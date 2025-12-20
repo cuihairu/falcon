@@ -1,0 +1,139 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+
+    steps:
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+
+  build-linux:
+    needs: create-release
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build libcurl4-openssl-dev
+
+      - name: Build
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+            -DFALCON_BUILD_CLI=ON \
+            -DFALCON_ENABLE_HTTP=ON
+          cmake --build build --config ${{ env.BUILD_TYPE }}
+
+      - name: Package
+        run: |
+          mkdir -p falcon-linux-x64
+          cp build/bin/falcon-cli falcon-linux-x64/
+          cp README.md LICENSE falcon-linux-x64/
+          tar -czvf falcon-linux-x64.tar.gz falcon-linux-x64
+
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./falcon-linux-x64.tar.gz
+          asset_name: falcon-linux-x64.tar.gz
+          asset_content_type: application/gzip
+
+  build-macos:
+    needs: create-release
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: brew install cmake ninja curl
+
+      - name: Build
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+            -DFALCON_BUILD_CLI=ON \
+            -DFALCON_ENABLE_HTTP=ON
+          cmake --build build --config ${{ env.BUILD_TYPE }}
+
+      - name: Package
+        run: |
+          mkdir -p falcon-macos-x64
+          cp build/bin/falcon-cli falcon-macos-x64/
+          cp README.md LICENSE falcon-macos-x64/
+          tar -czvf falcon-macos-x64.tar.gz falcon-macos-x64
+
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./falcon-macos-x64.tar.gz
+          asset_name: falcon-macos-x64.tar.gz
+          asset_content_type: application/gzip
+
+  build-windows:
+    needs: create-release
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install vcpkg
+        run: |
+          git clone https://github.com/Microsoft/vcpkg.git
+          .\vcpkg\bootstrap-vcpkg.bat
+          .\vcpkg\vcpkg install curl:x64-windows
+
+      - name: Build
+        run: |
+          cmake -B build `
+            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} `
+            -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake `
+            -DFALCON_BUILD_CLI=ON `
+            -DFALCON_ENABLE_HTTP=ON
+          cmake --build build --config ${{ env.BUILD_TYPE }}
+
+      - name: Package
+        run: |
+          mkdir falcon-windows-x64
+          copy build\bin\Release\falcon-cli.exe falcon-windows-x64\
+          copy README.md falcon-windows-x64\
+          copy LICENSE falcon-windows-x64\
+          Compress-Archive -Path falcon-windows-x64 -DestinationPath falcon-windows-x64.zip
+
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./falcon-windows-x64.zip
+          asset_name: falcon-windows-x64.zip
+          asset_content_type: application/zip
