@@ -4,7 +4,7 @@
 
 **A Modern Multi-Protocol Download Library & Tool**
 
-[![CI](https://github.com/cuihairu/falcon/actions/workflows/ci.yml/badge.svg)](https://github.com/cuihairu/falcon/actions/workflows/ci.yml)
+[![Build](https://github.com/cuihairu/falcon/actions/workflows/cmake-multi-platform.yml/badge.svg)](https://github.com/cuihairu/falcon/actions/workflows/cmake-multi-platform.yml)
 [![License](https://img.shields.io/github/license/cuihairu/falcon)](LICENSE)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://isocpp.org/std/the-standard)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)](https://github.com/cuihairu/falcon)
