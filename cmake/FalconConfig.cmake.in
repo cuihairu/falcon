@@ -1,0 +1,17 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# 查找依赖
+find_dependency(Threads)
+find_dependency(spdlog)
+find_dependency(nlohmann_json)
+
+if(@FALCON_ENABLE_HTTP@ OR @FALCON_ENABLE_FTP@)
+    find_dependency(CURL)
+endif()
+
+# 导入目标
+include("${CMAKE_CURRENT_LIST_DIR}/FalconTargets.cmake")
+
+check_required_components(Falcon)

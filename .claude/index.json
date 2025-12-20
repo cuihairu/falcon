@@ -1,0 +1,138 @@
+{
+  "scan_timestamp": "2025-12-21T00:00:00Z",
+  "project_name": "falcon",
+  "project_version": "0.1.0",
+  "description": "Falcon Downloader - Modern multi-protocol download library and tools",
+  "monorepo": true,
+  "modules": [
+    {
+      "name": "libfalcon",
+      "path": "packages/libfalcon",
+      "type": "library",
+      "language": "C++17",
+      "status": "skeleton_created",
+      "entry_points": [
+        "include/falcon/download_engine.hpp",
+        "include/falcon/task_manager.hpp",
+        "include/falcon/plugin_interface.hpp"
+      ],
+      "dependencies": [
+        "spdlog",
+        "nlohmann_json"
+      ],
+      "test_coverage": "0%",
+      "notes": "Core download engine library - skeleton created, implementation pending"
+    },
+    {
+      "name": "falcon-cli",
+      "path": "packages/falcon-cli",
+      "type": "executable",
+      "language": "C++17",
+      "status": "skeleton_created",
+      "entry_points": [
+        "src/main.cpp"
+      ],
+      "dependencies": [
+        "libfalcon",
+        "CLI11",
+        "spdlog"
+      ],
+      "test_coverage": "0%",
+      "notes": "Command-line interface - skeleton created, implementation pending"
+    },
+    {
+      "name": "falcon-daemon",
+      "path": "packages/falcon-daemon",
+      "type": "executable",
+      "language": "C++17",
+      "status": "skeleton_created",
+      "entry_points": [
+        "src/main.cpp"
+      ],
+      "dependencies": [
+        "libfalcon",
+        "gRPC",
+        "SQLite3",
+        "spdlog"
+      ],
+      "test_coverage": "0%",
+      "notes": "Daemon service - skeleton created, implementation pending"
+    },
+    {
+      "name": "desktop",
+      "path": "apps/desktop",
+      "type": "application",
+      "language": "TBD",
+      "status": "planned",
+      "notes": "GUI desktop application - technology stack to be decided (Qt/Tauri/Electron)"
+    },
+    {
+      "name": "web",
+      "path": "apps/web",
+      "type": "application",
+      "language": "TypeScript",
+      "status": "planned",
+      "notes": "Web management interface - technology stack to be decided (React/Vue)"
+    }
+  ],
+  "coverage": {
+    "total_files": 45,
+    "scanned_files": 45,
+    "coverage_percentage": 100,
+    "missing_components": [
+      "libfalcon core implementation",
+      "HTTP/FTP/BitTorrent plugins",
+      "CLI implementation",
+      "Daemon implementation",
+      "Unit tests",
+      "Integration tests"
+    ]
+  },
+  "ignored_patterns": [
+    "node_modules/**",
+    ".git/**",
+    ".github/**",
+    "dist/**",
+    "build/**",
+    ".next/**",
+    "__pycache__/**",
+    "*.lock",
+    "*.log",
+    "*.bin",
+    "*.pdf",
+    "*.png",
+    "*.jpg",
+    "*.jpeg",
+    "*.gif",
+    "*.mp4",
+    "*.zip",
+    "*.tar",
+    "*.gz",
+    "*.d",
+    "*.slo",
+    "*.lo",
+    "*.o",
+    "*.obj",
+    "*.gch",
+    "*.pch",
+    "*.so",
+    "*.dylib",
+    "*.dll",
+    "*.mod",
+    "*.smod",
+    "*.lai",
+    "*.la",
+    "*.a",
+    "*.lib",
+    "*.exe",
+    "*.out",
+    "*.app"
+  ],
+  "next_steps": [
+    "实现 libfalcon 核心类（DownloadEngine, TaskManager, PluginManager）",
+    "实现 HTTP 插件（基于 libcurl）",
+    "实现 CLI 参数解析与进度显示",
+    "编写单元测试（GTest）",
+    "完善 CMake 构建配置"
+  ]
+}
