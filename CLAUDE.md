@@ -2,6 +2,16 @@
 
 ## 变更记录 (Changelog)
 
+### 2025-12-21 - 添加私有协议支持
+- 实现迅雷 thunder:// 协议支持
+- 实现 QQ 旋风 qqlink:// 协议支持
+- 实现快车 flashget:// 协议支持
+- 实现 ED2K 电驴协议支持
+- 实现 HLS/DASH 流媒体协议支持
+- 更新插件管理器支持所有新协议
+- 为 CLI 工具添加所有新协议的命令行支持
+- 添加私有协议的单元测试
+
 ### 2025-12-21 - 重构为 Monorepo 架构
 - 调整项目结构为 Monorepo 模式
 - 建立 packages/ 和 apps/ 目录分离
@@ -134,6 +144,11 @@ graph TD
 | `packages/libfalcon/plugins/http` | HTTP/HTTPS 协议实现 | C++17/20 + libcurl | 待开发 |
 | `packages/libfalcon/plugins/ftp` | FTP 协议实现 | C++17/20 + libcurl | 待开发 |
 | `packages/libfalcon/plugins/bittorrent` | BitTorrent/Magnet 实现 | C++17/20 + libtorrent | 待开发 |
+| `packages/libfalcon/plugins/thunder` | 迅雷 thunder:// 协议 | C++17/20 + OpenSSL | 已实现 |
+| `packages/libfalcon/plugins/qqdl` | QQ旋风 qqlink:// 协议 | C++17/20 + OpenSSL | 已实现 |
+| `packages/libfalcon/plugins/flashget` | 快车 flashget:// 协议 | C++17/20 + OpenSSL | 已实现 |
+| `packages/libfalcon/plugins/ed2k` | ED2K 电驴协议 | C++17/20 | 已实现 |
+| `packages/libfalcon/plugins/hls` | HLS/DASH 流媒体协议 | C++17/20 | 已实现 |
 | `packages/falcon-cli` | 命令行下载工具 | C++17/20 + CLI11 | 待开发 |
 | `packages/falcon-daemon` | 后台守护进程 + RPC 服务 | C++17/20 + gRPC/REST | 待开发 |
 | `apps/desktop` | GUI 桌面应用（预留） | Qt/Tauri/Electron | 规划中 |

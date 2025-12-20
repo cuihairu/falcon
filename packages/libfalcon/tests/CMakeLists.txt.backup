@@ -1,0 +1,162 @@
+cmake_minimum_required(VERSION 3.15)
+
+project(falcon_tests
+    VERSION 0.1.0
+    DESCRIPTION "Falcon library unit tests"
+    LANGUAGES CXX
+)
+
+# ============================================================================
+# Find GoogleTest
+# ============================================================================
+
+find_package(GTest QUIET)
+
+if(NOT GTest_FOUND)
+    # Try to fetch GoogleTest if not found
+    include(FetchContent)
+    FetchContent_Declare(
+        googletest
+        GIT_REPOSITORY https://github.com/google/googletest.git
+        GIT_TAG v1.14.0
+    )
+    # For Windows: Prevent overriding the parent project's compiler/linker settings
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
+endif()
+
+enable_testing()
+
+# ============================================================================
+# Unit tests
+# ============================================================================
+
+add_executable(falcon_unit_tests
+    # 核心模块测试
+    unit/download_task_test.cpp
+    unit/task_manager_test.cpp
+    unit/url_utils_test.cpp
+    unit/thread_pool_test.cpp
+
+    # HTTP/HTTPS 插件测试
+    unit/http_plugin_test.cpp
+
+    # 私有协议插件测试（根据编译选项包含）
+)
+
+# 条件编译私有协议测试
+if(FALCON_ENABLE_THUNDER)
+    target_sources(falcon_unit_tests PRIVATE unit/thunder_plugin_test.cpp)
+endif()
+
+if(FALCON_ENABLE_QQDL)
+    target_sources(falcon_unit_tests PRIVATE unit/qqdl_plugin_test.cpp)
+endif()
+
+if(FALCON_ENABLE_FLASHGET)
+    target_sources(falcon_unit_tests PRIVATE unit/flashget_plugin_test.cpp)
+endif()
+
+if(FALCON_ENABLE_ED2K)
+    target_sources(falcon_unit_tests PRIVATE unit/ed2k_plugin_test.cpp)
+endif()
+
+if(FALCON_ENABLE_HLS)
+    target_sources(falcon_unit_tests PRIVATE unit/hls_plugin_test.cpp)
+endif()
+
+if(FALCON_ENABLE_BITTORRENT)
+    target_sources(falcon_unit_tests PRIVATE unit/bittorrent_plugin_test.cpp)
+endif()
+
+target_link_libraries(falcon_unit_tests
+    PRIVATE
+        falcon
+        GTest::gtest
+        GTest::gtest_main
+)
+
+target_include_directories(falcon_unit_tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+)
+
+target_compile_features(falcon_unit_tests PRIVATE cxx_std_17)
+
+# 添加必要的库
+if(FALCON_ENABLE_HTTP)
+    find_package(CURL QUIET)
+    if(CURL_FOUND)
+        target_link_libraries(falcon_unit_tests PRIVATE CURL::libcurl)
+    endif()
+endif()
+
+if(FALCON_ENABLE_BITTORRENT)
+    find_package(PkgConfig QUIET)
+    pkg_check_modules(LIBTORRENT-Rasterbar QUIET libtorrent-rasterbar)
+    if(LIBTORRENT-Rasterbar_FOUND)
+        target_include_directories(falcon_unit_tests PRIVATE ${LIBTORRENT-Rasterbar_INCLUDE_DIRS})
+        target_link_libraries(falcon_unit_tests PRIVATE ${LIBTORRENT-Rasterbar_LIBRARIES})
+        target_compile_definitions(falcon_unit_tests PRIVATE FALCON_USE_LIBTORRENT)
+    endif()
+endif()
+
+# 需要链接系统库
+if(UNIX AND NOT APPLE)
+    target_link_libraries(falcon_unit_tests PRIVATE pthread)
+endif()
+
+# Register tests with CTest
+include(GoogleTest)
+gtest_discover_tests(falcon_unit_tests)
+
+# ============================================================================
+# Integration tests
+# ============================================================================
+
+add_executable(falcon_integration_tests
+    integration/all_protocols_integration_test.cpp
+)
+
+target_link_libraries(falcon_integration_tests
+    PRIVATE
+        falcon
+        GTest::gtest
+        GTest::gtest_main
+)
+
+target_include_directories(falcon_integration_tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+)
+
+target_compile_features(falcon_integration_tests PRIVATE cxx_std_17)
+
+# 注册集成测试
+include(GoogleTest)
+gtest_discover_tests(falcon_integration_tests)
+
+# 添加集成测试到 CTest
+set_tests_properties(falcon_integration_tests
+    PROPERTIES
+    LABELS "integration"
+)
+
+# 创建测试目标
+add_custom_target(run_unit_tests
+    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure --label-exclude "integration"
+    DEPENDS falcon_unit_tests
+    COMMENT "Running unit tests"
+)
+
+add_custom_target(run_integration_tests
+    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure --label "integration"
+    DEPENDS falcon_integration_tests
+    COMMENT "Running integration tests"
+)
+
+add_custom_target(run_all_tests
+    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
+    DEPENDS falcon_unit_tests falcon_integration_tests
+    COMMENT "Running all tests"
+)

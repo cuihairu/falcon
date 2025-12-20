@@ -1,0 +1,132 @@
+{
+  "search_engines": [
+    {
+      "name": "TorrentGalaxy",
+      "base_url": "https://torrentgalaxy.to",
+      "search_path": "/torrents.php",
+      "enabled": true,
+      "weight": 1.0,
+      "encoding": "utf-8",
+      "delay_ms": 2000,
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+      },
+      "params": {
+        "search": "",
+        "cat": "0",
+        "sort": "seeders",
+        "order": "desc"
+      },
+      "selectors": {
+        "item": "div.tgx-table tbody tr",
+        "title": "td:nth-child(2) a",
+        "url": "td:nth-child(2) a@href",
+        "size": "td:nth-child(6)",
+        "seeds": "td:nth-child(7)",
+        "peers": "td:nth-child(8)",
+        "date": "td:nth-child(5)"
+      }
+    },
+    {
+      "name": "1337x",
+      "base_url": "https://1337x.to",
+      "search_path": "/search",
+      "enabled": true,
+      "weight": 0.9,
+      "encoding": "utf-8",
+      "delay_ms": 1500,
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+      },
+      "selectors": {
+        "item": "table tbody tr",
+        "title": "td.coll-1 a",
+        "url": "td.coll-1 a@href",
+        "seeds": "td.coll-2",
+        "peers": "td.coll-3",
+        "size": "td.coll-4",
+        "date": "td.coll-date"
+      }
+    },
+    {
+      "name": "ThePirateBay",
+      "base_url": "https://apibay.org",
+      "search_path": "/q.php",
+      "enabled": true,
+      "weight": 1.0,
+      "encoding": "utf-8",
+      "delay_ms": 1000,
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (compatible; FalconBot/1.0)"
+      },
+      "params": {
+        "q": "",
+        "cat": "0"
+      },
+      "response_format": "json"
+    },
+    {
+      "name": "EZTV",
+      "base_url": "https://eztv.re",
+      "search_path": "/search",
+      "enabled": true,
+      "weight": 0.8,
+      "encoding": "utf-8",
+      "delay_ms": 2000,
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+      },
+      "params": {
+        "keyword": ""
+      },
+      "selectors": {
+        "item": "table.forum_header_border tr",
+        "title": "td:nth-child(2) a",
+        "url": "td:nth-child(2) a@href",
+        "size": "td:nth-child(4)",
+        "seeds": "td:nth-child(5)",
+        "date": "td:nth-child(3)"
+      }
+    },
+    {
+      "name": "MagnetDL",
+      "base_url": "https://www.magnetdl.com",
+      "search_path": "",
+      "enabled": true,
+      "weight": 0.85,
+      "encoding": "utf-8",
+      "delay_ms": 3000,
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+      },
+      "path_pattern": "/{first_char}/{query_letter}/se/desc/{page}/",
+      "selectors": {
+        "item": "tbody tr",
+        "title": "td a",
+        "url": "td.m a@href",
+        "magnet": "td.n a@href",
+        "size": "td:nth-child(6)",
+        "seeds": "td:nth-child(7)",
+        "date": "td:nth-child(2)"
+      }
+    }
+  ],
+  "global_settings": {
+    "timeout_seconds": 30,
+    "max_results_per_engine": 100,
+    "min_confidence": 0.5,
+    "default_delay_ms": 2000,
+    "parallel_requests": 3,
+    "cache_duration_minutes": 60,
+    "filter_duplicate_hashes": true,
+    "proxy": {
+      "enabled": false,
+      "host": "",
+      "port": 8080,
+      "type": "http",
+      "username": "",
+      "password": ""
+    }
+  }
+}

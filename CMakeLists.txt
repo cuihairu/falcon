@@ -37,6 +37,13 @@ option(FALCON_ENABLE_HTTP "Enable HTTP/HTTPS plugin" ON)
 option(FALCON_ENABLE_FTP "Enable FTP plugin" ON)
 option(FALCON_ENABLE_BITTORRENT "Enable BitTorrent plugin" OFF)
 
+# 私有协议插件
+option(FALCON_ENABLE_THUNDER "Enable Thunder protocol plugin" OFF)
+option(FALCON_ENABLE_QQDL "Enable QQDL protocol plugin" OFF)
+option(FALCON_ENABLE_FLASHGET "Enable FlashGet protocol plugin" OFF)
+option(FALCON_ENABLE_ED2K "Enable ED2K protocol plugin" OFF)
+option(FALCON_ENABLE_HLS "Enable HLS/DASH protocol plugin" OFF)
+
 # 依赖管理
 option(FALCON_USE_SYSTEM_LIBS "Use system libraries instead of vcpkg" OFF)
 option(FALCON_USE_STATIC_LIBS "Link dependencies statically" OFF)

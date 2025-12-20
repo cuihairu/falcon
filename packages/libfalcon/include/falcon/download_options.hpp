@@ -41,6 +41,16 @@ struct DownloadOptions {
     /// Proxy server URL (e.g., "http://proxy:8080", "socks5://proxy:1080")
     std::string proxy;
 
+    /// Proxy username (optional)
+    std::string proxy_username;
+
+    /// Proxy password (optional)
+    std::string proxy_password;
+
+    /// Proxy type override: "http", "https", "socks4", "socks5"
+    /// If empty, will be auto-detected from proxy URL
+    std::string proxy_type;
+
     /// Verify SSL certificates (HTTPS)
     bool verify_ssl = true;
 

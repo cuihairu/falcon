@@ -2,94 +2,94 @@
 
   <img src="https://raw.githubusercontent.com/falcon-project/falcon/main/assets/logo.png" alt="Falcon Logo" width="200"/>
 
-  # Falcon Downloader
+  # Falcon 下载器
 
   [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
   [![Build Status](https://github.com/cuihairu/falcon/workflows/cmake-multi-platform.yml/badge.svg)](https://github.com/cuihairu/falcon/actions)
   [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/cuihairu/falcon)
   [![Version](https://img.shields.io/badge/version-0.1.0-green.svg)](https://github.com/cuihairu/falcon/releases)
 
-  **A modern, high-performance, cross-platform download accelerator**
+  **现代化、高性能、跨平台的下载加速器**
 
 </div>
 
-## Features 🚀
+## 特性 🚀
 
-- **Multi-Protocol Support**: HTTP/HTTPS, FTP, BitTorrent, Magnet links, Private protocols
-  - Thunder (迅雷)
-  - QQDL (腾讯旋风)
-  - FlashGet
-  - ED2K (电驴)
-  - HLS/DASH streaming
-- **Cloud Storage Integration**:
-  - Amazon S3
-  - Alibaba Cloud OSS (阿里云OSS)
-  - Tencent COS (腾讯云)
-  - Qiniu Kodo (七牛云)
-  - Upyun USS (又拍云)
-- **Remote Resource Browsing**: Browse FTP/SFTP/S3 directories with rich information
-- **Resource Search**: Built-in search engine for torrent and file resources
-- **Secure Configuration**: AES-256 encrypted credential storage with master password protection
-- **High Performance**: Multi-threaded downloading with speed control and bandwidth throttling
-- **Resume Support**: Automatic resumption of interrupted downloads
-- **Proxy Support**: HTTP/HTTPS/SOCKS5 proxy support
+- **多协议支持**: HTTP/HTTPS、FTP、BitTorrent、磁力链接、私有协议
+  - 迅雷 (Thunder)
+  - 腾讯旋风 (QQDL)
+  - 快车 (FlashGet)
+  - 电驴 (ED2K)
+  - HLS/DASH 流媒体
+- **云存储集成**:
+  - 亚马逊 S3
+  - 阿里云 OSS
+  - 腾讯云 COS
+  - 七牛云 Kodo
+  - 又拍云 USS
+- **远程资源浏览**: 轻松浏览 FTP/SFTP/S3 目录，显示详细信息
+- **资源搜索**: 内置搜索引擎，支持种子和文件资源搜索
+- **安全配置**: AES-256 加密存储凭据，主密码保护
+- **高性能**: 多线程下载，支持速度控制和带宽限制
+- **断点续传**: 自动恢复中断的下载
+- **代理支持**: HTTP/HTTPS/SOCKS5 代理支持
 
-## Quick Start ⚡
+## 快速开始 ⚡
 
-### Installation
+### 安装
 
 ```bash
-# Clone repository
+# 克隆仓库
 git clone https://github.com/cuihairu/falcon.git
 cd falcon
 
-# Build from source
+# 从源码编译
 cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
 
-# Or use package manager (coming soon)
+# 或使用包管理器（即将推出）
 # npm install -g falcon-downloader
 # pip install falcon-downloader
 ```
 
-### Basic Usage
+### 基本使用
 
 ```bash
-# Simple download
+# 简单下载
 falcon-cli https://example.com/file.zip
 
-# Multi-threaded download (5 connections)
+# 多线程下载（5个连接）
 falcon-cli https://example.com/large_file.iso -c 5
 
-# Download with speed limit (1MB/s)
+# 限速下载（1MB/s）
 falcon-cli https://example.com/video.mp4 --limit 1M
 
-# Browse FTP directory
+# 浏览 FTP 目录
 falcon-cli --list ftp://ftp.example.com/pub
 
-# Browse S3 bucket
+# 浏览 S3 存储桶
 falcon-cli --list s3://my-bucket --key-id YOUR_KEY --secret-key YOUR_SECRET
 
-# Search for torrents
+# 搜索种子
 falcon-cli --search "Ubuntu 22.04" --min-seeds 10
 ```
 
-## Supported Protocols 📡
+## 支持的协议 📡
 
-| Protocol | Status | Description |
-|----------|--------|-------------|
-| HTTP/HTTPS | ✅ | Standard web protocols with resume support |
-| FTP/FTPS | ✅ | File Transfer Protocol with passive mode |
-| BitTorrent | ✅ | Peer-to-peer file sharing with magnet links |
-| Thunder | ✅ | Xunlei (Thunder) links |
-| QQDL | ✅ | Tencent QQ Download links |
-| FlashGet | ✅ | FlashGet links |
-| ED2K | ✅ | eDonkey2000 network support |
-| HLS/DASH | ✅ | HTTP Live Streaming and Dynamic Adaptive Streaming |
+| 协议 | 状态 | 描述 |
+|------|------|------|
+| HTTP/HTTPS | ✅ | 标准 Web 协议，支持断点续传 |
+| FTP/FTPS | ✅ | 文件传输协议，支持被动模式 |
+| BitTorrent | ✅ | 点对点文件共享，支持磁力链接 |
+| 迅雷 | ✅ | 迅雷专用链接 |
+| 腾讯旋风 | ✅ | 腾讯旋风专用链接 |
+| 快车 | ✅ | 快车专用链接 |
+| 电驴 | ✅ | eDonkey2000 网络支持 |
+| HLS/DASH | ✅ | HTTP Live Streaming 和动态自适应流媒体 |
 
-## Cloud Storage Support ☁️
+## 云存储支持 ☁️
 
-### Amazon S3
+### 亚马逊 S3
 ```bash
 falcon-cli --list s3://my-bucket \
   --key-id AKIAIOSFODNN7EXAMPLE \
@@ -97,7 +97,7 @@ falcon-cli --list s3://my-bucket \
   --region us-west-2
 ```
 
-### Alibaba Cloud OSS (阿里云OSS)
+### 阿里云 OSS
 ```bash
 falcon-cli --list oss://my-bucket/my-folder \
   --access-key-id YOUR_ACCESS_KEY_ID \
@@ -105,7 +105,7 @@ falcon-cli --list oss://my-bucket/my-folder \
   --region cn-beijing
 ```
 
-### Tencent COS (腾讯云)
+### 腾讯云 COS
 ```bash
 falcon-cli --list cos://my-bucket-1250000000 \
   --secret-id YOUR_SECRET_ID \
@@ -113,35 +113,35 @@ falcon-cli --list cos://my-bucket-1250000000 \
   --region ap-beijing
 ```
 
-### Qiniu Kodo (七牛云)
+### 七牛云 Kodo
 ```bash
 falcon-cli --list kodo://my-bucket \
   --access-key YOUR_ACCESS_KEY \
   --secret-key YOUR_SECRET_KEY
 ```
 
-### Upyun USS (又拍云)
+### 又拍云 USS
 ```bash
 falcon-cli --list upyun://my-service \
   --username YOUR_USERNAME \
   --password YOUR_PASSWORD
 ```
 
-## Configuration Management 🔐
+## 配置管理 🔐
 
-Falcon provides secure credential storage with AES-256 encryption:
+Falcon 提供使用 AES-256 加密的安全凭据存储：
 
-### Set Master Password
+### 设置主密码
 ```bash
 falcon-cli --set-master-password
 ```
 
-### Add Cloud Storage Configuration
+### 添加云存储配置
 ```bash
-# Interactive mode (prompts for credentials)
+# 交互模式（提示输入凭据）
 falcon-cli --add-config my-s3-bucket --provider s3
 
-# Direct mode
+# 直接模式
 falcon-cli --add-config my-s3-bucket --provider s3 \
   --key-id AKIAIOSFODNN7EXAMPLE \
   --secret-key wJalrXUtnFEMI/ \
@@ -149,26 +149,26 @@ falcon-cli --add-config my-s3-bucket --provider s3 \
   --bucket my-bucket
 ```
 
-### Use Saved Configuration
+### 使用已保存的配置
 ```bash
 falcon-cli --list s3://my-bucket --config my-s3-bucket
 ```
 
-### List Configurations
+### 列出所有配置
 ```bash
 falcon-cli --list-configs
 ```
 
-## Advanced Features ⚙️
+## 高级功能 ⚙️
 
-### Resource Search
-Search across multiple torrent sites and file hosting services:
+### 资源搜索
+在多个种子和文件托管网站中搜索：
 ```bash
-# Basic search
+# 基础搜索
 falcon-cli --search "Ubuntu 22.04"
 
-# Advanced search with filters
-falcon-cli --search "movies" \
+# 高级搜索和过滤
+falcon-cli --search "电影" \
   --category video \
   --min-size 1GB \
   --max-size 10GB \
@@ -177,86 +177,86 @@ falcon-cli --search "movies" \
   --download 1
 ```
 
-### Remote Directory Browsing
-Browse remote directories with rich information display:
+### 远程目录浏览
+浏览远程目录并显示丰富信息：
 ```bash
-# Short listing
+# 短格式列表
 falcon-cli --list ftp://ftp.example.com/pub
 
-# Detailed listing
+# 详细列表
 falcon-cli --list -L ftp://ftp.example.com/pub
 
-# Tree view with recursion
+# 树形视图，递归显示
 falcon-cli --list --tree --recursive s3://my-bucket/data
 
-# Sort and filter
+# 排序和过滤
 falcon-cli --list --sort size --sort-desc s3://my-bucket/
 ```
 
-### Download Management
+### 下载管理
 ```bash
-# Batch download from file
+# 从文件批量下载
 falcon-cli --input urls.txt
 
-# Resume interrupted download
+# 恢复中断的下载
 falcon-cli --continue https://example.com/partial.zip
 
-# Custom headers and user agent
+# 自定义请求头和用户代理
 falcon-cli https://example.com/file.bin \
   --header "Authorization: Bearer TOKEN" \
   --user-agent "Falcon/1.0"
 
-# Proxy support
+# 代理支持
 falcon-cli https://example.com/file.zip \
   --proxy http://proxy.example.com:8080 \
   --proxy-username user \
   --proxy-password pass
 ```
 
-## Architecture 🏗️
+## 架构设计 🏗️
 
-Falcon follows a modular architecture:
+Falcon 采用模块化架构：
 
 ```
 ┌─────────────────────────────────────────┐
-│              Applications                │
+│              应用层                      │
 │  ┌────────────┐ ┌────────────┐          │
 │  │ falcon-cli │ │ falcon-gui │          │
 │  └────────────┘ └────────────┘          │
 └────────────────────┬────────────────────┘
                      │
 ┌────────────────────▼────────────────────┐
-│              Falcon Core                 │
+│              Falcon 核心库               │
 │  ┌──────────────────────────────────┐  │
-│  │     Download Engine              │  │
-│  │     Task Manager                  │  │
-│  │     Plugin Manager                │  │
-│  │     Config Manager                │  │
-│  │     Password Manager              │  │
+│  │     下载引擎                      │  │
+│  │     任务管理器                    │  │
+│  │     插件管理器                    │  │
+│  │     配置管理器                    │  │
+│  │     密码管理器                    │  │
 │  └──────────────────────────────────┘  │
 └────────────────────┬────────────────────┘
                      │
 ┌────────────────────▼────────────────────┐
-│            Protocol Plugins              │
+│              协议插件层                  │
 │  ┌─────┐ ┌─────┐ ┌──────┐ ┌─────┐       │
 │  │ HTTP│ │ FTP │ │  BT  │ │ OSS  │ ...  │
 │  └─────┘ └─────┘ └──────┘ └─────┘       │
 └─────────────────────────────────────────┘
 ```
 
-## Development 👷
+## 开发指南 👷
 
-### Prerequisites
+### 系统要求
 - CMake 3.15+
-- C++17 compatible compiler
+- C++17 兼容的编译器
 - libcurl 7.68+
 - nlohmann/json 3.10+
 - OpenSSL 1.1.1+
 - SQLite 3.35+
 
-### Build Options
+### 编译选项
 ```bash
-# Enable/disable features
+# 启用/禁用功能
 cmake -B build -S . \
   -DFALCON_ENABLE_HTTP=ON \
   -DFALCON_ENABLE_FTP=ON \
@@ -266,31 +266,56 @@ cmake -B build -S . \
   -DFALCON_ENABLE_RESOURCE_SEARCH=ON
 ```
 
-## Contributing 🤝
+## 贡献指南 🤝
 
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
+我们欢迎贡献！请查看我们的[贡献指南](CONTRIBUTING_CN.md)了解详情。
 
-### Code Style
-- Follow Google C++ Style Guide
-- Use `clang-format` for code formatting
-- Write unit tests for new features
+### 代码风格
+- 遵循 Google C++ 风格指南
+- 使用 `clang-format` 进行代码格式化
+- 为新功能编写单元测试
 
-## License 📄
+## 许可证 📄
 
-This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
+本项目采用 Apache License 2.0 许可证 - 详见 [LICENSE](LICENSE) 文件。
 
-## Acknowledgments 🙏
+## 致谢 🙏
 
-- [libcurl](https://curl.se/) for HTTP/FTP support
-- [libtorrent](https://www.libtorrent.org/) for BitTorrent support
-- [nlohmann/json](https://github.com/nlohmann/json) for JSON handling
-- [OpenSSL](https://www.openssl.org/) for cryptographic operations
-- [SQLite](https://sqlite.org/) for configuration storage
+- [libcurl](https://curl.se/) 用于 HTTP/FTP 支持
+- [libtorrent](https://www.libtorrent.org/) 用于 BitTorrent 支持
+- [nlohmann/json](https://github.com/nlohmann/json) 用于 JSON 处理
+- [OpenSSL](https://www.openssl.org/) 用于加密操作
+- [SQLite](https://sqlite.org/) 用于配置存储
+
+## 功能路线图 📋
+
+### 已完成 ✅
+- [x] 核心下载引擎
+- [x] HTTP/HTTPS 插件 (libcurl)
+- [x] FTP/FTPS 插件
+- [x] 命令行界面
+- [x] 私有协议支持（迅雷、QQDL、FlashGet、ED2K）
+- [x] 云存储支持（S3、阿里云OSS、腾讯云COS、七牛云、又拍云）
+- [x] 远程资源浏览
+- [x] 资源搜索功能
+- [x] 安全配置管理
+
+### 进行中 🚧
+- [ ] BitTorrent 插件 (libtorrent)
+- [ ] Web 管理界面
+- [ ] Windows GUI 应用
+- [ ] 更多私有协议
+
+### 计划中 📅
+- [ ] macOS 原生应用
+- [ ] Linux 原生应用
+- [ ] 移动端支持
+- [] 分布式下载节点
 
 ---
 
 <div align="center">
-  Made with ❤️ by the Falcon Team
+  Made with ❤️ by Falcon Team
 
-  [中文文档](README_CN.md)
+  [English](README.md)
 </div>

@@ -16,6 +16,14 @@ add_library(falcon
     src/download_task.cpp
     src/task_manager.cpp
     src/thread_pool.cpp
+    src/plugin_manager.cpp
+    src/event_dispatcher.cpp
+    # Resource search
+    src/resource_search.cpp
+    # Cloud storage
+    src/cloud_storage_plugin.cpp
+    # Resource browser
+    src/resource_browser.cpp
 )
 
 # Alias for consistent usage
@@ -64,6 +72,13 @@ if(nlohmann_json_FOUND)
     target_compile_definitions(falcon PUBLIC FALCON_USE_JSON)
 endif()
 
+# Link libcurl for HTTP requests
+find_package(CURL QUIET)
+if(CURL_FOUND)
+    target_link_libraries(falcon PRIVATE CURL::libcurl)
+    target_compile_definitions(falcon PRIVATE FALCON_USE_CURL)
+endif()
+
 # ============================================================================
 # Export symbols (Windows DLL)
 # ============================================================================
@@ -74,6 +89,14 @@ if(BUILD_SHARED_LIBS)
         INTERFACE FALCON_IMPORTS
     )
 endif()
+
+# ============================================================================
+# Optional features
+# ============================================================================
+
+option(FALCON_ENABLE_CLOUD_STORAGE "Enable cloud storage plugins" ON)
+option(FALCON_ENABLE_RESOURCE_SEARCH "Enable resource search functionality" ON)
+option(FALCON_ENABLE_RESOURCE_BROWSER "Enable resource browser functionality" ON)
 
 # ============================================================================
 # Protocol plugins
@@ -105,6 +128,93 @@ if(FALCON_ENABLE_BITTORRENT)
     add_subdirectory(plugins/bittorrent)
     target_link_libraries(falcon PRIVATE falcon_plugin_bittorrent)
     target_compile_definitions(falcon PRIVATE FALCON_ENABLE_BT_PLUGIN)
+endif()
+
+# Thunder plugin
+if(FALCON_ENABLE_THUNDER)
+    add_subdirectory(plugins/thunder)
+    target_sources(falcon PRIVATE
+        plugins/thunder/thunder_plugin.cpp
+    )
+    target_compile_definitions(falcon PRIVATE FALCON_ENABLE_THUNDER_PLUGIN)
+endif()
+
+# QQDL plugin
+if(FALCON_ENABLE_QQDL)
+    target_sources(falcon PRIVATE
+        plugins/qqdl/qqdl_plugin.cpp
+    )
+    target_compile_definitions(falcon PRIVATE FALCON_ENABLE_QQDL_PLUGIN)
+endif()
+
+# FlashGet plugin
+if(FALCON_ENABLE_FLASHGET)
+    target_sources(falcon PRIVATE
+        plugins/flashget/flashget_plugin.cpp
+    )
+    target_compile_definitions(falcon PRIVATE FALCON_ENABLE_FLASHGET_PLUGIN)
+endif()
+
+# ED2K plugin
+if(FALCON_ENABLE_ED2K)
+    target_sources(falcon PRIVATE
+        plugins/ed2k/ed2k_plugin.cpp
+    )
+    target_compile_definitions(falcon PRIVATE FALCON_ENABLE_ED2K_PLUGIN)
+endif()
+
+# HLS/DASH plugin
+if(FALCON_ENABLE_HLS)
+    target_sources(falcon PRIVATE
+        plugins/hls/hls_plugin.cpp
+    )
+    target_compile_definitions(falcon PRIVATE FALCON_ENABLE_HLS_PLUGIN)
+    # 需要nlohmann/json用于DASH解析
+    if(NOT nlohmann_json_FOUND)
+        target_compile_definitions(falcon PRIVATE FALCON_HLS_NO_JSON)
+    endif()
+endif()
+
+# Cloud storage support
+if(FALCON_ENABLE_CLOUD_STORAGE)
+    target_sources(falcon PRIVATE
+        src/cloud_storage_plugin.cpp
+    )
+    target_compile_definitions(falcon PRIVATE FALCON_ENABLE_CLOUD_STORAGE)
+    # 需要libcurl用于HTTP请求
+    if(NOT CURL_FOUND)
+        message(WARNING "Cloud storage plugins require libcurl")
+    endif()
+endif()
+
+# Resource search functionality
+if(FALCON_ENABLE_RESOURCE_SEARCH)
+    target_compile_definitions(falcon PRIVATE FALCON_ENABLE_RESOURCE_SEARCH)
+    # 需要nlohmann/json用于配置解析
+    if(NOT nlohmann_json_FOUND)
+        message(WARNING "Resource search requires nlohmann_json")
+    endif()
+    # 需要libcurl用于网页请求
+    if(NOT CURL_FOUND)
+        message(WARNING "Resource search requires libcurl")
+    endif()
+endif()
+
+# Resource browser functionality
+if(FALCON_ENABLE_RESOURCE_BROWSER)
+    target_sources(falcon PRIVATE
+        plugins/ftp/ftp_browser.cpp
+        plugins/s3/s3_browser.cpp
+    )
+    target_compile_definitions(falcon PRIVATE FALCON_ENABLE_RESOURCE_BROWSER)
+    # 需要libcurl用于FTP/S3请求
+    if(NOT CURL_FOUND)
+        message(WARNING "Resource browser requires libcurl")
+    endif()
+    # 需要nlohmann/json用于S3解析
+    if(NOT nlohmann_json_FOUND)
+        target_compile_definitions(falcon PRIVATE FALCON_BROWSER_NO_JSON)
+    endif()
 endif()
 
 # ============================================================================
