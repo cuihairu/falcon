@@ -8,7 +8,10 @@
 #include <falcon/resource_search.hpp>
 #include <falcon/logger.hpp>
 #include <curl/curl.h>
+#ifdef HAVE_NLOHMANN_JSON
 #include <nlohmann/json.hpp>
+using json = nlohmann::json;
+#endif
 #include <thread>
 #include <chrono>
 #include <regex>
@@ -16,8 +19,6 @@
 #include <algorithm>
 #include <unordered_set>
 #include <fstream>
-
-using json = nlohmann::json;
 
 namespace falcon {
 namespace search {

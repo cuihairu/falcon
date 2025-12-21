@@ -62,19 +62,19 @@ std::string RemoteResource::formatted_size() const {
     if (type != ResourceType::File) return "-";
 
     const char* units[] = {"B", "KB", "MB", "GB", "TB"};
-    double size = static_cast<double>(size_);
+    double size_bytes = static_cast<double>(size);
     int unit_index = 0;
 
-    while (size >= 1024.0 && unit_index < 4) {
-        size /= 1024.0;
+    while (size_bytes >= 1024.0 && unit_index < 4) {
+        size_bytes /= 1024.0;
         unit_index++;
     }
 
     std::ostringstream oss;
     if (unit_index == 0) {
-        oss << static_cast<int64_t>(size_);
+        oss << static_cast<int64_t>(size);
     } else {
-        oss << std::fixed << std::setprecision(1) << size;
+        oss << std::fixed << std::setprecision(1) << size_bytes;
     }
     oss << " " << units[unit_index];
 
@@ -84,7 +84,7 @@ std::string RemoteResource::formatted_size() const {
 // BrowserFormatter 实现
 std::string BrowserFormatter::format_short(const std::vector<RemoteResource>& resources) {
     std::ostringstream oss;
-    oss << "total " << resources.size() "\n";
+    oss << "total " << resources.size() << "\n";
 
     for (const auto& res : resources) {
         oss << res.display_name() << "\n";
@@ -187,7 +187,7 @@ std::string BrowserFormatter::format_table(const std::vector<RemoteResource>& re
 
         // 大小
         if (res.is_file()) {
-            oss << std::setw(10) << std::right << res.size_;
+            oss << std::setw(10) << std::right << res.size;
         } else {
             oss << std::setw(10) << std::right << "-";
         }

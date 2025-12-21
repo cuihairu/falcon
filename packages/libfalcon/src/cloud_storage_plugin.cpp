@@ -7,13 +7,14 @@
 
 #include <falcon/cloud_storage_plugin.hpp>
 #include <falcon/logger.hpp>
+#ifdef HAVE_NLOHMANN_JSON
 #include <nlohmann/json.hpp>
+using json = nlohmann::json;
+#endif
 #include <curl/curl.h>
 #include <algorithm>
 #include <regex>
 #include <sstream>
-
-using json = nlohmann::json;
 
 namespace falcon {
 

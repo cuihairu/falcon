@@ -154,7 +154,7 @@ void PluginManager::unloadPlugin(const std::string& protocol) {
         std::cout << "Unloading plugin for protocol: " << protocol << std::endl;
         plugins_.erase(it);
     } else {
-        std::cerr <<("No plugin found for protocol: {}", protocol);
+        std::cerr << "No plugin found for protocol: " << protocol << std::endl;
     }
 }
 

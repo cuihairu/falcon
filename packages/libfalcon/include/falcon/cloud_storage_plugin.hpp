@@ -40,7 +40,7 @@ enum class CloudPlatform {
     LanzouCloud,     // 蓝奏云
     AlibabaCloud,    // 阿里云盘
     TencentWeiyun,   // 腾讯微云
-    115Cloud,        // 115网盘
+    Cloud115,        // 115网盘
     Quark,           // 夸克网盘
     PikPak,          // PikPak
     Mega,            // MEGA
