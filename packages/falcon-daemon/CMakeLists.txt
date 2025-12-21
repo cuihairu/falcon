@@ -20,10 +20,16 @@ add_executable(falcon-daemon
 target_link_libraries(falcon-daemon
     PRIVATE
         Falcon::falcon
-        spdlog::spdlog
         # gRPC::grpc++  # 待添加
         # SQLite::SQLite3  # 待添加
 )
+
+# Optional: spdlog for logging
+find_package(spdlog QUIET)
+if(spdlog_FOUND)
+    target_link_libraries(falcon-daemon PRIVATE spdlog::spdlog)
+    target_compile_definitions(falcon-daemon PRIVATE FALCON_USE_SPDLOG)
+endif()
 
 target_compile_features(falcon-daemon PRIVATE cxx_std_17)
 
