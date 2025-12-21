@@ -1,0 +1,23 @@
+# CMake 选项文件
+# 使用方法: cmake -C CMakeOptions.txt -B build
+
+# 构建类型
+set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type")
+
+# 编译器选项
+set(CMAKE_CXX_STANDARD 17 CACHE STRING "C++ standard")
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# 功能选项
+set(FALCON_ENABLE_HTTP ON CACHE BOOL "Enable HTTP/HTTPS support")
+set(FALCON_ENABLE_FTP OFF CACHE BOOL "Enable FTP support")
+set(FALCON_ENABLE_BITTORRENT OFF CACHE BOOL "Enable BitTorrent support")
+set(FALCON_ENABLE_CLOUD_STORAGE OFF CACHE BOOL "Enable cloud storage support")
+set(FALCON_ENABLE_RESOURCE_BROWSER OFF CACHE BOOL "Enable resource browser")
+set(FALCON_ENABLE_RESOURCE_SEARCH OFF CACHE BOOL "Enable resource search")
+
+# 构建选项
+set(FALCON_BUILD_TESTS OFF CACHE BOOL "Build tests")
+set(FALCON_BUILD_EXAMPLES OFF CACHE BOOL "Build examples")
+set(FALCON_BUILD_CLI OFF CACHE BOOL "Build CLI tool")
+set(FALCON_BUILD_DAEMON OFF CACHE BOOL "Build daemon")
