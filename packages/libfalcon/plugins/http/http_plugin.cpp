@@ -9,6 +9,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <mutex>
 #include <thread>
@@ -412,7 +413,9 @@ public:
         }
 
         // Move temp file to final destination
-        std::filesystem::rename(temp_path, task->output_path());
+        if (std::rename(temp_path.c_str(), task->output_path().c_str()) != 0) {
+            throw FileException("Failed to move downloaded file to destination");
+        }
         task->set_status(TaskStatus::Completed);
 
 #else
