@@ -128,7 +128,7 @@ public:
     void on_progress(const falcon::ProgressInfo& info) override {
         // Calculate progress bar
         int width = get_terminal_width();
-        int bar_width = std::max(20, width - 60);
+        int bar_width = (std::max)(20, width - 60);
 
         int filled = 0;
         if (info.total_bytes > 0) {
@@ -227,25 +227,25 @@ void print_help(const char* program_name) {
     std::cout << "  --min-size <SIZE>     最小文件大小 (如: 100M)" << std::endl;
     std::cout << "  --max-size <SIZE>     最大文件大小" << std::endl;
     std::cout << "  --min-seeds <N>       最小种子数" << std::endl;
-    std::cout << "  --sort-by <FIELD>     排序字段 (size/seeds/date)" << std::endl;
-    std::cout << "  --download <INDEX>    下载搜索结果的第INDEX项 (从1开始)" << std::endl;
+    std::cout << "  --sort-by <FIELD>     Sort field (size/seeds/date)" << std::endl;
+    std::cout << "  --download <INDEX>    Download result at INDEX (starting from 1)" << std::endl;
     std::cout << std::endl;
-    std::cout << "浏览选项:" << std::endl;
-    std::cout << "  -L, --list            列出远程目录内容" << std::endl;
-    std::cout << "  --long               显示详细信息 (类似ls -l)" << std::endl;
-    std::cout << "  --tree              树形显示目录结构" << std::endl;
-    std::cout << "  --recursive         递归列出子目录" << std::endl;
-    --  --sort-by <FIELD>   排序字段 (name/size/modified_time)" << std::endl;
-    std::cout << "  --filter <PATTERN>   文件过滤 (支持*通配符)" << std::endl;
-    std::cout << "  --show-hidden       显示隐藏文件" << std::endl;
-    std::cout << "  --json              输出JSON格式" << std::endl;
+    std::cout << "Browse Options:" << std::endl;
+    std::cout << "  -L, --list            List remote directory contents" << std::endl;
+    std::cout << "  --long               Show detailed information (like ls -l)" << std::endl;
+    std::cout << "  --tree              Tree display of directory structure" << std::endl;
+    std::cout << "  --recursive         List subdirectories recursively" << std::endl;
+    std::cout << "  --sort-by <FIELD>   Sort field (name/size/modified_time)" << std::endl;
+    std::cout << "  --filter <PATTERN>   File filter (supports * wildcard)" << std::endl;
+    std::cout << "  --show-hidden       Show hidden files" << std::endl;
+    std::cout << "  --json              Output in JSON format" << std::endl;
     std::cout << std::endl;
-    std::cout << "认证选项:" << std::endl;
-    std::cout << "  --username <USER>    用户名" << std::endl;
-    std::cout << "  --password <PASS>    密码" << std::endl;
-    std::cout << "  --key-id <KEY>       AWS访问密钥ID" << std::endl;
-    std::cout << "  --secret-key <KEY>   AWS密钥" << std::endl;
-    std::cout << "  --region <REGION>     AWS区域" << std::endl;
+    std::cout << "Authentication Options:" << std::endl;
+    std::cout << "  --username <USER>    Username" << std::endl;
+    std::cout << "  --password <PASS>    Password" << std::endl;
+    std::cout << "  --key-id <KEY>       AWS Access Key ID" << std::endl;
+    std::cout << "  --secret-key <KEY>   AWS Secret Key" << std::endl;
+    std::cout << "  --region <REGION>     AWS Region" << std::endl;
     std::cout << std::endl;
     std::cout << "示例:" << std::endl;
     std::cout << "  # 基础下载" << std::endl;
@@ -369,7 +369,11 @@ bool perform_search(const falcon::search::SearchQuery& query,
 }
 
 // 执行浏览
-int perform_browse(const std::string& url) {
+int perform_browse(const std::string& url, bool show_hidden = false, bool recursive = false,
+                  const std::string& sort_field = "", bool sort_desc = false,
+                  const std::string& username = "", const std::string& password = "",
+                  const std::string& access_key_id = "", const std::string& secret_access_key = "",
+                  const std::string& region = "") {
     falcon::ListOptions options;
     options.show_hidden = show_hidden;
     options.recursive = recursive;

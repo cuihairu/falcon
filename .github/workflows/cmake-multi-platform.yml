@@ -75,7 +75,7 @@ jobs:
           -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
           -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
           -DFALCON_BUILD_TESTS=ON
-          -DFALCON_BUILD_CLI=ON
+          -DFALCON_BUILD_CLI=OFF
           -DFALCON_ENABLE_HTTP=ON
           -DFALCON_ENABLE_FTP=OFF
           -DFALCON_ENABLE_CLOUD_STORAGE=OFF
@@ -94,7 +94,7 @@ jobs:
           -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
           -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
           -DFALCON_BUILD_TESTS=ON
-          -DFALCON_BUILD_CLI=ON
+          -DFALCON_BUILD_CLI=OFF
           -DFALCON_ENABLE_HTTP=ON
           -DFALCON_ENABLE_FTP=OFF
           -DFALCON_ENABLE_CLOUD_STORAGE=OFF
