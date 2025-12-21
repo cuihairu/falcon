@@ -6,8 +6,8 @@
  */
 
 #include <gtest/gtest.h>
-#include <falcon/http_plugin.hpp>
 #include <falcon/exceptions.hpp>
+#include "../plugins/http/http_plugin.hpp"
 #include <thread>
 #include <chrono>
 #include <fstream>

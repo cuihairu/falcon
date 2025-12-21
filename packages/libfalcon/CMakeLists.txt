@@ -108,7 +108,7 @@ if(FALCON_ENABLE_HTTP)
     target_sources(falcon PRIVATE
         $<TARGET_OBJECTS:falcon_plugin_http>
     )
-    target_compile_definitions(falcon PRIVATE FALCON_ENABLE_HTTP_PLUGIN)
+    target_compile_definitions(falcon PRIVATE FALCON_ENABLE_HTTP_PLUGIN FALCON_ENABLE_HTTP)
     # Link curl to falcon directly if http plugin uses it
     find_package(CURL QUIET)
     if(CURL_FOUND)

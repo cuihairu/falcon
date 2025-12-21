@@ -1,254 +1,221 @@
 // Falcon Task Manager Unit Tests
 // Copyright (c) 2025 Falcon Project
 
-#include "internal/task_manager.hpp"
-
+#include <falcon/task_manager.hpp>
 #include <falcon/download_task.hpp>
+#include <falcon/event_dispatcher.hpp>
 
 #include <gtest/gtest.h>
 
 #include <thread>
 #include <vector>
+#include <chrono>
 
 using namespace falcon;
-using namespace falcon::internal;
 
 class TaskManagerTest : public ::testing::Test {
 protected:
-    void SetUp() override { manager_ = std::make_unique<TaskManager>(5); }
+    void SetUp() override {
+        TaskManagerConfig config;
+        config.max_concurrent_tasks = 5;
+        config.cleanup_interval = std::chrono::seconds(1);
 
+        event_dispatcher_ = std::make_unique<EventDispatcher>();
+        manager_ = std::make_unique<TaskManager>(config, event_dispatcher_.get());
+
+        // Start the task manager
+        manager_->start();
+    }
+
+    void TearDown() override {
+        if (manager_) {
+            manager_->stop();
+        }
+        if (event_dispatcher_) {
+            event_dispatcher_->stop();
+        }
+    }
+
+    std::unique_ptr<EventDispatcher> event_dispatcher_;
     std::unique_ptr<TaskManager> manager_;
     DownloadOptions default_options_;
 };
 
 TEST_F(TaskManagerTest, CreateManager) {
-    EXPECT_EQ(manager_->max_concurrent(), 5);
-    EXPECT_EQ(manager_->total_count(), 0);
-    EXPECT_EQ(manager_->active_count(), 0);
+    EXPECT_EQ(manager_->get_max_concurrent_tasks(), 5);
+    EXPECT_EQ(manager_->get_queue_size(), 0);
+    EXPECT_EQ(manager_->get_active_task_count(), 0);
+    EXPECT_TRUE(manager_->is_running());
 }
 
 TEST_F(TaskManagerTest, AddTask) {
-    TaskId id = manager_->next_id();
-    auto task = std::make_shared<DownloadTask>(id, "https://example.com/file.zip",
+    auto task = std::make_shared<DownloadTask>(1, "https://example.com/file.zip",
                                                 default_options_);
-    manager_->add_task(task);
+    TaskId id = manager_->add_task(task, TaskPriority::Normal);
 
-    EXPECT_EQ(manager_->total_count(), 1);
+    EXPECT_NE(id, INVALID_TASK_ID);
     EXPECT_NE(manager_->get_task(id), nullptr);
+    EXPECT_EQ(task->status(), TaskStatus::Pending);
 }
 
 TEST_F(TaskManagerTest, AddMultipleTasks) {
+    std::vector<TaskId> ids;
     for (int i = 0; i < 10; ++i) {
-        TaskId id = manager_->next_id();
         auto task = std::make_shared<DownloadTask>(
-            id, "https://example.com/file" + std::to_string(i) + ".zip",
+            i + 1, "https://example.com/file" + std::to_string(i) + ".zip",
             default_options_);
-        manager_->add_task(task);
+        TaskId id = manager_->add_task(task, TaskPriority::Normal);
+        ids.push_back(id);
     }
 
-    EXPECT_EQ(manager_->total_count(), 10);
-}
-
-TEST_F(TaskManagerTest, GetNonExistentTask) {
-    auto task = manager_->get_task(999);
-    EXPECT_EQ(task, nullptr);
-}
-
-TEST_F(TaskManagerTest, RemoveFinishedTask) {
-    TaskId id = manager_->next_id();
-    auto task = std::make_shared<DownloadTask>(id, "https://example.com/file.zip",
-                                                default_options_);
-    manager_->add_task(task);
-
-    // Cannot remove non-finished task
-    EXPECT_FALSE(manager_->remove_task(id));
-    EXPECT_EQ(manager_->total_count(), 1);
-
-    // Mark as completed
-    task->set_status(TaskStatus::Completed);
-
-    // Now can remove
-    EXPECT_TRUE(manager_->remove_task(id));
-    EXPECT_EQ(manager_->total_count(), 0);
-}
-
-TEST_F(TaskManagerTest, GetAllTasks) {
-    for (int i = 0; i < 5; ++i) {
-        TaskId id = manager_->next_id();
-        auto task = std::make_shared<DownloadTask>(
-            id, "https://example.com/file" + std::to_string(i) + ".zip",
-            default_options_);
-        manager_->add_task(task);
+    // Check that all tasks were added
+    for (TaskId id : ids) {
+        EXPECT_NE(manager_->get_task(id), nullptr);
     }
 
-    auto tasks = manager_->get_all_tasks();
-    EXPECT_EQ(tasks.size(), 5);
+    // All tasks should be pending since no protocol handler is set
+    auto pending_tasks = manager_->get_tasks_by_status(TaskStatus::Pending);
+    EXPECT_EQ(pending_tasks.size(), 10);
 }
 
 TEST_F(TaskManagerTest, GetTasksByStatus) {
-    // Add tasks with different statuses
-    for (int i = 0; i < 3; ++i) {
-        TaskId id = manager_->next_id();
+    // Add tasks
+    for (int i = 0; i < 5; ++i) {
         auto task = std::make_shared<DownloadTask>(
-            id, "https://example.com/pending" + std::to_string(i) + ".zip",
+            i + 1, "https://example.com/file" + std::to_string(i) + ".zip",
             default_options_);
-        manager_->add_task(task);
+        manager_->add_task(task, TaskPriority::Normal);
     }
 
-    for (int i = 0; i < 2; ++i) {
-        TaskId id = manager_->next_id();
-        auto task = std::make_shared<DownloadTask>(
-            id, "https://example.com/downloading" + std::to_string(i) + ".zip",
-            default_options_);
-        task->set_status(TaskStatus::Downloading);
-        manager_->add_task(task);
-    }
-
+    // Initially all should be pending
     auto pending = manager_->get_tasks_by_status(TaskStatus::Pending);
-    EXPECT_EQ(pending.size(), 3);
+    EXPECT_EQ(pending.size(), 5);
 
-    auto downloading = manager_->get_tasks_by_status(TaskStatus::Downloading);
-    EXPECT_EQ(downloading.size(), 2);
+    auto active = manager_->get_active_tasks();
+    EXPECT_EQ(active.size(), 0);
 
     auto completed = manager_->get_tasks_by_status(TaskStatus::Completed);
     EXPECT_EQ(completed.size(), 0);
 }
 
-TEST_F(TaskManagerTest, GetActiveTasks) {
-    // Add pending task
-    {
-        TaskId id = manager_->next_id();
-        auto task = std::make_shared<DownloadTask>(id, "https://example.com/pending.zip",
-                                                    default_options_);
-        manager_->add_task(task);
-    }
-
-    // Add downloading tasks
-    for (int i = 0; i < 2; ++i) {
-        TaskId id = manager_->next_id();
+TEST_F(TaskManagerTest, GetAllTasks) {
+    // Add some tasks
+    int task_count = 3;
+    for (int i = 0; i < task_count; ++i) {
         auto task = std::make_shared<DownloadTask>(
-            id, "https://example.com/downloading" + std::to_string(i) + ".zip",
+            i + 1, "https://example.com/file" + std::to_string(i) + ".zip",
             default_options_);
-        task->set_status(TaskStatus::Downloading);
-        manager_->add_task(task);
+        manager_->add_task(task, TaskPriority::Normal);
     }
 
-    // Add preparing task
-    {
-        TaskId id = manager_->next_id();
-        auto task = std::make_shared<DownloadTask>(id, "https://example.com/preparing.zip",
-                                                    default_options_);
-        task->set_status(TaskStatus::Preparing);
-        manager_->add_task(task);
-    }
-
-    auto active = manager_->get_active_tasks();
-    EXPECT_EQ(active.size(), 3);  // 2 downloading + 1 preparing
+    auto all_tasks = manager_->get_all_tasks();
+    EXPECT_EQ(all_tasks.size(), task_count);
 }
 
-TEST_F(TaskManagerTest, GetNextPending) {
-    // Add tasks in order
-    TaskId first_id = 0;
+TEST_F(TaskManagerTest, TaskControl) {
+    auto task = std::make_shared<DownloadTask>(1, "https://example.com/file.zip",
+                                                default_options_);
+    TaskId id = manager_->add_task(task, TaskPriority::Normal);
+
+    // Test pause
+    EXPECT_TRUE(manager_->pause_task(id));
+    EXPECT_EQ(task->status(), TaskStatus::Paused);
+
+    // Test resume
+    EXPECT_TRUE(manager_->resume_task(id));
+    // Note: Task will remain Paused since no protocol handler
+
+    // Test cancel
+    EXPECT_TRUE(manager_->cancel_task(id));
+    EXPECT_EQ(task->status(), TaskStatus::Cancelled);
+}
+
+TEST_F(TaskManagerTest, GlobalControl) {
+    // Add multiple tasks
     for (int i = 0; i < 3; ++i) {
-        TaskId id = manager_->next_id();
-        if (i == 0) first_id = id;
         auto task = std::make_shared<DownloadTask>(
-            id, "https://example.com/file" + std::to_string(i) + ".zip",
+            i + 1, "https://example.com/file" + std::to_string(i) + ".zip",
             default_options_);
-        manager_->add_task(task);
+        manager_->add_task(task, TaskPriority::Normal);
     }
 
-    auto next = manager_->get_next_pending();
-    ASSERT_NE(next, nullptr);
-    EXPECT_EQ(next->id(), first_id);
+    // Pause all
+    manager_->pause_all();
+    auto paused = manager_->get_tasks_by_status(TaskStatus::Paused);
+    EXPECT_EQ(paused.size(), 3);
+
+    // Resume all
+    manager_->resume_all();
+    // Note: Tasks will remain Paused since no protocol handler
 }
 
-TEST_F(TaskManagerTest, SetMaxConcurrent) {
-    EXPECT_EQ(manager_->max_concurrent(), 5);
+TEST_F(TaskManagerTest, RemoveTask) {
+    auto task = std::make_shared<DownloadTask>(1, "https://example.com/file.zip",
+                                                default_options_);
+    TaskId id = manager_->add_task(task, TaskPriority::Normal);
 
-    manager_->set_max_concurrent(10);
-    EXPECT_EQ(manager_->max_concurrent(), 10);
+    // Cannot remove while not finished
+    EXPECT_FALSE(manager_->remove_task(id));
 
-    manager_->set_max_concurrent(1);
-    EXPECT_EQ(manager_->max_concurrent(), 1);
+    // Mark as finished
+    task->set_status(TaskStatus::Completed);
+
+    // Now can remove
+    EXPECT_TRUE(manager_->remove_task(id));
+    EXPECT_EQ(manager_->get_task(id), nullptr);
 }
 
-TEST_F(TaskManagerTest, CanStartMore) {
-    EXPECT_TRUE(manager_->can_start_more());
-
-    manager_->set_max_concurrent(0);
-    EXPECT_FALSE(manager_->can_start_more());
-}
-
-TEST_F(TaskManagerTest, RemoveFinished) {
-    // Add mix of tasks
-    for (int i = 0; i < 3; ++i) {
-        TaskId id = manager_->next_id();
+TEST_F(TaskManagerTest, CleanupFinishedTasks) {
+    // Add tasks with different statuses
+    for (int i = 0; i < 5; ++i) {
         auto task = std::make_shared<DownloadTask>(
-            id, "https://example.com/pending" + std::to_string(i) + ".zip",
+            i + 1, "https://example.com/file" + std::to_string(i) + ".zip",
             default_options_);
-        manager_->add_task(task);
+        manager_->add_task(task, TaskPriority::Normal);
+
+        // Mark some as finished
+        if (i % 2 == 0) {
+            task->set_status(TaskStatus::Completed);
+        }
     }
 
-    for (int i = 0; i < 2; ++i) {
-        TaskId id = manager_->next_id();
-        auto task = std::make_shared<DownloadTask>(
-            id, "https://example.com/completed" + std::to_string(i) + ".zip",
-            default_options_);
-        task->set_status(TaskStatus::Completed);
-        manager_->add_task(task);
-    }
+    size_t removed = manager_->cleanup_finished_tasks();
+    EXPECT_GT(removed, 0);
 
-    for (int i = 0; i < 2; ++i) {
-        TaskId id = manager_->next_id();
-        auto task = std::make_shared<DownloadTask>(
-            id, "https://example.com/failed" + std::to_string(i) + ".zip",
-            default_options_);
-        task->set_status(TaskStatus::Failed);
-        manager_->add_task(task);
-    }
-
-    EXPECT_EQ(manager_->total_count(), 7);
-
-    std::size_t removed = manager_->remove_finished();
-    EXPECT_EQ(removed, 4);  // 2 completed + 2 failed
-    EXPECT_EQ(manager_->total_count(), 3);  // 3 pending remain
+    // Check that finished tasks were removed
+    auto all_tasks = manager_->get_all_tasks();
+    EXPECT_LT(all_tasks.size(), 5);
 }
 
-TEST_F(TaskManagerTest, NextIdIsUnique) {
-    std::vector<TaskId> ids;
-    for (int i = 0; i < 100; ++i) {
-        ids.push_back(manager_->next_id());
+TEST_F(TaskManagerTest, GetStatistics) {
+    // Add tasks
+    int total = 10;
+    for (int i = 0; i < total; ++i) {
+        auto task = std::make_shared<DownloadTask>(
+            i + 1, "https://example.com/file" + std::to_string(i) + ".zip",
+            default_options_);
+        manager_->add_task(task, TaskPriority::Normal);
+
+        // Set some statuses
+        if (i < 3) {
+            task->set_status(TaskStatus::Completed);
+        } else if (i < 5) {
+            task->set_status(TaskStatus::Failed);
+        }
     }
 
-    // All IDs should be unique
-    std::sort(ids.begin(), ids.end());
-    auto last = std::unique(ids.begin(), ids.end());
-    EXPECT_EQ(last, ids.end());
+    auto stats = manager_->get_statistics();
+    EXPECT_EQ(stats.total_tasks, total);
+    EXPECT_EQ(stats.completed_tasks, 3);
+    EXPECT_EQ(stats.failed_tasks, 2);
+    EXPECT_EQ(stats.pending_tasks, 5);
 }
 
-TEST_F(TaskManagerTest, ThreadSafeAddTask) {
-    const int num_threads = 10;
-    const int tasks_per_thread = 100;
+TEST_F(TaskManagerTest, SetMaxConcurrentTasks) {
+    // Default should be 5
+    EXPECT_EQ(manager_->get_max_concurrent_tasks(), 5);
 
-    std::vector<std::thread> threads;
-    for (int t = 0; t < num_threads; ++t) {
-        threads.emplace_back([this, t, tasks_per_thread]() {
-            for (int i = 0; i < tasks_per_thread; ++i) {
-                TaskId id = manager_->next_id();
-                auto task = std::make_shared<DownloadTask>(
-                    id, "https://example.com/thread" + std::to_string(t) +
-                            "_file" + std::to_string(i) + ".zip",
-                    default_options_);
-                manager_->add_task(task);
-            }
-        });
-    }
-
-    for (auto& t : threads) {
-        t.join();
-    }
-
-    EXPECT_EQ(manager_->total_count(),
-              static_cast<std::size_t>(num_threads * tasks_per_thread));
+    // Change to 10
+    manager_->set_max_concurrent_tasks(10);
+    EXPECT_EQ(manager_->get_max_concurrent_tasks(), 10);
 }

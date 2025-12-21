@@ -58,6 +58,7 @@ add_executable(falcon_core_tests
     unit/download_task_test.cpp
     unit/task_manager_test.cpp
     unit/url_utils_test.cpp
+    unit/bug_fix_test.cpp
     unit/thread_pool_test.cpp
 )
 
@@ -108,6 +109,34 @@ target_include_directories(falcon_http_tests
 add_test_compile_options(falcon_http_tests)
 
 # ============================================================================
+# 集成测试
+# ============================================================================
+add_executable(falcon_integration_tests
+    integration/download_integration_test.cpp
+)
+
+target_link_libraries(falcon_integration_tests
+    PRIVATE
+        falcon
+        GTest::gtest
+        GTest::gtest_main
+)
+
+target_include_directories(falcon_integration_tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+)
+
+add_test_compile_options(falcon_integration_tests)
+
+# 查找并链接 libcurl
+find_package(CURL QUIET)
+if(CURL_FOUND)
+    target_link_libraries(falcon_integration_tests PRIVATE CURL::libcurl)
+    target_compile_definitions(falcon_integration_tests PRIVATE FALCON_TEST_CURL_AVAILABLE)
+endif()
+
+# ============================================================================
 # 注册测试到 CTest
 # ============================================================================
 
@@ -121,3 +150,6 @@ gtest_discover_tests(falcon_core_tests)
 if(TARGET falcon_http_tests)
     gtest_discover_tests(falcon_http_tests)
 endif()
+
+# 注册集成测试
+gtest_discover_tests(falcon_integration_tests)

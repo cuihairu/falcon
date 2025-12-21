@@ -1,97 +1,119 @@
-// Falcon Download Engine - Core Implementation
-// Copyright (c) 2025 Falcon Project
+/**
+ * @file download_engine.cpp
+ * @brief 下载引擎实现
+ * @author Falcon Team
+ * @date 2025-12-21
+ */
 
 #include <falcon/download_engine.hpp>
 #include <falcon/exceptions.hpp>
-
-#include "internal/event_dispatcher.hpp"
-#include "internal/plugin_manager.hpp"
-#include "internal/task_manager.hpp"
-#include "internal/thread_pool.hpp"
-
+#include <falcon/logger.hpp>
+#include <falcon/task_manager.hpp>
+#include <falcon/event_dispatcher.hpp>
+#include <falcon/plugin_manager.hpp>
 #include <filesystem>
+
+// 临时日志宏
+#define LOG_ERROR(msg) falcon::log_error(msg)
 
 namespace falcon {
 
-/// Implementation details for DownloadEngine
+/**
+ * @brief 下载引擎实现类
+ */
 class DownloadEngine::Impl {
 public:
-    explicit Impl(EngineConfig config)
-        : config_(std::move(config)),
-          task_manager_(config_.max_concurrent_tasks),
-          thread_pool_(config_.max_concurrent_tasks) {}
+    explicit Impl(const EngineConfig& config)
+        : config_(config)
+        , task_manager_(TaskManagerConfig{}, &event_dispatcher_)
+        , global_speed_limiter_(0)
+        , next_task_id_(1) {
+
+        // 启动事件分发器
+        event_dispatcher_.start();
+
+        // 启动任务管理器
+        task_manager_.start();
+    }
 
     ~Impl() {
-        // Cancel all active tasks
-        auto tasks = task_manager_.get_active_tasks();
-        for (auto& task : tasks) {
-            task->cancel();
-        }
-        thread_pool_.wait();
+        // 停止所有任务
+        task_manager_.cancel_all();
+        task_manager_.stop();
+
+        // 停止事件分发器
+        event_dispatcher_.stop();
     }
 
     DownloadTask::Ptr add_task(const std::string& url,
-                                const DownloadOptions& options) {
-        // Validate URL
-        if (!internal::UrlUtils::is_valid_url(url)) {
-            throw InvalidURLException(url);
+                               const DownloadOptions& options) {
+        if (url.empty()) {
+            throw InvalidURLException("Empty URL");
         }
 
-        // Find handler
-        auto* handler = plugin_manager_.find_handler(url);
+        // 查找协议处理器
+        auto* handler = plugin_manager_.getPluginByUrl(url);
         if (!handler) {
-            throw UnsupportedProtocolException(
-                internal::UrlUtils::extract_scheme(url));
+            throw UnsupportedProtocolException("No handler for URL: " + url);
         }
 
-        // Create task
-        TaskId id = task_manager_.next_id();
+        // 创建任务
+        TaskId id = next_task_id_++;
         auto task = std::make_shared<DownloadTask>(id, url, options);
 
-        // Set up output path
-        std::string output_dir = options.output_directory;
-        if (output_dir.empty()) {
-            output_dir = ".";
+        // 设置协议处理器
+        task->set_handler(std::shared_ptr<IProtocolHandler>(handler, [](IProtocolHandler*) {}));
+
+        // 生成输出路径
+        std::string output_path;
+        if (!options.output_filename.empty()) {
+            // 如果指定了文件名
+            if (!options.output_directory.empty()) {
+                // 同时指定了目录
+                output_path = options.output_directory;
+                if (output_path.back() != '/') {
+                    output_path += '/';
+                }
+                output_path += options.output_filename;
+            } else {
+                // 只指定了文件名
+                output_path = options.output_filename;
+            }
+        } else {
+            // 没有指定文件名，从 URL 提取
+            auto pos = url.rfind('/');
+            if (pos != std::string::npos && pos < url.length() - 1) {
+                output_path = url.substr(pos + 1);
+            } else {
+                output_path = "download";
+            }
         }
+        task->set_output_path(output_path);
 
-        std::string filename = options.output_filename;
-        if (filename.empty()) {
-            filename = internal::UrlUtils::extract_filename(url);
-        }
-
-        std::filesystem::path output_path =
-            std::filesystem::path(output_dir) / filename;
-
-        // Create directory if needed
-        if (options.create_directory) {
-            std::filesystem::create_directories(output_path.parent_path());
-        }
-
-        task->set_output_path(output_path.string());
-        task->set_listener(&event_dispatcher_);
-
-        // Add to manager
-        task_manager_.add_task(task);
-
-        // Auto-start if configured
-        if (config_.auto_start && task_manager_.can_start_more()) {
-            start_task_internal(task, handler);
-        }
+        // 添加到任务管理器
+        task_manager_.add_task(task, TaskPriority::Normal);
 
         return task;
     }
 
     std::vector<DownloadTask::Ptr> add_tasks(
-        const std::vector<std::string>& urls, const DownloadOptions& options) {
+        const std::vector<std::string>& urls,
+        const DownloadOptions& options) {
+
         std::vector<DownloadTask::Ptr> tasks;
         tasks.reserve(urls.size());
+
         for (const auto& url : urls) {
             try {
-                tasks.push_back(add_task(url, options));
-            } catch (const FalconException&) {
-                // Skip invalid URLs
+                auto task = add_task(url, options);
+                if (task) {
+                    tasks.push_back(task);
+                }
+            } catch (const std::exception& e) {
+                LOG_ERROR("Failed to add task for URL: " + url + " Error: " + e.what());
             }
         }
+
         return tasks;
     }
 
@@ -111,84 +133,62 @@ public:
         return task_manager_.get_active_tasks();
     }
 
-    bool remove_task(TaskId id) { return task_manager_.remove_task(id); }
+    bool remove_task(TaskId id) {
+        return task_manager_.remove_task(id);
+    }
 
-    std::size_t remove_finished_tasks() { return task_manager_.remove_finished(); }
+    size_t remove_finished_tasks() {
+        return task_manager_.cleanup_finished_tasks();
+    }
 
     bool start_task(TaskId id) {
-        auto task = task_manager_.get_task(id);
-        if (!task || task->status() != TaskStatus::Pending) {
-            return false;
-        }
-
-        auto* handler = plugin_manager_.find_handler(task->url());
-        if (!handler) {
-            return false;
-        }
-
-        start_task_internal(task, handler);
-        return true;
+        return task_manager_.start_task(id);
     }
 
     bool pause_task(TaskId id) {
-        auto task = task_manager_.get_task(id);
-        if (!task) {
-            return false;
-        }
-        return task->pause();
+        return task_manager_.pause_task(id);
     }
 
     bool resume_task(TaskId id) {
-        auto task = task_manager_.get_task(id);
-        if (!task) {
-            return false;
-        }
-        return task->resume();
+        return task_manager_.resume_task(id);
     }
 
     bool cancel_task(TaskId id) {
-        auto task = task_manager_.get_task(id);
-        if (!task) {
-            return false;
-        }
-        return task->cancel();
+        return task_manager_.cancel_task(id);
     }
 
     void pause_all() {
-        auto tasks = task_manager_.get_active_tasks();
-        for (auto& task : tasks) {
-            task->pause();
-        }
+        task_manager_.pause_all();
     }
 
     void resume_all() {
-        auto tasks = task_manager_.get_tasks_by_status(TaskStatus::Paused);
-        for (auto& task : tasks) {
-            task->resume();
-        }
+        task_manager_.resume_all();
     }
 
     void cancel_all() {
-        auto tasks = task_manager_.get_all_tasks();
-        for (auto& task : tasks) {
-            if (!task->is_finished()) {
-                task->cancel();
-            }
+        task_manager_.cancel_all();
+    }
+
+    void wait_all() {
+        task_manager_.wait_all();
+    }
+
+    void register_handler(std::unique_ptr<IProtocolHandler> handler) {
+        if (handler) {
+            plugin_manager_.registerPlugin(std::move(handler));
         }
     }
 
-    void wait_all() { task_manager_.wait_all(); }
-
-    void register_handler(std::unique_ptr<IProtocolHandler> handler) {
-        plugin_manager_.register_handler(std::move(handler));
+    void register_handler_factory(ProtocolHandlerFactory factory) {
+        handler_factories_.push_back(factory);
     }
 
     std::vector<std::string> get_supported_protocols() const {
-        return plugin_manager_.get_protocols();
+        return plugin_manager_.getSupportedProtocols();
     }
 
     bool is_url_supported(const std::string& url) const {
-        return plugin_manager_.is_supported(url);
+        return plugin_manager_.supportsUrl(url);
     }
 
     void add_listener(IEventListener* listener) {
@@ -199,109 +199,68 @@ public:
         event_dispatcher_.remove_listener(listener);
     }
 
-    const EngineConfig& config() const noexcept { return config_; }
+    const EngineConfig& config() const noexcept {
+        return config_;
+    }
 
     void set_global_speed_limit(BytesPerSecond bytes_per_second) {
-        config_.global_speed_limit = bytes_per_second;
+        global_speed_limiter_ = bytes_per_second;
+        // TODO: 通知所有任务调整速度
     }
 
     void set_max_concurrent_tasks(std::size_t max_tasks) {
-        config_.max_concurrent_tasks = max_tasks;
-        task_manager_.set_max_concurrent(max_tasks);
+        task_manager_.set_max_concurrent_tasks(max_tasks);
     }
 
     BytesPerSecond get_total_speed() const {
-        BytesPerSecond total = 0;
-        auto tasks = task_manager_.get_active_tasks();
-        for (const auto& task : tasks) {
-            total += task->speed();
-        }
-        return total;
+        auto stats = task_manager_.get_statistics();
+        return stats.total_speed;
     }
 
     std::size_t get_active_task_count() const {
-        return task_manager_.active_count();
+        return task_manager_.get_active_task_count();
     }
 
     std::size_t get_total_task_count() const {
-        return task_manager_.total_count();
+        auto stats = task_manager_.get_statistics();
+        return stats.total_tasks;
+    }
+
+    void load_all_plugins() {
+        plugin_manager_.loadAllPlugins();
+
+        // 加载工厂函数创建的插件
+        for (auto& factory : handler_factories_) {
+            if (factory) {
+                auto handler = factory();
+                if (handler) {
+                    plugin_manager_.registerPlugin(std::move(handler));
+                }
+            }
+        }
     }
 
 private:
-    void start_task_internal(DownloadTask::Ptr task, IProtocolHandler* handler) {
-        task->set_status(TaskStatus::Preparing);
-        task->mark_started();
-
-        // Submit to thread pool
-        thread_pool_.submit([this, task, handler]() {
-            try {
-                // Get file info first
-                auto info =
-                    handler->get_file_info(task->url(), task->options());
-                task->set_file_info(info);
-
-                // Check if file exists and resume
-                auto output_path = task->output_path();
-                std::filesystem::path temp_path =
-                    output_path + config_.temp_extension;
-
-                if (task->options().resume_enabled &&
-                    std::filesystem::exists(temp_path)) {
-                    auto existing_size = std::filesystem::file_size(temp_path);
-                    task->update_progress(existing_size, info.total_size, 0);
-                }
-
-                // Start download
-                task->set_status(TaskStatus::Downloading);
-                handler->download(task, &event_dispatcher_);
-
-                // Check completion
-                if (task->status() == TaskStatus::Downloading) {
-                    // Rename temp file to final
-                    if (std::filesystem::exists(temp_path)) {
-                        std::filesystem::rename(temp_path, output_path);
-                    }
-
-                    task->set_status(TaskStatus::Completed);
-                    event_dispatcher_.on_completed(task->id(), output_path);
-                }
-            } catch (const std::exception& e) {
-                task->set_error(e.what());
-                task->set_status(TaskStatus::Failed);
-            }
-
-            // Try to start next pending task
-            try_start_next();
-        });
-    }
-
-    void try_start_next() {
-        if (!config_.auto_start || !task_manager_.can_start_more()) {
-            return;
-        }
-
-        auto next = task_manager_.get_next_pending();
-        if (next) {
-            auto* handler = plugin_manager_.find_handler(next->url());
-            if (handler) {
-                start_task_internal(next, handler);
-            }
-        }
-    }
-
     EngineConfig config_;
-    internal::TaskManager task_manager_;
-    internal::PluginManager plugin_manager_;
-    internal::EventDispatcher event_dispatcher_;
-    internal::ThreadPool thread_pool_;
+    PluginManager plugin_manager_;
+    EventDispatcher event_dispatcher_;
+    TaskManager task_manager_;
+
+    std::vector<ProtocolHandlerFactory> handler_factories_;
+    std::atomic<BytesPerSecond> global_speed_limiter_;
+    std::atomic<TaskId> next_task_id_;
 };
 
-// DownloadEngine public API implementation
-
-DownloadEngine::DownloadEngine() : impl_(std::make_unique<Impl>(EngineConfig{})) {}
+// DownloadEngine 实现
+DownloadEngine::DownloadEngine()
+    : impl_(std::make_unique<Impl>(EngineConfig{})) {
+    impl_->load_all_plugins();
+}
 
 DownloadEngine::DownloadEngine(const EngineConfig& config)
-    : impl_(std::make_unique<Impl>(config)) {}
+    : impl_(std::make_unique<Impl>(config)) {
+    impl_->load_all_plugins();
+}
 
 DownloadEngine::~DownloadEngine() = default;
 
@@ -311,7 +270,8 @@ DownloadTask::Ptr DownloadEngine::add_task(const std::string& url,
 }
 
 std::vector<DownloadTask::Ptr> DownloadEngine::add_tasks(
-    const std::vector<std::string>& urls, const DownloadOptions& options) {
+    const std::vector<std::string>& urls,
+    const DownloadOptions& options) {
     return impl_->add_tasks(urls, options);
 }
 
@@ -323,8 +283,7 @@ std::vector<DownloadTask::Ptr> DownloadEngine::get_all_tasks() const {
     return impl_->get_all_tasks();
 }
 
-std::vector<DownloadTask::Ptr> DownloadEngine::get_tasks_by_status(
-    TaskStatus status) const {
+std::vector<DownloadTask::Ptr> DownloadEngine::get_tasks_by_status(TaskStatus status) const {
     return impl_->get_tasks_by_status(status);
 }
 
@@ -332,36 +291,52 @@ std::vector<DownloadTask::Ptr> DownloadEngine::get_active_tasks() const {
     return impl_->get_active_tasks();
 }
 
-bool DownloadEngine::remove_task(TaskId id) { return impl_->remove_task(id); }
+bool DownloadEngine::remove_task(TaskId id) {
+    return impl_->remove_task(id);
+}
 
-std::size_t DownloadEngine::remove_finished_tasks() {
+size_t DownloadEngine::remove_finished_tasks() {
     return impl_->remove_finished_tasks();
 }
 
-bool DownloadEngine::start_task(TaskId id) { return impl_->start_task(id); }
+bool DownloadEngine::start_task(TaskId id) {
+    return impl_->start_task(id);
+}
 
-bool DownloadEngine::pause_task(TaskId id) { return impl_->pause_task(id); }
+bool DownloadEngine::pause_task(TaskId id) {
+    return impl_->pause_task(id);
+}
 
-bool DownloadEngine::resume_task(TaskId id) { return impl_->resume_task(id); }
+bool DownloadEngine::resume_task(TaskId id) {
+    return impl_->resume_task(id);
+}
 
-bool DownloadEngine::cancel_task(TaskId id) { return impl_->cancel_task(id); }
+bool DownloadEngine::cancel_task(TaskId id) {
+    return impl_->cancel_task(id);
+}
 
-void DownloadEngine::pause_all() { impl_->pause_all(); }
+void DownloadEngine::pause_all() {
+    impl_->pause_all();
+}
 
-void DownloadEngine::resume_all() { impl_->resume_all(); }
+void DownloadEngine::resume_all() {
+    impl_->resume_all();
+}
 
-void DownloadEngine::cancel_all() { impl_->cancel_all(); }
+void DownloadEngine::cancel_all() {
+    impl_->cancel_all();
+}
 
-void DownloadEngine::wait_all() { impl_->wait_all(); }
+void DownloadEngine::wait_all() {
+    impl_->wait_all();
+}
 
 void DownloadEngine::register_handler(std::unique_ptr<IProtocolHandler> handler) {
     impl_->register_handler(std::move(handler));
 }
 
 void DownloadEngine::register_handler_factory(ProtocolHandlerFactory factory) {
-    if (factory) {
-        impl_->register_handler(factory());
-    }
+    impl_->register_handler_factory(factory);
 }
 
 std::vector<std::string> DownloadEngine::get_supported_protocols() const {
@@ -404,4 +379,4 @@ std::size_t DownloadEngine::get_total_task_count() const {
     return impl_->get_total_task_count();
 }
 
-}  // namespace falcon
+} // namespace falcon

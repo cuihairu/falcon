@@ -110,6 +110,21 @@ public:
                     TaskPriority priority = TaskPriority::Normal);
 
     /**
+     * @brief 启动任务
+     * @param id 任务ID
+     * @return 是否成功启动
+     */
+    bool start_task(TaskId id);
+
+    /**
+     * @brief 启动任务（带优先级）
+     * @param id 任务ID
+     * @param priority 任务优先级
+     * @return 是否成功启动
+     */
+    bool start_task(TaskId id, TaskPriority priority);
+
+    /**
      * @brief 获取任务
      * @param id 任务ID
      * @return 任务指针，如果不存在返回nullptr

@@ -86,7 +86,7 @@ void PluginManager::loadAllPlugins() {
     std::cout << "Loading all available plugins" << std::endl;
 
 #ifdef FALCON_ENABLE_HTTP
-    registerPlugin(std::make_unique<plugins::HttpHandler>());
+    registerPlugin(plugins::create_http_handler());
 #endif
 
 #ifdef FALCON_ENABLE_FTP

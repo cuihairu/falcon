@@ -1,11 +1,12 @@
 // Falcon HTTP Plugin - Implementation
 // Copyright (c) 2025 Falcon Project
 
-#include "http_handler.hpp"
+#include "http_plugin.hpp"
 
 #include <falcon/exceptions.hpp>
 
 #include <algorithm>
+#include <iostream>
 #include <atomic>
 #include <chrono>
 #include <cstring>
@@ -413,7 +414,9 @@ public:
         }
 
         // Move temp file to final destination
+        std::cerr << "Moving '" << temp_path << "' to '" << task->output_path() << "'" << std::endl;
         if (std::rename(temp_path.c_str(), task->output_path().c_str()) != 0) {
+            perror("rename failed");
             throw FileIOException("Failed to move downloaded file to destination");
         }
         task->set_status(TaskStatus::Completed);

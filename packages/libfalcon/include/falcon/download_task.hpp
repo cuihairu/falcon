@@ -131,6 +131,9 @@ public:
     /// Set the protocol handler
     void set_handler(std::shared_ptr<IProtocolHandler> handler);
 
+    /// Get the protocol handler
+    std::shared_ptr<IProtocolHandler> get_handler() const;
+
     /// Set event listener
     void set_listener(IEventListener* listener);
 

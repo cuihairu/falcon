@@ -7,7 +7,7 @@
 
 #pragma once
 
-#include "../base_protocol_plugin.hpp"
+#include <falcon/protocol_handler.hpp>
 #include <string>
 #include <vector>
 #include <memory>

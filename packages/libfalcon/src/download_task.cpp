@@ -129,6 +129,11 @@ void DownloadTask::set_handler(std::shared_ptr<IProtocolHandler> handler) {
     handler_ = std::move(handler);
 }
 
+std::shared_ptr<IProtocolHandler> DownloadTask::get_handler() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return handler_;
+}
+
 void DownloadTask::set_listener(IEventListener* listener) {
     std::lock_guard<std::mutex> lock(mutex_);
     listener_ = listener;
