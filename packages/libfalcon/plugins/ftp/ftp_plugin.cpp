@@ -3,6 +3,7 @@
 
 namespace falcon {
 
-// TODO: Implement FTPPlugin class
+// TODO: Implement FTP plugin with libcurl
+// This is a placeholder to ensure the plugin builds
 
 } // namespace falcon

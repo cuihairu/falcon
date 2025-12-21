@@ -223,7 +223,18 @@ endif()
 
 include(GNUInstallDirs)
 
-install(TARGETS falcon
+# Install falcon library (HTTP plugin is embedded as OBJECT library)
+# Only standalone plugins need to be installed separately
+set(FALCON_PLUGIN_TARGETS)
+if(FALCON_ENABLE_FTP)
+    list(APPEND FALCON_PLUGIN_TARGETS falcon_plugin_ftp)
+endif()
+if(FALCON_ENABLE_BITTORRENT)
+    list(APPEND FALCON_PLUGIN_TARGETS falcon_plugin_bittorrent)
+endif()
+
+# Install all targets
+install(TARGETS falcon ${FALCON_PLUGIN_TARGETS}
     EXPORT FalconTargets
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}

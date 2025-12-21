@@ -7,6 +7,21 @@
 
 #include <falcon/s3_browser.hpp>
 #include <falcon/logger.hpp>
+
+// Use spdlog for logging if available
+#ifdef FALCON_USE_SPDLOG
+#include <spdlog/spdlog.h>
+#define LOG_ERROR(msg, ...) spdlog::error(msg, __VA_ARGS__)
+#define LOG_WARN(msg, ...) spdlog::warn(msg, __VA_ARGS__)
+#define LOG_INFO(msg, ...) spdlog::info(msg, __VA_ARGS__)
+#else
+// Fallback to simple logger
+#include <iostream>
+#define LOG_ERROR(msg, ...) std::cerr << "[ERROR] " << msg << std::endl
+#define LOG_WARN(msg, ...) std::cerr << "[WARN] " << msg << std::endl
+#define LOG_INFO(msg, ...) std::cout << "[INFO] " << msg << std::endl
+#endif
+
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
 #include <sstream>
@@ -79,7 +94,7 @@ public:
         // 添加AWS签名头部
         std::map<std::string, std::string> signed_headers = headers;
         if (config_.access_key_id.empty()) {
-            Logger::warn("No AWS credentials provided");
+            LOG_WARN("No AWS credentials provided%s", "");
         }
 
         // 简化签名（实际应使用AWS签名V4）
@@ -112,7 +127,7 @@ public:
         }
 
         if (res != CURLE_OK) {
-            Logger::error("S3 request failed: {}", curl_easy_strerror(res));
+            LOG_ERROR("S3 request failed: {}", curl_easy_strerror(res));
             return "";
         }
 
@@ -332,7 +347,7 @@ std::vector<RemoteResource> S3Browser::list_directory(
 
     if (!path.empty() && path != "/") {
         list_url += "&prefix=" + p_impl_->url_encode(path);
-        if (!path.ends_with('/')) {
+        if (path.back() != '/') {
             list_url += "/";
         }
     }
@@ -343,7 +358,7 @@ std::vector<RemoteResource> S3Browser::list_directory(
     std::string response = p_impl_->perform_s3_request("GET", list_url, {});
 
     if (response.empty()) {
-        Logger::error("Failed to list S3 directory");
+        LOG_ERROR("Failed to list S3 directory%s", "");
         return resources;
     }
 
@@ -384,7 +399,7 @@ std::vector<RemoteResource> S3Browser::list_directory(
         }
 
     } catch (const std::exception& e) {
-        Logger::error("Failed to parse S3 response: {}", e.what());
+        LOG_ERROR("Failed to parse S3 response: {}", e.what());
     }
 #endif
 
@@ -437,7 +452,7 @@ RemoteResource S3Browser::get_resource_info(const std::string& path) {
 bool S3Browser::create_directory(const std::string& path, bool recursive) {
     // S3使用PUT操作创建目录对象
     std::string dir_path = path;
-    if (!dir_path.ends_with('/')) {
+    if (dir_path.back() != '/') {
         dir_path += "/";
     }
 
@@ -538,7 +553,7 @@ std::map<std::string, uint64_t> S3Browser::get_quota_info() {
             }
         }
     } catch (const std::exception& e) {
-        Logger::error("Failed to parse quota info: {}", e.what());
+        LOG_ERROR("Failed to parse quota info: {}", e.what());
     }
 #endif
 

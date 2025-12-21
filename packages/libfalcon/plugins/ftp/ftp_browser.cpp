@@ -7,6 +7,20 @@
 
 #include <falcon/ftp_browser.hpp>
 #include <falcon/logger.hpp>
+
+// Use spdlog for logging if available
+#ifdef FALCON_USE_SPDLOG
+#include <spdlog/spdlog.h>
+#define LOG_ERROR(msg, ...) spdlog::error(msg, __VA_ARGS__)
+#define LOG_WARN(msg, ...) spdlog::warn(msg, __VA_ARGS__)
+#define LOG_INFO(msg, ...) spdlog::info(msg, __VA_ARGS__)
+#else
+// Fallback to simple logger
+#include <iostream>
+#define LOG_ERROR(msg, ...) std::cerr << "[ERROR] " << msg << std::endl
+#define LOG_WARN(msg, ...) std::cerr << "[WARN] " << msg << std::endl
+#define LOG_INFO(msg, ...) std::cout << "[INFO] " << msg << std::endl
+#endif
 #include <curl/curl.h>
 #include <sstream>
 #include <algorithm>
@@ -103,7 +117,7 @@ public:
 
         CURLcode res = curl_easy_perform(curl_);
         if (res != CURLE_OK) {
-            falcon::log_error("FTP LIST failed: " + std::string(curl_easy_strerror(res)));
+            LOG_ERROR("FTP LIST failed: {}", curl_easy_strerror(res));
             return "";
         }
 
@@ -487,7 +501,7 @@ bool FTPBrowser::rename(const std::string& old_path, const std::string& new_path
 
 bool FTPBrowser::copy(const std::string& source_path, const std::string& dest_path) {
     // FTP不直接支持复制，需要先下载再上传
-    falcon::log_error("FTP does not support direct copy operation");
+    LOG_ERROR("FTP does not support direct copy operation");
     return false;
 }
 
