@@ -6,67 +6,39 @@
  */
 
 #include <falcon/plugin_manager.hpp>
-#include <falcon/logger.hpp>
+#include <iostream>
+#include <format>
 
 // 包含所有插件头文件
 #ifdef FALCON_ENABLE_HTTP
-#include "../plugins/http/http_plugin.hpp"
-#endif
-
-#ifdef FALCON_ENABLE_FTP
-#include "../plugins/ftp/ftp_plugin.hpp"
-#endif
-
-#ifdef FALCON_ENABLE_BITTORRENT
-#include "../plugins/bittorrent/bittorrent_plugin.hpp"
-#endif
-
-// 新增私有协议
-#ifdef FALCON_ENABLE_THUNDER
-#include "../plugins/thunder/thunder_plugin.hpp"
-#endif
-
-#ifdef FALCON_ENABLE_QQDL
-#include "../plugins/qqdl/qqdl_plugin.hpp"
-#endif
-
-#ifdef FALCON_ENABLE_FLASHGET
-#include "../plugins/flashget/flashget_plugin.hpp"
-#endif
-
-#ifdef FALCON_ENABLE_ED2K
-#include "../plugins/ed2k/ed2k_plugin.hpp"
-#endif
-
-#ifdef FALCON_ENABLE_HLS
-#include "../plugins/hls/hls_plugin.hpp"
+#include "../plugins/http/http_handler.hpp"
 #endif
 
 namespace falcon {
 
 PluginManager::PluginManager() {
-    FALCON_LOG_INFO("Initializing plugin manager");
+    std::cout <<"Initializing plugin manager");
 }
 
 PluginManager::~PluginManager() {
-    FALCON_LOG_DEBUG("Shutting down plugin manager");
+    std::cout <<("Shutting down plugin manager");
 }
 
 void PluginManager::registerPlugin(std::unique_ptr<IProtocolHandler> plugin) {
     if (!plugin) {
-        FALCON_LOG_WARN("Attempted to register null plugin");
+        std::cerr <<("Attempted to register null plugin");
         return;
     }
 
-    std::string protocol = plugin->getProtocolName();
+    std::string protocol = plugin->protocol_name();
 
     // 检查是否已注册相同协议的插件
     auto it = plugins_.find(protocol);
     if (it != plugins_.end()) {
-        FALCON_LOG_WARN("Plugin for protocol '{}' already registered, replacing", protocol);
+        std::cerr << "Plugin for protocol '" << protocol << "' already registered, replacing" << std::endl;
     }
 
-    FALCON_LOG_INFO("Registering plugin for protocol: {}", protocol);
+    std::cout << "Registering plugin for protocol: " << protocol << std::endl;
     plugins_[protocol] = std::move(plugin);
 }
 
@@ -89,7 +61,7 @@ IProtocolHandler* PluginManager::getPluginByUrl(const std::string& url) const {
             // 检查是否是特殊格式的链接
             if (url.find(".m3u8") != std::string::npos || url.find(".mpd") != std::string::npos) {
                 auto hlsPlugin = getPlugin("hls");
-                if (hlsPlugin && hlsPlugin->canHandle(url)) {
+                if (hlsPlugin && hlsPlugin->can_handle(url)) {
                     return hlsPlugin;
                 }
             }
@@ -103,7 +75,7 @@ IProtocolHandler* PluginManager::getPluginByUrl(const std::string& url) const {
 
     // 如果直接通过scheme找不到，遍历所有插件检查
     for (const auto& pair : plugins_) {
-        if (pair.second->canHandle(url)) {
+        if (pair.second->can_handle(url)) {
             return pair.second.get();
         }
     }
@@ -112,45 +84,38 @@ IProtocolHandler* PluginManager::getPluginByUrl(const std::string& url) const {
 }
 
 void PluginManager::loadAllPlugins() {
-    FALCON_LOG_INFO("Loading all available plugins");
+    std::cout << "Loading all available plugins" << std::endl;
 
 #ifdef FALCON_ENABLE_HTTP
-    registerPlugin(std::make_unique<HttpPlugin>());
+    registerPlugin(std::make_unique<plugins::HttpHandler>());
 #endif
 
 #ifdef FALCON_ENABLE_FTP
-    registerPlugin(std::make_unique<FtpPlugin>());
 #endif
 
 #ifdef FALCON_ENABLE_BITTORRENT
-    registerPlugin(std::make_unique<BitTorrentPlugin>());
 #endif
 
 // 加载私有协议插件
 #ifdef FALCON_ENABLE_THUNDER
-    registerPlugin(std::make_unique<ThunderPlugin>());
 #endif
 
 #ifdef FALCON_ENABLE_QQDL
-    registerPlugin(std::make_unique<QQDLPlugin>());
 #endif
 
 #ifdef FALCON_ENABLE_FLASHGET
-    registerPlugin(std::make_unique<FlashGetPlugin>());
 #endif
 
 #ifdef FALCON_ENABLE_ED2K
-    registerPlugin(std::make_unique<ED2KPlugin>());
 #endif
 
 #ifdef FALCON_ENABLE_HLS
-    registerPlugin(std::make_unique<HLSPlugin>());
 #endif
 
-    FALCON_LOG_INFO("Loaded {} plugins", plugins_.size());
+    std::cout << "Loaded " << plugins_.size() << " plugins" << std::endl;
 }
 
-std::vector<std::string> PluginManager::listSupportedProtocols() const {
+std::vector<std::string> PluginManager::getSupportedProtocols() const {
     std::vector<std::string> protocols;
     protocols.reserve(plugins_.size());
 
@@ -186,15 +151,15 @@ bool PluginManager::supportsUrl(const std::string& url) const {
 void PluginManager::unloadPlugin(const std::string& protocol) {
     auto it = plugins_.find(protocol);
     if (it != plugins_.end()) {
-        FALCON_LOG_INFO("Unloading plugin for protocol: {}", protocol);
+        std::cout << "Unloading plugin for protocol: " << protocol << std::endl;
         plugins_.erase(it);
     } else {
-        FALCON_LOG_WARN("No plugin found for protocol: {}", protocol);
+        std::cerr <<("No plugin found for protocol: {}", protocol);
     }
 }
 
 void PluginManager::unloadAllPlugins() {
-    FALCON_LOG_INFO("Unloading all plugins");
+    std::cout << "Unloading all plugins" << std::endl;
     plugins_.clear();
 }
 
