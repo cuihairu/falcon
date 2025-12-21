@@ -277,6 +277,12 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
+        // 启动任务
+        if (!engine.start_task(task->id())) {
+            std::cerr << "错误：无法启动下载任务\n";
+            return 1;
+        }
+
         // 等待下载完成
         while (!g_interrupted && !task->is_finished()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));

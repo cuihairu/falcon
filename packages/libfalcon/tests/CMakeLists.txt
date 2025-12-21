@@ -82,7 +82,7 @@ add_test_compile_options(falcon_core_tests)
 
 # HTTP 插件测试（始终编译）
 add_executable(falcon_http_tests
-    unit/http_plugin_test.cpp
+    unit/http_handler_test.cpp
 )
 
 target_link_libraries(falcon_http_tests

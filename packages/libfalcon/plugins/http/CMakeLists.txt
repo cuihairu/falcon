@@ -11,7 +11,7 @@ project(falcon_plugin_http
 # ============================================================================
 
 add_library(falcon_plugin_http OBJECT
-    http_plugin.cpp
+    http_handler.cpp
 )
 
 target_include_directories(falcon_plugin_http

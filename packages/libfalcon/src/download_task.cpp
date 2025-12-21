@@ -65,8 +65,14 @@ bool DownloadTask::is_finished() const noexcept {
 
 bool DownloadTask::pause() {
     TaskStatus current = status_.load();
-    if (current != TaskStatus::Downloading && current != TaskStatus::Preparing) {
+    if (current != TaskStatus::Downloading && current != TaskStatus::Preparing && current != TaskStatus::Pending) {
         return false;
+    }
+
+    // 如果是 Pending 状态，直接设置为 Paused
+    if (current == TaskStatus::Pending) {
+        set_status(TaskStatus::Paused);
+        return true;
     }
 
     pause_requested_.store(true);

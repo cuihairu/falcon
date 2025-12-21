@@ -166,13 +166,6 @@ public:
     // === 任务控制 ===
 
     /**
-     * @brief 启动任务
-     * @param id 任务ID
-     * @return 是否成功启动
-     */
-    bool start_task(TaskId id);
-
-    /**
      * @brief 暂停任务
      * @param id 任务ID
      * @return 是否成功暂停

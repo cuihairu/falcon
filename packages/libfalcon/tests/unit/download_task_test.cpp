@@ -125,9 +125,12 @@ TEST_F(DownloadTaskTest, Cancel) {
 TEST_F(DownloadTaskTest, PauseResume) {
     auto task = std::make_shared<DownloadTask>(9, "https://example.com/file.zip", options_);
 
-    // Cannot pause pending task
-    EXPECT_FALSE(task->pause());
+    // Can pause pending task
+    EXPECT_TRUE(task->pause());
+    EXPECT_EQ(task->status(), TaskStatus::Paused);
 
+    // Resume and change to Downloading
+    task->resume();
     task->set_status(TaskStatus::Downloading);
     EXPECT_TRUE(task->pause());
     EXPECT_EQ(task->status(), TaskStatus::Paused);

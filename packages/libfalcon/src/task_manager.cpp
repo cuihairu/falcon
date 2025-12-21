@@ -134,23 +134,6 @@ public:
         return result;
     }
 
-    bool start_task(TaskId id) {
-        auto task = get_task(id);
-        if (!task || task->is_active() || task->is_finished()) {
-            return false;
-        }
-
-        // 添加到优先级队列
-        std::lock_guard<std::mutex> lock(queue_mutex_);
-        TaskQueueItem item{id, TaskPriority::Normal, std::chrono::steady_clock::now()};
-        task_queue_.push(item);
-
-        // 通知工作线程
-        cv_.notify_one();
-
-        return true;
-    }
-
     bool start_task(TaskId id, TaskPriority priority) {
         auto task = get_task(id);
         if (!task || task->is_active() || task->is_finished()) {
@@ -264,9 +247,12 @@ public:
     }
 
     void pause_all() {
-        auto active_tasks = get_active_tasks();
-        for (auto& task : active_tasks) {
-            pause_task(task->id());
+        auto all_tasks = get_all_tasks();
+        for (auto& task : all_tasks) {
+            if (task->status() == TaskStatus::Pending || task->status() == TaskStatus::Downloading ||
+                task->status() == TaskStatus::Preparing) {
+                pause_task(task->id());
+            }
         }
     }
 
@@ -422,10 +408,10 @@ public:
         }
     }
 
-    void on_progress(TaskId task_id, const ProgressInfo& progress) {
+    void on_progress(const ProgressInfo& progress) {
         // 分发进度事件
         if (event_dispatcher_) {
-            event_dispatcher_->dispatch_progress(task_id, progress);
+            event_dispatcher_->dispatch_progress(progress.task_id, progress);
         }
     }
 
@@ -591,10 +577,6 @@ size_t TaskManager::cleanup_finished_tasks() {
     return impl_->cleanup_finished_tasks();
 }
 
-bool TaskManager::start_task(TaskId id) {
-    return impl_->start_task(id);
-}
-
 bool TaskManager::pause_task(TaskId id) {
     return impl_->pause_task(id);
 }
@@ -678,7 +660,15 @@ void TaskManager::on_task_status_changed(TaskId task_id,
 }
 
 void TaskManager::on_task_progress(TaskId task_id, const ProgressInfo& progress) {
-    impl_->on_progress(task_id, progress);
+    impl_->on_progress(progress);
+}
+
+bool TaskManager::start_task(TaskId id) {
+    return impl_->start_task(id, TaskPriority::Normal);
+}
+
+bool TaskManager::start_task(TaskId id, TaskPriority priority) {
+    return impl_->start_task(id, priority);
 }
 
 } // namespace falcon

@@ -111,7 +111,7 @@ TEST_F(DownloadIntegrationTest, MultipleDownloads) {
         EXPECT_EQ(task->status(), TaskStatus::Completed);
 
         // Verify file exists
-        std::filesystem::path output_file = test_dir_ / filenames[i];
+        std::filesystem::path output_file = test_dir_ / filenames[task->id() - 1];
         EXPECT_TRUE(std::filesystem::exists(output_file));
         EXPECT_GT(std::filesystem::file_size(output_file), 0);
     }
