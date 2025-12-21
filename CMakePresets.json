@@ -1,0 +1,79 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 15,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "vcpkg",
+      "hidden": true,
+      "generator": "Unix Makefiles",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "vcpkg-macos",
+      "hidden": true,
+      "generator": "Unix Makefiles",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    },
+    {
+      "name": "vcpkg-windows",
+      "hidden": true,
+      "generator": "Visual Studio 17 2022",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "base-debug",
+      "displayName": "Debug Config",
+      "hidden": true,
+      "inherits": "vcpkg-macos",
+      "binaryDir": "${sourceDir}/build-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "FALCON_BUILD_TESTS": "ON",
+        "FALCON_BUILD_EXAMPLES": "ON"
+      }
+    },
+    {
+      "name": "base-release",
+      "displayName": "Release Config",
+      "hidden": true,
+      "inherits": "vcpkg-macos",
+      "binaryDir": "${sourceDir}/build-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "FALCON_BUILD_TESTS": "OFF",
+        "FALCON_BUILD_EXAMPLES": "OFF"
+      }
+    },
+    {
+      "name": "ninja-debug",
+      "displayName": "Ninja Debug",
+      "inherits": "base-debug",
+      "generator": "Ninja"
+    },
+    {
+      "name": "ninja-release",
+      "displayName": "Ninja Release",
+      "inherits": "base-release",
+      "generator": "Ninja"
+    }
+  ]
+}
