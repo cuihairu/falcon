@@ -1,0 +1,1 @@
+A blazing-fast, secure download manager for Windows, macOS, and Linux. Supports HTTP/HTTPS, FTP, BitTorrent, cloud storage (AWS S3, Alibaba Cloud), and private protocols (Thunder, QQDL). Features multi-threaded downloads, encrypted credentials, and resume support. Open source C++ application.
