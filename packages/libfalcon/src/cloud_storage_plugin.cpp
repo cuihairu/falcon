@@ -10,6 +10,21 @@
 #ifdef HAVE_NLOHMANN_JSON
 #include <nlohmann/json.hpp>
 using json = nlohmann::json;
+#else
+// Fallback: empty json type for compilation without nlohmann
+struct json {
+    json() = default;
+    json(const std::string&) {}
+    json(const std::initializer_list<std::pair<std::string, std::string>>&) {}
+    std::string dump() const { return "{}"; }
+    template<typename T>
+    bool contains(const T&) const { return false; }
+    template<typename T>
+    T get() const { return T{}; }
+    static json parse(const std::string&) { return json{}; }
+    json& operator[](const std::string&) { return *this; }
+    const json& operator[](const std::string&) const { return *this; }
+};
 #endif
 #include <curl/curl.h>
 #include <algorithm>
@@ -53,7 +68,7 @@ void CloudLinkDetector::init_patterns() {
     };
 
     // 115网盘
-    url_patterns_[CloudPlatform::115Cloud] = {
+    url_patterns_[CloudPlatform::Cloud115] = {
         std::regex(R"(https?://115\.com/s/[a-zA-Z0-9]+)"),
         std::regex(R"(https?://anxia\.com/s/[a-zA-Z0-9]+)")
     };
@@ -306,9 +321,9 @@ public:
         file_info.id = file_id;
 
         // 使用正则表达式提取文件名和大小
-        std::regex name_regex(R"("filename":"([^"]+)")");
-        std::regex size_regex(R"("size":"([^"]+)")");
-        std::regex time_regex(R"("time":"([^"]+)")");
+        std::regex name_regex("\"filename\":\"([^\"]+)\"");
+        std::regex size_regex("\"size\":\"([^\"]+)\"");
+        std::regex time_regex("\"time\":\"([^\"]+)\"");
 
         std::smatch match;
         if (std::regex_search(html, match, name_regex)) {
@@ -437,7 +452,7 @@ CloudExtractionResult CloudStorageManager::handle_share_link(
     // 查找对应的插件
     for (auto& plugin : p_impl->plugins_) {
         if (plugin->can_handle(url)) {
-            Logger::info("使用 {} 处理网盘链接", plugin->platform_name());
+            log_info("使用 " + plugin->platform_name() + " 处理网盘链接");
             return plugin->extract_share_link(url, password);
         }
     }
