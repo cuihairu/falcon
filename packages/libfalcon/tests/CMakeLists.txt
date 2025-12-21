@@ -298,6 +298,9 @@ include(GoogleTest)
 gtest_discover_tests(falcon_core_tests
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     TEST_PREFIX "core_"
+    PROPERTIES
+    LABELS "core;unit"
+    TIMEOUT 60
 )
 
 # 注册基础搜索测试
@@ -324,6 +327,9 @@ gtest_discover_tests(falcon_cloud_storage_tests
 gtest_discover_tests(falcon_http_tests
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     TEST_PREFIX "http_"
+    PROPERTIES
+    LABELS "http;plugin;unit"
+    TIMEOUT 120
 )
 
 # 注册私有协议测试（如果存在）
@@ -331,6 +337,9 @@ if(PRIVATE_PROTOCOL_TEST_SOURCES)
     gtest_discover_tests(falcon_private_protocol_tests
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
         TEST_PREFIX "private_"
+        PROPERTIES
+        LABELS "private;plugin;unit"
+        TIMEOUT 60
     )
 endif()
 
@@ -338,42 +347,16 @@ endif()
 gtest_discover_tests(falcon_integration_tests
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     TEST_PREFIX "integration_"
-)
-
-# 设置测试属性
-set_tests_properties(falcon_core_tests
-    PROPERTIES
-    LABELS "core;unit"
-    TIMEOUT 60
-)
-
-set_tests_properties(falcon_http_tests
-    PROPERTIES
-    LABELS "http;plugin;unit"
-    TIMEOUT 120
-)
-
-if(PRIVATE_PROTOCOL_TEST_SOURCES)
-    set_tests_properties(falcon_private_protocol_tests
-        PROPERTIES
-        LABELS "private;plugin;unit"
-        TIMEOUT 60
-    )
-endif()
-
-set_tests_properties(falcon_integration_tests
     PROPERTIES
     LABELS "integration"
     TIMEOUT 300
 )
 
+# 注册性能测试（如果存在）
 if(FALCON_BUILD_PERFORMANCE_TESTS)
     gtest_discover_tests(falcon_performance_tests
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
         TEST_PREFIX "perf_"
-    )
-
-    set_tests_properties(falcon_performance_tests
         PROPERTIES
         LABELS "performance"
         TIMEOUT 600
@@ -387,19 +370,17 @@ endif()
 # 运行单元测试
 add_custom_target(run_unit_tests
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure --label "unit"
-    DEPENDS falcon_core_tests falcon_http_tests falcon_private_protocol_tests
     COMMENT "Running all unit tests"
 )
 
 # 运行集成测试
 add_custom_target(run_integration_tests
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure --label "integration"
-    DEPENDS falcon_integration_tests
     COMMENT "Running integration tests"
 )
 
-# 运行所有测试
-add_custom_target(test
+# 运行所有测试（不使用保留名称 "test"）
+add_custom_target(run_all_tests
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
     COMMENT "Running all tests"
 )
@@ -409,15 +390,6 @@ add_custom_target(test_parallel
     COMMAND ${CMAKE_CTEST_COMMAND} --parallel ${PROCESSOR_COUNT} --output-on-failure
     COMMENT "Running tests in parallel"
 )
-
-# 运行性能测试
-if(FALCON_BUILD_PERFORMANCE_TESTS)
-    add_custom_target(run_performance_tests
-        COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure --label "performance"
-        DEPENDS falcon_performance_tests
-        COMMENT "Running performance tests"
-    )
-endif()
 
 # ============================================================================
 # 代码覆盖率（Debug 模式）
