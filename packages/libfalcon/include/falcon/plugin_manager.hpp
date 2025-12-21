@@ -4,11 +4,10 @@
 #include <unordered_map>
 #include <memory>
 #include <vector>
+#include <algorithm>
+#include "protocol_handler.hpp"
 
 namespace falcon {
-
-// Forward declarations
-class IProtocolHandler;
 
 /**
  * @class PluginManager
@@ -66,6 +65,36 @@ public:
      * @return Vector of supported protocol names
      */
     std::vector<std::string> getSupportedProtocols() const;
+
+    /**
+     * @brief List all supported schemes from all plugins
+     * @return Vector of supported URL schemes
+     */
+    std::vector<std::string> listSupportedSchemes() const;
+
+    /**
+     * @brief Check if URL can be handled by any plugin
+     * @param url The URL to check
+     * @return true if supported
+     */
+    bool supportsUrl(const std::string& url) const;
+
+    /**
+     * @brief Unload a plugin
+     * @param protocol The protocol to unload
+     */
+    void unloadPlugin(const std::string& protocol);
+
+    /**
+     * @brief Unload all plugins
+     */
+    void unloadAllPlugins();
+
+    /**
+     * @brief Get number of loaded plugins
+     * @return Number of plugins
+     */
+    size_t getPluginCount() const;
 
 private:
     /// Map of protocol name to plugin handler

@@ -17,11 +17,11 @@
 namespace falcon {
 
 PluginManager::PluginManager() {
-    std::cout <<"Initializing plugin manager");
+    std::cout << "Initializing plugin manager" << std::endl;
 }
 
 PluginManager::~PluginManager() {
-    std::cout <<("Shutting down plugin manager");
+    std::cout << "Shutting down plugin manager" << std::endl;
 }
 
 void PluginManager::registerPlugin(std::unique_ptr<IProtocolHandler> plugin) {
@@ -133,7 +133,7 @@ std::vector<std::string> PluginManager::listSupportedSchemes() const {
     std::vector<std::string> schemes;
 
     for (const auto& pair : plugins_) {
-        auto pluginSchemes = pair.second->getSupportedSchemes();
+        auto pluginSchemes = pair.second->supported_schemes();
         schemes.insert(schemes.end(), pluginSchemes.begin(), pluginSchemes.end());
     }
 
