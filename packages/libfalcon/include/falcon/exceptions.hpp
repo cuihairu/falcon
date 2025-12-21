@@ -5,46 +5,46 @@
 
 namespace falcon {
 
-/// 基础异常类
+/// Base exception class
 class FalconException : public std::runtime_error {
 public:
     using std::runtime_error::runtime_error;
 };
 
-/// 无效的 URL 格式
+/// Invalid URL format
 class InvalidURLException : public FalconException {
 public:
     InvalidURLException(const std::string& url)
         : FalconException("Invalid URL: " + url) {}
 };
 
-/// 不支持的协议
+/// Unsupported protocol
 class UnsupportedProtocolException : public FalconException {
 public:
     UnsupportedProtocolException(const std::string& protocol)
         : FalconException("Unsupported protocol: " + protocol) {}
 };
 
-/// 网络错误
+/// Network error
 class NetworkException : public FalconException {
 public:
     using FalconException::FalconException;
 };
 
-/// 文件 IO 错误
+/// File IO error
 class FileIOException : public FalconException {
 public:
     using FalconException::FalconException;
 };
 
-/// 任务已取消
+/// Task cancelled
 class TaskCancelledException : public FalconException {
 public:
     TaskCancelledException()
         : FalconException("Task was cancelled") {}
 };
 
-/// 下载失败
+/// Download failed
 class DownloadFailedException : public FalconException {
 public:
     using FalconException::FalconException;

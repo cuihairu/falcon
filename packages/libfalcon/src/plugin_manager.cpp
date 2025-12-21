@@ -1,15 +1,14 @@
 /**
  * @file plugin_manager.cpp
- * @brief 插件管理器实现
+ * @brief Plugin manager implementation
  * @author Falcon Team
  * @date 2025-12-21
  */
 
 #include <falcon/plugin_manager.hpp>
 #include <iostream>
-#include <format>
 
-// 包含所有插件头文件
+// Include all plugin headers
 #ifdef FALCON_ENABLE_HTTP
 #include "../plugins/http/http_handler.hpp"
 #endif
