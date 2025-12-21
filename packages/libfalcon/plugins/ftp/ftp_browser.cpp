@@ -103,7 +103,7 @@ public:
 
         CURLcode res = curl_easy_perform(curl_);
         if (res != CURLE_OK) {
-            Logger::error("FTP LIST failed: {}", curl_easy_strerror(res));
+            falcon::log_error("FTP LIST failed: " + std::string(curl_easy_strerror(res)));
             return "";
         }
 
@@ -487,7 +487,7 @@ bool FTPBrowser::rename(const std::string& old_path, const std::string& new_path
 
 bool FTPBrowser::copy(const std::string& source_path, const std::string& dest_path) {
     // FTP不直接支持复制，需要先下载再上传
-    Logger::error("FTP does not support direct copy operation");
+    falcon::log_error("FTP does not support direct copy operation");
     return false;
 }
 

@@ -60,7 +60,6 @@ jobs:
         run: |
           git clone https://github.com/Microsoft/vcpkg.git
           .\vcpkg\bootstrap-vcpkg.bat
-          .\vcpkg\vcpkg install curl:x64-windows
 
       - name: Set reusable strings
         id: strings
@@ -79,6 +78,9 @@ jobs:
           -DFALCON_BUILD_CLI=ON
           -DFALCON_ENABLE_HTTP=ON
           -DFALCON_ENABLE_FTP=OFF
+          -DFALCON_ENABLE_CLOUD_STORAGE=OFF
+          -DFALCON_ENABLE_RESOURCE_SEARCH=OFF
+          -DFALCON_ENABLE_RESOURCE_BROWSER=OFF
           -DFALCON_BUILD_DAEMON=OFF
           -DFALCON_BUILD_EXAMPLES=OFF
           -S ${{ github.workspace }}
@@ -95,6 +97,9 @@ jobs:
           -DFALCON_BUILD_CLI=ON
           -DFALCON_ENABLE_HTTP=ON
           -DFALCON_ENABLE_FTP=OFF
+          -DFALCON_ENABLE_CLOUD_STORAGE=OFF
+          -DFALCON_ENABLE_RESOURCE_SEARCH=OFF
+          -DFALCON_ENABLE_RESOURCE_BROWSER=OFF
           -DFALCON_BUILD_DAEMON=OFF
           -DFALCON_BUILD_EXAMPLES=OFF
           -S ${{ github.workspace }}
