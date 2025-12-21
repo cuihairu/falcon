@@ -1,6 +1,6 @@
 <div align="center">
 
-  <img src="https://raw.githubusercontent.com/falcon-project/falcon/main/assets/logo.png" alt="Falcon Logo" width="200"/>
+  <img src="./assets/falcon.png" alt="Falcon Logo" width="200"/>
 
   # Falcon 下载器
 
