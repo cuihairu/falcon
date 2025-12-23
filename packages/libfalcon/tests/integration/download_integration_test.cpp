@@ -9,8 +9,24 @@
 #include <filesystem>
 #include <thread>
 #include <chrono>
+#include <cstdlib>
 
 using namespace falcon;
+
+namespace {
+
+bool env_truthy(const char* name) {
+    const char* value = std::getenv(name);
+    if (!value) return false;
+    return std::string(value) == "1" || std::string(value) == "true" || std::string(value) == "TRUE";
+}
+
+std::string test_server_url() {
+    const char* value = std::getenv("FALCON_TEST_SERVER_URL");
+    return value ? std::string(value) : std::string{};
+}
+
+} // namespace
 
 class DownloadIntegrationTest : public ::testing::Test {
 protected:
@@ -29,7 +45,43 @@ protected:
     std::filesystem::path test_dir_;
 };
 
+TEST_F(DownloadIntegrationTest, LocalHttpDownloadFile) {
+    const std::string base_url = test_server_url();
+    if (base_url.empty()) {
+        GTEST_SKIP() << "Set FALCON_TEST_SERVER_URL to enable local HTTP integration tests";
+    }
+
+    DownloadEngine engine;
+
+    DownloadOptions options;
+    options.output_directory = test_dir_.string();
+    options.output_filename = "test_download.json";
+    options.max_connections = 1;
+    options.timeout_seconds = 10;
+    options.resume_enabled = false;
+
+    std::string url = base_url + "/test.json";
+    auto task = engine.add_task(url, options);
+    ASSERT_NE(task, nullptr);
+    ASSERT_TRUE(engine.start_task(task->id()));
+
+    ASSERT_TRUE(task->wait_for(std::chrono::seconds(20)));
+    EXPECT_EQ(task->status(), TaskStatus::Completed);
+
+    std::filesystem::path output_file = test_dir_ / "test_download.json";
+    ASSERT_TRUE(std::filesystem::exists(output_file));
+
+    std::ifstream file(output_file);
+    std::string content((std::istreambuf_iterator<char>(file)),
+                        std::istreambuf_iterator<char>());
+    EXPECT_NE(content.find("\"hello\""), std::string::npos);
+}
+
 TEST_F(DownloadIntegrationTest, HttpDownloadFile) {
+    if (!env_truthy("FALCON_RUN_NETWORK_TESTS")) {
+        GTEST_SKIP() << "Set FALCON_RUN_NETWORK_TESTS=1 to enable external network tests";
+    }
+
     DownloadEngine engine;
 
     DownloadOptions options;
@@ -48,10 +100,8 @@ TEST_F(DownloadIntegrationTest, HttpDownloadFile) {
     EXPECT_EQ(task->url(), url);
     EXPECT_EQ(task->status(), TaskStatus::Pending);
 
-    // Wait for completion
-    while (!task->is_finished()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
+    ASSERT_TRUE(engine.start_task(task->id()));
+    ASSERT_TRUE(task->wait_for(std::chrono::seconds(60)));
 
     // Check result
     EXPECT_EQ(task->status(), TaskStatus::Completed);
@@ -73,6 +123,10 @@ TEST_F(DownloadIntegrationTest, HttpDownloadFile) {
 }
 
 TEST_F(DownloadIntegrationTest, MultipleDownloads) {
+    if (!env_truthy("FALCON_RUN_NETWORK_TESTS")) {
+        GTEST_SKIP() << "Set FALCON_RUN_NETWORK_TESTS=1 to enable external network tests";
+    }
+
     DownloadEngine engine;
 
     DownloadOptions options;
@@ -100,14 +154,13 @@ TEST_F(DownloadIntegrationTest, MultipleDownloads) {
         options.output_filename = filenames[i];
         auto task = engine.add_task(urls[i], options);
         ASSERT_NE(task, nullptr);
+        ASSERT_TRUE(engine.start_task(task->id()));
         tasks.push_back(task);
     }
 
     // Wait for all to complete
     for (auto& task : tasks) {
-        while (!task->is_finished()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
+        ASSERT_TRUE(task->wait_for(std::chrono::seconds(60)));
         EXPECT_EQ(task->status(), TaskStatus::Completed);
 
         // Verify file exists
@@ -118,6 +171,10 @@ TEST_F(DownloadIntegrationTest, MultipleDownloads) {
 }
 
 TEST_F(DownloadIntegrationTest, PauseAndResume) {
+    if (!env_truthy("FALCON_RUN_NETWORK_TESTS")) {
+        GTEST_SKIP() << "Set FALCON_RUN_NETWORK_TESTS=1 to enable external network tests";
+    }
+
     DownloadEngine engine;
 
     DownloadOptions options;
@@ -132,6 +189,7 @@ TEST_F(DownloadIntegrationTest, PauseAndResume) {
     auto task = engine.add_task(url, options);
 
     ASSERT_NE(task, nullptr);
+    ASSERT_TRUE(engine.start_task(task->id()));
 
     // Wait a bit then pause
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -150,9 +208,7 @@ TEST_F(DownloadIntegrationTest, PauseAndResume) {
     EXPECT_TRUE(engine.resume_task(task->id()));
 
     // Wait for completion
-    while (!task->is_finished()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
+    ASSERT_TRUE(task->wait_for(std::chrono::seconds(60)));
 
     EXPECT_EQ(task->status(), TaskStatus::Completed);
     EXPECT_TRUE(std::filesystem::exists(output_file));
@@ -160,6 +216,10 @@ TEST_F(DownloadIntegrationTest, PauseAndResume) {
 }
 
 TEST_F(DownloadIntegrationTest, CancelDownload) {
+    if (!env_truthy("FALCON_RUN_NETWORK_TESTS")) {
+        GTEST_SKIP() << "Set FALCON_RUN_NETWORK_TESTS=1 to enable external network tests";
+    }
+
     DownloadEngine engine;
 
     DownloadOptions options;
@@ -173,6 +233,7 @@ TEST_F(DownloadIntegrationTest, CancelDownload) {
     auto task = engine.add_task(url, options);
 
     ASSERT_NE(task, nullptr);
+    ASSERT_TRUE(engine.start_task(task->id()));
 
     // Wait a bit then cancel
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -188,6 +249,10 @@ TEST_F(DownloadIntegrationTest, CancelDownload) {
 }
 
 TEST_F(DownloadIntegrationTest, GetStatistics) {
+    if (!env_truthy("FALCON_RUN_NETWORK_TESTS")) {
+        GTEST_SKIP() << "Set FALCON_RUN_NETWORK_TESTS=1 to enable external network tests";
+    }
+
     DownloadEngine engine;
 
     DownloadOptions options;

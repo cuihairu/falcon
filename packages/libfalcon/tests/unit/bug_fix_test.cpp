@@ -16,6 +16,8 @@
 #include <vector>
 #include <chrono>
 #include <memory>
+#include <atomic>
+#include <mutex>
 
 using namespace falcon;
 
@@ -78,10 +80,14 @@ TEST_F(BugFixTest, TaskManagerConcurrentTaskAccess) {
     const int tasks_per_thread = 5;
     std::vector<std::thread> threads;
     std::vector<TaskId> created_task_ids;
+    created_task_ids.reserve(static_cast<size_t>(num_threads * tasks_per_thread));
+    std::mutex ids_mutex;
+    std::atomic<int> add_ok{0};
+    std::atomic<int> get_ok{0};
 
     // Create tasks from multiple threads
     for (int i = 0; i < num_threads; ++i) {
-        threads.emplace_back([this, i, &created_task_ids]() {
+        threads.emplace_back([this, i, &created_task_ids, &ids_mutex, &add_ok, &get_ok]() {
             for (int j = 0; j < tasks_per_thread; ++j) {
                 try {
                     DownloadOptions options;
@@ -93,13 +99,16 @@ TEST_F(BugFixTest, TaskManagerConcurrentTaskAccess) {
                     );
 
                     TaskId id = manager_->add_task(task);
-                    if (id != 0) {
-                        // Store the created task ID
-                        created_task_ids.push_back(id);
+                    if (id != INVALID_TASK_ID) {
+                        add_ok.fetch_add(1);
+                        {
+                            std::lock_guard<std::mutex> lock(ids_mutex);
+                            created_task_ids.push_back(id);
+                        }
 
-                        // Try to access the task immediately
-                        auto retrieved_task = manager_->get_task(id);
-                        EXPECT_NE(retrieved_task, nullptr) << "Should be able to retrieve valid task immediately";
+                        if (manager_->get_task(id) != nullptr) {
+                            get_ok.fetch_add(1);
+                        }
                     }
                 } catch (const std::exception& e) {
                     FAIL() << "Exception during task creation: " << e.what();
@@ -112,6 +121,9 @@ TEST_F(BugFixTest, TaskManagerConcurrentTaskAccess) {
     for (auto& thread : threads) {
         thread.join();
     }
+
+    EXPECT_EQ(add_ok.load(), num_threads * tasks_per_thread);
+    EXPECT_EQ(get_ok.load(), num_threads * tasks_per_thread);
 
     // Verify all created tasks can be accessed
     for (TaskId id : created_task_ids) {
@@ -129,26 +141,29 @@ TEST_F(BugFixTest, DownloadTaskAtomicStatusTransition) {
     // Initial status should be Pending
     EXPECT_EQ(task->status(), TaskStatus::Pending);
 
-    // Test concurrent status changes
-    std::atomic<int> success_count{0};
-    std::atomic<int> failure_count{0};
+    class StatusListener final : public IEventListener {
+    public:
+        void on_status_changed(TaskId, TaskStatus, TaskStatus new_status) override {
+            if (new_status == TaskStatus::Downloading) {
+                downloading_transitions.fetch_add(1);
+            }
+        }
+
+        std::atomic<int> downloading_transitions{0};
+    };
+
+    StatusListener listener;
+    task->set_listener(&listener);
+
     std::vector<std::thread> threads;
 
     const int num_threads = 20;
     for (int i = 0; i < num_threads; ++i) {
-        threads.emplace_back([&task, &success_count, &failure_count]() {
+        threads.emplace_back([&task]() {
             try {
-                // Try to start the task from multiple threads
-                // Only one should succeed
                 task->set_status(TaskStatus::Downloading);
-                if (task->status() == TaskStatus::Downloading) {
-                    success_count++;
-                } else {
-                    failure_count++;
-                }
             } catch (const std::exception& e) {
-                // Expected for all but one thread
-                failure_count++;
+                (void)e;
             }
         });
     }
@@ -158,8 +173,9 @@ TEST_F(BugFixTest, DownloadTaskAtomicStatusTransition) {
         thread.join();
     }
 
-    // Only one thread should have successfully started the task
-    EXPECT_EQ(success_count.load(), 1) << "Only one thread should successfully start the task";
+    // Only one thread should trigger the status transition notification
+    EXPECT_EQ(listener.downloading_transitions.load(), 1)
+        << "Only one thread should trigger Pending -> Downloading transition";
     EXPECT_EQ(task->status(), TaskStatus::Downloading) << "Task should be in Downloading state";
 }
 

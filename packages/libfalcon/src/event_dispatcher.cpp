@@ -43,44 +43,53 @@ public:
         if (!running_) return;
 
         running_ = false;
-
-        // 通知所有工作线程
         cv_.notify_all();
 
-        if (wait_for_completion) {
-            // 等待队列为空
-            std::unique_lock<std::mutex> lock(queue_mutex_);
-            cv_.wait(lock, [this] { return event_queue_.empty(); });
-        }
-
-        // 等待所有工作线程退出
+        // 等待所有工作线程退出（running_ 置为 false 后不会再处理队列）
         for (auto& worker : workers_) {
             if (worker.joinable()) {
                 worker.join();
             }
         }
         workers_.clear();
+
+        if (wait_for_completion) {
+            // 同步清空队列，避免遗留事件导致 stop(true) 卡住
+            while (true) {
+                std::shared_ptr<EventData> event;
+                {
+                    std::lock_guard<std::mutex> lock(queue_mutex_);
+                    if (event_queue_.empty()) break;
+                    event = event_queue_.front();
+                    event_queue_.pop();
+                }
+                if (event) {
+                    process_event(event);
+                    ++processed_count_;
+                }
+            }
+        }
     }
 
     bool dispatch(std::shared_ptr<EventData> event) {
         if (!event) return false;
 
-        {
-            std::unique_lock<std::mutex> lock(queue_mutex_);
-
-            // 检查队列大小
-            if (event_queue_.size() >= config_.max_queue_size) {
-                ++dropped_count_;
-                return false;
-            }
-
-            event_queue_.push(event);
-        }
-
         if (!config_.enable_async_dispatch) {
-            // 同步模式下立即处理
+            // 同步模式下立即处理（不入队）
             process_event(event);
+            ++processed_count_;
         } else {
+            {
+                std::unique_lock<std::mutex> lock(queue_mutex_);
+
+                // 检查队列大小
+                if (event_queue_.size() >= config_.max_queue_size) {
+                    ++dropped_count_;
+                    return false;
+                }
+
+                event_queue_.push(event);
+            }
             // 异步模式下通知工作线程
             cv_.notify_one();
         }
@@ -91,6 +100,7 @@ public:
     void dispatch_sync(std::shared_ptr<EventData> event) {
         if (!event) return;
         process_event(event);
+        ++processed_count_;
     }
 
     void add_listener(IEventListener* listener) {

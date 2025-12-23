@@ -24,7 +24,6 @@ public:
     Impl(const TaskManagerConfig& config, EventDispatcher* event_dispatcher)
         : config_(config)
         , event_dispatcher_(event_dispatcher)
-        , next_task_id_(1)
         , running_(false) {}
 
     ~Impl() {
@@ -52,6 +51,7 @@ public:
 
         // 通知工作线程退出
         cv_.notify_all();
+        cleanup_cv_.notify_all();
 
         // 等待工作线程退出
         if (worker_thread_.joinable()) {
@@ -76,7 +76,13 @@ public:
 
         std::lock_guard<std::mutex> lock(tasks_mutex_);
 
-        TaskId id = next_task_id_++;
+        TaskId id = task->id();
+        if (id == INVALID_TASK_ID) {
+            return INVALID_TASK_ID;
+        }
+        if (tasks_.find(id) != tasks_.end()) {
+            return INVALID_TASK_ID;
+        }
         task->set_listener(this);
         tasks_[id] = std::move(task);
 
@@ -497,9 +503,13 @@ private:
 
     void cleanup_loop() {
         while (running_) {
-            std::this_thread::sleep_for(config_.cleanup_interval);
-
-            if (!running_) break;
+            {
+                std::unique_lock<std::mutex> lock(cleanup_mutex_);
+                cleanup_cv_.wait_for(lock, config_.cleanup_interval, [this] { return !running_; });
+            }
+            if (!running_) {
+                break;
+            }
 
             // 清理完成的任务
             cleanup_finished_tasks();
@@ -526,12 +536,15 @@ private:
     // 任务存储
     mutable std::mutex tasks_mutex_;
     std::unordered_map<TaskId, DownloadTask::Ptr> tasks_;
-    TaskId next_task_id_;
 
     // 任务队列
     mutable std::mutex queue_mutex_;
     std::priority_queue<TaskQueueItem> task_queue_;
     std::condition_variable cv_;
+
+    // 清理线程唤醒
+    mutable std::mutex cleanup_mutex_;
+    std::condition_variable cleanup_cv_;
 
     // 活动任务
     mutable std::mutex active_mutex_;

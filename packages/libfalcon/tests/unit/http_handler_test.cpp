@@ -17,9 +17,20 @@
 #include <chrono>
 #include <fstream>
 #include <filesystem>
+#include <cstdlib>
 
 using namespace falcon;
 using namespace falcon::plugins;
+
+namespace {
+
+bool env_truthy(const char* name) {
+    const char* value = std::getenv(name);
+    if (!value) return false;
+    return std::string(value) == "1" || std::string(value) == "true" || std::string(value) == "TRUE";
+}
+
+} // namespace
 
 class HttpHandlerTest : public ::testing::Test {
 protected:
@@ -81,6 +92,10 @@ TEST_F(HttpHandlerTest, CanHandleUrls) {
 }
 
 TEST_F(HttpHandlerTest, GetFileInfo) {
+    if (!env_truthy("FALCON_RUN_NETWORK_TESTS")) {
+        GTEST_SKIP() << "Set FALCON_RUN_NETWORK_TESTS=1 to enable external network tests";
+    }
+
     DownloadOptions options;
     options.timeout_seconds = 10;
     options.user_agent = "Falcon-Test/1.0";

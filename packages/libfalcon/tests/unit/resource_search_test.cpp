@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 #include <falcon/resource_search.hpp>
 #include <nlohmann/json.hpp>
+#include <cstdio>
 #include <fstream>
 #include <thread>
 #include <chrono>

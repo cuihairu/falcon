@@ -197,6 +197,10 @@ public:
 
     [[nodiscard]] FileInfo get_file_info(const std::string& url,
                                           const DownloadOptions& options) {
+        if (!can_handle(url)) {
+            throw NetworkException("Invalid URL: " + url);
+        }
+
         FileInfo info;
         info.url = url;
 

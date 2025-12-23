@@ -38,12 +38,6 @@ std::string Version::to_full_string() const {
 
 const Version FALCON_VERSION{0, 1, 0};
 
-// Legacy functions for backward compatibility
-constexpr int VERSION_MAJOR = 0;
-constexpr int VERSION_MINOR = 1;
-constexpr int VERSION_PATCH = 0;
-constexpr const char* VERSION_STRING = "0.1.0";
-
 const char* get_version_string() {
     static std::string version = FALCON_VERSION.to_full_string();
     return version.c_str();

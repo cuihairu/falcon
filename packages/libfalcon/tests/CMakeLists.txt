@@ -60,6 +60,12 @@ add_executable(falcon_core_tests
     unit/url_utils_test.cpp
     unit/bug_fix_test.cpp
     unit/thread_pool_test.cpp
+    unit/plugin_manager_test.cpp
+    unit/event_dispatcher_test.cpp
+    unit/download_engine_test.cpp
+    unit/version_test.cpp
+    unit/resource_browser_utils_test.cpp
+    unit/password_manager_test.cpp
 )
 
 target_link_libraries(falcon_core_tests
@@ -153,3 +159,65 @@ endif()
 
 # 注册集成测试
 gtest_discover_tests(falcon_integration_tests)
+
+# ============================================================================
+# 可选功能测试
+# ============================================================================
+
+if(FALCON_ENABLE_CLOUD_STORAGE)
+    add_executable(falcon_cloud_storage_tests
+        unit/cloud_storage_test.cpp
+    )
+
+    target_link_libraries(falcon_cloud_storage_tests
+        PRIVATE
+            falcon
+            GTest::gtest
+            GTest::gtest_main
+    )
+
+    add_test_compile_options(falcon_cloud_storage_tests)
+    gtest_discover_tests(falcon_cloud_storage_tests)
+endif()
+
+if(FALCON_ENABLE_RESOURCE_SEARCH)
+    add_executable(falcon_resource_search_tests
+        unit/search_basic_test.cpp
+        unit/resource_search_test.cpp
+    )
+
+    target_link_libraries(falcon_resource_search_tests
+        PRIVATE
+            falcon
+            GTest::gtest
+            GTest::gtest_main
+    )
+
+    add_test_compile_options(falcon_resource_search_tests)
+    gtest_discover_tests(falcon_resource_search_tests)
+endif()
+
+if(FALCON_ENABLE_RESOURCE_BROWSER)
+    find_package(OpenSSL QUIET)
+
+    add_executable(falcon_resource_browser_tests
+        unit/resource_browsers_test.cpp
+    )
+
+    target_link_libraries(falcon_resource_browser_tests
+        PRIVATE
+            falcon
+            GTest::gtest
+            GTest::gtest_main
+    )
+
+    add_test_compile_options(falcon_resource_browser_tests)
+
+    if(OpenSSL_FOUND)
+        target_sources(falcon_resource_browser_tests PRIVATE
+            unit/resource_cloud_browsers_test.cpp
+        )
+    endif()
+
+    gtest_discover_tests(falcon_resource_browser_tests)
+endif()

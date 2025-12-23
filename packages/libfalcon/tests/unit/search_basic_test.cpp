@@ -8,6 +8,8 @@
 #include <gtest/gtest.h>
 #include <falcon/resource_search.hpp>
 #include <algorithm>
+#include <memory>
+#include <set>
 #include <vector>
 
 using namespace falcon::search;

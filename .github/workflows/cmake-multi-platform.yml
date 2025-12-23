@@ -110,3 +110,57 @@ jobs:
       - name: Test
         working-directory: ${{ steps.strings.outputs.build-output-dir }}
         run: ctest --build-config ${{ matrix.build_type }} --output-on-failure
+
+  coverage:
+    name: Coverage (Ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies (Ubuntu)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build libcurl4-openssl-dev libssl-dev gcovr nlohmann-json3-dev
+
+      - name: Configure CMake
+        run: >
+          cmake -B ${{ github.workspace }}/build-coverage
+          -DCMAKE_CXX_COMPILER=g++
+          -DCMAKE_C_COMPILER=gcc
+          -DCMAKE_BUILD_TYPE=Debug
+          -DFALCON_BUILD_TESTS=ON
+          -DFALCON_BUILD_CLI=OFF
+          -DFALCON_BUILD_DAEMON=OFF
+          -DFALCON_BUILD_EXAMPLES=OFF
+          -DFALCON_ENABLE_COVERAGE=ON
+          -DFALCON_ENABLE_HTTP=ON
+          -DFALCON_ENABLE_FTP=ON
+          -DFALCON_ENABLE_CLOUD_STORAGE=ON
+          -DFALCON_ENABLE_RESOURCE_SEARCH=ON
+          -DFALCON_ENABLE_RESOURCE_BROWSER=ON
+          -S ${{ github.workspace }}
+
+      - name: Build
+        run: cmake --build ${{ github.workspace }}/build-coverage --config Debug
+
+      - name: Test
+        working-directory: ${{ github.workspace }}/build-coverage
+        run: ctest --build-config Debug --output-on-failure
+
+      - name: Generate coverage (gcovr)
+        working-directory: ${{ github.workspace }}/build-coverage
+        run: |
+          gcovr -r ${{ github.workspace }} \
+            --exclude '.*(/|\\\\)build.*' \
+            --exclude '.*(/|\\\\)vcpkg_installed.*' \
+            --exclude '.*(/|\\\\)third_party.*' \
+            --exclude '.*(/|\\\\)packages(/|\\\\)libfalcon(/|\\\\)tests(/|\\\\).*' \
+            --xml-pretty -o coverage.xml
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ${{ github.workspace }}/build-coverage/coverage.xml
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}

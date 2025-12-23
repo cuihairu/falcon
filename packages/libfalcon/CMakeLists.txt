@@ -18,6 +18,9 @@ add_library(falcon
     src/thread_pool.cpp
     src/plugin_manager.cpp
     src/event_dispatcher.cpp
+    src/resource_browser.cpp
+    src/password_manager.cpp
+    src/version.cpp
     # Resource search - TODO: Fix compilation issues
     # src/resource_search.cpp
     # Cloud storage - TODO: Fix compilation issues
@@ -70,6 +73,7 @@ find_package(nlohmann_json QUIET)
 if(nlohmann_json_FOUND)
     target_link_libraries(falcon PUBLIC nlohmann_json::nlohmann_json)
     target_compile_definitions(falcon PUBLIC FALCON_USE_JSON)
+    target_compile_definitions(falcon PRIVATE HAVE_NLOHMANN_JSON)
 endif()
 
 # Link libcurl for HTTP requests
@@ -177,43 +181,55 @@ endif()
 
 # Cloud storage support
 if(FALCON_ENABLE_CLOUD_STORAGE)
-    target_sources(falcon PRIVATE
-        src/cloud_storage_plugin.cpp
-    )
-    target_compile_definitions(falcon PRIVATE FALCON_ENABLE_CLOUD_STORAGE)
-    # 需要libcurl用于HTTP请求
     if(NOT CURL_FOUND)
-        message(WARNING "Cloud storage plugins require libcurl")
+        message(WARNING "Cloud storage plugins require libcurl; disabling FALCON_ENABLE_CLOUD_STORAGE")
+        set(FALCON_ENABLE_CLOUD_STORAGE OFF CACHE BOOL "Enable cloud storage plugins" FORCE)
+    else()
+        target_sources(falcon PRIVATE
+            src/cloud_storage_plugin.cpp
+        )
+        target_compile_definitions(falcon PRIVATE FALCON_ENABLE_CLOUD_STORAGE)
     endif()
 endif()
 
 # Resource search functionality
 if(FALCON_ENABLE_RESOURCE_SEARCH)
-    target_compile_definitions(falcon PRIVATE FALCON_ENABLE_RESOURCE_SEARCH)
-    # 需要nlohmann/json用于配置解析
-    if(NOT nlohmann_json_FOUND)
-        message(WARNING "Resource search requires nlohmann_json")
-    endif()
-    # 需要libcurl用于网页请求
-    if(NOT CURL_FOUND)
-        message(WARNING "Resource search requires libcurl")
+    if(NOT CURL_FOUND OR NOT nlohmann_json_FOUND)
+        message(WARNING "Resource search requires libcurl and nlohmann_json; disabling FALCON_ENABLE_RESOURCE_SEARCH")
+        set(FALCON_ENABLE_RESOURCE_SEARCH OFF CACHE BOOL "Enable resource search functionality" FORCE)
+    else()
+        target_sources(falcon PRIVATE
+            src/resource_search.cpp
+        )
+        target_compile_definitions(falcon PRIVATE FALCON_ENABLE_RESOURCE_SEARCH)
+        target_link_libraries(falcon PRIVATE CURL::libcurl)
     endif()
 endif()
 
 # Resource browser functionality
 if(FALCON_ENABLE_RESOURCE_BROWSER)
-    target_sources(falcon PRIVATE
-        plugins/ftp/ftp_browser.cpp
-        plugins/s3/s3_browser.cpp
-    )
-    target_compile_definitions(falcon PRIVATE FALCON_ENABLE_RESOURCE_BROWSER)
-    # 需要libcurl用于FTP/S3请求
-    if(NOT CURL_FOUND)
-        message(WARNING "Resource browser requires libcurl")
-    endif()
-    # 需要nlohmann/json用于S3解析
-    if(NOT nlohmann_json_FOUND)
-        target_compile_definitions(falcon PRIVATE FALCON_BROWSER_NO_JSON)
+    if(NOT CURL_FOUND OR NOT nlohmann_json_FOUND)
+        message(WARNING "Resource browser requires libcurl and nlohmann_json; disabling FALCON_ENABLE_RESOURCE_BROWSER")
+        set(FALCON_ENABLE_RESOURCE_BROWSER OFF CACHE BOOL "Enable resource browser functionality" FORCE)
+    else()
+        target_sources(falcon PRIVATE
+            plugins/ftp/ftp_browser.cpp
+            plugins/s3/s3_browser.cpp
+        )
+        target_compile_definitions(falcon PRIVATE FALCON_ENABLE_RESOURCE_BROWSER)
+
+        find_package(OpenSSL QUIET)
+        if(OpenSSL_FOUND)
+            target_sources(falcon PRIVATE
+                plugins/oss/oss_browser.cpp
+                plugins/cos/cos_browser.cpp
+                plugins/kodo/kodo_browser.cpp
+                plugins/upyun/upyun_browser.cpp
+            )
+            target_link_libraries(falcon PRIVATE OpenSSL::Crypto)
+        else()
+            message(STATUS "OpenSSL not found: OSS/COS/Kodo/Upyun browsers will not be built")
+        endif()
     endif()
 endif()
 
