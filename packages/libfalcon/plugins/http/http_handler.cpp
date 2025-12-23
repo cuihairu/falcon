@@ -3,6 +3,7 @@
 
 #include "http_handler.hpp"
 
+#include <falcon/segment_downloader.hpp>
 #include <falcon/exceptions.hpp>
 #include <curl/curl.h>
 #include <algorithm>
@@ -174,6 +175,79 @@ static int progress_callback(void* clientp, curl_off_t dltotal, curl_off_t dlnow
     return 0;
 }
 
+// Download a single segment using CURL
+static bool download_segment_curl(
+    const std::string& url,
+    Bytes start,
+    Bytes end,
+    const std::string& output_path,
+    const DownloadOptions& options,
+    std::atomic<bool>& cancelled) {
+
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        return false;
+    }
+
+    // Open file for writing
+    std::ofstream file(output_path, std::ios::binary | std::ios::trunc);
+    if (!file.is_open()) {
+        curl_easy_cleanup(curl);
+        return false;
+    }
+
+    // Configure CURL
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &file);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, static_cast<long>(options.timeout_seconds));
+
+    // Set Range header for segmented download
+    std::string range_header = std::to_string(start) + "-" + std::to_string(end);
+    curl_easy_setopt(curl, CURLOPT_RANGE, range_header.c_str());
+
+    if (!options.user_agent.empty()) {
+        curl_easy_setopt(curl, CURLOPT_USERAGENT, options.user_agent.c_str());
+    }
+
+    if (!options.proxy.empty()) {
+        curl_easy_setopt(curl, CURLOPT_PROXY, options.proxy.c_str());
+    }
+
+    if (!options.verify_ssl) {
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+    }
+
+    // Speed limit
+    if (options.speed_limit > 0) {
+        curl_easy_setopt(curl, CURLOPT_MAX_RECV_SPEED_LARGE,
+                         static_cast<curl_off_t>(options.speed_limit));
+    }
+
+    // Custom headers
+    struct curl_slist* headers = nullptr;
+    for (const auto& pair : options.headers) {
+        std::string header = pair.first + ": " + pair.second;
+        headers = curl_slist_append(headers, header.c_str());
+    }
+    if (headers) {
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    }
+
+    CURLcode res = curl_easy_perform(curl);
+
+    if (headers) {
+        curl_slist_free_all(headers);
+    }
+
+    file.close();
+    curl_easy_cleanup(curl);
+
+    return res == CURLE_OK && !cancelled.load();
+}
+
 #endif  // FALCON_USE_CURL
 
 class HttpHandler::Impl {
@@ -305,6 +379,33 @@ public:
     void download(DownloadTask::Ptr task, IEventListener* listener) {
 #ifdef FALCON_USE_CURL
         const auto& options = task->options();
+
+        // First, get file info to determine if we should use segmented download
+        FileInfo info = get_file_info(task->url(), options);
+
+        // Check if segmented download is beneficial
+        bool use_segments = info.supports_resume &&
+                            info.total_size > static_cast<Bytes>(options.min_segment_size) &&
+                            options.max_connections > 1;
+
+        if (use_segments) {
+            // Use multi-threaded segmented download
+            download_segmented(task, listener, info);
+        } else {
+            // Use single connection download
+            download_single(task, listener, info);
+        }
+
+#else
+        // Without libcurl, we cannot download
+        throw UnsupportedProtocolException(
+            "HTTP downloads require libcurl. Please compile with FALCON_USE_CURL=ON");
+#endif
+    }
+
+    void download_single(DownloadTask::Ptr task, IEventListener* listener, const FileInfo& info) {
+#ifdef FALCON_USE_CURL
+        const auto& options = task->options();
         std::string temp_path = task->output_path() + ".falcon.tmp";
 
         // Check for existing partial download
@@ -434,11 +535,45 @@ public:
         }
         task->set_status(TaskStatus::Completed);
 
-#else
-        // Without libcurl, we cannot download
-        throw UnsupportedProtocolException(
-            "HTTP downloads require libcurl. Please compile with FALCON_USE_CURL=ON");
-#endif
+#endif  // FALCON_USE_CURL
+    }
+
+    void download_segmented(DownloadTask::Ptr task, IEventListener* listener, const FileInfo& info) {
+#ifdef FALCON_USE_CURL
+        const auto& options = task->options();
+
+        // Configure segment downloader
+        SegmentConfig seg_config;
+        seg_config.num_connections = options.max_connections;
+        seg_config.min_segment_size = options.min_segment_size;
+        seg_config.timeout_seconds = options.timeout_seconds;
+        seg_config.max_retries = options.max_retries;
+
+        // Create segment downloader
+        SegmentDownloader downloader(
+            task,
+            task->url(),
+            task->output_path(),
+            seg_config
+        );
+
+        downloader.set_event_listener(listener);
+
+        // Start segmented download
+        bool success = downloader.start([&](const std::string& url,
+                                            Bytes start,
+                                            Bytes end,
+                                            const std::string& output_path,
+                                            std::atomic<bool>& cancelled) -> bool {
+            return download_segment_curl(url, start, end, output_path, options, cancelled);
+        });
+
+        if (success) {
+            task->set_status(TaskStatus::Completed);
+        } else {
+            throw FileIOException("Segmented download failed");
+        }
+#endif  // FALCON_USE_CURL
     }
 
     void pause(DownloadTask::Ptr task) {

@@ -18,6 +18,7 @@ add_library(falcon
     src/thread_pool.cpp
     src/plugin_manager.cpp
     src/event_dispatcher.cpp
+    src/segment_downloader.cpp
     src/resource_browser.cpp
     src/password_manager.cpp
     src/version.cpp

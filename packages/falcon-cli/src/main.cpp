@@ -138,10 +138,17 @@ struct CliArgs {
     std::string url;
     std::string output_file;
     std::string output_dir;
-    int connections = 4;
-    falcon::Bytes speed_limit = 0;
+    int connections = 4;          // 并发连接数 (aria2 风格)
+    falcon::Bytes speed_limit = 0;  // 速度限制
+    std::size_t min_segment_size = 1024 * 1024;  // 最小分块大小 (1MB)
     bool continue_download = true;
     int timeout = 30;
+    int max_retries = 3;
+    bool adaptive_sizing = true;   // 自适应分块大小
+    bool verify_ssl = true;
+    std::string proxy;
+    std::string user_agent = "Falcon/0.2.0";
+    std::vector<std::pair<std::string, std::string>> headers;
     bool verbose = false;
     bool quiet = false;
     bool show_help = false;
@@ -168,13 +175,71 @@ CliArgs parse_args(int argc, char* argv[]) {
             }
         } else if (arg == "-c" || arg == "--connections") {
             if (i + 1 < argc) {
-                args.connections = std::max(1, std::min(16, std::stoi(argv[++i])));
+                args.connections = std::max(1, std::min(64, std::stoi(argv[++i])));
+            }
+        } else if (arg == "-x" || arg == "--max-connections") {
+            if (i + 1 < argc) {
+                args.connections = std::max(1, std::min(64, std::stoi(argv[++i])));
+            }
+        } else if (arg == "-s" || arg == "--split") {
+            if (i + 1 < argc) {
+                args.connections = std::max(1, std::min(64, std::stoi(argv[++i])));
+            }
+        } else if (arg == "--min-segment-size") {
+            if (i + 1 < argc) {
+                std::string size_str = argv[++i];
+                // Parse size with suffix (K, M, G)
+                std::size_t multiplier = 1;
+                if (!size_str.empty()) {
+                    char suffix = size_str.back();
+                    if (suffix == 'K' || suffix == 'k') {
+                        multiplier = 1024;
+                        size_str.pop_back();
+                    } else if (suffix == 'M' || suffix == 'm') {
+                        multiplier = 1024 * 1024;
+                        size_str.pop_back();
+                    } else if (suffix == 'G' || suffix == 'g') {
+                        multiplier = 1024 * 1024 * 1024;
+                        size_str.pop_back();
+                    }
+                }
+                args.min_segment_size = std::stoull(size_str) * multiplier;
             }
         } else if (arg == "--no-continue") {
             args.continue_download = false;
+        } else if (arg == "--no-adaptive") {
+            args.adaptive_sizing = false;
         } else if (arg == "-t" || arg == "--timeout") {
             if (i + 1 < argc) {
                 args.timeout = std::stoi(argv[++i]);
+            }
+        } else if (arg == "-r" || arg == "--retry") {
+            if (i + 1 < argc) {
+                args.max_retries = std::max(0, std::min(10, std::stoi(argv[++i])));
+            }
+        } else if (arg == "--no-verify-ssl") {
+            args.verify_ssl = false;
+        } else if (arg == "--proxy") {
+            if (i + 1 < argc) {
+                args.proxy = argv[++i];
+            }
+        } else if (arg == "-U" || arg == "--user-agent") {
+            if (i + 1 < argc) {
+                args.user_agent = argv[++i];
+            }
+        } else if (arg == "-H" || arg == "--header") {
+            if (i + 1 < argc) {
+                std::string header = argv[++i];
+                auto pos = header.find(':');
+                if (pos != std::string::npos && pos < header.length() - 1) {
+                    std::string key = header.substr(0, pos);
+                    std::string value = header.substr(pos + 1);
+                    // Trim leading whitespace from value
+                    while (!value.empty() && value[0] == ' ') {
+                        value = value.substr(1);
+                    }
+                    args.headers.push_back({key, value});
+                }
             }
         } else if (arg == "-v" || arg == "--verbose") {
             args.verbose = true;
@@ -191,23 +256,47 @@ CliArgs parse_args(int argc, char* argv[]) {
 }
 
 void show_help() {
-    std::cout << "Falcon 命令行下载工具 v0.1.0\n\n";
+    std::cout << "Falcon 命令行下载工具 v0.2.0 - aria2 风格多线程下载\n\n";
     std::cout << "用法:\n";
     std::cout << "  falcon-cli [选项] <URL>\n\n";
     std::cout << "选项:\n";
     std::cout << "  -h, --help                 显示帮助信息\n";
     std::cout << "  -V, --version              显示版本信息\n";
     std::cout << "  -o, --output <文件>        指定输出文件名\n";
-    std::cout << "  -d, --directory <目录>     指定输出目录\n";
-    std::cout << "  -c, --connections <数量>   并发连接数 (1-16) [默认: 4]\n";
+    std::cout << "  -d, --directory <目录>     指定输出目录\n\n";
+
+    std::cout << "多线程下载选项 (aria2 风格):\n";
+    std::cout << "  -c, --connections <数量>   并发连接数 (1-64) [默认: 4]\n";
+    std::cout << "  -x, --max-connections <N>  最大连接数 (同 -c)\n";
+    std::cout << "  -s, --split <N>            分块数量 (同 -c)\n";
+    std::cout << "      --min-segment-size     最小分块大小 [默认: 1M]\n";
+    std::cout << "      --no-adaptive          禁用自适应分块大小\n\n";
+
+    std::cout << "高级选项:\n";
     std::cout << "      --no-continue          禁用断点续传\n";
-    std::cout << "  -t, --timeout <秒>        超时时间 [默认: 30]\n";
-    std::cout << "  -v, --verbose             详细输出\n";
+    std::cout << "  -t, --timeout <秒>         超时时间 [默认: 30]\n";
+    std::cout << "  -r, --retry <次数>        最大重试次数 [默认: 3]\n";
+    std::cout << "      --no-verify-ssl        跳过 SSL 证书验证\n";
+    std::cout << "      --proxy <URL>          设置代理服务器\n";
+    std::cout << "  -U, --user-agent <字符串>  自定义 User-Agent\n";
+    std::cout << "  -H, --header <头部>        自定义 HTTP 头 (可多次使用)\n\n";
+
+    std::cout << "输出选项:\n";
+    std::cout << "  -v, --verbose              详细输出\n";
     std::cout << "  -q, --quiet                静默模式\n\n";
+
     std::cout << "示例:\n";
-    std::cout << "  falcon-cli https://example.com/file.zip\n";
-    std::cout << "  falcon-cli https://example.com/file.zip -o /tmp/file.zip\n";
-    std::cout << "  falcon-cli https://example.com/file.zip -c 8\n";
+    std::cout << "  # 基础下载\n";
+    std::cout << "  falcon-cli https://example.com/file.zip\n\n";
+    std::cout << "  # 8 线程下载\n";
+    std::cout << "  falcon-cli https://example.com/file.zip -c 8\n\n";
+    std::cout << "  # 指定输出路径和分块大小\n";
+    std::cout << "  falcon-cli https://example.com/file.zip -o /tmp/file.zip --min-segment-size 5M\n\n";
+    std::cout << "  # 使用代理和自定义头\n";
+    std::cout << "  falcon-cli https://example.com/file.zip --proxy http://127.0.0.1:7890 \\\n";
+    std::cout << "           -H \"Authorization: Bearer token\"\n\n";
+    std::cout << "  # aria2 兼容模式\n";
+    std::cout << "  falcon-cli https://example.com/file.zip -x 16 -s 16 --min-segment-size 1M\n";
 }
 
 int main(int argc, char* argv[]) {
@@ -247,10 +336,18 @@ int main(int argc, char* argv[]) {
         falcon::DownloadOptions options;
         options.max_connections = static_cast<size_t>(args.connections);
         options.timeout_seconds = static_cast<size_t>(args.timeout);
+        options.max_retries = static_cast<size_t>(args.max_retries);
         options.resume_enabled = args.continue_download;
         options.speed_limit = args.speed_limit;
-        options.user_agent = "Falcon/0.1";
-        options.verify_ssl = true;
+        options.min_segment_size = args.min_segment_size;
+        options.user_agent = args.user_agent;
+        options.verify_ssl = args.verify_ssl;
+        options.proxy = args.proxy;
+
+        // 添加自定义 HTTP 头
+        for (const auto& header : args.headers) {
+            options.headers[header.first] = header.second;
+        }
 
         // 设置输出路径
         if (!args.output_dir.empty()) {
