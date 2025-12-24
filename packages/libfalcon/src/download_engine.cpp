@@ -11,6 +11,7 @@
 #include <falcon/task_manager.hpp>
 #include <falcon/event_dispatcher.hpp>
 #include <falcon/plugin_manager.hpp>
+#include <algorithm>
 #include <filesystem>
 
 // 临时日志宏
@@ -25,7 +26,12 @@ class DownloadEngine::Impl {
 public:
     explicit Impl(const EngineConfig& config)
         : config_(config)
-        , task_manager_(TaskManagerConfig{}, &event_dispatcher_)
+        , task_manager_([&] {
+              TaskManagerConfig tm;
+              tm.max_concurrent_tasks = std::max<std::size_t>(1, config_.max_concurrent_tasks);
+              return tm;
+          }(),
+          &event_dispatcher_)
         , global_speed_limiter_(0)
         , next_task_id_(1) {
 
@@ -65,30 +71,49 @@ public:
         task->set_handler(std::shared_ptr<IProtocolHandler>(handler, [](IProtocolHandler*) {}));
 
         // 生成输出路径
-        std::string output_path;
+        const bool has_custom_dir =
+            !options.output_directory.empty() && options.output_directory != ".";
+        std::filesystem::path out_dir =
+            has_custom_dir ? std::filesystem::path(options.output_directory) : std::filesystem::path();
+
+        std::filesystem::path out_path;
         if (!options.output_filename.empty()) {
-            // 如果指定了文件名
-            if (!options.output_directory.empty()) {
-                // 同时指定了目录
-                output_path = options.output_directory;
-                if (output_path.back() != '/') {
-                    output_path += '/';
-                }
-                output_path += options.output_filename;
+            std::filesystem::path filename(options.output_filename);
+            if (has_custom_dir && filename.is_relative()) {
+                out_path = out_dir / filename;
             } else {
-                // 只指定了文件名
-                output_path = options.output_filename;
+                out_path = filename;
             }
         } else {
-            // 没有指定文件名，从 URL 提取
+            // No filename specified: derive from URL.
+            std::string filename = "download";
             auto pos = url.rfind('/');
-            if (pos != std::string::npos && pos < url.length() - 1) {
-                output_path = url.substr(pos + 1);
-            } else {
-                output_path = "download";
+            if (pos != std::string::npos && pos + 1 < url.size()) {
+                filename = url.substr(pos + 1);
+                // Remove query string if present
+                auto query_pos = filename.find('?');
+                if (query_pos != std::string::npos) {
+                    filename = filename.substr(0, query_pos);
+                }
+                if (filename.empty()) {
+                    filename = "download";
+                }
+            }
+            out_path = has_custom_dir ? (out_dir / filename) : std::filesystem::path(filename);
+        }
+
+        if (options.create_directory) {
+            std::error_code ec;
+            auto parent = out_path.parent_path();
+            if (!parent.empty()) {
+                std::filesystem::create_directories(parent, ec);
+                if (ec) {
+                    throw FileIOException("Failed to create output directory: " + ec.message());
+                }
             }
         }
-        task->set_output_path(output_path);
+
+        task->set_output_path(out_path.string());
 
         // 添加到任务管理器
         task_manager_.add_task(task, TaskPriority::Normal);

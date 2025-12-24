@@ -67,6 +67,12 @@ add_executable(falcon_core_tests
     unit/resource_browser_utils_test.cpp
     unit/password_manager_test.cpp
     unit/segment_downloader_test.cpp
+    # aria2 风格核心功能测试
+    unit/command_test.cpp
+    unit/event_poll_test.cpp
+    unit/socket_pool_test.cpp
+    unit/request_group_test.cpp
+    unit/file_hash_test.cpp
 )
 
 target_link_libraries(falcon_core_tests

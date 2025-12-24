@@ -16,12 +16,27 @@
 
 ## Features 🚀
 
+- **aria2-Compatible Architecture**:
+  - Event-driven command pattern
+  - I/O multiplexing (epoll/kqueue/poll)
+  - Socket connection pooling
+  - Request group management
 - **Multi-Protocol Support**: HTTP/HTTPS, FTP, BitTorrent, Magnet links, Private protocols
   - Thunder (迅雷)
   - QQDL (腾讯旋风)
   - FlashGet
   - ED2K (电驴)
   - HLS/DASH streaming
+- **High Performance**:
+  - Multi-threaded segmented downloading
+  - Non-blocking I/O with event-driven architecture
+  - Connection pooling for reduced latency
+  - Speed control and bandwidth throttling
+- **Advanced Features**:
+  - File hash verification (MD5/SHA1/SHA256/SHA512)
+  - Resume support for interrupted downloads
+  - Multi-mirror failover
+  - 30+ aria2-compatible CLI parameters
 - **Cloud Storage Integration**:
   - Amazon S3
   - Alibaba Cloud OSS (阿里云OSS)
@@ -31,8 +46,6 @@
 - **Remote Resource Browsing**: Browse FTP/SFTP/S3 directories with rich information
 - **Resource Search**: Built-in search engine for torrent and file resources
 - **Secure Configuration**: AES-256 encrypted credential storage with master password protection
-- **High Performance**: Multi-threaded downloading with speed control and bandwidth throttling
-- **Resume Support**: Automatic resumption of interrupted downloads
 - **Proxy Support**: HTTP/HTTPS/SOCKS5 proxy support
 
 ## Quick Start ⚡
@@ -60,10 +73,22 @@ cmake --build build --config Release
 falcon-cli https://example.com/file.zip
 
 # Multi-threaded download (5 connections)
-falcon-cli https://example.com/large_file.iso -c 5
+falcon-cli -x 5 https://example.com/large_file.iso
 
 # Download with speed limit (1MB/s)
-falcon-cli https://example.com/video.mp4 --limit 1M
+falcon-cli --max-download-limit=1M https://example.com/video.mp4
+
+# Resume interrupted download
+falcon-cli -c https://example.com/partial.zip
+
+# Multi-mirror download (automatic failover)
+falcon-cli https://mirror1.com/file.zip \
+  https://mirror2.com/file.zip \
+  https://mirror3.com/file.zip
+
+# Verify file hash after download
+falcon-cli --checksum=sha256=dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f \
+  https://example.com/file.zip
 
 # Browse FTP directory
 falcon-cli --list ftp://ftp.example.com/pub
@@ -73,6 +98,43 @@ falcon-cli --list s3://my-bucket --key-id YOUR_KEY --secret-key YOUR_SECRET
 
 # Search for torrents
 falcon-cli --search "Ubuntu 22.04" --min-seeds 10
+```
+
+### aria2-Compatible Parameters
+
+Falcon CLI supports aria2-compatible parameters:
+
+```bash
+# Connection settings
+falcon-cli -x 16 -s 16 --min-split-size=1M https://example.com/file.zip
+# -x: Max connections per task
+# -s: Max connections per server
+
+# Retry settings
+falcon-cli --max-tries=5 --retry-wait=10 https://example.com/file.zip
+
+# Timeout settings
+falcon-cli --timeout=30 --connect-timeout=10 https://example.com/file.zip
+
+# HTTP authentication
+falcon-cli --http-user=user --http-passwd=pass https://example.com/file.zip
+
+# Custom headers
+falcon-cli --header="Authorization: Bearer TOKEN" https://example.com/api/file
+
+# Proxy support
+falcon-cli --proxy=http://proxy.example.com:8080 \
+  --proxy-user=user --proxy-password=pass https://example.com/file.zip
+
+# User agent
+falcon-cli --user-agent="Falcon/1.0" https://example.com/file.zip
+
+# Output directory
+falcon-cli -d /tmp/downloads -o custom_name.zip https://example.com/file.zip
+
+# Speed limits
+falcon-cli --max-download-limit=5M \
+  --max-overall-download-limit=10M https://example.com/file.zip
 ```
 
 ## Supported Protocols 📡
@@ -216,7 +278,7 @@ falcon-cli https://example.com/file.zip \
 
 ## Architecture 🏗️
 
-Falcon follows a modular architecture:
+Falcon follows a modular architecture with aria2-inspired event-driven design:
 
 ```
 ┌─────────────────────────────────────────┐
@@ -227,13 +289,19 @@ Falcon follows a modular architecture:
 └────────────────────┬────────────────────┘
                      │
 ┌────────────────────▼────────────────────┐
-│              Falcon Core                 │
+│         Falcon Core (aria2-style)       │
 │  ┌──────────────────────────────────┐  │
-│  │     Download Engine              │  │
-│  │     Task Manager                  │  │
-│  │     Plugin Manager                │  │
-│  │     Config Manager                │  │
-│  │     Password Manager              │  │
+│  │  DownloadEngineV2 (Event Loop)  │  │
+│  │  ├─ Command Queue               │  │
+│  │  ├─ Routine Commands            │  │
+│  │  └─ Event Poll (epoll/kqueue)   │  │
+│  ├──────────────────────────────────┤  │
+│  │  RequestGroupMan                │  │
+│  │  ├─ Active Tasks                │  │
+│  │  └─ Waiting Queue               │  │
+│  ├──────────────────────────────────┤  │
+│  │  Socket Pool                    │  │
+│  │  └─ Connection Reuse            │  │
 │  └──────────────────────────────────┘  │
 └────────────────────┬────────────────────┘
                      │
@@ -244,6 +312,22 @@ Falcon follows a modular architecture:
 │  └─────┘ └─────┘ └──────┘ └─────┘       │
 └─────────────────────────────────────────┘
 ```
+
+### Event-Driven Architecture
+
+Falcon uses an event-driven command pattern inspired by aria2:
+
+1. **Command Execution**: All download operations are encapsulated as command objects
+2. **I/O Multiplexing**: Uses epoll (Linux), kqueue (macOS/BSD), or poll (fallback)
+3. **Connection Pooling**: Reuses HTTP/HTTPS connections for better performance
+4. **Non-Blocking I/O**: All sockets are non-blocking, driven by events
+
+### Documentation
+
+- [Architecture Overview](docs/aria2_architecture.md) - Detailed architecture documentation
+- [API Guide](docs/api_guide.md) - Complete API usage guide
+- [Developer Guide](docs/developer_guide.md) - Development setup and guidelines
+- [Migration Plan](docs/aria2c-migration-plan.md) - aria2 compatibility roadmap
 
 ## Development 👷
 

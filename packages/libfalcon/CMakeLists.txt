@@ -22,6 +22,15 @@ add_library(falcon
     src/resource_browser.cpp
     src/password_manager.cpp
     src/version.cpp
+    # aria2 风格命令系统
+    src/commands/http_commands.cpp
+    src/net/event_poll_epoll.cpp
+    src/net/event_poll_kqueue.cpp
+    src/net/event_poll_poll.cpp
+    src/net/socket_pool.cpp
+    src/request_group.cpp
+    src/download_engine_v2.cpp
+    src/file_hash.cpp
     # Resource search - TODO: Fix compilation issues
     # src/resource_search.cpp
     # Cloud storage - TODO: Fix compilation issues
@@ -82,6 +91,13 @@ find_package(CURL QUIET)
 if(CURL_FOUND)
     target_link_libraries(falcon PRIVATE CURL::libcurl)
     target_compile_definitions(falcon PRIVATE FALCON_USE_CURL)
+endif()
+
+# Link OpenSSL for file hash verification
+find_package(OpenSSL QUIET)
+if(OPENSSL_FOUND)
+    target_link_libraries(falcon PUBLIC OpenSSL::Crypto OpenSSL::SSL)
+    target_compile_definitions(falcon PRIVATE FALCON_USE_OPENSSL)
 endif()
 
 # ============================================================================

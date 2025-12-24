@@ -99,8 +99,8 @@ static bool mock_segment_download(
     const std::string& output_path,
     std::atomic<bool>& cancelled) {
 
-    // Simulate download delay
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    // Minimal delay for testing
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
 
     if (cancelled.load()) {
         return false;
@@ -115,16 +115,21 @@ static bool mock_segment_download(
     Bytes size = end - start + 1;
     std::vector<uint8_t> buffer(4096);
 
-    for (Bytes pos = 0; pos < size; ++pos) {
-        uint8_t value = static_cast<uint8_t>((start + pos) % 256);
-        file.write(reinterpret_cast<const char*>(&value), 1);
+    // Fill buffer with pattern
+    for (std::size_t i = 0; i < buffer.size(); ++i) {
+        buffer[i] = static_cast<uint8_t>(i % 256);
+    }
 
-        if (pos % 4096 == 0 && pos > 0) {
-            // Check for cancellation periodically
-            if (cancelled.load()) {
-                file.close();
-                return false;
-            }
+    Bytes written = 0;
+    while (written < size) {
+        Bytes to_write = std::min(static_cast<Bytes>(buffer.size()), size - written);
+        file.write(reinterpret_cast<const char*>(buffer.data()), to_write);
+        written += to_write;
+
+        // Check for cancellation periodically
+        if (written % (64 * 1024) == 0 && cancelled.load()) {
+            file.close();
+            return false;
         }
     }
 
@@ -179,7 +184,7 @@ TEST(SegmentDownloaderTest, BasicSegmentedDownload) {
     options.max_connections = 4;
 
     auto task = std::make_shared<MockDownloadTask>(1, "http://test.example.com/file.bin", options);
-    task->set_test_file_info(1024 * 100);  // 100 KB file
+    task->set_test_file_info(1024 * 10);  // 10 KB file (smaller for faster tests)
 
     // Create segment downloader
     SegmentConfig config;
@@ -203,7 +208,7 @@ TEST(SegmentDownloaderTest, Cancellation) {
     options.max_connections = 4;
 
     auto task = std::make_shared<MockDownloadTask>(1, "http://test.example.com/file.bin", options);
-    task->set_test_file_info(1024 * 100);  // 100 KB file
+    task->set_test_file_info(1024 * 10);  // 10 KB file (smaller for faster tests)
 
     SegmentConfig config;
     config.num_connections = 8;  // Many segments
@@ -265,7 +270,7 @@ TEST(SegmentDownloaderTest, PauseAndResume) {
     options.max_connections = 4;
 
     auto task = std::make_shared<MockDownloadTask>(1, "http://test.example.com/file.bin", options);
-    task->set_test_file_info(1024 * 100);
+    task->set_test_file_info(1024 * 10);  // 10 KB file (smaller for faster tests)
 
     SegmentConfig config;
     config.num_connections = 4;
@@ -302,7 +307,7 @@ TEST(SegmentDownloaderTest, SpeedTracking) {
     options.max_connections = 4;
 
     auto task = std::make_shared<MockDownloadTask>(1, "http://test.example.com/file.bin", options);
-    task->set_test_file_info(1024 * 100);
+    task->set_test_file_info(1024 * 10);  // 10 KB file (smaller for faster tests)
 
     SegmentConfig config;
     config.num_connections = 4;

@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -189,7 +190,11 @@ bool SegmentDownloader::start(SegmentDownloadFunc download_func) {
     if (running_.load()) {
         return false;  // Already running
     }
+    if (cancelled_.load()) {
+        return false;  // Cancelled before start
+    }
 
+    try {
     // Get file size from task info
     Bytes file_size = task_->file_info().total_size;
     if (file_size == 0) {
@@ -205,82 +210,161 @@ bool SegmentDownloader::start(SegmentDownloadFunc download_func) {
 
     running_.store(true);
     paused_.store(false);
-    cancelled_.store(false);
+    failed_.store(false);
 
     // Reset stats
-    stats_.total_downloaded.store(0);
     stats_.total_size.store(file_size);
-    stats_.completed_segments.store(0);
     stats_.active_connections.store(0);
     stats_.start_time = std::chrono::steady_clock::now();
     stats_.last_update = stats_.start_time;
     stats_.last_downloaded = 0;
+    current_speed_.store(0);
+
+    // Ensure output directory exists (for segment temp files and final output)
+    if (task_ && task_->options().create_directory) {
+        try {
+            std::filesystem::path out_path(output_path_);
+            auto parent = out_path.parent_path();
+            if (!parent.empty()) {
+                std::filesystem::create_directories(parent);
+            }
+        } catch (const std::exception& e) {
+            running_.store(false);
+            throw FileIOException(std::string("Failed to create output directory: ") + e.what());
+        }
+    }
+
+    // Resume support: detect existing segment files and continue from where we left off
+    const bool resume_enabled = task_ ? task_->options().resume_enabled : false;
+    if (!resume_enabled) {
+        cleanup_segment_files();
+    } else {
+        for (auto& segment : segments_) {
+            const std::string segment_path = get_segment_path(segment->index);
+            std::ifstream file(segment_path, std::ios::binary | std::ios::ate);
+            if (!file.is_open()) continue;
+            auto sz = file.tellg();
+            if (sz <= 0) continue;
+            Bytes downloaded = static_cast<Bytes>(sz);
+            downloaded = std::min(downloaded, segment->size());
+            segment->downloaded.store(downloaded);
+            if (downloaded >= segment->size()) {
+                segment->completed.store(true);
+            }
+        }
+    }
+
+    update_progress();
+
+    // If everything is already downloaded, just merge.
+    if (all_segments_completed()) {
+        running_.store(false);
+        return merge_segments();
+    }
+
+    // Start connection monitor thread (store under lock to avoid races with cancel())
+    {
+        std::thread monitor([this]() { monitor_connections(); });
+        std::lock_guard<std::mutex> lock(workers_mutex_);
+        monitor_thread_ = std::move(monitor);
+    }
 
     // Start worker threads
-    std::size_t num_workers = std::min(
-        segments_.size(),
-        static_cast<std::size_t>(config_.num_connections > 0 ?
-                                 config_.num_connections : segments_.size())
-    );
+    std::size_t desired_workers = config_.num_connections > 0 ? config_.num_connections : segments_.size();
+    std::size_t num_workers = std::max<std::size_t>(1, std::min(desired_workers, segments_.size()));
+    active_workers_.store(num_workers);
 
     {
         std::lock_guard<std::mutex> lock(workers_mutex_);
+        workers_.clear();
         workers_.reserve(num_workers);
-    }
 
-    // Allocate initial segments
-    for (std::size_t i = 0; i < num_workers; ++i) {
-        auto segment = allocate_segment();
-        if (!segment) {
-            break;  // No more segments to allocate
+        for (std::size_t i = 0; i < num_workers; ++i) {
+            workers_.emplace_back([this, download_func]() {
+                while (!cancelled_.load() && !failed_.load()) {
+                    if (paused_.load()) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                        continue;
+                    }
+
+                    auto segment = allocate_segment();
+                    if (!segment) {
+                        break;
+                    }
+
+                    download_segment(std::move(segment), download_func);
+                }
+
+                if (active_workers_.fetch_sub(1) == 1) {
+                    cv_.notify_all();
+                } else {
+                    cv_.notify_all();
+                }
+            });
         }
-
-        std::lock_guard<std::mutex> lock(workers_mutex_);
-        workers_.emplace_back([this, segment, download_func]() {
-            download_segment(segment, download_func);
-        });
-        active_workers_++;
     }
 
-    // Start connection monitor thread
-    monitor_thread_ = std::thread([this]() {
-        monitor_connections();
-    });
-
-    // Wait for all workers to complete
+    // Wait for all workers to complete or cancellation/failure
     {
         std::unique_lock<std::mutex> lock(workers_mutex_);
         cv_.wait(lock, [this]() {
-            return active_workers_ == 0 || cancelled_.load();
+            return active_workers_.load() == 0 || cancelled_.load() || failed_.load();
         });
-    }
-
-    // Join all worker threads
-    for (auto& worker : workers_) {
-        if (worker.joinable()) {
-            worker.join();
-        }
-    }
-    workers_.clear();
-
-    // Stop monitor thread
-    if (monitor_thread_.joinable()) {
-        monitor_thread_.join();
     }
 
     running_.store(false);
 
-    // Check if all segments completed successfully
+    // Join workers (don't hold workers_mutex_ while joining)
+    std::vector<std::thread> workers_to_join;
+    {
+        std::lock_guard<std::mutex> lock(workers_mutex_);
+        workers_to_join.swap(workers_);
+    }
+    for (auto& worker : workers_to_join) {
+        if (worker.joinable()) {
+            worker.join();
+        }
+    }
+
+    // Stop monitor thread
+    {
+        std::thread monitor_to_join;
+        {
+            std::lock_guard<std::mutex> lock(workers_mutex_);
+            monitor_to_join = std::move(monitor_thread_);
+        }
+        if (monitor_to_join.joinable()) {
+            monitor_to_join.join();
+        }
+    }
+
+    if (failed_.load()) {
+        return false;
+    }
+
+    // Check if cancelled
     if (cancelled_.load()) {
         return false;
     }
 
     if (!all_segments_completed()) {
-        throw FileIOException("Download incomplete: not all segments finished");
+        return false;
     }
 
     // Merge segments into final file
     return merge_segments();
+    } catch (const std::exception& e) {
+        {
+            std::lock_guard<std::mutex> lock(failure_.mutex);
+            if (!failure_.message.has_value()) {
+                failure_.message = e.what();
+            }
+        }
+        failed_.store(true);
+        cancelled_.store(true);
+        cancel();
+        return false;
+    }
 }
 
 std::shared_ptr<Segment> SegmentDownloader::allocate_segment() {
@@ -304,30 +388,62 @@ void SegmentDownloader::download_segment(
     std::shared_ptr<Segment> segment,
     SegmentDownloadFunc download_func) {
 
-    std::size_t retry_count = 0;
+    // Ensure segment is marked inactive and active connection count is decremented on all exits.
+    struct ConnectionGuard {
+        std::shared_ptr<Segment> segment;
+        SegmentStats* stats;
+        explicit ConnectionGuard(std::shared_ptr<Segment> s, SegmentStats* st)
+            : segment(std::move(s)), stats(st) {}
+        ~ConnectionGuard() {
+            if (segment) {
+                segment->active.store(false);
+            }
+            if (stats) {
+                stats->active_connections--;
+            }
+        }
+    } guard(segment, &stats_);
+
+    std::size_t attempt = 0;
+    std::string last_error;
 
     while (!cancelled_.load() && !segment->completed.load() &&
-           retry_count <= config_.max_retries) {
+           attempt <= config_.max_retries) {
 
         if (paused_.load()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             continue;
         }
 
-        try {
-            std::string segment_path = get_segment_path(segment->index);
+        const std::string segment_path = get_segment_path(segment->index);
 
+        try {
             // Call the download function
             bool success = download_func(
                 url_,
-                segment->start + segment->downloaded,  // Resume position
+                segment->start + segment->downloaded.load(),  // Resume position
                 segment->end,
                 segment_path,
                 cancelled_
             );
 
             if (success && !cancelled_.load()) {
-                // Mark segment as completed
+                if (config_.validate_pieces) {
+                    std::ifstream file(segment_path, std::ios::binary | std::ios::ate);
+                    if (!file.is_open()) {
+                        throw FileIOException("Failed to open segment file: " + segment_path);
+                    }
+                    Bytes downloaded = static_cast<Bytes>(file.tellg());
+                    downloaded = std::min(downloaded, segment->size());
+                    segment->downloaded.store(downloaded);
+                    if (downloaded < segment->size()) {
+                        throw FileIOException("Segment incomplete after download: seg" +
+                                              std::to_string(segment->index));
+                    }
+                } else {
+                    segment->downloaded.store(segment->size());
+                }
+
                 complete_segment(segment);
                 break;
             } else if (cancelled_.load()) {
@@ -337,60 +453,59 @@ void SegmentDownloader::download_segment(
         } catch (const std::exception& e) {
             std::cerr << "Segment " << segment->index
                      << " error: " << e.what() << std::endl;
+            last_error = e.what();
         }
 
-        // Retry logic
-        if (retry_count < config_.max_retries && !cancelled_.load()) {
-            retry_count++;
-            std::this_thread::sleep_for(
-                std::chrono::milliseconds(config_.retry_delay_ms * retry_count)
-            );
+        // Update downloaded bytes from partial segment file (best-effort)
+        {
+            std::ifstream file(segment_path, std::ios::binary | std::ios::ate);
+            if (file.is_open()) {
+                Bytes downloaded = static_cast<Bytes>(file.tellg());
+                downloaded = std::min(downloaded, segment->size());
+                segment->downloaded.store(downloaded);
+            }
         }
-    }
 
-    // Decrease active connections count
-    stats_.active_connections--;
-
-    // Try to allocate next segment
-    if (!cancelled_.load() && segment->completed.load()) {
-        auto next_seg = allocate_segment();
-        if (next_seg) {
-            std::lock_guard<std::mutex> lock(workers_mutex_);
-            workers_.emplace_back([this, next_seg, download_func]() {
-                download_segment(next_seg, download_func);
-            });
-            active_workers_++;
+        if (cancelled_.load()) {
+            break;
         }
-    }
 
-    // Check if all workers are done
-    if (stats_.active_connections == 0 || all_segments_completed()) {
-        cv_.notify_all();
-    }
+        if (attempt >= config_.max_retries) {
+            {
+                std::lock_guard<std::mutex> lock(failure_.mutex);
+                if (!failure_.message.has_value()) {
+                    if (!last_error.empty()) {
+                        failure_.message = last_error;
+                    } else {
+                        failure_.message = "Segment failed: seg" + std::to_string(segment->index);
+                    }
+                }
+            }
+            failed_.store(true);
+            cancelled_.store(true);
+            cv_.notify_all();
+            break;
+        }
 
-    active_workers_--;
+        ++attempt;
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(config_.retry_delay_ms * attempt)
+        );
+    }
 }
 
 void SegmentDownloader::complete_segment(std::shared_ptr<Segment> segment) {
     segment->completed.store(true);
     segment->active.store(false);
-    stats_.completed_segments++;
-
-    // Get actual downloaded size
-    std::string segment_path = get_segment_path(segment->index);
-    std::ifstream file(segment_path, std::ios::binary | std::ios::ate);
-    if (file.is_open()) {
-        segment->downloaded = static_cast<Bytes>(file.tellg());
-        stats_.total_downloaded += segment->downloaded;
-    }
 
     update_progress();
 }
 
 bool SegmentDownloader::merge_segments() {
-    std::ofstream output_file(output_path_, std::ios::binary);
+    const std::string temp_output = output_path_ + ".falcon.tmp.merge";
+    std::ofstream output_file(temp_output, std::ios::binary | std::ios::trunc);
     if (!output_file.is_open()) {
-        throw FileIOException("Failed to create output file: " + output_path_);
+        throw FileIOException("Failed to create output file: " + temp_output);
     }
 
     // Merge segments in order
@@ -406,6 +521,14 @@ bool SegmentDownloader::merge_segments() {
     }
 
     output_file.close();
+
+    // Atomically move into place
+    std::error_code ec;
+    std::filesystem::rename(temp_output, output_path_, ec);
+    if (ec) {
+        std::remove(temp_output.c_str());
+        throw FileIOException("Failed to move merged file to destination: " + ec.message());
+    }
 
     // Clean up segment files
     cleanup_segment_files();
@@ -427,16 +550,26 @@ void SegmentDownloader::cancel() {
     cv_.notify_all();
 
     // Wait for workers to finish
-    std::lock_guard<std::mutex> lock(workers_mutex_);
-    for (auto& worker : workers_) {
+    std::vector<std::thread> workers_to_join;
+    {
+        std::lock_guard<std::mutex> lock(workers_mutex_);
+        workers_to_join.swap(workers_);
+    }
+    for (auto& worker : workers_to_join) {
         if (worker.joinable()) {
             worker.join();
         }
     }
-    workers_.clear();
 
-    if (monitor_thread_.joinable()) {
-        monitor_thread_.join();
+    {
+        std::thread monitor_to_join;
+        {
+            std::lock_guard<std::mutex> lock(workers_mutex_);
+            monitor_to_join = std::move(monitor_thread_);
+        }
+        if (monitor_to_join.joinable()) {
+            monitor_to_join.join();
+        }
     }
 }
 
@@ -467,7 +600,7 @@ void SegmentDownloader::monitor_connections() {
         update_progress();
 
         // Check for slow connections
-        if (config_.slow_speed_threshold > 0 && active_workers_ > 0) {
+        if (config_.slow_speed_threshold > 0 && active_workers_.load() > 0) {
             BytesPerSecond speed = current_speed_.load();
             if (speed < config_.slow_speed_threshold) {
                 // Could restart slow connections here
@@ -480,21 +613,28 @@ void SegmentDownloader::monitor_connections() {
 }
 
 void SegmentDownloader::update_progress() {
-    if (event_listener_ && task_) {
-        ProgressInfo progress;
-        progress.task_id = task_->id();
-        progress.downloaded_bytes = stats_.total_downloaded.load();
-        progress.total_bytes = stats_.total_size.load();
-        progress.speed = current_speed_.load();
+    if (!task_) return;
 
-        task_->update_progress(
-            progress.downloaded_bytes,
-            progress.total_bytes,
-            progress.speed
-        );
-
-        event_listener_->on_progress(progress);
+    Bytes total_downloaded = 0;
+    std::size_t completed = 0;
+    {
+        std::lock_guard<std::mutex> lock(segments_mutex_);
+        for (const auto& segment : segments_) {
+            total_downloaded += std::min(segment->downloaded.load(), segment->size());
+            if (segment->completed.load()) {
+                ++completed;
+            }
+        }
     }
+
+    stats_.total_downloaded.store(total_downloaded);
+    stats_.completed_segments.store(completed);
+
+    task_->update_progress(
+        total_downloaded,
+        stats_.total_size.load(),
+        current_speed_.load()
+    );
 }
 
 bool SegmentDownloader::is_active() const noexcept {

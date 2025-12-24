@@ -155,18 +155,7 @@ static int progress_callback(void* clientp, curl_off_t dltotal, curl_off_t dlnow
             speed = (bytes_since_last * 1000) / static_cast<Bytes>(elapsed);
         }
 
-        ProgressInfo progress;
-        progress.task_id = data->task->id();
-        progress.downloaded_bytes = current;
-        progress.total_bytes = total;
-        progress.speed = speed;
-
         data->task->update_progress(current, total, speed);
-
-        // Dispatch event
-        if (data->listener) {
-            data->listener->on_progress(progress);
-        }
 
         data->last_update = now;
         data->last_bytes = current;
@@ -189,8 +178,23 @@ static bool download_segment_curl(
         return false;
     }
 
-    // Open file for writing
-    std::ofstream file(output_path, std::ios::binary | std::ios::trunc);
+    // Open file for writing (append if resuming an existing segment)
+    std::ios::openmode mode = std::ios::binary;
+    {
+        std::error_code ec;
+        if (std::filesystem::exists(output_path, ec) && !ec) {
+            auto sz = std::filesystem::file_size(output_path, ec);
+            if (!ec && sz > 0) {
+                mode |= std::ios::app;
+            } else {
+                mode |= std::ios::trunc;
+            }
+        } else {
+            mode |= std::ios::trunc;
+        }
+    }
+
+    std::ofstream file(output_path, mode);
     if (!file.is_open()) {
         curl_easy_cleanup(curl);
         return false;
@@ -548,6 +552,8 @@ public:
         seg_config.min_segment_size = options.min_segment_size;
         seg_config.timeout_seconds = options.timeout_seconds;
         seg_config.max_retries = options.max_retries;
+        seg_config.retry_delay_ms = options.retry_delay_seconds * 1000;
+        seg_config.adaptive_sizing = options.adaptive_segment_sizing;
 
         // Create segment downloader
         SegmentDownloader downloader(

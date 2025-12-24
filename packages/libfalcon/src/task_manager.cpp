@@ -8,6 +8,7 @@
 #include <falcon/task_manager.hpp>
 #include <falcon/event_dispatcher.hpp>
 #include <falcon/protocol_handler.hpp>
+#include "internal/thread_pool.hpp"
 #include <algorithm>
 #include <fstream>
 #include <sstream>
@@ -24,6 +25,7 @@ public:
     Impl(const TaskManagerConfig& config, EventDispatcher* event_dispatcher)
         : config_(config)
         , event_dispatcher_(event_dispatcher)
+        , download_pool_(0)
         , running_(false) {}
 
     ~Impl() {
@@ -227,8 +229,11 @@ public:
         if (!task) return false;
 
         // 添加到等待队列
-        TaskQueueItem item{id, TaskPriority::Normal, std::chrono::steady_clock::now()};
-        task_queue_.push(item);
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex_);
+            TaskQueueItem item{id, TaskPriority::Normal, std::chrono::steady_clock::now()};
+            task_queue_.push(item);
+        }
 
         // 通知工作线程
         cv_.notify_one();
@@ -313,7 +318,8 @@ public:
     }
 
     void set_max_concurrent_tasks(size_t max_tasks) {
-        config_.max_concurrent_tasks = max_tasks;
+        config_.max_concurrent_tasks = std::max<size_t>(1, max_tasks);
+        cv_.notify_one();
     }
 
     bool adjust_task_priority(TaskId id, TaskPriority priority) {
@@ -393,18 +399,37 @@ public:
 
     // IEventListener 实现
     void on_status_changed(TaskId task_id, TaskStatus old_status, TaskStatus new_status) {
+        auto is_active_status = [](TaskStatus s) {
+            return s == TaskStatus::Downloading || s == TaskStatus::Preparing;
+        };
+
         // 更新活动任务列表
-        if (new_status == TaskStatus::Downloading) {
+        if (is_active_status(new_status) && !is_active_status(old_status)) {
             std::lock_guard<std::mutex> lock(active_mutex_);
             active_tasks_.insert(task_id);
-        } else {
+            active_count_.fetch_add(1);
+        } else if (!is_active_status(new_status) && is_active_status(old_status)) {
             std::lock_guard<std::mutex> lock(active_mutex_);
             active_tasks_.erase(task_id);
+            active_count_.fetch_sub(1);
         }
 
         // 分发事件
         if (event_dispatcher_) {
             event_dispatcher_->dispatch_status_changed(task_id, old_status, new_status);
+        }
+
+        // 任务完成时分发完成事件
+        if (new_status == TaskStatus::Completed && event_dispatcher_) {
+            auto task = get_task(task_id);
+            if (task) {
+                event_dispatcher_->dispatch_completed(
+                    task_id,
+                    task->output_path(),
+                    task->total_bytes(),
+                    task->elapsed()
+                );
+            }
         }
 
         // 任务完成后通知等待队列
@@ -453,15 +478,12 @@ private:
                 std::unique_lock<std::mutex> lock(queue_mutex_);
 
                 cv_.wait(lock, [this] {
-                    return !task_queue_.empty() || !running_;
+                    return !running_ ||
+                           (!task_queue_.empty() &&
+                            active_count_.load() < config_.max_concurrent_tasks);
                 });
 
                 if (!running_) break;
-
-                // 检查并发限制
-                if (get_active_task_count() >= config_.max_concurrent_tasks) {
-                    continue;
-                }
 
                 // 获取任务
                 item = task_queue_.top();
@@ -475,28 +497,26 @@ private:
             }
 
             // 启动任务
+            task->mark_started();
+            task->set_status(TaskStatus::Downloading);
+
             try {
-                // 添加到活动任务列表
-                {
-                    std::lock_guard<std::mutex> lock(active_mutex_);
-                    active_tasks_.insert(item.task_id);
-                }
-
-                // 设置任务状态
-                task->set_status(TaskStatus::Downloading);
-
-                // 获取协议处理器并开始下载
-                auto handler = task->get_handler();
-                if (handler) {
-                    // 使用当前对象（实现了 IEventListener）作为监听器
-                    handler->download(task, this);
-                } else {
-                    throw std::runtime_error("No protocol handler available for task");
-                }
-
+                download_pool_.submit([this, task]() {
+                    try {
+                        auto handler = task->get_handler();
+                        if (handler) {
+                            handler->download(task, this);
+                        } else {
+                            throw std::runtime_error("No protocol handler available for task");
+                        }
+                    } catch (const std::exception& e) {
+                        task->set_error(e.what());
+                        task->set_status(TaskStatus::Failed);
+                    }
+                });
             } catch (const std::exception& e) {
+                task->set_error(e.what());
                 task->set_status(TaskStatus::Failed);
-                on_error(item.task_id, e.what());
             }
         }
     }
@@ -532,6 +552,8 @@ private:
 
     TaskManagerConfig config_;
     EventDispatcher* event_dispatcher_;
+    internal::ThreadPool download_pool_;
+    std::atomic<size_t> active_count_{0};
 
     // 任务存储
     mutable std::mutex tasks_mutex_;

@@ -9,6 +9,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <vector>
 
@@ -23,12 +24,12 @@ struct Segment {
     std::size_t index;              // Segment index
     Bytes start;                    // Start byte position (inclusive)
     Bytes end;                      // End byte position (inclusive)
-    Bytes downloaded;               // Bytes downloaded for this segment
+    std::atomic<Bytes> downloaded{0};  // Bytes downloaded for this segment
     std::atomic<bool> completed{false};
     std::atomic<bool> active{false};
 
     Segment(std::size_t idx, Bytes s, Bytes e)
-        : index(idx), start(s), end(e), downloaded(0) {}
+        : index(idx), start(s), end(e) {}
 
     /// Get segment size in bytes
     [[nodiscard]] Bytes size() const noexcept {
@@ -37,13 +38,13 @@ struct Segment {
 
     /// Get remaining bytes
     [[nodiscard]] Bytes remaining() const noexcept {
-        return size() - downloaded;
+        return size() - downloaded.load();
     }
 
     /// Get progress ratio (0.0 ~ 1.0)
     [[nodiscard]] float progress() const noexcept {
         Bytes seg_size = size();
-        return seg_size > 0 ? static_cast<float>(downloaded) / seg_size : 1.0f;
+        return seg_size > 0 ? static_cast<float>(downloaded.load()) / seg_size : 1.0f;
     }
 };
 
@@ -246,6 +247,11 @@ private:
     void calculate_adaptive_segments(Bytes file_size);
 
 private:
+    struct FailureState {
+        std::mutex mutex;
+        std::optional<std::string> message;
+    };
+
     DownloadTask::Ptr task_;
     std::string url_;
     std::string output_path_;
@@ -266,7 +272,9 @@ private:
     std::condition_variable cv_;
 
     std::size_t next_segment_{0};
-    std::size_t active_workers_{0};
+    std::atomic<std::size_t> active_workers_{0};
+    std::atomic<bool> failed_{false};
+    FailureState failure_;
 
     IEventListener* event_listener_{nullptr};
 

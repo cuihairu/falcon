@@ -49,9 +49,8 @@ void CloudLinkDetector::init_patterns() {
 
     // 蓝奏云
     url_patterns_[CloudPlatform::LanzouCloud] = {
-        std::regex(R"(https?://[a-zA-Z0-9-]*lanzou[a-z]\.com/[a-zA-Z0-9]+)"),
-        std::regex(R"(https?://[a-zA-Z0-9-]*lanzou[a-z]\.net/[a-zA-Z0-9]+)"),
-        std::regex(R"(https?://[a-zA-Z0-9-]*ww[a-z]\.lanzou[a-z]\.com/[a-zA-Z0-9]+)")
+        std::regex(R"(https?://([\w-]+\.)*lanzou[a-z]\.(com|net)/[\w]+)"),
+        std::regex(R"(https?://([\w-]+\.)*lanzou[a-z]\.(com|net)/i[\w]+)")
     };
 
     // 阿里云盘
@@ -121,9 +120,11 @@ void CloudLinkDetector::init_patterns() {
 CloudPlatform CloudLinkDetector::detect_platform(const std::string& url) {
     init_patterns();
 
+    const std::string normalized = normalize_url(url);
+
     for (const auto& [platform, patterns] : url_patterns_) {
         for (const auto& pattern : patterns) {
-            if (std::regex_match(url, pattern)) {
+            if (std::regex_search(url, pattern) || std::regex_search(normalized, pattern)) {
                 return platform;
             }
         }
@@ -442,14 +443,7 @@ CloudExtractionResult CloudStorageManager::handle_share_link(
 
     CloudExtractionResult result;
 
-    // 检测平台
-    CloudPlatform platform = CloudLinkDetector::detect_platform(url);
-    if (platform == CloudPlatform::Unknown) {
-        result.error_message = "不支持的网盘平台";
-        return result;
-    }
-
-    // 查找对应的插件
+    // 查找对应的插件（允许插件自行识别，避免平台检测误判导致无法处理）
     for (auto& plugin : p_impl->plugins_) {
         if (plugin->can_handle(url)) {
             log_info("使用 " + plugin->platform_name() + " 处理网盘链接");

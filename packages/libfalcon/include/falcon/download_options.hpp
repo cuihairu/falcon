@@ -57,6 +57,9 @@ struct DownloadOptions {
     /// Minimum segment size for multi-connection download (bytes)
     std::size_t min_segment_size = 1024 * 1024;  // 1 MB
 
+    /// Enable adaptive segment sizing for segmented download
+    bool adaptive_segment_sizing = true;
+
     /// Progress callback interval in milliseconds
     std::size_t progress_interval_ms = 500;
 

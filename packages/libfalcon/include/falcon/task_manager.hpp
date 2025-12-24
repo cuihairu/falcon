@@ -47,10 +47,10 @@ struct TaskQueueItem {
     bool operator<(const TaskQueueItem& other) const {
         // 优先级高的先执行
         if (priority != other.priority) {
-            return priority > other.priority;
+            return priority < other.priority;
         }
         // 相同优先级按时间排序
-        return schedule_time < other.schedule_time;
+        return schedule_time > other.schedule_time;
     }
 };
 
