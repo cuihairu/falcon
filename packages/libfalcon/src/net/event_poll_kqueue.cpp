@@ -153,7 +153,7 @@ bool KqueueEventPoll::remove_event(int fd) {
 
     auto it = events_.find(fd);
     if (it == events_.end()) {
-        return true;  // 已经不存在
+        return false;  // fd 不存在，返回 false（与 epoll 行为一致）
     }
 
     int events = it->second.events;

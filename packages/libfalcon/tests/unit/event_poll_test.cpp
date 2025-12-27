@@ -182,8 +182,8 @@ TEST(EventPollTest, RemoveNonExistentEvent) {
     auto poll = EventPoll::create();
     ASSERT_NE(poll, nullptr);
 
-    // 移除不存在的 fd
-    EXPECT_TRUE(poll->remove_event(999));
+    // 移除不存在的 fd - 应该返回 false
+    EXPECT_FALSE(poll->remove_event(999));
 }
 
 TEST(EventPollTest, RemoveEventTwice) {
@@ -198,7 +198,7 @@ TEST(EventPollTest, RemoveEventTwice) {
 
     EXPECT_TRUE(poll->add_event(fd0, static_cast<int>(IOEvent::READ), callback));
     EXPECT_TRUE(poll->remove_event(fd0));
-    EXPECT_TRUE(poll->remove_event(fd0));  // 第二次应当是幂等的
+    EXPECT_FALSE(poll->remove_event(fd0));  // 第二次应当返回 false（已不存在）
 
     close(fd0);
     close(fd1);
