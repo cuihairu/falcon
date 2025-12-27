@@ -245,22 +245,39 @@ protected:
         //         url += "?s=" + url_encode(query.keyword);
         //     }
         // } else {
-            // 构建查询参数
-            std::string query_str;
-            for (const auto& [key, value] : config_.params) {
-                if (!query_str.empty()) query_str += "&";
+        //     // 构建查询参数
+        //     std::string query_str;
+        //     for (const auto& [key, value] : config_.params) {
+        //         if (!query_str.empty()) query_str += "&";
+        //
+        //         std::string param_value = value;
+        //         if (value.empty() && key == "search" || key == "q" || key == "keyword") {
+        //             param_value = query.keyword;
+        //         }
+        //
+        //         query_str += key + "=" + url_encode(param_value);
+        //     }
+        //
+        //     if (!query_str.empty()) {
+        //         url += (first_param ? "?" : "&") + query_str;
+        //     }
+        // }
 
-                std::string param_value = value;
-                if (value.empty() && key == "search" || key == "q" || key == "keyword") {
-                    param_value = query.keyword;
-                }
+        // 构建查询参数
+        std::string query_str;
+        for (const auto& [key, value] : config_.params) {
+            if (!query_str.empty()) query_str += "&";
 
-                query_str += key + "=" + url_encode(param_value);
+            std::string param_value = value;
+            if (value.empty() && (key == "search" || key == "q" || key == "keyword")) {
+                param_value = query.keyword;
             }
 
-            if (!query_str.empty()) {
-                url += (first_param ? "?" : "&") + query_str;
-            }
+            query_str += key + "=" + url_encode(param_value);
+        }
+
+        if (!query_str.empty()) {
+            url += (first_param ? "?" : "&") + query_str;
         }
 
         return url;

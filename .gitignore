@@ -1,50 +1,46 @@
 # Build directories
 build/
 build-*/
-build_*/
-cmake-build-*/
-out/
+*/build/
+*.build/
 
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+CTestTestfile.cmake
+cmake_install.cmake
+Makefile
+*.cmake
+!*/CMakeLists.txt
 
-# Prerequisites
-*.d
+# Dependencies
+_deps/
+vcpkg_installed/
 
-# Compiled Object files
-*.slo
-*.lo
-*.o
-*.obj
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Compiled Dynamic libraries
+# Compiled libraries
+lib/
+*.a
 *.so
 *.dylib
 *.dll
 
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
-
-# Executables
+# Binaries
+bin/
 *.exe
 *.out
 *.app
 
-# vcpkg
-vcpkg_installed/
-.vcpkg/
+# Testing
+Testing/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

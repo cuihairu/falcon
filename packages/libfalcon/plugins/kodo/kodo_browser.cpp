@@ -15,7 +15,6 @@
 #include <iomanip>
 #include <cstring>
 #include <openssl/hmac.h>
-#include <openssl/sha1.h>
 #include <openssl/bio.h>
 #include <openssl/buffer.h>
 #include <openssl/evp.h>
@@ -190,7 +189,7 @@ public:
         }
 
         if (res != CURLE_OK) {
-            Logger::error("Kodo request failed: {}", curl_easy_strerror(res));
+            FALCON_LOG_ERROR("Kodo request failed: " << curl_easy_strerror(res));
             return "";
         }
 
@@ -375,7 +374,7 @@ std::vector<RemoteResource> KodoBrowser::list_directory(
 
     if (!path.empty() && path != "/") {
         request_body["prefix"] = path;
-        if (!path.ends_with('/')) {
+        if (path.empty() || path.back() != '/') {
             request_body["prefix"] = path + "/";
         }
     }
@@ -390,7 +389,7 @@ std::vector<RemoteResource> KodoBrowser::list_directory(
     std::string response = p_impl_->perform_kodo_request("POST", list_url, body, true);
 
     if (response.empty()) {
-        Logger::error("Failed to list Kodo directory");
+        FALCON_LOG_ERROR("Failed to list Kodo directory");
         return resources;
     }
 
@@ -430,7 +429,7 @@ std::vector<RemoteResource> KodoBrowser::list_directory(
         }
 
     } catch (const std::exception& e) {
-        Logger::error("Failed to parse Kodo response: {}", e.what());
+        FALCON_LOG_ERROR("Failed to parse Kodo response: " << e.what());
     }
 #endif
 
@@ -472,7 +471,7 @@ RemoteResource KodoBrowser::get_resource_info(const std::string& path) {
                 info.mime_type = json_response["mimeType"];
             }
         } catch (const std::exception& e) {
-            Logger::error("Failed to parse stat response: {}", e.what());
+            FALCON_LOG_ERROR("Failed to parse stat response: " << e.what());
         }
 #endif
     }
@@ -483,7 +482,7 @@ RemoteResource KodoBrowser::get_resource_info(const std::string& path) {
 bool KodoBrowser::create_directory(const std::string& path, bool recursive) {
     // 七牛云没有真正的目录概念，可以通过创建空对象模拟目录
     std::string dir_path = path;
-    if (!dir_path.ends_with('/')) {
+    if (dir_path.empty() || dir_path.back() != '/') {
         dir_path += "/";
     }
 
@@ -596,7 +595,7 @@ std::map<std::string, uint64_t> KodoBrowser::get_quota_info() {
             }
         }
     } catch (const std::exception& e) {
-        Logger::error("Failed to parse quota info: {}", e.what());
+        FALCON_LOG_ERROR("Failed to parse quota info: " << e.what());
     }
 #endif
 

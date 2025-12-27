@@ -15,6 +15,10 @@
 #include <iomanip>
 #include <cstring>
 #include <openssl/md5.h>
+#include <openssl/hmac.h>
+#include <openssl/evp.h>
+#include <openssl/bio.h>
+#include <openssl/buffer.h>
 
 #ifdef FALCON_BROWSER_NO_JSON
 #pragma message "Warning: Compiling Upyun browser without JSON support. Some features may not work."
@@ -93,14 +97,26 @@ public:
 
         std::string password_md5 = md5_str;
 
-        // HMAC-MD1签名
+        // HMAC-MD5签名（兼容 OpenSSL 3.0）
+        unsigned char hmac[MD5_DIGEST_LENGTH];
+        unsigned int hmac_len = 0;
+
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+        // OpenSSL 3.0+
+        HMAC_CTX* hmac_ctx = HMAC_CTX_new();
+        HMAC_Init_ex(hmac_ctx, password_md5.c_str(), password_md5.length(), EVP_md5(), nullptr);
+        HMAC_Update(hmac_ctx, (unsigned char*)sign_str.c_str(), sign_str.length());
+        HMAC_Final(hmac_ctx, hmac, &hmac_len);
+        HMAC_CTX_free(hmac_ctx);
+#else
+        // OpenSSL 1.x
         HMAC_CTX hmac_ctx;
+        HMAC_CTX_init(&hmac_ctx);
         HMAC_Init(&hmac_ctx, password_md5.c_str(), password_md5.length(), EVP_md5());
         HMAC_Update(&hmac_ctx, (unsigned char*)sign_str.c_str(), sign_str.length());
-
-        unsigned char hmac[MD5_DIGEST_LENGTH];
-        unsigned int hmac_len;
         HMAC_Final(&hmac_ctx, hmac, &hmac_len);
+        HMAC_CTX_cleanup(&hmac_ctx);
+#endif
 
         // Base64编码
         std::string result = base64_encode(hmac, hmac_len);
@@ -161,7 +177,7 @@ public:
         }
 
         if (res != CURLE_OK) {
-            Logger::error("Upyun request failed: {}", curl_easy_strerror(res));
+            FALCON_LOG_ERROR("Upyun request failed: " << curl_easy_strerror(res));
             return "";
         }
 
@@ -367,15 +383,15 @@ std::vector<RemoteResource> UpyunBrowser::list_directory(
     headers["x-list-order"] = options.sort_desc ? "desc" : "asc";
 
     if (options.sort_by == "size") {
-        headers["x-list-order"] = "size:" + (options.sort_desc ? "desc" : "asc");
+        headers["x-list-order"] = std::string("size:") + (options.sort_desc ? "desc" : "asc");
     } else if (options.sort_by == "modified_time") {
-        headers["x-list-order"] = "time:" + (options.sort_desc ? "desc" : "asc");
+        headers["x-list-order"] = std::string("time:") + (options.sort_desc ? "desc" : "asc");
     }
 
     std::string response = p_impl_->perform_upyun_request("GET", uri, headers);
 
     if (response.empty()) {
-        Logger::error("Failed to list Upyun directory");
+        FALCON_LOG_ERROR("Failed to list Upyun directory");
         return resources;
     }
 
@@ -473,7 +489,7 @@ bool UpyunBrowser::create_directory(const std::string& path, bool recursive) {
     if (uri[0] != '/') {
         uri = "/" + uri;
     }
-    if (!uri.ends_with('/')) {
+    if (uri.empty() || uri.back() != '/') {
         uri += "/";
     }
 
@@ -532,7 +548,7 @@ bool UpyunBrowser::copy(const std::string& source_path, const std::string& dest_
     }
 
     std::map<std::string, std::string> headers;
-    headers["x-upyun-copy-source"] = "/" + upyun_url_.bucket + "/" + source_path;
+    headers["x-upyun-copy-source"] = "/" + p_impl_->upyun_url_.bucket + "/" + source_path;
 
     std::string response = p_impl_->perform_upyun_request("PUT", uri, headers);
 
@@ -575,7 +591,7 @@ std::map<std::string, uint64_t> UpyunBrowser::get_quota_info() {
             }
         }
     } catch (const std::exception& e) {
-        Logger::error("Failed to parse quota info: {}", e.what());
+        FALCON_LOG_ERROR("Failed to parse quota info: " << e.what());
     }
 #endif
 

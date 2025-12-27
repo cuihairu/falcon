@@ -187,7 +187,7 @@ public:
         }
 
         if (res != CURLE_OK) {
-            Logger::error("OSS request failed: {}", curl_easy_strerror(res));
+            FALCON_LOG_ERROR("OSS request failed: " << curl_easy_strerror(res));
             return "";
         }
 
@@ -418,7 +418,7 @@ std::vector<RemoteResource> OSSBrowser::list_directory(
 
     if (!path.empty() && path != "/") {
         query_string += "&prefix=" + p_impl_->url_encode(path);
-        if (!path.ends_with('/')) {
+        if (path.empty() || path.back() != '/') {
             query_string += "/";
         }
     }
@@ -429,7 +429,7 @@ std::vector<RemoteResource> OSSBrowser::list_directory(
     std::string response = p_impl_->perform_oss_request("GET", url, {}, query_string);
 
     if (response.empty()) {
-        Logger::error("Failed to list OSS directory");
+        FALCON_LOG_ERROR("Failed to list OSS directory");
         return resources;
     }
 
@@ -467,7 +467,7 @@ std::vector<RemoteResource> OSSBrowser::list_directory(
         }
 
     } catch (const std::exception& e) {
-        Logger::error("Failed to parse OSS response: {}", e.what());
+        FALCON_LOG_ERROR("Failed to parse OSS response: " << e.what());
     }
 #endif
 
@@ -500,7 +500,7 @@ RemoteResource OSSBrowser::get_resource_info(const std::string& path) {
 bool OSSBrowser::create_directory(const std::string& path, bool recursive) {
     // OSS使用PUT操作创建目录对象
     std::string dir_path = path;
-    if (!dir_path.ends_with('/')) {
+    if (dir_path.empty() || dir_path.back() != '/') {
         dir_path += "/";
     }
 
@@ -596,7 +596,7 @@ std::map<std::string, uint64_t> OSSBrowser::get_quota_info() {
             }
         }
     } catch (const std::exception& e) {
-        Logger::error("Failed to parse quota info: {}", e.what());
+        FALCON_LOG_ERROR("Failed to parse quota info: " << e.what());
     }
 #endif
 
