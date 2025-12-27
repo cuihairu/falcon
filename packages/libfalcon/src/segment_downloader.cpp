@@ -307,9 +307,20 @@ bool SegmentDownloader::start(SegmentDownloadFunc download_func) {
     // Wait for all workers to complete or cancellation/failure
     {
         std::unique_lock<std::mutex> lock(workers_mutex_);
-        cv_.wait(lock, [this]() {
+
+        // Add timeout to prevent real deadlock
+        bool wait_result = cv_.wait_for(lock, std::chrono::seconds(30), [this]() {
             return active_workers_.load() == 0 || cancelled_.load() || failed_.load();
         });
+
+        if (!wait_result) {
+            // Timeout - this indicates a real bug
+            std::cerr << "ERROR: Timeout waiting for workers! active_workers="
+                     << active_workers_.load() << ", cancelled=" << cancelled_.load()
+                     << ", failed=" << failed_.load() << std::endl;
+            cancelled_.store(true);
+            failed_.store(true);
+        }
     }
 
     running_.store(false);
