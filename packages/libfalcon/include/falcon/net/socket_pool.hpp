@@ -21,6 +21,9 @@
 
 #ifdef _WIN32
 #include <winsock2.h>
+#include <ws2tcpip.h>
+// Windows 没有 socklen_t，使用 int
+typedef int socklen_t;
 #else
 #include <sys/socket.h>
 #include <unistd.h>

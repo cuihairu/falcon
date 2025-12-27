@@ -58,10 +58,10 @@ void hash_32(const unsigned char* data, size_t len, unsigned char out[32]) {
     size_t h2 = hasher("salt:" + s);
     size_t h3 = hasher(s + ":more");
     size_t h4 = hasher("more:" + s);
-    std::memcpy(out + 0, &h1, std::min(sizeof(h1), size_t{8}));
-    std::memcpy(out + 8, &h2, std::min(sizeof(h2), size_t{8}));
-    std::memcpy(out + 16, &h3, std::min(sizeof(h3), size_t{8}));
-    std::memcpy(out + 24, &h4, std::min(sizeof(h4), size_t{8}));
+    std::memcpy(out + 0, &h1, (sizeof(h1) < 8 ? sizeof(h1) : 8));
+    std::memcpy(out + 8, &h2, (sizeof(h2) < 8 ? sizeof(h2) : 8));
+    std::memcpy(out + 16, &h3, (sizeof(h3) < 8 ? sizeof(h3) : 8));
+    std::memcpy(out + 24, &h4, (sizeof(h4) < 8 ? sizeof(h4) : 8));
 #endif
 }
 
