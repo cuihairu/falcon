@@ -67,9 +67,9 @@ enum class IOEvent : int {
     NONE = 0,
     READ = 1,      // 可读事件
     WRITE = 2,     // 可写事件
-    ERROR = 4,     // 错误事件
+    ERR = 4,       // 错误事件（原 ERROR，避免与 Windows 宏冲突）
     HANGUP = 8,    // 挂起事件（对端关闭连接）
-    ALL = READ | WRITE | ERROR | HANGUP
+    ALL = READ | WRITE | ERR | HANGUP
 };
 
 /**
@@ -333,7 +333,7 @@ inline const char* event_to_string(IOEvent event) {
     switch (event) {
         case IOEvent::READ:  return "READ";
         case IOEvent::WRITE: return "WRITE";
-        case IOEvent::ERROR: return "ERROR";
+        case IOEvent::ERR:   return "ERROR";
         case IOEvent::HANGUP: return "HANGUP";
         default: return "UNKNOWN";
     }

@@ -31,7 +31,7 @@ std::string events_to_string(int events) {
     if (events & static_cast<int>(IOEvent::WRITE)) {
         result += "WRITE|";
     }
-    if (events & static_cast<int>(IOEvent::ERROR)) {
+    if (events & static_cast<int>(IOEvent::ERR)) {
         result += "ERROR|";
     }
     if (events & static_cast<int>(IOEvent::HANGUP)) {

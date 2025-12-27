@@ -381,7 +381,7 @@ poll->add_event(socket_fd, static_cast<int>(IOEvent::WRITE),
     });
 
 // 注册错误事件
-poll->add_event(socket_fd, static_cast<int>(IOEvent::ERROR | IOEvent::HANGUP),
+poll->add_event(socket_fd, static_cast<int>(IOEvent::ERR | IOEvent::HANGUP),
     [](int fd, int events, void* user_data) {
         close(fd);
     });

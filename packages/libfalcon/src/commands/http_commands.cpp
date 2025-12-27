@@ -10,12 +10,22 @@
 #include <falcon/exceptions.hpp>
 #include <falcon/logger.hpp>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#else
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <fcntl.h>
 #include <unistd.h>
+#endif
+
 #include <errno.h>
 
 #include <chrono>

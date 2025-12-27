@@ -147,7 +147,7 @@ int PollEventPoll::poll(int timeout_ms) {
             events |= static_cast<int>(IOEvent::WRITE);
         }
         if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
-            events |= static_cast<int>(IOEvent::ERROR);
+            events |= static_cast<int>(IOEvent::ERR);
         }
 
         // 调用回调函数
