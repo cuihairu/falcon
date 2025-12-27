@@ -15,7 +15,7 @@
 #include <fstream>
 #include <mutex>
 #include <thread>
-#include <unordered_set>
+#include <unordered_map>
 
 // Use libcurl if available, otherwise provide a simple fallback
 #ifdef FALCON_USE_CURL
@@ -138,6 +138,13 @@ static int progress_callback(void* clientp, curl_off_t dltotal, curl_off_t dlnow
         return 1;  // Abort transfer
     }
 
+    if (data->task) {
+        TaskStatus status = data->task->status();
+        if (status == TaskStatus::Paused || status == TaskStatus::Cancelled) {
+            return 1;  // Abort transfer
+        }
+    }
+
     auto now = std::chrono::steady_clock::now();
     auto elapsed =
         std::chrono::duration_cast<std::chrono::milliseconds>(now - data->last_update)
@@ -161,6 +168,91 @@ static int progress_callback(void* clientp, curl_off_t dltotal, curl_off_t dlnow
         data->last_bytes = current;
     }
 
+    return 0;
+}
+
+struct CurlHeaderList {
+    curl_slist* list = nullptr;
+    ~CurlHeaderList() {
+        if (list) {
+            curl_slist_free_all(list);
+        }
+    }
+    CurlHeaderList(const CurlHeaderList&) = delete;
+    CurlHeaderList& operator=(const CurlHeaderList&) = delete;
+    CurlHeaderList() = default;
+};
+
+struct CurlAuthStrings {
+    std::string userpwd;
+    std::string proxy_userpwd;
+};
+
+static void apply_common_curl_options(CURL* curl,
+                                      const DownloadOptions& options,
+                                      bool enable_cookie_jar,
+                                      CurlHeaderList& header_list,
+                                      CurlAuthStrings& auth_strings) {
+    if (!options.user_agent.empty()) {
+        curl_easy_setopt(curl, CURLOPT_USERAGENT, options.user_agent.c_str());
+    }
+
+    if (!options.proxy.empty()) {
+        curl_easy_setopt(curl, CURLOPT_PROXY, options.proxy.c_str());
+    }
+
+    if (!options.proxy_username.empty()) {
+        auth_strings.proxy_userpwd = options.proxy_username + ":" + options.proxy_password;
+        curl_easy_setopt(curl, CURLOPT_PROXYUSERPWD, auth_strings.proxy_userpwd.c_str());
+        curl_easy_setopt(curl, CURLOPT_PROXYAUTH, CURLAUTH_ANY);
+    }
+
+    if (!options.verify_ssl) {
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+    }
+
+    if (!options.referer.empty()) {
+        curl_easy_setopt(curl, CURLOPT_REFERER, options.referer.c_str());
+    }
+
+    if (!options.cookie_file.empty()) {
+        curl_easy_setopt(curl, CURLOPT_COOKIEFILE, options.cookie_file.c_str());
+    }
+
+    if (enable_cookie_jar && !options.cookie_jar.empty()) {
+        curl_easy_setopt(curl, CURLOPT_COOKIEJAR, options.cookie_jar.c_str());
+    }
+
+    if (!options.http_username.empty()) {
+        auth_strings.userpwd = options.http_username + ":" + options.http_password;
+        curl_easy_setopt(curl, CURLOPT_HTTPAUTH, CURLAUTH_ANY);
+        curl_easy_setopt(curl, CURLOPT_USERPWD, auth_strings.userpwd.c_str());
+    }
+
+    for (const auto& pair : options.headers) {
+        std::string header = pair.first + ": " + pair.second;
+        header_list.list = curl_slist_append(header_list.list, header.c_str());
+    }
+
+    if (header_list.list) {
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, header_list.list);
+    }
+}
+
+struct SegmentProgressData {
+    std::atomic<bool>* cancelled = nullptr;
+};
+
+static int segment_progress_callback(void* clientp,
+                                     curl_off_t /*dltotal*/,
+                                     curl_off_t /*dlnow*/,
+                                     curl_off_t /*ultotal*/,
+                                     curl_off_t /*ulnow*/) {
+    auto* data = static_cast<SegmentProgressData*>(clientp);
+    if (data && data->cancelled && data->cancelled->load()) {
+        return 1;
+    }
     return 0;
 }
 
@@ -211,18 +303,15 @@ static bool download_segment_curl(
     std::string range_header = std::to_string(start) + "-" + std::to_string(end);
     curl_easy_setopt(curl, CURLOPT_RANGE, range_header.c_str());
 
-    if (!options.user_agent.empty()) {
-        curl_easy_setopt(curl, CURLOPT_USERAGENT, options.user_agent.c_str());
-    }
+    CurlHeaderList header_list;
+    CurlAuthStrings auth_strings;
+    apply_common_curl_options(curl, options, /*enable_cookie_jar=*/false, header_list, auth_strings);
 
-    if (!options.proxy.empty()) {
-        curl_easy_setopt(curl, CURLOPT_PROXY, options.proxy.c_str());
-    }
-
-    if (!options.verify_ssl) {
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
-    }
+    SegmentProgressData progress_data;
+    progress_data.cancelled = &cancelled;
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, segment_progress_callback);
+    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &progress_data);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
 
     // Speed limit
     if (options.speed_limit > 0) {
@@ -230,21 +319,7 @@ static bool download_segment_curl(
                          static_cast<curl_off_t>(options.speed_limit));
     }
 
-    // Custom headers
-    struct curl_slist* headers = nullptr;
-    for (const auto& pair : options.headers) {
-        std::string header = pair.first + ": " + pair.second;
-        headers = curl_slist_append(headers, header.c_str());
-    }
-    if (headers) {
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    }
-
     CURLcode res = curl_easy_perform(curl);
-
-    if (headers) {
-        curl_slist_free_all(headers);
-    }
 
     file.close();
     curl_easy_cleanup(curl);
@@ -296,35 +371,11 @@ public:
         curl_easy_setopt(curl, CURLOPT_HEADERDATA, &header_data);
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, static_cast<long>(options.timeout_seconds));
-
-        if (!options.user_agent.empty()) {
-            curl_easy_setopt(curl, CURLOPT_USERAGENT, options.user_agent.c_str());
-        }
-
-        if (!options.proxy.empty()) {
-            curl_easy_setopt(curl, CURLOPT_PROXY, options.proxy.c_str());
-        }
-
-        if (!options.verify_ssl) {
-            curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-            curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
-        }
-
-        // Add custom headers
-        struct curl_slist* headers = nullptr;
-        for (const auto& pair : options.headers) {
-            std::string header = pair.first + ": " + pair.second;
-            headers = curl_slist_append(headers, header.c_str());
-        }
-        if (headers) {
-            curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-        }
+        CurlHeaderList header_list;
+        CurlAuthStrings auth_strings;
+        apply_common_curl_options(curl, options, /*enable_cookie_jar=*/true, header_list, auth_strings);
 
         CURLcode res = curl_easy_perform(curl);
-
-        if (headers) {
-            curl_slist_free_all(headers);
-        }
 
         if (res != CURLE_OK) {
             curl_easy_cleanup(curl);
@@ -386,6 +437,7 @@ public:
 
         // First, get file info to determine if we should use segmented download
         FileInfo info = get_file_info(task->url(), options);
+        task->set_file_info(info);
 
         // Check if segmented download is beneficial
         bool use_segments = info.supports_resume &&
@@ -407,142 +459,130 @@ public:
 #endif
     }
 
-    void download_single(DownloadTask::Ptr task, IEventListener* listener, const FileInfo& info) {
+    void download_single(DownloadTask::Ptr task, IEventListener* listener, const FileInfo& /*info*/) {
 #ifdef FALCON_USE_CURL
         const auto& options = task->options();
         std::string temp_path = task->output_path() + ".falcon.tmp";
 
-        // Check for existing partial download
-        Bytes start_offset = 0;
-        if (options.resume_enabled) {
-            std::ifstream test(temp_path, std::ios::binary | std::ios::ate);
-            if (test.is_open()) {
-                start_offset = static_cast<Bytes>(test.tellg());
-                test.close();
+        std::string last_error;
+        for (std::size_t attempt = 0; attempt <= options.max_retries; ++attempt) {
+            if (task->status() == TaskStatus::Paused || task->status() == TaskStatus::Cancelled) {
+                return;
+            }
+
+            // Check for existing partial download
+            Bytes start_offset = 0;
+            if (options.resume_enabled) {
+                std::ifstream test(temp_path, std::ios::binary | std::ios::ate);
+                if (test.is_open()) {
+                    start_offset = static_cast<Bytes>(test.tellg());
+                    test.close();
+                }
+            }
+
+            // Open file for writing
+            std::ofstream file;
+            if (start_offset > 0) {
+                file.open(temp_path, std::ios::binary | std::ios::app);
+            } else {
+                file.open(temp_path, std::ios::binary | std::ios::trunc);
+            }
+
+            if (!file.is_open()) {
+                throw FileIOException("Failed to open file: " + temp_path);
+            }
+
+            CURL* curl = curl_easy_init();
+            if (!curl) {
+                throw NetworkException("Failed to initialize CURL");
+            }
+
+            std::atomic<bool> cancelled{false};
+            ProgressData progress_data;
+            progress_data.task = task;
+            progress_data.listener = listener;
+            progress_data.cancelled = &cancelled;
+            progress_data.start_offset = start_offset;
+            progress_data.last_update = std::chrono::steady_clock::now();
+            progress_data.last_bytes = start_offset;
+
+            curl_easy_setopt(curl, CURLOPT_URL, task->url().c_str());
+            curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+            curl_easy_setopt(curl, CURLOPT_WRITEDATA, &file);
+            curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+            curl_easy_setopt(curl, CURLOPT_TIMEOUT,
+                             static_cast<long>(options.timeout_seconds));
+            curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress_callback);
+            curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &progress_data);
+            curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+
+            CurlHeaderList header_list;
+            CurlAuthStrings auth_strings;
+            apply_common_curl_options(curl, options, /*enable_cookie_jar=*/true, header_list, auth_strings);
+
+            // Resume support
+            if (start_offset > 0) {
+                curl_easy_setopt(curl, CURLOPT_RESUME_FROM_LARGE,
+                                 static_cast<curl_off_t>(start_offset));
+            }
+
+            // Speed limit
+            if (options.speed_limit > 0) {
+                curl_easy_setopt(curl, CURLOPT_MAX_RECV_SPEED_LARGE,
+                                 static_cast<curl_off_t>(options.speed_limit));
+            }
+
+            CURLcode res = curl_easy_perform(curl);
+
+            file.close();
+
+            if (res == CURLE_ABORTED_BY_CALLBACK) {
+                curl_easy_cleanup(curl);
+                return;
+            }
+
+            if (res != CURLE_OK) {
+                last_error = curl_easy_strerror(res);
+                curl_easy_cleanup(curl);
+            } else {
+                long response_code = 0;
+                curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
+                curl_easy_cleanup(curl);
+
+                if (response_code >= 400) {
+                    last_error = "HTTP error: " + std::to_string(response_code);
+                    if (response_code < 500) {
+                        throw NetworkException(last_error);
+                    }
+                } else {
+                    // Move temp file to final destination
+                    if (std::rename(temp_path.c_str(), task->output_path().c_str()) != 0) {
+                        throw FileIOException("Failed to move downloaded file to destination");
+                    }
+                    task->set_status(TaskStatus::Completed);
+                    return;
+                }
+            }
+
+            if (attempt >= options.max_retries) {
+                throw NetworkException(last_error.empty() ? "Download failed" : last_error);
+            }
+
+            if (task->status() == TaskStatus::Paused || task->status() == TaskStatus::Cancelled) {
+                return;
+            }
+
+            if (options.retry_delay_seconds > 0) {
+                std::size_t backoff = options.retry_delay_seconds;
+                backoff *= (std::size_t{1} << attempt);
+                std::this_thread::sleep_for(std::chrono::seconds(backoff));
             }
         }
-
-        // Open file for writing
-        std::ofstream file;
-        if (start_offset > 0) {
-            file.open(temp_path, std::ios::binary | std::ios::app);
-        } else {
-            file.open(temp_path, std::ios::binary | std::ios::trunc);
-        }
-
-        if (!file.is_open()) {
-            throw FileIOException("Failed to open file: " + temp_path);
-        }
-
-        CURL* curl = curl_easy_init();
-        if (!curl) {
-            throw NetworkException("Failed to initialize CURL");
-        }
-
-        std::atomic<bool> cancelled{false};
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            active_tasks_.insert(task->id());
-            cancelled_tasks_.erase(task->id());
-        }
-
-        ProgressData progress_data;
-        progress_data.task = task;
-        progress_data.listener = listener;
-        progress_data.cancelled = &cancelled;
-        progress_data.start_offset = start_offset;
-        progress_data.last_update = std::chrono::steady_clock::now();
-        progress_data.last_bytes = start_offset;
-
-        curl_easy_setopt(curl, CURLOPT_URL, task->url().c_str());
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &file);
-        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT,
-                         static_cast<long>(options.timeout_seconds));
-        curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress_callback);
-        curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &progress_data);
-        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
-
-        if (!options.user_agent.empty()) {
-            curl_easy_setopt(curl, CURLOPT_USERAGENT, options.user_agent.c_str());
-        }
-
-        if (!options.proxy.empty()) {
-            curl_easy_setopt(curl, CURLOPT_PROXY, options.proxy.c_str());
-        }
-
-        if (!options.verify_ssl) {
-            curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-            curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
-        }
-
-        // Resume support
-        if (start_offset > 0) {
-            curl_easy_setopt(curl, CURLOPT_RESUME_FROM_LARGE,
-                             static_cast<curl_off_t>(start_offset));
-        }
-
-        // Speed limit
-        if (options.speed_limit > 0) {
-            curl_easy_setopt(curl, CURLOPT_MAX_RECV_SPEED_LARGE,
-                             static_cast<curl_off_t>(options.speed_limit));
-        }
-
-        // Custom headers
-        struct curl_slist* headers = nullptr;
-        for (const auto& pair : options.headers) {
-            std::string header = pair.first + ": " + pair.second;
-            headers = curl_slist_append(headers, header.c_str());
-        }
-        if (headers) {
-            curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-        }
-
-        CURLcode res = curl_easy_perform(curl);
-
-        if (headers) {
-            curl_slist_free_all(headers);
-        }
-
-        file.close();
-
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            active_tasks_.erase(task->id());
-        }
-
-        if (res == CURLE_ABORTED_BY_CALLBACK) {
-            task->set_status(TaskStatus::Cancelled);
-            curl_easy_cleanup(curl);
-            return;
-        }
-
-        if (res != CURLE_OK) {
-            curl_easy_cleanup(curl);
-            throw NetworkException(std::string("CURL error: ") +
-                                   curl_easy_strerror(res));
-        }
-
-        long response_code = 0;
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
-
-        curl_easy_cleanup(curl);
-
-        if (response_code >= 400) {
-            throw NetworkException("HTTP error: " + std::to_string(response_code));
-        }
-
-        // Move temp file to final destination
-        if (std::rename(temp_path.c_str(), task->output_path().c_str()) != 0) {
-            throw FileIOException("Failed to move downloaded file to destination");
-        }
-        task->set_status(TaskStatus::Completed);
 
 #endif  // FALCON_USE_CURL
     }
 
-    void download_segmented(DownloadTask::Ptr task, IEventListener* listener, const FileInfo& info) {
+    void download_segmented(DownloadTask::Ptr task, IEventListener* listener, const FileInfo& /*info*/) {
 #ifdef FALCON_USE_CURL
         const auto& options = task->options();
 
@@ -556,23 +596,43 @@ public:
         seg_config.adaptive_sizing = options.adaptive_segment_sizing;
 
         // Create segment downloader
-        SegmentDownloader downloader(
+        auto downloader = std::make_shared<SegmentDownloader>(
             task,
             task->url(),
             task->output_path(),
             seg_config
         );
 
-        downloader.set_event_listener(listener);
+        downloader->set_event_listener(listener);
+
+        // Register for external cancellation (pause/cancel)
+        {
+            std::lock_guard<std::mutex> lock(downloads_mutex_);
+            active_segmented_downloads_[task->id()] = downloader;
+        }
+        struct EraseGuard {
+            std::mutex* m;
+            std::unordered_map<TaskId, std::shared_ptr<SegmentDownloader>>* map;
+            TaskId id;
+            ~EraseGuard() {
+                if (!m || !map) return;
+                std::lock_guard<std::mutex> lock(*m);
+                map->erase(id);
+            }
+        } erase_guard{&downloads_mutex_, &active_segmented_downloads_, task->id()};
 
         // Start segmented download
-        bool success = downloader.start([&](const std::string& url,
-                                            Bytes start,
-                                            Bytes end,
-                                            const std::string& output_path,
-                                            std::atomic<bool>& cancelled) -> bool {
+        bool success = downloader->start([&](const std::string& url,
+                                             Bytes start,
+                                             Bytes end,
+                                             const std::string& output_path,
+                                             std::atomic<bool>& cancelled) -> bool {
             return download_segment_curl(url, start, end, output_path, options, cancelled);
         });
+
+        if (task->status() == TaskStatus::Paused || task->status() == TaskStatus::Cancelled) {
+            return;
+        }
 
         if (success) {
             task->set_status(TaskStatus::Completed);
@@ -583,11 +643,19 @@ public:
     }
 
     void pause(DownloadTask::Ptr task) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (active_tasks_.count(task->id())) {
-            cancelled_tasks_.insert(task->id());
-        }
         task->set_status(TaskStatus::Paused);
+
+        std::shared_ptr<SegmentDownloader> downloader;
+        {
+            std::lock_guard<std::mutex> lock(downloads_mutex_);
+            auto it = active_segmented_downloads_.find(task->id());
+            if (it != active_segmented_downloads_.end()) {
+                downloader = it->second;
+            }
+        }
+        if (downloader) {
+            downloader->cancel();
+        }
     }
 
     void resume(DownloadTask::Ptr task, IEventListener* listener) {
@@ -596,14 +664,24 @@ public:
     }
 
     void cancel(DownloadTask::Ptr task) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        cancelled_tasks_.insert(task->id());
+        task->set_status(TaskStatus::Cancelled);
+
+        std::shared_ptr<SegmentDownloader> downloader;
+        {
+            std::lock_guard<std::mutex> lock(downloads_mutex_);
+            auto it = active_segmented_downloads_.find(task->id());
+            if (it != active_segmented_downloads_.end()) {
+                downloader = it->second;
+            }
+        }
+        if (downloader) {
+            downloader->cancel();
+        }
     }
 
 private:
-    std::mutex mutex_;
-    std::unordered_set<TaskId> active_tasks_;
-    std::unordered_set<TaskId> cancelled_tasks_;
+    std::mutex downloads_mutex_;
+    std::unordered_map<TaskId, std::shared_ptr<SegmentDownloader>> active_segmented_downloads_;
 };
 
 HttpHandler::HttpHandler() : impl_(std::make_unique<Impl>()) {}

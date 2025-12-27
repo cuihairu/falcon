@@ -8,6 +8,12 @@ project(falcon_plugin_ftp
 
 add_library(falcon_plugin_ftp
     ftp_plugin.cpp
+    ftp_handler.hpp
+)
+
+target_include_directories(falcon_plugin_ftp
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../include
 )
 
 target_link_libraries(falcon_plugin_ftp

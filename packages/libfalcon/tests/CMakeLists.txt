@@ -75,6 +75,12 @@ add_executable(falcon_core_tests
     unit/file_hash_test.cpp
 )
 
+if(FALCON_ENABLE_FTP)
+    target_sources(falcon_core_tests PRIVATE
+        unit/ftp_handler_test.cpp
+    )
+endif()
+
 target_link_libraries(falcon_core_tests
     PRIVATE
         falcon

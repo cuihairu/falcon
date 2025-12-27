@@ -225,17 +225,17 @@ falcon-cli --max-download-limit=1M https://example.com/file.zip
 falcon-cli --max-overall-download-limit=10M https://example.com/file.zip
 ```
 
-#### RPC 参数（计划中）
+#### RPC 参数（已实现）
 
 ```bash
 # 启用 RPC
-falcon-daemon --enable-rpc=true --rpc-listen-port=6800
+falcon-daemon --enable-rpc --rpc-listen-port 6800
 
-# 设置 RPC 密钥
-falcon-daemon --rpc-secret=mysecrettoken
+# 设置 RPC 密钥（客户端需在 JSON-RPC params 里携带 "token:<密钥>"）
+falcon-daemon --enable-rpc --rpc-secret mysecrettoken
 
 # 允许跨域请求
-falcon-daemon --rpc-allow-origin-all=true
+falcon-daemon --enable-rpc --rpc-allow-origin-all
 ```
 
 ### 文件哈希验证

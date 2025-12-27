@@ -44,7 +44,7 @@ struct Segment {
     /// Get progress ratio (0.0 ~ 1.0)
     [[nodiscard]] float progress() const noexcept {
         Bytes seg_size = size();
-        return seg_size > 0 ? static_cast<float>(downloaded.load()) / seg_size : 1.0f;
+        return seg_size > 0 ? static_cast<float>(downloaded.load()) / static_cast<float>(seg_size) : 1.0f;
     }
 };
 
@@ -61,7 +61,7 @@ struct SegmentStats {
     /// Get overall progress (0.0 ~ 1.0)
     [[nodiscard]] float progress() const noexcept {
         Bytes total = total_size.load();
-        return total > 0 ? static_cast<float>(total_downloaded.load()) / total : 0.0f;
+        return total > 0 ? static_cast<float>(total_downloaded.load()) / static_cast<float>(total) : 0.0f;
     }
 
     /// Get download speed in bytes/second

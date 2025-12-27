@@ -139,51 +139,61 @@ void RequestGroupMan::add_request_group(std::unique_ptr<RequestGroup> group) {
 
     FALCON_LOG_INFO("添加 RequestGroup: id=" << id << ", url=" << group->current_uri());
 
-    // 获取原始指针
-    RequestGroup* raw_ptr = group.get();
-
     // 添加到所有组列表（转移所有权）
     all_groups_.push_back(std::move(group));
+    RequestGroup* raw_ptr = all_groups_.back().get();
 
     // 添加到映射
     group_map_[id] = raw_ptr;
 
-    // 如果有空闲槽位，直接激活
-    if (request_groups_.size() < max_concurrent_) {
-        request_groups_.push_back(raw_ptr);
-        raw_ptr->set_status(RequestGroupStatus::ACTIVE);
-        FALCON_LOG_DEBUG("直接激活任务: id=" << id);
-    } else {
-        // 否则从 all_groups_ 中移除并加入等待队列
-        // 找到刚添加的组并转移所有权
-        for (auto it = all_groups_.begin(); it != all_groups_.end(); ++it) {
-            if (it->get() == raw_ptr) {
-                reserved_groups_.push_back(std::move(*it));
-                all_groups_.erase(it);
-                break;
-            }
-        }
-        FALCON_LOG_DEBUG("任务加入等待队列: id=" << id);
-    }
+    // 新任务默认进入等待队列，实际激活由引擎调度
+    raw_ptr->set_status(RequestGroupStatus::WAITING);
+    reserved_groups_.push_back(raw_ptr);
+    FALCON_LOG_DEBUG("任务加入等待队列: id=" << id);
 }
 
 void RequestGroupMan::fill_request_group_from_reserver(DownloadEngineV2* engine) {
-    // 当有空闲槽位时，从等待队列激活任务
-    while (!reserved_groups_.empty() &&
-           request_groups_.size() < max_concurrent_) {
+    // 当有空闲槽位时，从等待队列激活任务（跳过 PAUSED）
+    while (request_groups_.size() < max_concurrent_) {
+        if (reserved_groups_.empty()) {
+            return;
+        }
 
-        auto group = std::move(reserved_groups_.front());
-        reserved_groups_.pop_front();
+        bool found_waiting = false;
+        const std::size_t scan = reserved_groups_.size();
+        for (std::size_t i = 0; i < scan; ++i) {
+            RequestGroup* group = reserved_groups_.front();
+            reserved_groups_.pop_front();
 
-        TaskId id = group->id();
-        group->set_status(RequestGroupStatus::ACTIVE);
-        request_groups_.push_back(group.get());
+            if (!group) {
+                continue;
+            }
 
-        FALCON_LOG_INFO("从等待队列激活任务: id=" << id);
+            if (group->status() == RequestGroupStatus::PAUSED) {
+                reserved_groups_.push_back(group);
+                continue;
+            }
 
-        // TODO: 创建初始命令并添加到引擎
-        // auto cmd = group->create_initial_command();
-        // engine->add_command(std::move(cmd));
+            if (group->status() != RequestGroupStatus::WAITING) {
+                continue;
+            }
+
+            TaskId id = group->id();
+            group->set_status(RequestGroupStatus::ACTIVE);
+            request_groups_.push_back(group);
+
+            FALCON_LOG_INFO("从等待队列激活任务: id=" << id);
+            found_waiting = true;
+
+            // TODO: 创建初始命令并添加到引擎
+            // auto cmd = group->create_initial_command();
+            // engine->add_command(std::move(cmd));
+            break;
+        }
+
+        if (!found_waiting) {
+            return;
+        }
     }
 }
 
@@ -194,7 +204,18 @@ bool RequestGroupMan::pause_group(TaskId id) {
         return false;
     }
 
-    it->second->pause();
+    auto* group = it->second;
+    if (!group) return false;
+
+    // 若在活动队列中，移回等待队列
+    auto active_it = std::find(request_groups_.begin(), request_groups_.end(), group);
+    if (active_it != request_groups_.end()) {
+        request_groups_.erase(active_it);
+        reserved_groups_.push_back(group);
+    }
+
+    group->set_status(RequestGroupStatus::PAUSED);
+    group->pause();
     return true;
 }
 
@@ -205,13 +226,13 @@ bool RequestGroupMan::resume_group(TaskId id) {
         return false;
     }
 
-    it->second->resume();
+    auto* group = it->second;
+    if (!group) return false;
 
-    // 如果任务在等待队列中，尝试立即激活
-    if (it->second->status() == RequestGroupStatus::WAITING) {
-        // TODO: 尝试立即激活
-        FALCON_LOG_DEBUG("尝试立即激活等待中的任务: id=" << id);
+    if (group->status() == RequestGroupStatus::PAUSED) {
+        group->set_status(RequestGroupStatus::WAITING);
     }
+    group->resume();
 
     return true;
 }
@@ -228,14 +249,20 @@ bool RequestGroupMan::remove_group(TaskId id) {
 
     // 从活动组中移除
     auto active_it = std::find_if(request_groups_.begin(), request_groups_.end(),
-        [id](const RequestGroup* g) { return g->id() == id; });
+        [id](const RequestGroup* g) { return g && g->id() == id; });
     if (active_it != request_groups_.end()) {
         request_groups_.erase(active_it);
     }
 
-    // 从所有组中移除
+    // 从等待队列中移除
+    reserved_groups_.erase(
+        std::remove(reserved_groups_.begin(), reserved_groups_.end(), group),
+        reserved_groups_.end()
+    );
+
+    // 从所有组中移除（释放所有权）
     auto all_it = std::find_if(all_groups_.begin(), all_groups_.end(),
-        [id](const std::unique_ptr<RequestGroup>& g) { return g->id() == id; });
+        [id](const std::unique_ptr<RequestGroup>& g) { return g && g->id() == id; });
     if (all_it != all_groups_.end()) {
         all_groups_.erase(all_it);
     }

@@ -73,7 +73,7 @@ public:
         }
     }
 
-    TaskId add_task(DownloadTask::Ptr task, TaskPriority priority) {
+    TaskId add_task(DownloadTask::Ptr task, TaskPriority /*priority*/) {
         if (!task) return INVALID_TASK_ID;
 
         std::lock_guard<std::mutex> lock(tasks_mutex_);
@@ -322,7 +322,7 @@ public:
         cv_.notify_one();
     }
 
-    bool adjust_task_priority(TaskId id, TaskPriority priority) {
+    bool adjust_task_priority(TaskId /*id*/, TaskPriority /*priority*/) {
         // 需要找到并调整任务在队列中的优先级
         // 这里简化实现，实际可能需要更复杂的优先级队列
         return false;
@@ -694,7 +694,7 @@ void TaskManager::on_task_status_changed(TaskId task_id,
     impl_->on_status_changed(task_id, old_status, new_status);
 }
 
-void TaskManager::on_task_progress(TaskId task_id, const ProgressInfo& progress) {
+void TaskManager::on_task_progress(TaskId /*task_id*/, const ProgressInfo& progress) {
     impl_->on_progress(progress);
 }
 

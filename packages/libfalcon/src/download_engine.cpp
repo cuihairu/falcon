@@ -35,6 +35,9 @@ public:
         , global_speed_limiter_(0)
         , next_task_id_(1) {
 
+        // Apply global log level
+        falcon::set_log_level(config_.log_level);
+
         // 启动事件分发器
         event_dispatcher_.start();
 

@@ -7,21 +7,54 @@ project(falcon-daemon
 )
 
 # ============================================================================
+# Dependencies
+# ============================================================================
+
+include(FetchContent)
+
+# JSON (needed for aria2-compatible JSON-RPC)
+find_package(nlohmann_json QUIET)
+if(NOT nlohmann_json_FOUND)
+    message(STATUS "nlohmann_json not found: fetching via FetchContent")
+    FetchContent_Declare(
+        nlohmann_json
+        GIT_REPOSITORY https://github.com/nlohmann/json.git
+        GIT_TAG v3.11.3
+    )
+    FetchContent_MakeAvailable(nlohmann_json)
+endif()
+
+# ============================================================================
 # 可执行文件
 # ============================================================================
 
+add_library(falcon_daemon_rpc STATIC
+    src/rpc/json_rpc_server.cpp
+    src/rpc/json_rpc_server.hpp
+)
+
+target_link_libraries(falcon_daemon_rpc
+    PUBLIC
+        Falcon::falcon
+        nlohmann_json::nlohmann_json
+        # gRPC::grpc++  # 待添加
+        # SQLite::SQLite3  # 待添加
+)
+
+target_include_directories(falcon_daemon_rpc
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_compile_features(falcon_daemon_rpc PRIVATE cxx_std_17)
+
 add_executable(falcon-daemon
     src/main.cpp
-    # src/daemon.cpp
-    # src/rpc_server.cpp
-    # src/task_storage.cpp
 )
 
 target_link_libraries(falcon-daemon
     PRIVATE
-        Falcon::falcon
-        # gRPC::grpc++  # 待添加
-        # SQLite::SQLite3  # 待添加
+        falcon_daemon_rpc
 )
 
 # Optional: spdlog for logging

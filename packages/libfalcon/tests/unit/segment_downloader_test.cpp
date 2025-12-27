@@ -7,8 +7,10 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <filesystem>
 #include <fstream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -16,6 +18,14 @@
 namespace {
 
 using namespace falcon;
+
+static std::string make_unique_temp_path(const std::string& stem) {
+    auto dir = std::filesystem::temp_directory_path();
+    auto now = std::chrono::steady_clock::now().time_since_epoch().count();
+    std::ostringstream oss;
+    oss << stem << "_" << now;
+    return (dir / oss.str()).string();
+}
 
 // Mock download task for testing
 class MockDownloadTask : public DownloadTask {
@@ -33,63 +43,6 @@ public:
         set_file_info(info);
     }
 };
-
-// Create a test file with known content
-static std::string create_test_file(const std::string& path, Bytes size) {
-    std::ofstream file(path, std::ios::binary);
-    if (!file.is_open()) {
-        return "";
-    }
-
-    // Write pattern to file
-    std::vector<uint8_t> buffer(4096);
-    for (std::size_t i = 0; i < buffer.size(); ++i) {
-        buffer[i] = static_cast<uint8_t>(i % 256);
-    }
-
-    Bytes written = 0;
-    while (written < size) {
-        Bytes to_write = std::min(static_cast<Bytes>(buffer.size()), size - written);
-        file.write(reinterpret_cast<const char*>(buffer.data()), to_write);
-        written += to_write;
-    }
-
-    file.close();
-    return path;
-}
-
-// Verify file content matches expected pattern
-static bool verify_file_content(const std::string& path, Bytes size) {
-    std::ifstream file(path, std::ios::binary);
-    if (!file.is_open()) {
-        return false;
-    }
-
-    std::vector<uint8_t> buffer(4096);
-    Bytes read = 0;
-
-    while (read < size) {
-        Bytes to_read = std::min(static_cast<Bytes>(buffer.size()), size - read);
-        file.read(reinterpret_cast<char*>(buffer.data()), to_read);
-
-        if (file.gcount() != static_cast<std::streamsize>(to_read)) {
-            return false;
-        }
-
-        // Verify pattern
-        for (std::size_t i = 0; i < static_cast<std::size_t>(to_read); ++i) {
-            uint8_t expected = static_cast<uint8_t>((read + i) % 256);
-            if (buffer[i] != expected) {
-                return false;
-            }
-        }
-
-        read += to_read;
-    }
-
-    file.close();
-    return true;
-}
 
 // Mock segment download function that creates files with predictable content
 static bool mock_segment_download(
@@ -186,6 +139,8 @@ TEST(SegmentDownloaderTest, BasicSegmentedDownload) {
     auto task = std::make_shared<MockDownloadTask>(1, "http://test.example.com/file.bin", options);
     task->set_test_file_info(1024 * 10);  // 10 KB file (smaller for faster tests)
 
+    const std::string output_path = make_unique_temp_path("falcon_test_output.bin");
+
     // Create segment downloader
     SegmentConfig config;
     config.num_connections = 4;
@@ -193,7 +148,7 @@ TEST(SegmentDownloaderTest, BasicSegmentedDownload) {
     config.min_file_size = 1;  // Always segment
 
     SegmentDownloader downloader(task, "http://test.example.com/file.bin",
-                                 "/tmp/test_output.bin", config);
+                                 output_path, config);
 
     // Start download with mock function
     bool success = downloader.start(mock_segment_download);
@@ -201,6 +156,7 @@ TEST(SegmentDownloaderTest, BasicSegmentedDownload) {
     EXPECT_TRUE(success);
     EXPECT_FLOAT_EQ(downloader.progress(), 1.0f);
     EXPECT_EQ(downloader.completed_segments(), downloader.total_segments());
+    std::remove(output_path.c_str());
 }
 
 TEST(SegmentDownloaderTest, Cancellation) {
@@ -210,13 +166,15 @@ TEST(SegmentDownloaderTest, Cancellation) {
     auto task = std::make_shared<MockDownloadTask>(1, "http://test.example.com/file.bin", options);
     task->set_test_file_info(1024 * 10);  // 10 KB file (smaller for faster tests)
 
+    const std::string output_path = make_unique_temp_path("falcon_test_cancel.bin");
+
     SegmentConfig config;
     config.num_connections = 8;  // Many segments
     config.min_segment_size = 1024;
     config.min_file_size = 1;
 
     SegmentDownloader downloader(task, "http://test.example.com/file.bin",
-                                 "/tmp/test_output.bin", config);
+                                 output_path, config);
 
     // Start download in a thread and cancel immediately
     std::atomic<bool> started{false};
@@ -241,6 +199,7 @@ TEST(SegmentDownloaderTest, Cancellation) {
 
     // Download should have been cancelled
     EXPECT_LT(downloader.progress(), 1.0f);
+    std::remove(output_path.c_str());
 }
 
 TEST(SegmentDownloaderTest, SingleConnectionFallback) {
@@ -256,13 +215,16 @@ TEST(SegmentDownloaderTest, SingleConnectionFallback) {
     config.min_segment_size = 1024 * 1024;  // 1 MB minimum
     config.min_file_size = 1024 * 1024;  // 1 MB minimum file size
 
+    const std::string output_path = make_unique_temp_path("falcon_test_small.bin");
+
     SegmentDownloader downloader(task, "http://test.example.com/small.bin",
-                                 "/tmp/test_small.bin", config);
+                                 output_path, config);
 
     bool success = downloader.start(mock_segment_download);
 
     EXPECT_TRUE(success);
     EXPECT_EQ(downloader.total_segments(), 1);
+    std::remove(output_path.c_str());
 }
 
 TEST(SegmentDownloaderTest, PauseAndResume) {
@@ -277,8 +239,10 @@ TEST(SegmentDownloaderTest, PauseAndResume) {
     config.min_segment_size = 1024;
     config.min_file_size = 1;
 
+    const std::string output_path = make_unique_temp_path("falcon_test_pause.bin");
+
     SegmentDownloader downloader(task, "http://test.example.com/file.bin",
-                                 "/tmp/test_pause.bin", config);
+                                 output_path, config);
 
     // Download in a thread
     std::thread download_thread([&]() {
@@ -300,6 +264,7 @@ TEST(SegmentDownloaderTest, PauseAndResume) {
 
     downloader.cancel();
     download_thread.join();
+    std::remove(output_path.c_str());
 }
 
 TEST(SegmentDownloaderTest, SpeedTracking) {
@@ -314,14 +279,17 @@ TEST(SegmentDownloaderTest, SpeedTracking) {
     config.min_segment_size = 1024;
     config.min_file_size = 1;
 
+    const std::string output_path = make_unique_temp_path("falcon_test_speed.bin");
+
     SegmentDownloader downloader(task, "http://test.example.com/file.bin",
-                                 "/tmp/test_speed.bin", config);
+                                 output_path, config);
 
     bool success = downloader.start(mock_segment_download);
 
     EXPECT_TRUE(success);
     // Speed should be calculated
     // Note: Mock download is very fast, so speed might be high or low depending on timing
+    std::remove(output_path.c_str());
 }
 
 // Test configuration

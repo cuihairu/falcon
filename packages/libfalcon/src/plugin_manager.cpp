@@ -9,8 +9,11 @@
 #include <iostream>
 
 // Include all plugin headers
-#ifdef FALCON_ENABLE_HTTP
+#if defined(FALCON_ENABLE_HTTP_PLUGIN) || defined(FALCON_ENABLE_HTTP)
 #include "../plugins/http/http_handler.hpp"
+#endif
+#ifdef FALCON_ENABLE_FTP_PLUGIN
+#include "../plugins/ftp/ftp_handler.hpp"
 #endif
 
 namespace falcon {
@@ -85,30 +88,31 @@ IProtocolHandler* PluginManager::getPluginByUrl(const std::string& url) const {
 void PluginManager::loadAllPlugins() {
     std::cout << "Loading all available plugins" << std::endl;
 
-#ifdef FALCON_ENABLE_HTTP
+#if defined(FALCON_ENABLE_HTTP_PLUGIN) || defined(FALCON_ENABLE_HTTP)
     registerPlugin(plugins::create_http_handler());
 #endif
 
-#ifdef FALCON_ENABLE_FTP
+#ifdef FALCON_ENABLE_FTP_PLUGIN
+    registerPlugin(plugins::create_ftp_handler());
 #endif
 
-#ifdef FALCON_ENABLE_BITTORRENT
+#if defined(FALCON_ENABLE_BITTORRENT) || defined(FALCON_ENABLE_BT_PLUGIN)
 #endif
 
 // 加载私有协议插件
-#ifdef FALCON_ENABLE_THUNDER
+#if defined(FALCON_ENABLE_THUNDER) || defined(FALCON_ENABLE_THUNDER_PLUGIN)
 #endif
 
-#ifdef FALCON_ENABLE_QQDL
+#if defined(FALCON_ENABLE_QQDL) || defined(FALCON_ENABLE_QQDL_PLUGIN)
 #endif
 
-#ifdef FALCON_ENABLE_FLASHGET
+#if defined(FALCON_ENABLE_FLASHGET) || defined(FALCON_ENABLE_FLASHGET_PLUGIN)
 #endif
 
-#ifdef FALCON_ENABLE_ED2K
+#if defined(FALCON_ENABLE_ED2K) || defined(FALCON_ENABLE_ED2K_PLUGIN)
 #endif
 
-#ifdef FALCON_ENABLE_HLS
+#if defined(FALCON_ENABLE_HLS) || defined(FALCON_ENABLE_HLS_PLUGIN)
 #endif
 
     std::cout << "Loaded " << plugins_.size() << " plugins" << std::endl;

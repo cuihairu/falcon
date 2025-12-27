@@ -19,7 +19,7 @@ namespace falcon {
 
 namespace {
     // Generate random string for temp file suffix
-    std::string generate_random_suffix(std::size_t length = 8) {
+    [[maybe_unused]] static std::string generate_random_suffix(std::size_t length = 8) {
         const char charset[] = "0123456789abcdef";
         std::random_device rd;
         std::mt19937 gen(rd());
@@ -34,7 +34,7 @@ namespace {
     }
 
     // Format bytes to human readable string
-    std::string format_bytes(Bytes bytes) {
+    [[maybe_unused]] static std::string format_bytes(Bytes bytes) {
         const char* units[] = {"B", "KB", "MB", "GB", "TB"};
         int unit_index = 0;
         double size = static_cast<double>(bytes);
@@ -158,8 +158,8 @@ void SegmentDownloader::calculate_adaptive_segments(Bytes file_size) {
     // Adaptive sizing: smaller segments at the start
     for (std::size_t i = 0; i < num_segments; ++i) {
         // Progressively increase segment size
-        double multiplier = 0.5 + (1.5 * i / (num_segments - 1));
-        Bytes seg_size = static_cast<Bytes>(base_size * multiplier);
+        double multiplier = 0.5 + (1.5 * static_cast<double>(i) / static_cast<double>(num_segments - 1));
+        Bytes seg_size = static_cast<Bytes>(static_cast<double>(base_size) * multiplier);
 
         // Clamp to min/max segment size
         seg_size = std::clamp(seg_size,

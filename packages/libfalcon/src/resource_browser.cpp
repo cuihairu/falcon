@@ -8,6 +8,7 @@
 #include <falcon/resource_browser.hpp>
 #include <falcon/logger.hpp>
 #include <algorithm>
+#include <functional>
 #include <iomanip>
 #include <sstream>
 #include <ctime>
@@ -137,14 +138,14 @@ std::string BrowserFormatter::format_tree(const std::vector<RemoteResource>& res
 
     // 简单的树形显示实现
     std::function<void(const std::string&, int)> print_tree;
-    print_tree = [&](const std::string& path, int depth) {
+    print_tree = [&](const std::string& /* path */, int depth) {
         if (max_depth > 0 && depth >= max_depth) return;
 
         // 这里应该递归获取子目录
         // 为了简化，只显示当前层级的树形结构
         for (size_t i = 0; i < resources.size(); ++i) {
             const auto& res = resources[i];
-            std::string prefix(depth * 2, ' ');
+            std::string prefix(static_cast<size_t>(depth) * 2, ' ');
 
             if (i == resources.size() - 1) {
                 prefix += "└── ";

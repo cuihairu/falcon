@@ -17,6 +17,7 @@
 #include <sstream>
 #include <fstream>
 #include <cctype>
+#include <algorithm>
 
 // 全局变量用于信号处理
 std::atomic<bool> g_interrupted{false};
@@ -540,6 +541,7 @@ int main(int argc, char* argv[]) {
         options.max_connections = static_cast<size_t>(args.connections);
         options.timeout_seconds = static_cast<size_t>(args.timeout);
         options.max_retries = static_cast<size_t>(args.max_retries);
+        options.retry_delay_seconds = static_cast<size_t>(std::max(0, args.retry_wait));
         options.resume_enabled = args.continue_download;
         options.speed_limit = args.speed_limit;
         options.min_segment_size = args.min_segment_size;
@@ -547,6 +549,13 @@ int main(int argc, char* argv[]) {
         options.user_agent = args.user_agent;
         options.verify_ssl = args.verify_ssl;
         options.proxy = args.proxy;
+        options.proxy_username = args.proxy_user;
+        options.proxy_password = args.proxy_passwd;
+        options.referer = args.referer;
+        options.cookie_file = args.cookie_file;
+        options.cookie_jar = args.save_cookies;
+        options.http_username = args.http_user;
+        options.http_password = args.http_passwd;
 
         // 添加自定义 HTTP 头
         for (const auto& header : args.headers) {

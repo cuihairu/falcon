@@ -7,7 +7,10 @@
 
 #include <gtest/gtest.h>
 #include <falcon/file_hash.hpp>
+#include <chrono>
+#include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -32,6 +35,14 @@ std::string create_test_file(const std::string& path, const std::string& content
  */
 void remove_test_file(const std::string& path) {
     std::remove(path.c_str());
+}
+
+static std::string make_unique_temp_path(const std::string& filename) {
+    auto dir = std::filesystem::temp_directory_path();
+    auto now = std::chrono::steady_clock::now().time_since_epoch().count();
+    std::ostringstream oss;
+    oss << "falcon_" << now << "_" << filename;
+    return (dir / oss.str()).string();
 }
 
 /**
@@ -70,8 +81,8 @@ std::string get_sha256_hash(const std::string& data) {
 
 std::string get_sha512_hash(const std::string& data) {
     if (data == "Hello, World!") {
-        return "2c74fd17edafd80e8447b0d46741ee243b7eb74dd2149a0ab1b9246fb30382f27e853"
-               "d8585719e0e67cbda0daa8f51671064615d645ae27acb15bfb1447f459b";
+        return "374d794a95cdcfd8b35993185fef9ba368f160d8daf432d08ba9f1ed1e5abe6cc6929"
+               "1e0fa2fe0006a52570ef18c19def4e617c33ce52ef0a6e5fbe318cb0387";
     } else if (data.empty()) {
         return "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce"
                "47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e";
@@ -84,7 +95,7 @@ std::string get_sha512_hash(const std::string& data) {
 //==============================================================================
 
 TEST(FileHashTest, CalculateMD5EmptyFile) {
-    std::string path = "/tmp/test_empty.txt";
+    std::string path = make_unique_temp_path("test_empty.txt");
     create_test_file(path, "");
 
     auto result = FileHasher::calculate(path, HashAlgorithm::MD5);
@@ -94,7 +105,7 @@ TEST(FileHashTest, CalculateMD5EmptyFile) {
 }
 
 TEST(FileHashTest, CalculateMD5SimpleText) {
-    std::string path = "/tmp/test_simple.txt";
+    std::string path = make_unique_temp_path("test_simple.txt");
     create_test_file(path, "Hello, World!");
 
     auto result = FileHasher::calculate(path, HashAlgorithm::MD5);
@@ -104,7 +115,7 @@ TEST(FileHashTest, CalculateMD5SimpleText) {
 }
 
 TEST(FileHashTest, CalculateMD5BinaryData) {
-    std::string path = "/tmp/test_binary.dat";
+    std::string path = make_unique_temp_path("test_binary.dat");
     std::vector<uint8_t> binary_data(256);
     for (size_t i = 0; i < binary_data.size(); ++i) {
         binary_data[i] = static_cast<uint8_t>(i);
@@ -124,7 +135,7 @@ TEST(FileHashTest, CalculateMD5BinaryData) {
 }
 
 TEST(FileHashTest, CalculateMD5LargeFile) {
-    std::string path = "/tmp/test_large.txt";
+    std::string path = make_unique_temp_path("test_large.txt");
     std::string content(1024 * 1024, 'A');  // 1MB 数据
 
     create_test_file(path, content);
@@ -142,7 +153,7 @@ TEST(FileHashTest, CalculateMD5LargeFile) {
 //==============================================================================
 
 TEST(FileHashTest, CalculateSHA1EmptyFile) {
-    std::string path = "/tmp/test_empty.txt";
+    std::string path = make_unique_temp_path("test_empty_sha1.txt");
     create_test_file(path, "");
 
     auto result = FileHasher::calculate(path, HashAlgorithm::SHA1);
@@ -152,7 +163,7 @@ TEST(FileHashTest, CalculateSHA1EmptyFile) {
 }
 
 TEST(FileHashTest, CalculateSHA1SimpleText) {
-    std::string path = "/tmp/test_simple.txt";
+    std::string path = make_unique_temp_path("test_simple_sha1.txt");
     create_test_file(path, "Hello, World!");
 
     auto result = FileHasher::calculate(path, HashAlgorithm::SHA1);
@@ -162,7 +173,7 @@ TEST(FileHashTest, CalculateSHA1SimpleText) {
 }
 
 TEST(FileHashTest, CalculateSHA1OutputLength) {
-    std::string path = "/tmp/test_sha1.txt";
+    std::string path = make_unique_temp_path("test_sha1.txt");
     create_test_file(path, "Test data for SHA1");
 
     auto result = FileHasher::calculate(path, HashAlgorithm::SHA1);
@@ -176,7 +187,7 @@ TEST(FileHashTest, CalculateSHA1OutputLength) {
 //==============================================================================
 
 TEST(FileHashTest, CalculateSHA256EmptyFile) {
-    std::string path = "/tmp/test_empty.txt";
+    std::string path = make_unique_temp_path("test_empty_sha256.txt");
     create_test_file(path, "");
 
     auto result = FileHasher::calculate(path, HashAlgorithm::SHA256);
@@ -186,7 +197,7 @@ TEST(FileHashTest, CalculateSHA256EmptyFile) {
 }
 
 TEST(FileHashTest, CalculateSHA256SimpleText) {
-    std::string path = "/tmp/test_simple.txt";
+    std::string path = make_unique_temp_path("test_simple_sha256.txt");
     create_test_file(path, "Hello, World!");
 
     auto result = FileHasher::calculate(path, HashAlgorithm::SHA256);
@@ -196,7 +207,7 @@ TEST(FileHashTest, CalculateSHA256SimpleText) {
 }
 
 TEST(FileHashTest, CalculateSHA256OutputLength) {
-    std::string path = "/tmp/test_sha256.txt";
+    std::string path = make_unique_temp_path("test_sha256.txt");
     create_test_file(path, "Test data for SHA256");
 
     auto result = FileHasher::calculate(path, HashAlgorithm::SHA256);
@@ -210,7 +221,7 @@ TEST(FileHashTest, CalculateSHA256OutputLength) {
 //==============================================================================
 
 TEST(FileHashTest, CalculateSHA512EmptyFile) {
-    std::string path = "/tmp/test_empty.txt";
+    std::string path = make_unique_temp_path("test_empty_sha512.txt");
     create_test_file(path, "");
 
     auto result = FileHasher::calculate(path, HashAlgorithm::SHA512);
@@ -220,7 +231,7 @@ TEST(FileHashTest, CalculateSHA512EmptyFile) {
 }
 
 TEST(FileHashTest, CalculateSHA512SimpleText) {
-    std::string path = "/tmp/test_simple.txt";
+    std::string path = make_unique_temp_path("test_simple_sha512.txt");
     create_test_file(path, "Hello, World!");
 
     auto result = FileHasher::calculate(path, HashAlgorithm::SHA512);
@@ -230,7 +241,7 @@ TEST(FileHashTest, CalculateSHA512SimpleText) {
 }
 
 TEST(FileHashTest, CalculateSHA512OutputLength) {
-    std::string path = "/tmp/test_sha512.txt";
+    std::string path = make_unique_temp_path("test_sha512.txt");
     create_test_file(path, "Test data for SHA512");
 
     auto result = FileHasher::calculate(path, HashAlgorithm::SHA512);
@@ -244,7 +255,7 @@ TEST(FileHashTest, CalculateSHA512OutputLength) {
 //==============================================================================
 
 TEST(FileHashTest, VerifyFileSuccess) {
-    std::string path = "/tmp/test_verify.txt";
+    std::string path = make_unique_temp_path("test_verify.txt");
     create_test_file(path, "Hello, World!");
 
     std::string expected_hash = get_md5_hash("Hello, World!");
@@ -257,7 +268,7 @@ TEST(FileHashTest, VerifyFileSuccess) {
 }
 
 TEST(FileHashTest, VerifyFileFailure) {
-    std::string path = "/tmp/test_verify_fail.txt";
+    std::string path = make_unique_temp_path("test_verify_fail.txt");
     create_test_file(path, "Hello, World!");
 
     std::string wrong_hash = "00000000000000000000000000000000";
@@ -270,7 +281,7 @@ TEST(FileHashTest, VerifyFileFailure) {
 }
 
 TEST(FileHashTest, VerifyFileWithSHA256) {
-    std::string path = "/tmp/test_verify_sha256.txt";
+    std::string path = make_unique_temp_path("test_verify_sha256.txt");
     create_test_file(path, "Hello, World!");
 
     std::string expected_hash = get_sha256_hash("Hello, World!");
@@ -287,7 +298,8 @@ TEST(FileHashTest, VerifyFileWithSHA256) {
 //==============================================================================
 
 TEST(FileHashTest, NonExistentFile) {
-    std::string path = "/tmp/non_existent_file.txt";
+    std::string path = make_unique_temp_path("non_existent_file.txt");
+    remove_test_file(path);
 
     auto result = FileHasher::calculate(path, HashAlgorithm::MD5);
 
@@ -295,7 +307,8 @@ TEST(FileHashTest, NonExistentFile) {
 }
 
 TEST(FileHashTest, VerifyNonExistentFile) {
-    std::string path = "/tmp/non_existent_file.txt";
+    std::string path = make_unique_temp_path("non_existent_file.txt");
+    remove_test_file(path);
     std::string expected_hash = "some_hash";
 
     auto result = FileHasher::verify(path, expected_hash, HashAlgorithm::MD5);
@@ -305,7 +318,7 @@ TEST(FileHashTest, VerifyNonExistentFile) {
 }
 
 TEST(FileHashTest, EmptyExpectedHash) {
-    std::string path = "/tmp/test_empty_hash.txt";
+    std::string path = make_unique_temp_path("test_empty_hash.txt");
     create_test_file(path, "Some data");
 
     auto result = FileHasher::verify(path, "", HashAlgorithm::MD5);
@@ -375,7 +388,7 @@ TEST(FileHashTest, HashResultCopy) {
 //==============================================================================
 
 TEST(FileHashTest, PerformanceLargeFile) {
-    std::string path = "/tmp/test_large_perf.txt";
+    std::string path = make_unique_temp_path("test_large_perf.txt");
     std::string content(10 * 1024 * 1024, 'X');  // 10MB
 
     create_test_file(path, content);
@@ -396,4 +409,3 @@ TEST(FileHashTest, PerformanceLargeFile) {
 //==============================================================================
 // 主函数
 //==============================================================================
-

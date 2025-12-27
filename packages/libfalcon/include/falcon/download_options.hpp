@@ -54,6 +54,21 @@ struct DownloadOptions {
     /// Verify SSL certificates (HTTPS)
     bool verify_ssl = true;
 
+    /// HTTP Referer header value (optional)
+    std::string referer;
+
+    /// Load cookies from file (libcurl CURLOPT_COOKIEFILE)
+    std::string cookie_file;
+
+    /// Save cookies to file (libcurl CURLOPT_COOKIEJAR)
+    std::string cookie_jar;
+
+    /// HTTP authentication username (optional)
+    std::string http_username;
+
+    /// HTTP authentication password (optional)
+    std::string http_password;
+
     /// Minimum segment size for multi-connection download (bytes)
     std::size_t min_segment_size = 1024 * 1024;  // 1 MB
 

@@ -249,29 +249,21 @@ int KqueueEventPoll::poll(int timeout_ms) {
 }
 
 void KqueueEventPoll::clear() {
-    // 移除所有文件描述符
+    // 移除所有文件描述符（避免在遍历 map 时修改它）
+    std::vector<int> fds;
+    fds.reserve(events_.size());
     for (const auto& pair : events_) {
-        remove_event(pair.first);
+        fds.push_back(pair.first);
     }
-    events_.clear();
+    for (int fd : fds) {
+        remove_event(fd);
+    }
 }
 
 bool KqueueEventPoll::set_error(const std::string& msg) {
     error_msg_ = msg;
     FALCON_LOG_ERROR("KqueueEventPoll: " << msg);
     return false;
-}
-
-} // namespace falcon::net
-
-//==============================================================================
-// EventPoll 工厂方法
-//==============================================================================
-
-namespace falcon::net {
-
-std::unique_ptr<EventPoll> EventPoll::create() {
-    return std::make_unique<KqueueEventPoll>();
 }
 
 } // namespace falcon::net

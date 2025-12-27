@@ -27,6 +27,7 @@ add_library(falcon
     src/net/event_poll_epoll.cpp
     src/net/event_poll_kqueue.cpp
     src/net/event_poll_poll.cpp
+    src/net/event_poll_factory.cpp
     src/net/socket_pool.cpp
     src/request_group.cpp
     src/download_engine_v2.cpp
@@ -149,6 +150,20 @@ if(FALCON_ENABLE_BITTORRENT)
     add_subdirectory(plugins/bittorrent)
     target_link_libraries(falcon PRIVATE falcon_plugin_bittorrent)
     target_compile_definitions(falcon PRIVATE FALCON_ENABLE_BT_PLUGIN)
+endif()
+
+# SFTP plugin
+if(FALCON_ENABLE_SFTP)
+    add_subdirectory(plugins/sftp)
+    target_link_libraries(falcon PRIVATE falcon_plugin_sftp)
+    target_compile_definitions(falcon PRIVATE FALCON_ENABLE_SFTP_PLUGIN)
+endif()
+
+# Metalink plugin
+if(FALCON_ENABLE_METALINK)
+    add_subdirectory(plugins/metalink)
+    target_link_libraries(falcon PRIVATE falcon_plugin_metalink)
+    target_compile_definitions(falcon PRIVATE FALCON_ENABLE_METALINK_PLUGIN)
 endif()
 
 # Thunder plugin
@@ -274,6 +289,14 @@ install(TARGETS falcon ${FALCON_PLUGIN_TARGETS}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
+
+# Add new plugins to plugin targets list
+if(FALCON_ENABLE_SFTP)
+    list(APPEND FALCON_PLUGIN_TARGETS falcon_plugin_sftp)
+endif()
+if(FALCON_ENABLE_METALINK)
+    list(APPEND FALCON_PLUGIN_TARGETS falcon_plugin_metalink)
+endif()
 
 install(DIRECTORY include/falcon
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}

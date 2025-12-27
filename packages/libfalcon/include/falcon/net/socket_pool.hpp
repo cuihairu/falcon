@@ -13,7 +13,10 @@
 #include <falcon/logger.hpp>
 #include <string>
 #include <memory>
+#include <algorithm>
 #include <map>
+#include <mutex>
+#include <vector>
 #include <chrono>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -198,6 +201,7 @@ public:
      * @brief 获取池中连接数量
      */
     std::size_t size() const {
+        std::lock_guard<std::mutex> lock(mutex_);
         return pool_.size();
     }
 
@@ -218,6 +222,10 @@ private:
     // 连接池：key -> 连接列表（支持多连接到同一服务器）
     std::map<SocketKey, std::vector<std::shared_ptr<PooledSocket>>> pool_;
 
+    mutable std::mutex mutex_;
+
+    std::size_t cleanup_expired_locked();
+
     /**
      * @brief 查找可用连接
      */
@@ -235,16 +243,19 @@ private:
 
 inline std::shared_ptr<PooledSocket> SocketPool::acquire(const SocketKey& key) {
     // 首先尝试查找可用的空闲连接
-    auto socket = find_available(key);
+    std::shared_ptr<PooledSocket> socket;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        socket = find_available(key);
+    }
     if (socket && socket->is_valid()) {
         FALCON_LOG_DEBUG("复用 Socket 连接: " << key.to_string());
         socket->touch();
         return socket;
     }
 
-    // 没有可用连接，创建新的
-    FALCON_LOG_DEBUG("创建新 Socket 连接: " << key.to_string());
-    return create_connection(key);
+    // 没有可用连接
+    return nullptr;
 }
 
 inline std::shared_ptr<PooledSocket> SocketPool::find_available(const SocketKey& key) {
@@ -253,11 +264,23 @@ inline std::shared_ptr<PooledSocket> SocketPool::find_available(const SocketKey&
         return nullptr;
     }
 
-    // 查找空闲且有效的连接
-    for (auto& socket : it->second) {
-        if (socket && socket.use_count() == 1 && socket->is_valid()) {
-            return socket;
+    auto& sockets = it->second;
+
+    // 查找空闲且有效的连接（命中后从池中移除，避免重复引用/重复入池）
+    for (auto sit = sockets.begin(); sit != sockets.end();) {
+        auto& candidate = *sit;
+        if (!candidate) {
+            sit = sockets.erase(sit);
+            continue;
         }
+        if (!candidate->is_valid()) {
+            sit = sockets.erase(sit);
+            continue;
+        }
+
+        auto socket = std::move(candidate);
+        sit = sockets.erase(sit);
+        return socket;
     }
 
     return nullptr;
@@ -267,37 +290,55 @@ inline void SocketPool::release(std::shared_ptr<PooledSocket> socket) {
     if (!socket) return;
 
     const SocketKey& key = socket->key();
-    pool_[key].push_back(socket);
+    socket->touch();
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto& sockets = pool_[key];
+    sockets.push_back(std::move(socket));
 
     FALCON_LOG_DEBUG("归还 Socket 连接: " << key.to_string());
 
     // 如果连接数超过限制，清理最老的连接
-    if (pool_[key].size() > max_idle_) {
-        cleanup_expired();
+    if (sockets.size() > max_idle_) {
+        cleanup_expired_locked();
+        while (sockets.size() > max_idle_) {
+            sockets.erase(sockets.begin());
+        }
     }
 }
 
 inline std::size_t SocketPool::cleanup_expired() {
-    std::size_t cleaned = 0;
-    auto now = std::chrono::steady_clock::now();
+    std::lock_guard<std::mutex> lock(mutex_);
+    return cleanup_expired_locked();
+}
 
-    for (auto& pair : pool_) {
+inline std::size_t SocketPool::cleanup_expired_locked() {
+    std::size_t cleaned = 0;
+
+    for (auto it = pool_.begin(); it != pool_.end();) {
+        auto& pair = *it;
         auto& sockets = pair.second;
 
         // 移除过期或无效的连接
+        const std::size_t before = sockets.size();
         sockets.erase(
             std::remove_if(sockets.begin(), sockets.end(),
-                [now, this](const std::shared_ptr<PooledSocket>& socket) {
-                    if (!socket || socket.use_count() > 1) {
-                        return false;  // 仍在使用中
+                [this](const std::shared_ptr<PooledSocket>& socket) {
+                    if (!socket) {
+                        return true;
                     }
-                    auto idle = std::chrono::duration_cast<std::chrono::seconds>(
-                        now - std::chrono::steady_clock::time_point{});  // 简化处理
                     return socket->idle_time() > timeout_ || !socket->is_valid();
                 }),
             sockets.end());
 
-        cleaned += sockets.size();
+        cleaned += (before - sockets.size());
+
+        if (sockets.empty()) {
+            it = pool_.erase(it);
+            continue;
+        }
+
+        ++it;
     }
 
     if (cleaned > 0) {
@@ -308,21 +349,19 @@ inline std::size_t SocketPool::cleanup_expired() {
 }
 
 inline void SocketPool::clear() {
+    std::lock_guard<std::mutex> lock(mutex_);
     pool_.clear();
     FALCON_LOG_DEBUG("清空 Socket 连接池");
 }
 
 inline SocketPool::Stats SocketPool::get_stats() const {
     Stats stats;
+    std::lock_guard<std::mutex> lock(mutex_);
     for (const auto& pair : pool_) {
         stats.total_connections += pair.second.size();
         for (const auto& socket : pair.second) {
             if (socket && socket->is_valid()) {
-                if (socket.use_count() == 1) {
-                    stats.idle_connections++;
-                } else {
-                    stats.active_connections++;
-                }
+                stats.idle_connections++;
             }
         }
     }

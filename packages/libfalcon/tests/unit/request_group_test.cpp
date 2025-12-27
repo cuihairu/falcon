@@ -63,7 +63,7 @@ TEST(RequestGroupTest, RequestGroupStatusTransitions) {
 
     // 恢复
     group.resume();
-    EXPECT_EQ(group.status(), RequestGroupStatus::ACTIVE);
+    EXPECT_EQ(group.status(), RequestGroupStatus::WAITING);
 }
 
 TEST(RequestGroupTest, RequestGroupProgress) {
@@ -282,4 +282,3 @@ TEST(RequestGroupManTest, TaskCounts) {
 //==============================================================================
 // 主函数
 //==============================================================================
-

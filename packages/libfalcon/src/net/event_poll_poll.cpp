@@ -171,12 +171,4 @@ short PollEventPoll::to_poll_events(int events) const {
     return poll_events;
 }
 
-//==============================================================================
-// EventPoll 工厂方法
-//==============================================================================
-
-std::unique_ptr<EventPoll> EventPoll::create() {
-    return std::make_unique<PollEventPoll>();
-}
-
 } // namespace falcon::net

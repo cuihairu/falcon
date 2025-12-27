@@ -19,6 +19,8 @@
 #include <vector>
 #include <string>
 #include <map>
+#include <deque>
+#include <unordered_map>
 
 namespace falcon {
 
@@ -352,8 +354,8 @@ private:
     // 活动组（正在下载）- 存储原始指针指向 all_groups_
     std::vector<RequestGroup*> request_groups_;
 
-    // 等待队列（按优先级排序）- 存储 unique_ptr
-    std::deque<std::unique_ptr<RequestGroup>> reserved_groups_;
+    // 等待队列（FIFO）- 存储原始指针指向 all_groups_
+    std::deque<RequestGroup*> reserved_groups_;
 
     // 所有组（用于查找和管理，不保证顺序）
     std::vector<std::unique_ptr<RequestGroup>> all_groups_;

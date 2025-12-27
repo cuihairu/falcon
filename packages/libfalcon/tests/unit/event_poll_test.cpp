@@ -10,6 +10,7 @@
 #include <thread>
 #include <chrono>
 #include <array>
+#include <vector>
 #include <cstring>
 #include <unistd.h>
 #include <sys/socket.h>
@@ -27,52 +28,18 @@ using namespace falcon::net;
  * @brief 创建一对连接的 Socket 用于测试
  */
 std::array<int, 2> create_socket_pair() {
-    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_fd < 0) {
+    int fds[2] = {-1, -1};
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) != 0) {
         return {-1, -1};
     }
 
     // 设置非阻塞
-    int flags = fcntl(server_fd, F_GETFL, 0);
-    fcntl(server_fd, F_SETFL, flags | O_NONBLOCK);
-
-    struct sockaddr_in addr = {};
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    addr.sin_port = 0;  // 任意端口
-
-    if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
-        close(server_fd);
-        return {-1, -1};
+    for (int i = 0; i < 2; ++i) {
+        int flags = fcntl(fds[i], F_GETFL, 0);
+        fcntl(fds[i], F_SETFL, flags | O_NONBLOCK);
     }
 
-    if (listen(server_fd, 1) != 0) {
-        close(server_fd);
-        return {-1, -1};
-    }
-
-    // 获取实际绑定的端口
-    struct sockaddr_in actual_addr = {};
-    socklen_t len = sizeof(actual_addr);
-    if (getsockname(server_fd, (struct sockaddr*)&actual_addr, &len) != 0) {
-        close(server_fd);
-        return {-1, -1};
-    }
-
-    int client_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (client_fd < 0) {
-        close(server_fd);
-        return {-1, -1};
-    }
-
-    // 设置非阻塞
-    flags = fcntl(client_fd, F_GETFL, 0);
-    fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
-
-    // 尝试连接（可能返回 EINPROGRESS）
-    connect(client_fd, (struct sockaddr*)&actual_addr, sizeof(actual_addr));
-
-    return {server_fd, client_fd};
+    return {fds[0], fds[1]};
 }
 
 //==============================================================================
@@ -100,33 +67,51 @@ TEST(EventPollTest, AddReadEvent) {
     auto poll = EventPoll::create();
     ASSERT_NE(poll, nullptr);
 
+    auto [fd0, fd1] = create_socket_pair();
+    ASSERT_GE(fd0, 0);
+    ASSERT_GE(fd1, 0);
+
     int callback_called = 0;
 
     auto callback = [&callback_called](int fd, int events, void* user_data) {
         callback_called++;
     };
 
-    bool result = poll->add_event(0, static_cast<int>(IOEvent::READ), callback);
+    bool result = poll->add_event(fd0, static_cast<int>(IOEvent::READ), callback);
     EXPECT_TRUE(result) << "Failed to add read event";
+
+    close(fd0);
+    close(fd1);
 }
 
 TEST(EventPollTest, AddWriteEvent) {
     auto poll = EventPoll::create();
     ASSERT_NE(poll, nullptr);
 
+    auto [fd0, fd1] = create_socket_pair();
+    ASSERT_GE(fd0, 0);
+    ASSERT_GE(fd1, 0);
+
     int callback_called = 0;
 
     auto callback = [&callback_called](int fd, int events, void* user_data) {
         callback_called++;
     };
 
-    bool result = poll->add_event(1, static_cast<int>(IOEvent::WRITE), callback);
+    bool result = poll->add_event(fd1, static_cast<int>(IOEvent::WRITE), callback);
     EXPECT_TRUE(result) << "Failed to add write event";
+
+    close(fd0);
+    close(fd1);
 }
 
 TEST(EventPollTest, AddMultipleEvents) {
     auto poll = EventPoll::create();
     ASSERT_NE(poll, nullptr);
+
+    auto [fd0, fd1] = create_socket_pair();
+    ASSERT_GE(fd0, 0);
+    ASSERT_GE(fd1, 0);
 
     int read_called = 0;
     int write_called = 0;
@@ -139,13 +124,20 @@ TEST(EventPollTest, AddMultipleEvents) {
         write_called++;
     };
 
-    EXPECT_TRUE(poll->add_event(0, static_cast<int>(IOEvent::READ), read_callback));
-    EXPECT_TRUE(poll->add_event(1, static_cast<int>(IOEvent::WRITE), write_callback));
+    EXPECT_TRUE(poll->add_event(fd0, static_cast<int>(IOEvent::READ), read_callback));
+    EXPECT_TRUE(poll->add_event(fd1, static_cast<int>(IOEvent::WRITE), write_callback));
+
+    close(fd0);
+    close(fd1);
 }
 
 TEST(EventPollTest, AddReadWriteEvent) {
     auto poll = EventPoll::create();
     ASSERT_NE(poll, nullptr);
+
+    auto [fd0, fd1] = create_socket_pair();
+    ASSERT_GE(fd0, 0);
+    ASSERT_GE(fd1, 0);
 
     int callback_called = 0;
 
@@ -154,12 +146,15 @@ TEST(EventPollTest, AddReadWriteEvent) {
     };
 
     bool result = poll->add_event(
-        0,
+        fd0,
         static_cast<int>(IOEvent::READ | IOEvent::WRITE),
         callback
     );
 
     EXPECT_TRUE(result) << "Failed to add read/write event";
+
+    close(fd0);
+    close(fd1);
 }
 
 //==============================================================================
@@ -170,10 +165,17 @@ TEST(EventPollTest, RemoveEvent) {
     auto poll = EventPoll::create();
     ASSERT_NE(poll, nullptr);
 
+    auto [fd0, fd1] = create_socket_pair();
+    ASSERT_GE(fd0, 0);
+    ASSERT_GE(fd1, 0);
+
     auto callback = [](int fd, int events, void* user_data) {};
 
-    EXPECT_TRUE(poll->add_event(0, static_cast<int>(IOEvent::READ), callback));
-    EXPECT_TRUE(poll->remove_event(0));
+    EXPECT_TRUE(poll->add_event(fd0, static_cast<int>(IOEvent::READ), callback));
+    EXPECT_TRUE(poll->remove_event(fd0));
+
+    close(fd0);
+    close(fd1);
 }
 
 TEST(EventPollTest, RemoveNonExistentEvent) {
@@ -181,18 +183,25 @@ TEST(EventPollTest, RemoveNonExistentEvent) {
     ASSERT_NE(poll, nullptr);
 
     // 移除不存在的 fd
-    EXPECT_FALSE(poll->remove_event(999));
+    EXPECT_TRUE(poll->remove_event(999));
 }
 
 TEST(EventPollTest, RemoveEventTwice) {
     auto poll = EventPoll::create();
     ASSERT_NE(poll, nullptr);
 
+    auto [fd0, fd1] = create_socket_pair();
+    ASSERT_GE(fd0, 0);
+    ASSERT_GE(fd1, 0);
+
     auto callback = [](int fd, int events, void* user_data) {};
 
-    EXPECT_TRUE(poll->add_event(0, static_cast<int>(IOEvent::READ), callback));
-    EXPECT_TRUE(poll->remove_event(0));
-    EXPECT_FALSE(poll->remove_event(0));  // 第二次应该失败
+    EXPECT_TRUE(poll->add_event(fd0, static_cast<int>(IOEvent::READ), callback));
+    EXPECT_TRUE(poll->remove_event(fd0));
+    EXPECT_TRUE(poll->remove_event(fd0));  // 第二次应当是幂等的
+
+    close(fd0);
+    close(fd1);
 }
 
 //==============================================================================
@@ -205,11 +214,18 @@ TEST(EventPollTest, PollWithTimeout) {
 
     auto callback = [](int fd, int events, void* user_data) {};
 
-    poll->add_event(0, static_cast<int>(IOEvent::READ), callback);
+    auto [fd0, fd1] = create_socket_pair();
+    ASSERT_GE(fd0, 0);
+    ASSERT_GE(fd1, 0);
+
+    poll->add_event(fd0, static_cast<int>(IOEvent::READ), callback);
 
     // 等待 100ms，应该超时返回 0
     int events = poll->poll(100);
     EXPECT_EQ(events, 0);
+
+    close(fd0);
+    close(fd1);
 }
 
 TEST(EventPollTest, PollWithoutEvents) {
@@ -239,11 +255,18 @@ TEST(EventPollTest, CallbackInvoked) {
         callback_events = events;
     };
 
-    poll->add_event(0, static_cast<int>(IOEvent::READ), callback);
+    auto [fd0, fd1] = create_socket_pair();
+    ASSERT_GE(fd0, 0);
+    ASSERT_GE(fd1, 0);
+
+    poll->add_event(fd0, static_cast<int>(IOEvent::READ), callback);
     poll->poll(100);
 
     // 注：因为 fd 0 可能没有数据可读，回调可能不会被调用
     // 这取决于具体的平台和实现
+
+    close(fd0);
+    close(fd1);
 }
 
 TEST(EventPollTest, CallbackWithUserData) {
@@ -257,13 +280,20 @@ TEST(EventPollTest, CallbackWithUserData) {
         received_data = user_data;
     };
 
-    poll->add_event(0, static_cast<int>(IOEvent::READ), callback, &test_value);
+    auto [fd0, fd1] = create_socket_pair();
+    ASSERT_GE(fd0, 0);
+    ASSERT_GE(fd1, 0);
+
+    poll->add_event(fd0, static_cast<int>(IOEvent::READ), callback, &test_value);
     poll->poll(100);
 
     // 如果回调被调用，检查用户数据
     if (received_data != nullptr) {
         EXPECT_EQ(received_data, &test_value);
     }
+
+    close(fd0);
+    close(fd1);
 }
 
 //==============================================================================
@@ -303,16 +333,23 @@ TEST(EventPollTest, ModifyEvent) {
     auto poll = EventPoll::create();
     ASSERT_NE(poll, nullptr);
 
+    auto [fd0, fd1] = create_socket_pair();
+    ASSERT_GE(fd0, 0);
+    ASSERT_GE(fd1, 0);
+
     auto callback = [](int fd, int events, void* user_data) {};
 
     // 先添加 READ 事件
-    EXPECT_TRUE(poll->add_event(0, static_cast<int>(IOEvent::READ), callback));
+    EXPECT_TRUE(poll->add_event(fd0, static_cast<int>(IOEvent::READ), callback));
 
     // 修改为 WRITE 事件
-    EXPECT_TRUE(poll->modify_event(0, static_cast<int>(IOEvent::WRITE)));
+    EXPECT_TRUE(poll->modify_event(fd0, static_cast<int>(IOEvent::WRITE)));
 
     // 移除
-    EXPECT_TRUE(poll->remove_event(0));
+    EXPECT_TRUE(poll->remove_event(fd0));
+
+    close(fd0);
+    close(fd1);
 }
 
 //==============================================================================
@@ -335,11 +372,18 @@ TEST(EventPollTest, ZeroTimeout) {
 
     auto callback = [](int fd, int events, void* user_data) {};
 
-    poll->add_event(0, static_cast<int>(IOEvent::READ), callback);
+    auto [fd0, fd1] = create_socket_pair();
+    ASSERT_GE(fd0, 0);
+    ASSERT_GE(fd1, 0);
+
+    poll->add_event(fd0, static_cast<int>(IOEvent::READ), callback);
 
     // 零超时应该立即返回
     int events = poll->poll(0);
     EXPECT_GE(events, 0);
+
+    close(fd0);
+    close(fd1);
 }
 
 TEST(EventPollTest, LargeFileDescriptor) {
@@ -348,9 +392,25 @@ TEST(EventPollTest, LargeFileDescriptor) {
 
     auto callback = [](int fd, int events, void* user_data) {};
 
-    // 大文件描述符
-    EXPECT_TRUE(poll->add_event(1024, static_cast<int>(IOEvent::READ), callback));
-    EXPECT_TRUE(poll->remove_event(1024));
+    auto [fd0, fd1] = create_socket_pair();
+    ASSERT_GE(fd0, 0);
+    ASSERT_GE(fd1, 0);
+
+    constexpr int TARGET_FD = 1024;
+    int fd_dup = dup2(fd0, TARGET_FD);
+    ASSERT_EQ(fd_dup, TARGET_FD);
+
+    int flags = fcntl(fd_dup, F_GETFL, 0);
+    fcntl(fd_dup, F_SETFL, flags | O_NONBLOCK);
+
+    close(fd0);
+    fd0 = fd_dup;
+
+    EXPECT_TRUE(poll->add_event(TARGET_FD, static_cast<int>(IOEvent::READ), callback));
+    EXPECT_TRUE(poll->remove_event(TARGET_FD));
+
+    close(fd0);
+    close(fd1);
 }
 
 //==============================================================================
@@ -374,7 +434,12 @@ TEST(EventPollTest, PlatformKqueue) {
 
     // BSD/macOS 应该使用 kqueue
     auto callback = [](int fd, int events, void* user_data) {};
-    EXPECT_TRUE(poll->add_event(0, static_cast<int>(IOEvent::READ), callback));
+    auto [fd0, fd1] = create_socket_pair();
+    ASSERT_GE(fd0, 0);
+    ASSERT_GE(fd1, 0);
+    EXPECT_TRUE(poll->add_event(fd0, static_cast<int>(IOEvent::READ), callback));
+    close(fd0);
+    close(fd1);
 }
 #else
 TEST(EventPollTest, PlatformPoll) {
@@ -398,18 +463,27 @@ TEST(EventPollTest, MultipleFileDescriptors) {
     constexpr int NUM_FDS = 100;
     auto callback = [](int fd, int events, void* user_data) {};
 
-    // 添加多个文件描述符
+    std::vector<int> fds;
+    fds.reserve(NUM_FDS);
+
     for (int i = 0; i < NUM_FDS; ++i) {
-        EXPECT_TRUE(poll->add_event(i, static_cast<int>(IOEvent::READ), callback));
+        auto [fd0, fd1] = create_socket_pair();
+        ASSERT_GE(fd0, 0);
+        ASSERT_GE(fd1, 0);
+        fds.push_back(fd0);
+        close(fd1);
     }
 
-    // 移除所有
-    for (int i = 0; i < NUM_FDS; ++i) {
-        EXPECT_TRUE(poll->remove_event(i));
+    for (int fd : fds) {
+        EXPECT_TRUE(poll->add_event(fd, static_cast<int>(IOEvent::READ), callback));
+    }
+
+    for (int fd : fds) {
+        EXPECT_TRUE(poll->remove_event(fd));
+        close(fd);
     }
 }
 
 //==============================================================================
 // 主函数
 //==============================================================================
-
