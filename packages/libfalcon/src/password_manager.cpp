@@ -8,8 +8,6 @@
 #include <falcon/password_manager.hpp>
 #include <falcon/logger.hpp>
 #include <iostream>
-#include <termios.h>
-#include <unistd.h>
 #include <chrono>
 #include <random>
 #include <algorithm>
@@ -17,6 +15,13 @@
 #include <filesystem>
 #include <fstream>
 #include <cstdlib>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <termios.h>
+#include <unistd.h>
+#endif
 
 #if __has_include(<openssl/rand.h>) && __has_include(<openssl/sha256.h>)
 #include <openssl/rand.h>
@@ -196,7 +201,20 @@ public:
         std::cout << prompt;
         std::cout.flush();
 
-        // 禁用回显
+#ifdef _WIN32
+        // Windows 实现
+        HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
+        DWORD mode = 0;
+        GetConsoleMode(hStdin, &mode);
+        SetConsoleMode(hStdin, mode & (~ENABLE_ECHO_INPUT));
+
+        std::string password;
+        std::getline(std::cin, password);
+
+        SetConsoleMode(hStdin, mode);
+        std::cout << std::endl;
+#else
+        // Unix/Linux 实现
         termios oldt, newt;
         tcgetattr(STDIN_FILENO, &oldt);
         newt = oldt;
@@ -209,6 +227,7 @@ public:
         // 恢复回显
         tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
         std::cout << std::endl;
+#endif
 
         return password;
     }

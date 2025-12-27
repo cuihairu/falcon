@@ -19,15 +19,18 @@
 #include <cstring>
 
 // 平台相关头文件
-#ifdef __linux__
-    #include <sys/epoll.h>
-#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
-    #include <sys/event.h>
+#ifdef _WIN32
+    #include <winsock2.h>
+#else
+    #ifdef __linux__
+        #include <sys/epoll.h>
+    #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+        #include <sys/event.h>
+    #endif
+    #include <poll.h>      // for struct pollfd
+    #include <sys/socket.h> // for socket functions
+    #include <unistd.h>    // for close()
 #endif
-
-#include <poll.h>      // for struct pollfd
-#include <cstdint>    // for int16_t, uint32_t
-#include <ctime>      // for timespec
 
 namespace falcon::net {
 

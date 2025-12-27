@@ -18,8 +18,13 @@
 #include <mutex>
 #include <vector>
 #include <chrono>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#else
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
 
 namespace falcon::net {
 
