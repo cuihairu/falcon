@@ -218,7 +218,7 @@ bool DownloadEngineV2::register_socket_event(int fd, int events, CommandId comma
     std::lock_guard<std::mutex> lock(socket_map_mutex_);
 
     // 注册到 EventPoll
-    auto callback = [this, command_id](int socket_fd, int ready_events, void* user_data) {
+    auto callback = [this](int socket_fd, int ready_events, void* /*user_data*/) {
         // 查找对应的命令并重新加入队列
         std::lock_guard<std::mutex> lock(command_queue_mutex_);
 

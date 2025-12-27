@@ -301,9 +301,9 @@ private:
     int socket_fd_;
     std::shared_ptr<HttpResponse> http_response_;
     SegmentId segment_id_;
-    Bytes offset_;          // 当前分段在文件中的起始偏移
+    [[maybe_unused]] Bytes offset_;          // 当前分段在文件中的起始偏移
     Bytes length_;          // 分段长度（0 表示到末尾）
-    Bytes current_offset_;  // 当前写入位置
+    [[maybe_unused]] Bytes current_offset_;  // 当前写入位置
 
     // 下载状态
     Bytes downloaded_bytes_ = 0;
@@ -312,8 +312,8 @@ private:
 
     // 分块传输编码状态
     bool chunked_encoding_ = false;
-    std::size_t chunk_remaining_ = 0;
-    bool chunk_end_ = false;
+    [[maybe_unused]] std::size_t chunk_remaining_ = 0;
+    [[maybe_unused]] bool chunk_end_ = false;
 
     // 进度计算
     std::chrono::steady_clock::time_point last_update_;

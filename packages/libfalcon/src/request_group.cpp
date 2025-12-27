@@ -85,7 +85,7 @@ RequestGroup::Progress RequestGroup::get_progress() const {
     }
 
     if (progress.total > 0) {
-        progress.progress = static_cast<double>(progress.downloaded) / progress.total;
+        progress.progress = static_cast<double>(progress.downloaded) / static_cast<double>(progress.total);
     }
 
     return progress;
@@ -152,7 +152,7 @@ void RequestGroupMan::add_request_group(std::unique_ptr<RequestGroup> group) {
     FALCON_LOG_DEBUG("任务加入等待队列: id=" << id);
 }
 
-void RequestGroupMan::fill_request_group_from_reserver(DownloadEngineV2* engine) {
+void RequestGroupMan::fill_request_group_from_reserver(DownloadEngineV2* /*engine*/) {
     // 当有空闲槽位时，从等待队列激活任务（跳过 PAUSED）
     while (request_groups_.size() < max_concurrent_) {
         if (reserved_groups_.empty()) {

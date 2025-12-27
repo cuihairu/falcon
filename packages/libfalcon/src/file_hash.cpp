@@ -13,6 +13,7 @@
 #include <iomanip>
 #include <cstring>
 #include <functional>
+#include <algorithm>
 
 // OpenSSL 提供哈希算法支持
 #include <openssl/md5.h>
@@ -195,8 +196,8 @@ std::vector<bool> PieceHashVerifier::verify(const std::string& file_path) const 
     std::vector<char> buffer(piece_size_);
 
     for (std::size_t i = 0; i < piece_hashes_.size(); ++i) {
-        file.read(buffer.data(), piece_size_);
-        std::size_t bytes_read = file.gcount();
+        file.read(buffer.data(), static_cast<std::streamsize>(piece_size_));
+        std::size_t bytes_read = static_cast<std::size_t>(file.gcount());
 
         if (bytes_read == 0) {
             break;  // 文件结束

@@ -23,7 +23,7 @@ namespace falcon::net {
 PollEventPoll::PollEventPoll(int max_fds)
     : max_fds_(max_fds)
 {
-    poll_fds_.reserve(max_fds_);
+    poll_fds_.reserve(static_cast<std::size_t>(max_fds_));
     FALCON_LOG_INFO("创建 PollEventPoll: max_fds=" << max_fds_);
 }
 
