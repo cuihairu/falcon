@@ -70,6 +70,13 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wformat=2
     )
 
+    # 代码覆盖率支持 (GCC/Clang)
+    if(FALCON_ENABLE_COVERAGE)
+        add_compile_options(--coverage -g -O0)
+        add_link_options(--coverage)
+        message(STATUS "Code coverage enabled with flags: --coverage")
+    endif()
+
     if(FALCON_ENABLE_SANITIZERS)
         add_compile_options(-fsanitize=address,undefined)
         add_link_options(-fsanitize=address,undefined)
@@ -80,6 +87,11 @@ elseif(MSVC)
         /permissive-
         /Zc:__cplusplus
     )
+
+    # MSVC 不原生支持代码覆盖率，需要使用 OpenCppCoverage 等工具
+    if(FALCON_ENABLE_COVERAGE)
+        message(WARNING "Code coverage on MSVC requires external tools like OpenCppCoverage")
+    endif()
 endif()
 
 # ============================================================================

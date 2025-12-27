@@ -309,4 +309,15 @@ install(DIRECTORY include/falcon
 
 if(FALCON_BUILD_TESTS)
     add_subdirectory(tests)
+
+    # 设置代码覆盖率目标
+    if(FALCON_ENABLE_COVERAGE)
+        include(cmake/CodeCoverage.cmake OPTIONAL)
+        if(COMMAND setup_coverage_target)
+            setup_coverage_target(falcon_coverage
+                "*/libfalcon/tests/*"
+                "*/build-*/*"
+            )
+        endif()
+    endif()
 endif()
