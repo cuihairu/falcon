@@ -19,6 +19,7 @@ using json = nlohmann::json;
 #include <algorithm>
 #include <unordered_set>
 #include <fstream>
+#include <future>
 
 namespace falcon {
 namespace search {
@@ -57,7 +58,7 @@ public:
             curl_easy_setopt(curl_, CURLOPT_PROXY, proxy_url.c_str());
 
             // 设置代理类型
-            CURLproxytype type = CURLPROXY_HTTP;
+            curl_proxytype type = CURLPROXY_HTTP;
             if (!proxy_type.empty()) {
                 if (proxy_type == "socks4") {
                     type = CURLPROXY_SOCKS4;
@@ -118,7 +119,7 @@ public:
 
         CURLcode res = curl_easy_perform(curl_);
         if (res != CURLE_OK) {
-            Logger::error("CURL error: {}", curl_easy_strerror(res));
+            FALCON_LOG_ERROR("CURL error: " << curl_easy_strerror(res));
             return "";
         }
 
@@ -159,25 +160,26 @@ public:
         }
 
         // 发送请求
-        Logger::debug("Searching {} with query: {}", config_.name, query.keyword);
+        FALCON_LOG_DEBUG("Searching " << config_.name << " with query: " << query.keyword);
         std::string response = crawler_->get(search_url);
 
         if (response.empty()) {
-            Logger::warn("No response from {}", config_.name);
+            FALCON_LOG_WARN("No response from " << config_.name);
             return results;
         }
 
         // 解析响应
-        if (config_.response_format == "json") {
-            results = parse_json_response(response);
-        } else {
+        // TODO: 实现 response_format 支持
+        // if (config_.response_format == "json") {
+        //     results = parse_json_response(response);
+        // } else {
             results = parse_html_response(response);
-        }
+        // }
 
         // 应用过滤
         results = filter_results(results, query);
 
-        Logger::debug("Found {} results from {}", results.size(), config_.name);
+        FALCON_LOG_DEBUG("Found " << results.size() << " results from " << config_.name);
         return results;
     }
 
@@ -225,23 +227,24 @@ protected:
         bool first_param = url.find('?') == std::string::npos;
 
         // 特殊处理MagnetDL的路径模式
-        if (config_.path_pattern.find("{query_letter}") != std::string::npos) {
-            std::string pattern = config_.path_pattern;
-            std::string query_letter = query.keyword.empty() ? "all" :
-                                     std::string(1, std::tolower(query.keyword[0]));
-            std::string first_char = std::isalpha(query_letter[0]) ? "1" : "0";
-
-            replace_all(pattern, "{first_char}", first_char);
-            replace_all(pattern, "{query_letter}", query_letter);
-            replace_all(pattern, "{page}", std::to_string(query.page));
-
-            url = config_.base_url + pattern;
-
-            // 添加关键词作为参数
-            if (!query.keyword.empty()) {
-                url += "?s=" + url_encode(query.keyword);
-            }
-        } else {
+        // TODO: 实现 path_pattern 支持
+        // if (config_.path_pattern.find("{query_letter}") != std::string::npos) {
+        //     std::string pattern = config_.path_pattern;
+        //     std::string query_letter = query.keyword.empty() ? "all" :
+        //                              std::string(1, static_cast<char>(std::tolower(query.keyword[0])));
+        //     std::string first_char = std::isalpha(query_letter[0]) ? "1" : "0";
+        //
+        //     replace_all(pattern, "{first_char}", first_char);
+        //     replace_all(pattern, "{query_letter}", query_letter);
+        //     replace_all(pattern, "{page}", std::to_string(query.page));
+        //
+        //     url = config_.base_url + pattern;
+        //
+        //     // 添加关键词作为参数
+        //     if (!query.keyword.empty()) {
+        //         url += "?s=" + url_encode(query.keyword);
+        //     }
+        // } else {
             // 构建查询参数
             std::string query_str;
             for (const auto& [key, value] : config_.params) {
@@ -266,19 +269,20 @@ protected:
     virtual std::vector<SearchResult> parse_html_response(const std::string& html) {
         std::vector<SearchResult> results;
 
+        // TODO: 实现 selectors 支持
         // 简单的HTML解析（实际项目中应使用专门的HTML解析库）
-        if (config_.selectors.empty()) {
-            return results;
-        }
-
-        // 这里使用正则表达式作为简单实现
-        // 实际项目中建议使用Gumbo或类似的HTML解析库
-
-        std::string item_selector = config_.selectors.at("item");
+        // if (config_.selectors.empty()) {
+        //     return results;
+        // }
+        //
+        // // 这里使用正则表达式作为简单实现
+        // // 实际项目中建议使用Gumbo或类似的HTML解析库
+        //
+        // std::string item_selector = config_.selectors.at("item");
 
         // 示例：解析1337x的HTML结构
         if (config_.name == "1337x") {
-            std::regex item_regex("<tr>(.*?)</tr>", std::regex::dotall);
+            std::regex item_regex("<tr>(.*?)</tr>", std::regex::ECMAScript);
             std::sregex_iterator iter(html.begin(), html.end(), item_regex);
             std::sregex_iterator end;
 
@@ -320,7 +324,7 @@ protected:
                 }
             }
         } catch (const std::exception& e) {
-            Logger::error("Failed to parse JSON response: {}", e.what());
+            FALCON_LOG_ERROR("Failed to parse JSON response: " << e.what());
         }
 
         return results;
@@ -508,7 +512,7 @@ public:
     bool load_config(const std::string& config_file) {
         std::ifstream file(config_file);
         if (!file.is_open()) {
-            Logger::warn("Failed to open search engine config file: {}", config_file);
+            FALCON_LOG_WARN("Failed to open search engine config file: " << config_file);
             return false;
         }
 
@@ -557,19 +561,20 @@ public:
                         }
                     }
 
-                    if (engine.contains("response_format")) {
-                        engine_config.response_format = engine["response_format"].get<std::string>();
-                    }
-
-                    if (engine.contains("selectors")) {
-                        for (auto& [key, value] : engine["selectors"].items()) {
-                            engine_config.selectors[key] = value.get<std::string>();
-                        }
-                    }
-
-                    if (engine.contains("path_pattern")) {
-                        engine_config.path_pattern = engine["path_pattern"].get<std::string>();
-                    }
+                    // TODO: 添加 response_format, selectors, path_pattern 成员
+                    // if (engine.contains("response_format")) {
+                    //     engine_config.response_format = engine["response_format"].get<std::string>();
+                    // }
+                    //
+                    // if (engine.contains("selectors")) {
+                    //     for (auto& [key, value] : engine["selectors"].items()) {
+                    //         engine_config.selectors[key] = value.get<std::string>();
+                    //     }
+                    // }
+                    //
+                    // if (engine.contains("path_pattern")) {
+                    //     engine_config.path_pattern = engine["path_pattern"].get<std::string>();
+                    // }
 
                     engine_configs_[engine_config.name] = engine_config;
 
@@ -589,11 +594,11 @@ public:
                 }
             }
 
-            Logger::info("Loaded {} search engines", providers_.size());
+            FALCON_LOG_INFO("Loaded " << providers_.size() << " search engines");
             return true;
 
         } catch (const std::exception& e) {
-            Logger::error("Failed to parse search engine config: {}", e.what());
+            FALCON_LOG_ERROR("Failed to parse search engine config: " << e.what());
             return false;
         }
     }
@@ -639,7 +644,7 @@ std::vector<SearchResult> ResourceSearchManager::search_all(const SearchQuery& q
                              std::make_move_iterator(results.begin()),
                              std::make_move_iterator(results.end()));
         } catch (const std::exception& e) {
-            Logger::error("Search error: {}", e.what());
+            FALCON_LOG_ERROR("Search error: " << e.what());
         }
     }
 

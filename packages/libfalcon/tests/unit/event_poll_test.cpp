@@ -420,7 +420,7 @@ TEST(EventPollTest, LargeFileDescriptor) {
 #if defined(__linux__)
 TEST(EventPollTest, PlatformEpoll) {
     auto poll = EventPoll::create();
-    ASSERT_NE(poll);
+    ASSERT_NE(poll, nullptr);
 
     // Linux 应该使用 epoll
     // 这里只能验证基本功能
