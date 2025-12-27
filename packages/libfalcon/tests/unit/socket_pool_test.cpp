@@ -17,12 +17,14 @@
 #endif
 #include <winsock2.h>
 #include <windows.h>
+#define CLOSE_SOCKET(fd) closesocket(fd)
 #else
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
+#define CLOSE_SOCKET(fd) close(fd)
 #endif
 
 using namespace falcon;
@@ -36,6 +38,16 @@ using namespace falcon::net;
  * @brief 创建一个测试 Socket
  */
 int create_test_socket() {
+#ifdef _WIN32
+    SOCKET fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (fd == INVALID_SOCKET) {
+        return -1;
+    }
+    // 设置非阻塞
+    u_long mode = 1;
+    ioctlsocket(fd, FIONBIO, &mode);
+    return static_cast<int>(fd);
+#else
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd >= 0) {
         // 设置非阻塞
@@ -43,6 +55,7 @@ int create_test_socket() {
         fcntl(fd, F_SETFL, flags | O_NONBLOCK);
     }
     return fd;
+#endif
 }
 
 /**

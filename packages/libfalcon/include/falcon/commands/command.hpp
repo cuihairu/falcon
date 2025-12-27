@@ -28,7 +28,7 @@ enum class CommandStatus {
     READY,       // 命令已创建，等待执行
     ACTIVE,      // 命令正在执行中
     COMPLETED,   // 命令执行完成
-    ERROR        // 命令执行出错
+    FAILED       // 命令执行出错（避免 Windows 宏冲突）
 };
 
 /**
@@ -110,7 +110,7 @@ protected:
     /**
      * @brief 设置命令状态为错误
      */
-    void mark_error() { status_ = CommandStatus::ERROR; }
+    void mark_error() { status_ = CommandStatus::FAILED; }
 
 private:
     static CommandId generate_command_id() {

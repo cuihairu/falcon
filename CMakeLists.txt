@@ -31,6 +31,7 @@ option(FALCON_BUILD_TESTS "Build tests" ON)
 option(FALCON_BUILD_EXAMPLES "Build examples" ON)
 option(FALCON_BUILD_CLI "Build CLI tool" ON)
 option(FALCON_BUILD_DAEMON "Build daemon service" ON)
+option(FALCON_BUILD_DESKTOP "Build desktop GUI application" ON)
 
 # 插件开关
 option(FALCON_ENABLE_HTTP "Enable HTTP/HTTPS plugin" ON)
@@ -125,6 +126,11 @@ if(FALCON_BUILD_DAEMON)
     add_subdirectory(packages/falcon-daemon)
 endif()
 
+# Desktop 应用（可选）
+if(FALCON_BUILD_DESKTOP)
+    add_subdirectory(apps/desktop)
+endif()
+
 # 示例代码（可选）
 if(FALCON_BUILD_EXAMPLES)
     add_subdirectory(examples)
@@ -179,6 +185,7 @@ message(STATUS "  Build Tests: ${FALCON_BUILD_TESTS}")
 message(STATUS "  Build Examples: ${FALCON_BUILD_EXAMPLES}")
 message(STATUS "  Build CLI: ${FALCON_BUILD_CLI}")
 message(STATUS "  Build Daemon: ${FALCON_BUILD_DAEMON}")
+message(STATUS "  Build Desktop: ${FALCON_BUILD_DESKTOP}")
 message(STATUS "")
 message(STATUS "Plugin Options:")
 message(STATUS "  HTTP/HTTPS: ${FALCON_ENABLE_HTTP}")

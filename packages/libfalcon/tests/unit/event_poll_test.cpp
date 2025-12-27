@@ -19,11 +19,13 @@
 #endif
 #include <winsock2.h>
 #include <windows.h>
+#define CLOSE_SOCKET(fd) closesocket(fd)
 #else
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <fcntl.h>
+#define CLOSE_SOCKET(fd) close(fd)
 #endif
 
 using namespace falcon;
@@ -37,6 +39,68 @@ using namespace falcon::net;
  * @brief 创建一对连接的 Socket 用于测试
  */
 std::array<int, 2> create_socket_pair() {
+#ifdef _WIN32
+    // Windows 不支持 socketpair，使用 TCP 连接模拟
+    SOCKET listen_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (listen_sock == INVALID_SOCKET) {
+        return {-1, -1};
+    }
+
+    // 绑定到本地端口
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = 0;
+
+    if (bind(listen_sock, (struct sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
+        closesocket(listen_sock);
+        return {-1, -1};
+    }
+
+    // 获取端口
+    int addr_len = sizeof(addr);
+    if (getsockname(listen_sock, (struct sockaddr*)&addr, &addr_len) == SOCKET_ERROR) {
+        closesocket(listen_sock);
+        return {-1, -1};
+    }
+
+    // 开始监听
+    if (listen(listen_sock, 1) == SOCKET_ERROR) {
+        closesocket(listen_sock);
+        return {-1, -1};
+    }
+
+    // 创建客户端 socket
+    SOCKET client_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (client_sock == INVALID_SOCKET) {
+        closesocket(listen_sock);
+        return {-1, -1};
+    }
+
+    // 连接
+    if (connect(client_sock, (struct sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
+        closesocket(listen_sock);
+        closesocket(client_sock);
+        return {-1, -1};
+    }
+
+    // 接受连接
+    SOCKET server_sock = accept(listen_sock, NULL, NULL);
+    closesocket(listen_sock);
+
+    if (server_sock == INVALID_SOCKET) {
+        closesocket(client_sock);
+        return {-1, -1};
+    }
+
+    // 设置非阻塞
+    u_long mode = 1;
+    ioctlsocket(client_sock, FIONBIO, &mode);
+    ioctlsocket(server_sock, FIONBIO, &mode);
+
+    return {static_cast<int>(client_sock), static_cast<int>(server_sock)};
+#else
     int fds[2] = {-1, -1};
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) != 0) {
         return {-1, -1};
@@ -49,6 +113,7 @@ std::array<int, 2> create_socket_pair() {
     }
 
     return {fds[0], fds[1]};
+#endif
 }
 
 //==============================================================================
@@ -89,8 +154,8 @@ TEST(EventPollTest, AddReadEvent) {
     bool result = poll->add_event(fd0, static_cast<int>(IOEvent::READ), callback);
     EXPECT_TRUE(result) << "Failed to add read event";
 
-    close(fd0);
-    close(fd1);
+    CLOSE_SOCKET(fd0);
+    CLOSE_SOCKET(fd1);
 }
 
 TEST(EventPollTest, AddWriteEvent) {
@@ -110,8 +175,8 @@ TEST(EventPollTest, AddWriteEvent) {
     bool result = poll->add_event(fd1, static_cast<int>(IOEvent::WRITE), callback);
     EXPECT_TRUE(result) << "Failed to add write event";
 
-    close(fd0);
-    close(fd1);
+    CLOSE_SOCKET(fd0);
+    CLOSE_SOCKET(fd1);
 }
 
 TEST(EventPollTest, AddMultipleEvents) {
@@ -136,8 +201,8 @@ TEST(EventPollTest, AddMultipleEvents) {
     EXPECT_TRUE(poll->add_event(fd0, static_cast<int>(IOEvent::READ), read_callback));
     EXPECT_TRUE(poll->add_event(fd1, static_cast<int>(IOEvent::WRITE), write_callback));
 
-    close(fd0);
-    close(fd1);
+    CLOSE_SOCKET(fd0);
+    CLOSE_SOCKET(fd1);
 }
 
 TEST(EventPollTest, AddReadWriteEvent) {
@@ -162,8 +227,8 @@ TEST(EventPollTest, AddReadWriteEvent) {
 
     EXPECT_TRUE(result) << "Failed to add read/write event";
 
-    close(fd0);
-    close(fd1);
+    CLOSE_SOCKET(fd0);
+    CLOSE_SOCKET(fd1);
 }
 
 //==============================================================================
@@ -183,8 +248,8 @@ TEST(EventPollTest, RemoveEvent) {
     EXPECT_TRUE(poll->add_event(fd0, static_cast<int>(IOEvent::READ), callback));
     EXPECT_TRUE(poll->remove_event(fd0));
 
-    close(fd0);
-    close(fd1);
+    CLOSE_SOCKET(fd0);
+    CLOSE_SOCKET(fd1);
 }
 
 TEST(EventPollTest, RemoveNonExistentEvent) {
@@ -209,8 +274,8 @@ TEST(EventPollTest, RemoveEventTwice) {
     EXPECT_TRUE(poll->remove_event(fd0));
     EXPECT_FALSE(poll->remove_event(fd0));  // 第二次应当返回 false（已不存在）
 
-    close(fd0);
-    close(fd1);
+    CLOSE_SOCKET(fd0);
+    CLOSE_SOCKET(fd1);
 }
 
 //==============================================================================
@@ -233,8 +298,8 @@ TEST(EventPollTest, PollWithTimeout) {
     int events = poll->poll(100);
     EXPECT_EQ(events, 0);
 
-    close(fd0);
-    close(fd1);
+    CLOSE_SOCKET(fd0);
+    CLOSE_SOCKET(fd1);
 }
 
 TEST(EventPollTest, PollWithoutEvents) {
@@ -274,8 +339,8 @@ TEST(EventPollTest, CallbackInvoked) {
     // 注：因为 fd 0 可能没有数据可读，回调可能不会被调用
     // 这取决于具体的平台和实现
 
-    close(fd0);
-    close(fd1);
+    CLOSE_SOCKET(fd0);
+    CLOSE_SOCKET(fd1);
 }
 
 TEST(EventPollTest, CallbackWithUserData) {
@@ -301,8 +366,8 @@ TEST(EventPollTest, CallbackWithUserData) {
         EXPECT_EQ(received_data, &test_value);
     }
 
-    close(fd0);
-    close(fd1);
+    CLOSE_SOCKET(fd0);
+    CLOSE_SOCKET(fd1);
 }
 
 //==============================================================================
@@ -330,8 +395,8 @@ TEST(EventPollTest, SocketWriteEvent) {
     EXPECT_GT(events, 0);
     EXPECT_GT(write_ready, 0);
 
-    close(client_fd);
-    close(server_fd);
+    CLOSE_SOCKET(client_fd);
+    CLOSE_SOCKET(server_fd);
 }
 
 //==============================================================================
@@ -357,8 +422,8 @@ TEST(EventPollTest, ModifyEvent) {
     // 移除
     EXPECT_TRUE(poll->remove_event(fd0));
 
-    close(fd0);
-    close(fd1);
+    CLOSE_SOCKET(fd0);
+    CLOSE_SOCKET(fd1);
 }
 
 //==============================================================================
@@ -391,8 +456,8 @@ TEST(EventPollTest, ZeroTimeout) {
     int events = poll->poll(0);
     EXPECT_GE(events, 0);
 
-    close(fd0);
-    close(fd1);
+    CLOSE_SOCKET(fd0);
+    CLOSE_SOCKET(fd1);
 }
 
 TEST(EventPollTest, LargeFileDescriptor) {
@@ -409,17 +474,25 @@ TEST(EventPollTest, LargeFileDescriptor) {
     int fd_dup = dup2(fd0, TARGET_FD);
     ASSERT_EQ(fd_dup, TARGET_FD);
 
+#ifdef _WIN32
+    // Windows: 重新创建 socket
+    CLOSE_SOCKET(fd0);
+    auto [new_fd0, new_fd1] = create_socket_pair();
+    fd0 = new_fd0;
+    CLOSE_SOCKET(new_fd1);
+#else
     int flags = fcntl(fd_dup, F_GETFL, 0);
     fcntl(fd_dup, F_SETFL, flags | O_NONBLOCK);
 
-    close(fd0);
+    CLOSE_SOCKET(fd0);
     fd0 = fd_dup;
+#endif
 
     EXPECT_TRUE(poll->add_event(TARGET_FD, static_cast<int>(IOEvent::READ), callback));
     EXPECT_TRUE(poll->remove_event(TARGET_FD));
 
-    close(fd0);
-    close(fd1);
+    CLOSE_SOCKET(fd0);
+    CLOSE_SOCKET(fd1);
 }
 
 //==============================================================================
@@ -447,8 +520,8 @@ TEST(EventPollTest, PlatformKqueue) {
     ASSERT_GE(fd0, 0);
     ASSERT_GE(fd1, 0);
     EXPECT_TRUE(poll->add_event(fd0, static_cast<int>(IOEvent::READ), callback));
-    close(fd0);
-    close(fd1);
+    CLOSE_SOCKET(fd0);
+    CLOSE_SOCKET(fd1);
 }
 #else
 TEST(EventPollTest, PlatformPoll) {
@@ -480,7 +553,7 @@ TEST(EventPollTest, MultipleFileDescriptors) {
         ASSERT_GE(fd0, 0);
         ASSERT_GE(fd1, 0);
         fds.push_back(fd0);
-        close(fd1);
+        CLOSE_SOCKET(fd1);
     }
 
     for (int fd : fds) {
@@ -489,7 +562,7 @@ TEST(EventPollTest, MultipleFileDescriptors) {
 
     for (int fd : fds) {
         EXPECT_TRUE(poll->remove_event(fd));
-        close(fd);
+        CLOSE_SOCKET(fd);
     }
 }
 
