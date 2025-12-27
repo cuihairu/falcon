@@ -42,7 +42,11 @@ std::shared_ptr<PooledSocket> SocketPool::create_connection(const SocketKey& key
 
     int ret = getaddrinfo(key.host.c_str(), std::to_string(key.port).c_str(), &hints, &result);
     if (ret != 0) {
+#ifdef _WIN32
+        FALCON_LOG_ERROR("DNS 解析失败: " << key.host << ": error=" << ret);
+#else
         FALCON_LOG_ERROR("DNS 解析失败: " << key.host << ": " << gai_strerror(ret));
+#endif
         return nullptr;
     }
 
@@ -55,12 +59,21 @@ std::shared_ptr<PooledSocket> SocketPool::create_connection(const SocketKey& key
         }
 
         // 设置为非阻塞模式
+#ifdef _WIN32
+        u_long mode = 1;
+        if (ioctlsocket(socket_fd, FIONBIO, &mode) != 0) {
+            closesocket(socket_fd);
+            socket_fd = -1;
+            continue;
+        }
+#else
         int flags = fcntl(socket_fd, F_GETFL, 0);
         if (flags < 0 || fcntl(socket_fd, F_SETFL, flags | O_NONBLOCK) < 0) {
             ::close(socket_fd);
             socket_fd = -1;
             continue;
         }
+#endif
 
         // 尝试连接
         if (connect(socket_fd, rp->ai_addr, rp->ai_addrlen) == 0) {
@@ -68,12 +81,20 @@ std::shared_ptr<PooledSocket> SocketPool::create_connection(const SocketKey& key
         }
 
         // 对于非阻塞 socket，连接进行中返回 EINPROGRESS
+#ifdef _WIN32
+        if (WSAGetLastError() == WSAEWOULDBLOCK) {
+#else
         if (errno == EINPROGRESS) {
+#endif
             break; // 连接进行中
         }
 
         // 连接失败，关闭 socket 并尝试下一个地址
+#ifdef _WIN32
+        closesocket(socket_fd);
+#else
         ::close(socket_fd);
+#endif
         socket_fd = -1;
     }
 
