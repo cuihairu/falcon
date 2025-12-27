@@ -21,10 +21,6 @@
 // 平台相关头文件
 #ifdef _WIN32
     #include <winsock2.h>
-    // Windows 上使用 WSAPOLLFD 替代 pollfd
-    #ifndef pollfd
-    #define pollfd WSAPOLLFD
-    #endif
     // Windows 上使用 WSAPoll 替代 poll
     #ifndef poll
     #define poll WSAPoll
@@ -317,7 +313,11 @@ private:
     std::map<int, EventEntry> events_;
 
     // pollfd 数组（动态分配）
+#ifdef _WIN32
+    std::vector<WSAPOLLFD> poll_fds_;
+#else
     std::vector<struct pollfd> poll_fds_;
+#endif
 
     bool set_error(const std::string& msg);
     void rebuild_poll_fds();
