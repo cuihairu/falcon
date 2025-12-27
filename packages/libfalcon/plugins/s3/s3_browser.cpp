@@ -43,7 +43,7 @@ S3Url S3UrlParser::parse(const std::string& url) {
 
     if (url.find("s3://") == 0) {
         // s3://bucket/key
-        size_t bucket_start = 5; // skip "s3://"
+        size_t bucket_start = 5; // skip "s3://" (s3 是 2 字符 + :// 是 3 字符 = 5)
         size_t bucket_end = url.find('/', bucket_start);
 
         if (bucket_end == std::string::npos) {

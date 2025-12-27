@@ -33,7 +33,7 @@ OSSUrl OSSUrlParser::parse(const std::string& url) {
 
     if (url.find("oss://") == 0) {
         // oss://bucket/key 或 oss://bucket.endpoint/key
-        size_t bucket_start = 5; // skip "oss://"
+        size_t bucket_start = 6; // skip "oss://"
         size_t bucket_end = url.find('/', bucket_start);
 
         if (bucket_end == std::string::npos) {

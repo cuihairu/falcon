@@ -34,7 +34,7 @@ UpyunUrl UpyunUrlParser::parse(const std::string& url) {
 
     if (url.find("upyun://") == 0) {
         // upyun://bucket/key
-        size_t bucket_start = 7; // skip "upyun://"
+        size_t bucket_start = 8; // skip "upyun://"
         size_t bucket_end = url.find('/', bucket_start);
 
         if (bucket_end == std::string::npos) {

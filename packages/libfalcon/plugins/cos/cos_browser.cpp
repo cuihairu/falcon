@@ -34,7 +34,7 @@ COSUrl COSUrlParser::parse(const std::string& url) {
 
     if (url.find("cos://") == 0) {
         // cos://bucket/key 或 cos://bucket-region/key
-        size_t bucket_start = 5; // skip "cos://"
+        size_t bucket_start = 6; // skip "cos://"
         size_t bucket_end = url.find('/', bucket_start);
 
         if (bucket_end == std::string::npos) {
