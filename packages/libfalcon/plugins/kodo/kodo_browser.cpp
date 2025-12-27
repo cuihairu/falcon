@@ -6,6 +6,7 @@
  */
 
 #include <falcon/kodo_browser.hpp>
+#include <falcon/cloud_url_protocols.hpp>
 #include <falcon/logger.hpp>
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
@@ -29,20 +30,29 @@ namespace falcon {
 
 // KodoUrlParser 实现
 KodoUrl KodoUrlParser::parse(const std::string& url) {
+    using namespace cloud;
+
     KodoUrl kodo_url;
 
-    if (url.find("kodo://") == 0 || url.find("qiniu://") == 0) {
-        // kodo://bucket/key
-        size_t protocol_end = url.find("://");
-        size_t bucket_start = protocol_end + 3;
-        size_t bucket_end = url.find('/', bucket_start);
+    // 检查支持的协议
+    std::string_view protocol;
+    if (starts_with_protocol(url, PROTOCOL_KODO)) {
+        protocol = PROTOCOL_KODO;
+    } else if (starts_with_protocol(url, PROTOCOL_QINIU)) {
+        protocol = PROTOCOL_QINIU;
+    } else {
+        return kodo_url;
+    }
 
-        if (bucket_end == std::string::npos) {
-            kodo_url.bucket = url.substr(bucket_start);
-        } else {
-            kodo_url.bucket = url.substr(bucket_start, bucket_end - bucket_start);
-            kodo_url.key = url.substr(bucket_end + 1);
-        }
+    // 使用协议常量自动计算偏移量，无需魔法数字！
+    size_t bucket_start = protocol.size();
+    size_t bucket_end = url.find('/', bucket_start);
+
+    if (bucket_end == std::string::npos) {
+        kodo_url.bucket = url.substr(bucket_start);
+    } else {
+        kodo_url.bucket = url.substr(bucket_start, bucket_end - bucket_start);
+        kodo_url.key = url.substr(bucket_end + 1);
     }
 
     return kodo_url;

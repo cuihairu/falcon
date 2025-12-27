@@ -6,6 +6,7 @@
  */
 
 #include <falcon/cos_browser.hpp>
+#include <falcon/cloud_url_protocols.hpp>
 #include <falcon/logger.hpp>
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
@@ -30,11 +31,13 @@ namespace falcon {
 
 // COSUrlParser 实现
 COSUrl COSUrlParser::parse(const std::string& url) {
+    using namespace cloud;
+
     COSUrl cos_url;
 
-    if (url.find("cos://") == 0) {
-        // cos://bucket/key 或 cos://bucket-region/key
-        size_t bucket_start = 6; // skip "cos://"
+    if (starts_with_protocol(url, PROTOCOL_COS)) {
+        // 使用协议常量自动计算偏移量，无需魔法数字！
+        size_t bucket_start = PROTOCOL_COS.size();  // 自动 = 6
         size_t bucket_end = url.find('/', bucket_start);
 
         if (bucket_end == std::string::npos) {

@@ -73,6 +73,8 @@ add_executable(falcon_core_tests
     unit/socket_pool_test.cpp
     unit/request_group_test.cpp
     unit/file_hash_test.cpp
+    # 云存储协议测试
+    unit/cloud_protocols_test.cpp
 )
 
 if(FALCON_ENABLE_FTP)

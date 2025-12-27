@@ -6,6 +6,7 @@
  */
 
 #include <falcon/s3_browser.hpp>
+#include <falcon/cloud_url_protocols.hpp>
 #include <falcon/logger.hpp>
 
 // Use spdlog for logging if available
@@ -39,11 +40,13 @@ namespace falcon {
 
 // S3UrlParser 实现
 S3Url S3UrlParser::parse(const std::string& url) {
+    using namespace cloud;
+
     S3Url s3_url;
 
-    if (url.find("s3://") == 0) {
-        // s3://bucket/key
-        size_t bucket_start = 5; // skip "s3://" (s3 是 2 字符 + :// 是 3 字符 = 5)
+    if (starts_with_protocol(url, PROTOCOL_S3)) {
+        // 使用协议常量自动计算偏移量，无需魔法数字！
+        size_t bucket_start = PROTOCOL_S3.size();  // 自动 = 5
         size_t bucket_end = url.find('/', bucket_start);
 
         if (bucket_end == std::string::npos) {

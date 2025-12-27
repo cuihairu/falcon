@@ -6,6 +6,7 @@
  */
 
 #include <falcon/upyun_browser.hpp>
+#include <falcon/cloud_url_protocols.hpp>
 #include <falcon/logger.hpp>
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
@@ -30,11 +31,13 @@ namespace falcon {
 
 // UpyunUrlParser 实现
 UpyunUrl UpyunUrlParser::parse(const std::string& url) {
+    using namespace cloud;
+
     UpyunUrl upyun_url;
 
-    if (url.find("upyun://") == 0) {
-        // upyun://bucket/key
-        size_t bucket_start = 8; // skip "upyun://"
+    if (starts_with_protocol(url, PROTOCOL_UPYUN)) {
+        // 使用协议常量自动计算偏移量，无需魔法数字！
+        size_t bucket_start = PROTOCOL_UPYUN.size();  // 自动 = 8
         size_t bucket_end = url.find('/', bucket_start);
 
         if (bucket_end == std::string::npos) {

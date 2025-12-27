@@ -6,6 +6,7 @@
  */
 
 #include <falcon/oss_browser.hpp>
+#include <falcon/cloud_url_protocols.hpp>
 #include <falcon/logger.hpp>
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
@@ -29,11 +30,13 @@ namespace falcon {
 
 // OSSUrlParser 实现
 OSSUrl OSSUrlParser::parse(const std::string& url) {
+    using namespace cloud;
+
     OSSUrl oss_url;
 
-    if (url.find("oss://") == 0) {
-        // oss://bucket/key 或 oss://bucket.endpoint/key
-        size_t bucket_start = 6; // skip "oss://"
+    if (starts_with_protocol(url, PROTOCOL_OSS)) {
+        // 使用协议常量自动计算偏移量，无需魔法数字！
+        size_t bucket_start = PROTOCOL_OSS.size();  // 自动 = 6
         size_t bucket_end = url.find('/', bucket_start);
 
         if (bucket_end == std::string::npos) {
