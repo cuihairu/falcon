@@ -8,11 +8,17 @@
 #include <falcon/net/event_poll.hpp>
 #include <falcon/logger.hpp>
 
-#include <poll.h>
-#include <unistd.h>
+#ifdef _WIN32
+    #include <winsock2.h>
+    #include <windows.h>
+#else
+    #include <poll.h>
+    #include <unistd.h>
+    #include <fcntl.h>  // for fcntl, F_GETFL, F_SETFL, O_NONBLOCK
+#endif
+
 #include <string.h>
 #include <errno.h>
-#include <fcntl.h>  // for fcntl, F_GETFL, F_SETFL, O_NONBLOCK
 
 namespace falcon::net {
 
@@ -34,11 +40,19 @@ bool PollEventPoll::add_event(int fd, int events,
         return set_error("超过最大文件描述符数量");
     }
 
-    // 设置为非阻塞模式
+#ifdef _WIN32
+    // Windows: 设置为非阻塞模式 (使用 ioctlsocket)
+    u_long mode = 1;
+    if (ioctlsocket(static_cast<SOCKET>(fd), FIONBIO, &mode) != 0) {
+        return set_error("设置非阻塞模式失败");
+    }
+#else
+    // Unix/Linux/macOS: 使用 fcntl
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
         return set_error("设置非阻塞模式失败: " + std::string(strerror(errno)));
     }
+#endif
 
     // 保存回调信息
     events_[fd] = EventEntry(fd, events, std::move(callback), user_data);
@@ -86,6 +100,17 @@ int PollEventPoll::poll(int timeout_ms) {
         return 0;  // 没有待监听的文件描述符
     }
 
+#ifdef _WIN32
+    int nfds = WSAPoll(poll_fds_.data(), static_cast<ULONG>(poll_fds_.size()), timeout_ms);
+    if (nfds == SOCKET_ERROR) {
+        int err = WSAGetLastError();
+        if (err == WSAEINTR) {
+            return 0;  // 被中断
+        }
+        set_error("WSAPoll() 失败: " + std::to_string(err));
+        return -1;
+    }
+#else
     int nfds = ::poll(poll_fds_.data(), poll_fds_.size(), timeout_ms);
     if (nfds < 0) {
         if (errno == EINTR) {
@@ -94,6 +119,7 @@ int PollEventPoll::poll(int timeout_ms) {
         set_error("poll() 失败: " + std::string(strerror(errno)));
         return -1;
     }
+#endif
 
     if (nfds == 0) {
         return 0;  // 超时

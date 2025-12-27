@@ -21,6 +21,30 @@
 // 平台相关头文件
 #ifdef _WIN32
     #include <winsock2.h>
+    // Windows 上使用 WSAPOLLFD 替代 pollfd
+    #ifndef pollfd
+    #define pollfd WSAPOLLFD
+    #endif
+    // Windows 上使用 WSAPoll 替代 poll
+    #ifndef poll
+    #define poll WSAPoll
+    #endif
+    // Windows poll 常量映射到 WSAPoll 常量
+    #ifndef POLLIN
+    #define POLLIN  POLLRDNORM
+    #endif
+    #ifndef POLLOUT
+    #define POLLOUT POLLWRNORM
+    #endif
+    #ifndef POLLERR
+    #define POLLERR  (0x0001)
+    #endif
+    #ifndef POLLHUP
+    #define POLLHUP  (0x0002)
+    #endif
+    #ifndef POLLNVAL
+    #define POLLNVAL (0x0004)
+    #endif
 #else
     #ifdef __linux__
         #include <sys/epoll.h>
