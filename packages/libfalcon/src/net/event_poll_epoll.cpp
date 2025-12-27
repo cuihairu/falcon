@@ -13,6 +13,7 @@
 
 #include <sys/epoll.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <string.h>
 #include <errno.h>
 
@@ -138,7 +139,7 @@ int EPollEventPoll::poll(int timeout_ms) {
     }
 
     // 分配事件数组
-    std::vector<struct epoll_event> epoll_events(max_events_);
+    std::vector<struct epoll_event> epoll_events(static_cast<std::size_t>(max_events_));
 
     int nfds = epoll_wait(epoll_fd_, epoll_events.data(),
                          max_events_, timeout_ms);
@@ -152,7 +153,7 @@ int EPollEventPoll::poll(int timeout_ms) {
 
     // 处理就绪事件
     for (int i = 0; i < nfds; ++i) {
-        const auto& ev = epoll_events[i];
+        const auto& ev = epoll_events[static_cast<std::size_t>(i)];
         int fd = ev.data.fd;
 
         auto it = events_.find(fd);
