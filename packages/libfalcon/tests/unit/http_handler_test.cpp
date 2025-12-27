@@ -18,6 +18,7 @@
 #include <fstream>
 #include <filesystem>
 #include <cstdlib>
+#include <algorithm>
 
 using namespace falcon;
 using namespace falcon::plugins;
