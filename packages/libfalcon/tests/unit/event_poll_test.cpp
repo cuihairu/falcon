@@ -12,10 +12,19 @@
 #include <array>
 #include <vector>
 #include <cstring>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <windows.h>
+#else
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <fcntl.h>
+#endif
 
 using namespace falcon;
 using namespace falcon::net;

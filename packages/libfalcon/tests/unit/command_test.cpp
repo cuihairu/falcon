@@ -114,7 +114,7 @@ TEST(CommandTest, ErrorCommandReturnsTrueWithError) {
     EngineConfigV2 config;
     DownloadEngineV2 engine(config);
     EXPECT_TRUE(cmd.execute(&engine));
-    EXPECT_EQ(cmd.status(), CommandStatus::ERROR);
+    EXPECT_EQ(cmd.status(), CommandStatus::FAILED);
 }
 
 //==============================================================================
