@@ -12,6 +12,7 @@
 
 #include <falcon/types.hpp>
 #include <falcon/download_options.hpp>
+#include <atomic>
 #include <memory>
 #include <string>
 

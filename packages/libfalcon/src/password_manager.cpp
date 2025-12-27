@@ -200,7 +200,7 @@ public:
         termios oldt, newt;
         tcgetattr(STDIN_FILENO, &oldt);
         newt = oldt;
-        newt.c_lflag &= ~ECHO;
+        newt.c_lflag &= static_cast<tcflag_t>(~ECHO);
         tcsetattr(STDIN_FILENO, TCSANOW, &newt);
 
         std::string password;
@@ -264,12 +264,12 @@ public:
 
         std::random_device rd;
         std::mt19937 gen(rd());
-        std::uniform_int_distribution<> dis(0, chars.length() - 1);
+        std::uniform_int_distribution<std::size_t> dis(0, chars.length() - 1);
 
         std::string password;
-        password.reserve(length);
+        password.reserve(static_cast<std::size_t>(length));
         for (int i = 0; i < length; ++i) {
-            password += chars[dis(gen)];
+            password += chars[static_cast<std::size_t>(dis(gen))];
         }
 
         return password;

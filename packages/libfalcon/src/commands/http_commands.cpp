@@ -267,7 +267,7 @@ HttpResponseCommand::HttpResponseCommand(
 
 HttpResponseCommand::~HttpResponseCommand() = default;
 
-bool HttpResponseCommand::execute(DownloadEngineV2* engine) {
+bool HttpResponseCommand::execute(DownloadEngineV2* /*engine*/) {
     // 接收响应头
     if (!headers_received_) {
         if (!receive_response_headers()) {
@@ -419,7 +419,7 @@ HttpDownloadCommand::HttpDownloadCommand(
 
 HttpDownloadCommand::~HttpDownloadCommand() = default;
 
-bool HttpDownloadCommand::execute(DownloadEngineV2* engine) {
+bool HttpDownloadCommand::execute(DownloadEngineV2* /*engine*/) {
     if (download_complete_) {
         return handle_result(ExecutionResult::OK);
     }
@@ -455,17 +455,17 @@ bool HttpDownloadCommand::receive_data() {
         return true;
     }
 
-    downloaded_bytes_ += n;
-    bytes_since_last_update_ += n;
+    downloaded_bytes_ += static_cast<Bytes>(n);
+    bytes_since_last_update_ += static_cast<Bytes>(n);
 
     if (chunked_encoding_) {
         return handle_chunked_encoding();
     } else {
-        return write_to_segment(buffer, n);
+        return write_to_segment(buffer, static_cast<std::size_t>(n));
     }
 }
 
-bool HttpDownloadCommand::write_to_segment(const char* data, std::size_t size) {
+bool HttpDownloadCommand::write_to_segment(const char* /*data*/, std::size_t size) {
     // TODO: 写入到分段下载器
     FALCON_LOG_DEBUG("写入 " << size << " 字节到分段 " << segment_id_);
     return true;
@@ -483,7 +483,7 @@ void HttpDownloadCommand::update_progress() {
 
     if (elapsed >= 1000) {  // 每秒更新一次
         download_speed_ = static_cast<Speed>(
-            bytes_since_last_update_ * 1000 / elapsed);
+            bytes_since_last_update_ * 1000 / static_cast<std::size_t>(elapsed));
         bytes_since_last_update_ = 0;
         last_update_ = now;
 
@@ -516,7 +516,7 @@ HttpRetryCommand::HttpRetryCommand(
 {
 }
 
-bool HttpRetryCommand::execute(DownloadEngineV2* engine) {
+bool HttpRetryCommand::execute(DownloadEngineV2* /*engine*/) {
     if (!should_retry()) {
         FALCON_LOG_ERROR("达到最大重试次数: " << max_retries_);
         return handle_result(ExecutionResult::ERROR_OCCURRED);
