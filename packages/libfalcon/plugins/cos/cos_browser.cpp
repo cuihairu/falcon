@@ -348,15 +348,35 @@ public:
     }
 
     std::string sha256_hex(const std::string& data) {
-        unsigned char hash[SHA256_DIGEST_LENGTH];
-        SHA256_CTX sha256;
-        SHA256_Init(&sha256);
-        SHA256_Update(&sha256, data.c_str(), data.length());
-        SHA256_Final(hash, &sha256);
+        // 使用 OpenSSL 3.0 EVP API
+        EVP_MD_CTX* mdctx = EVP_MD_CTX_new();
+        if (!mdctx) {
+            return "";
+        }
+
+        const EVP_MD* md = EVP_sha256();
+        if (EVP_DigestInit_ex(mdctx, md, nullptr) != 1) {
+            EVP_MD_CTX_free(mdctx);
+            return "";
+        }
+
+        if (EVP_DigestUpdate(mdctx, data.c_str(), data.length()) != 1) {
+            EVP_MD_CTX_free(mdctx);
+            return "";
+        }
+
+        unsigned char hash[EVP_MAX_MD_SIZE];
+        unsigned int hash_len = 0;
+        if (EVP_DigestFinal_ex(mdctx, hash, &hash_len) != 1) {
+            EVP_MD_CTX_free(mdctx);
+            return "";
+        }
+
+        EVP_MD_CTX_free(mdctx);
 
         std::ostringstream ss;
         ss << std::hex;
-        for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
+        for (unsigned int i = 0; i < hash_len; i++) {
             ss << std::setw(2) << std::setfill('0') << static_cast<int>(hash[i]);
         }
         return ss.str();

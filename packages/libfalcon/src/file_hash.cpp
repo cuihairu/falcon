@@ -15,9 +15,8 @@
 #include <functional>
 #include <algorithm>
 
-// OpenSSL 提供哈希算法支持
-#include <openssl/md5.h>
-#include <openssl/sha.h>
+// OpenSSL 3.0 使用 EVP API 替代弃用的低级函数
+#include <openssl/evp.h>
 
 namespace falcon {
 
@@ -59,31 +58,55 @@ std::string FileHasher::calculate(const std::string& file_path,
 
 std::string FileHasher::calculate(const char* data, std::size_t size,
                                    HashAlgorithm algorithm) {
-    std::vector<unsigned char> hash_result;
-
+    // 选择哈希算法
+    const char* md_type = nullptr;
     switch (algorithm) {
-        case HashAlgorithm::MD5:
-            hash_result.resize(MD5_DIGEST_LENGTH);
-            MD5(reinterpret_cast<const unsigned char*>(data), size, hash_result.data());
-            break;
-        case HashAlgorithm::SHA1:
-            hash_result.resize(SHA_DIGEST_LENGTH);
-            SHA1(reinterpret_cast<const unsigned char*>(data), size, hash_result.data());
-            break;
-        case HashAlgorithm::SHA256:
-            hash_result.resize(SHA256_DIGEST_LENGTH);
-            SHA256(reinterpret_cast<const unsigned char*>(data), size, hash_result.data());
-            break;
-        case HashAlgorithm::SHA512:
-            hash_result.resize(SHA512_DIGEST_LENGTH);
-            SHA512(reinterpret_cast<const unsigned char*>(data), size, hash_result.data());
-            break;
+        case HashAlgorithm::MD5:    md_type = "MD5"; break;
+        case HashAlgorithm::SHA1:   md_type = "SHA1"; break;
+        case HashAlgorithm::SHA256: md_type = "SHA256"; break;
+        case HashAlgorithm::SHA512: md_type = "SHA512"; break;
     }
+
+    // 使用 OpenSSL 3.0 EVP API
+    EVP_MD_CTX* mdctx = EVP_MD_CTX_new();
+    if (!mdctx) {
+        FALCON_LOG_ERROR("创建 EVP_MD_CTX 失败");
+        return "";
+    }
+
+    const EVP_MD* md = EVP_get_digestbyname(md_type);
+    if (!md) {
+        FALCON_LOG_ERROR("获取哈希算法失败: " << md_type);
+        EVP_MD_CTX_free(mdctx);
+        return "";
+    }
+
+    if (EVP_DigestInit_ex(mdctx, md, nullptr) != 1) {
+        FALCON_LOG_ERROR("初始化哈希失败");
+        EVP_MD_CTX_free(mdctx);
+        return "";
+    }
+
+    if (EVP_DigestUpdate(mdctx, data, size) != 1) {
+        FALCON_LOG_ERROR("更新哈希失败");
+        EVP_MD_CTX_free(mdctx);
+        return "";
+    }
+
+    unsigned char hash_value[EVP_MAX_MD_SIZE];
+    unsigned int hash_len = 0;
+    if (EVP_DigestFinal_ex(mdctx, hash_value, &hash_len) != 1) {
+        FALCON_LOG_ERROR("完成哈希失败");
+        EVP_MD_CTX_free(mdctx);
+        return "";
+    }
+
+    EVP_MD_CTX_free(mdctx);
 
     // 转换为十六进制字符串
     std::ostringstream oss;
-    for (unsigned char byte : hash_result) {
-        oss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(byte);
+    for (unsigned int i = 0; i < hash_len; i++) {
+        oss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(hash_value[i]);
     }
 
     return oss.str();

@@ -101,7 +101,8 @@ int PollEventPoll::poll(int timeout_ms) {
     }
 
 #ifdef _WIN32
-    int nfds = WSAPoll(poll_fds_.data(), static_cast<ULONG>(poll_fds_.size()), timeout_ms);
+    // Windows 下使用 WSAPoll（通过 poll 宏定义）
+    int nfds = ::poll(poll_fds_.data(), static_cast<ULONG>(poll_fds_.size()), timeout_ms);
     if (nfds == SOCKET_ERROR) {
         int err = WSAGetLastError();
         if (err == WSAEINTR) {

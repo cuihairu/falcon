@@ -87,43 +87,56 @@ public:
         // 又拍云签名算法
         std::string sign_str = method + "&" + uri + "&" + date;
 
-        // MD5加密密码
-        unsigned char md5[MD5_DIGEST_LENGTH];
-        MD5((unsigned char*)password.c_str(), password.length(), md5);
+        // 使用 OpenSSL 3.0 EVP API 计算 MD5
+        EVP_MD_CTX* mdctx = EVP_MD_CTX_new();
+        if (!mdctx) {
+            return "";
+        }
+
+        const EVP_MD* md = EVP_md5();
+        if (EVP_DigestInit_ex(mdctx, md, nullptr) != 1) {
+            EVP_MD_CTX_free(mdctx);
+            return "";
+        }
+
+        if (EVP_DigestUpdate(mdctx, password.c_str(), password.length()) != 1) {
+            EVP_MD_CTX_free(mdctx);
+            return "";
+        }
+
+        unsigned char md5_value[EVP_MAX_MD_SIZE];
+        unsigned int md5_len = 0;
+        if (EVP_DigestFinal_ex(mdctx, md5_value, &md5_len) != 1) {
+            EVP_MD_CTX_free(mdctx);
+            return "";
+        }
+
+        EVP_MD_CTX_free(mdctx);
 
         // 转换为十六进制字符串
         char md5_str[33];
-        for (int i = 0; i < 16; i++) {
-            sprintf(md5_str + i * 2, "%02x", md5[i]);
+        for (unsigned int i = 0; i < md5_len && i < 16; i++) {
+            sprintf(md5_str + i * 2, "%02x", md5_value[i]);
         }
         md5_str[32] = '\0';
 
         std::string password_md5 = md5_str;
 
-        // HMAC-MD5签名（兼容 OpenSSL 3.0）
-        unsigned char hmac[MD5_DIGEST_LENGTH];
+        // 使用 OpenSSL 3.0 HMAC API 计算 HMAC-MD5
+        unsigned char hmac[EVP_MAX_MD_SIZE];
         unsigned int hmac_len = 0;
+        unsigned char* result = HMAC(EVP_md5(),
+            password_md5.c_str(), password_md5.length(),
+            (unsigned char*)sign_str.c_str(), sign_str.length(),
+            hmac, &hmac_len);
 
-#if OPENSSL_VERSION_NUMBER >= 0x30000000L
-        // OpenSSL 3.0+
-        HMAC_CTX* hmac_ctx = HMAC_CTX_new();
-        HMAC_Init_ex(hmac_ctx, password_md5.c_str(), password_md5.length(), EVP_md5(), nullptr);
-        HMAC_Update(hmac_ctx, (unsigned char*)sign_str.c_str(), sign_str.length());
-        HMAC_Final(hmac_ctx, hmac, &hmac_len);
-        HMAC_CTX_free(hmac_ctx);
-#else
-        // OpenSSL 1.x
-        HMAC_CTX hmac_ctx;
-        HMAC_CTX_init(&hmac_ctx);
-        HMAC_Init(&hmac_ctx, password_md5.c_str(), password_md5.length(), EVP_md5());
-        HMAC_Update(&hmac_ctx, (unsigned char*)sign_str.c_str(), sign_str.length());
-        HMAC_Final(&hmac_ctx, hmac, &hmac_len);
-        HMAC_CTX_cleanup(&hmac_ctx);
-#endif
+        if (!result) {
+            return "";
+        }
 
         // Base64编码
-        std::string result = base64_encode(hmac, hmac_len);
-        return result;
+        std::string encoded = base64_encode(hmac, hmac_len);
+        return encoded;
     }
 
     std::string perform_upyun_request(

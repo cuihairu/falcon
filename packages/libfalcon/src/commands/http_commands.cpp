@@ -17,6 +17,12 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+// Windows 没有 ssize_t，使用 SSIZE_T 或 ptrdiff_t
+typedef SSIZE_T ssize_t;
+// Windows 没有 EINPROGRESS，使用 WSAEWOULDBLOCK
+#ifndef EINPROGRESS
+#define EINPROGRESS WSAEWOULDBLOCK
+#endif
 #else
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -138,8 +144,13 @@ bool HttpInitiateConnectionCommand::execute(DownloadEngineV2* engine) {
                 // 检查连接是否完成（使用 getsockopt SO_ERROR）
                 {
                     int error = 0;
+#ifdef _WIN32
+                    int len = sizeof(error);
+                    if (getsockopt(socket_fd_, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&error), &len) < 0) {
+#else
                     socklen_t len = sizeof(error);
                     if (getsockopt(socket_fd_, SOL_SOCKET, SO_ERROR, &error, &len) < 0) {
+#endif
                         return handle_result(ExecutionResult::ERROR_OCCURRED);
                     }
                     if (error != 0) {
@@ -212,12 +223,21 @@ bool HttpInitiateConnectionCommand::create_socket() {
     }
 
     // 设置非阻塞模式
+#ifdef _WIN32
+    u_long mode = 1;
+    if (ioctlsocket(socket_fd_, FIONBIO, &mode) != 0) {
+        closesocket(socket_fd_);
+        socket_fd_ = -1;
+        return false;
+    }
+#else
     int flags = fcntl(socket_fd_, F_GETFL, 0);
     if (flags < 0 || fcntl(socket_fd_, F_SETFL, flags | O_NONBLOCK) < 0) {
         ::close(socket_fd_);
         socket_fd_ = -1;
         return false;
     }
+#endif
 
     FALCON_LOG_DEBUG("创建 Socket: fd=" << socket_fd_);
     return true;
