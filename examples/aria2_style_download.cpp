@@ -124,7 +124,7 @@ int main(int argc, char* argv[]) {
             auto progress = group->get_progress();
             listener.on_update(progress);
 
-            if (group->is_completed() || group->status() == RequestGroupStatus::ERROR) {
+            if (group->is_completed() || group->status() == RequestGroupStatus::FAILED) {
                 break;
             }
         }

@@ -17,6 +17,10 @@
 #include <cstdlib>
 
 #ifdef _WIN32
+// Windows 头文件定义了 min/max 宏，会影响 std::min/std::max
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #else
 #include <termios.h>

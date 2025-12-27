@@ -109,7 +109,12 @@ public:
         // 使用 getsockopt 检查连接状态
         int error = 0;
         socklen_t len = sizeof(error);
+#ifdef _WIN32
+        // Windows 下 getsockopt 的第四个参数是 char*
+        return getsockopt(fd_, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&error), &len) == 0 && error == 0;
+#else
         return getsockopt(fd_, SOL_SOCKET, SO_ERROR, &error, &len) == 0 && error == 0;
+#endif
     }
 
     /**
@@ -132,7 +137,11 @@ public:
      */
     void close_fd() {
         if (fd_ >= 0) {
+#ifdef _WIN32
+            ::closesocket(fd_);
+#else
             ::close(fd_);
+#endif
             fd_ = -1;
         }
     }

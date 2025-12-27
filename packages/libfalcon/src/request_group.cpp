@@ -34,7 +34,7 @@ RequestGroup::RequestGroup(TaskId id,
     // 验证 URI 列表
     if (uris_.empty()) {
         set_error_message("URI 列表为空");
-        status_ = RequestGroupStatus::ERROR;
+        status_ = RequestGroupStatus::FAILED;
         return;
     }
 

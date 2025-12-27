@@ -35,7 +35,7 @@ enum class RequestGroupStatus {
     ACTIVE,      // 正在下载
     PAUSED,      // 已暂停
     COMPLETED,   // 已完成
-    ERROR,       // 错误
+    FAILED,      // 失败（原 ERROR，避免与 Windows 宏冲突）
     REMOVED      // 已移除
 };
 
@@ -48,7 +48,7 @@ inline const char* to_string(RequestGroupStatus status) {
         case RequestGroupStatus::ACTIVE:    return "ACTIVE";
         case RequestGroupStatus::PAUSED:    return "PAUSED";
         case RequestGroupStatus::COMPLETED: return "COMPLETED";
-        case RequestGroupStatus::ERROR:     return "ERROR";
+        case RequestGroupStatus::FAILED:    return "FAILED";
         case RequestGroupStatus::REMOVED:   return "REMOVED";
         default: return "UNKNOWN";
     }
