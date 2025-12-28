@@ -271,7 +271,7 @@ void DiscoveryPage::perform_search()
     }
 }
 
-void DiscoveryPage::search_magnet_links(const QString& keyword)
+void DiscoveryPage::search_magnet_links(const QString& /*keyword*/)
 {
     // TODO: 集成实际的磁力链接搜索API
     // 这里添加示例数据
@@ -301,7 +301,7 @@ void DiscoveryPage::search_magnet_links(const QString& keyword)
     display_results(results);
 }
 
-void DiscoveryPage::search_http_resources(const QString& keyword)
+void DiscoveryPage::search_http_resources(const QString& /*keyword*/)
 {
     // TODO: 集成实际的HTTP资源搜索
     QList<SearchResultItem> results;
@@ -319,7 +319,7 @@ void DiscoveryPage::search_http_resources(const QString& keyword)
     display_results(results);
 }
 
-void DiscoveryPage::search_cloud_resources(const QString& keyword)
+void DiscoveryPage::search_cloud_resources(const QString& /*keyword*/)
 {
     // TODO: 集成网盘资源搜索
     QList<SearchResultItem> results;
@@ -337,7 +337,7 @@ void DiscoveryPage::search_cloud_resources(const QString& keyword)
     display_results(results);
 }
 
-void DiscoveryPage::search_ftp_resources(const QString& keyword)
+void DiscoveryPage::search_ftp_resources(const QString& /*keyword*/)
 {
     // TODO: 集成FTP资源搜索
     QList<SearchResultItem> results;

@@ -56,6 +56,7 @@ signals:
     void downloadClicked();
     void cloudClicked();
     void discoveryClicked();
+    void settingsClicked();
 
 private:
     void setup_ui();
@@ -69,6 +70,7 @@ private:
     SideBarButton* download_button_;
     SideBarButton* cloud_button_;
     SideBarButton* discovery_button_;
+    SideBarButton* settings_button_;
 
     // 收起按钮
     QPushButton* toggle_button_;

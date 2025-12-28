@@ -503,7 +503,7 @@ void CloudPage::go_up()
     }
 
     QString new_path = current_path_;
-    int last_slash = new_path.lastIndexOf('/');
+    qsizetype last_slash = new_path.lastIndexOf('/');
     if (last_slash > 0) {
         new_path = new_path.left(last_slash);
     } else {

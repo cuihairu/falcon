@@ -89,6 +89,7 @@ SideBar::SideBar(QWidget* parent)
     , download_button_(nullptr)
     , cloud_button_(nullptr)
     , discovery_button_(nullptr)
+    , settings_button_(nullptr)
     , toggle_button_(nullptr)
     , width_animation_(new QPropertyAnimation(this, "maximumWidth"))
 {
@@ -185,6 +186,17 @@ void SideBar::create_buttons()
         discovery_button_->setActive(true);
         emit discoveryClicked();
     });
+
+    // Settings
+    settings_button_ = new SideBarButton("⚙  Settings", "Application Settings", this);
+    settings_button_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    layout_->addWidget(settings_button_);
+
+    connect(settings_button_, &SideBarButton::clicked, this, [this]() {
+        update_button_states();
+        settings_button_->setActive(true);
+        emit settingsClicked();
+    });
 }
 
 void SideBar::update_button_states()
@@ -192,6 +204,7 @@ void SideBar::update_button_states()
     download_button_->setActive(false);
     cloud_button_->setActive(false);
     discovery_button_->setActive(false);
+    settings_button_->setActive(false);
 }
 
 void SideBar::expand()
@@ -211,6 +224,7 @@ void SideBar::expand()
     download_button_->setText("⬇  Downloads");
     cloud_button_->setText("☁  Cloud");
     discovery_button_->setText("🔍  Discovery");
+    settings_button_->setText("⚙  Settings");
 }
 
 void SideBar::collapse()
@@ -230,6 +244,7 @@ void SideBar::collapse()
     download_button_->setText("⬇");
     cloud_button_->setText("☁");
     discovery_button_->setText("🔍");
+    settings_button_->setText("⚙");
 }
 
 void SideBar::toggle()

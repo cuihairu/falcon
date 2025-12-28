@@ -21,6 +21,10 @@ set(SOURCES
     src/pages/download_page.cpp
     src/pages/cloud_page.cpp
     src/pages/discovery_page.cpp
+    src/pages/settings_page.cpp
+    src/dialogs/add_download_dialog.cpp
+    src/utils/url_detector.cpp
+    src/utils/clipboard_monitor.cpp
 )
 
 # 头文件
@@ -31,6 +35,10 @@ set(HEADERS
     src/pages/download_page.hpp
     src/pages/cloud_page.hpp
     src/pages/discovery_page.hpp
+    src/pages/settings_page.hpp
+    src/dialogs/add_download_dialog.hpp
+    src/utils/url_detector.hpp
+    src/utils/clipboard_monitor.hpp
 )
 
 # UI 文件（如果使用 Qt Designer）
