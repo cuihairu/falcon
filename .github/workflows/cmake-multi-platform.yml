@@ -180,12 +180,15 @@ jobs:
         include:
           - os: ubuntu-latest
             qt-version: '6.6.3'
+            qt-arch: 'gcc_64'
             cmake-generator: 'Unix Makefiles'
           - os: macos-latest
             qt-version: '6.6.3'
+            qt-arch: 'clang_64'
             cmake-generator: 'Unix Makefiles'
           - os: windows-latest
             qt-version: '6.6.3'
+            qt-arch: 'mingw_64'
             cmake-generator: 'Visual Studio 17 2022'
 
     steps:
@@ -198,7 +201,7 @@ jobs:
           version: ${{ matrix.qt-version }}
           host: 'linux'
           target: 'desktop'
-          arch: 'gcc_64'
+          arch: ${{ matrix.qt-arch }}
           cache: true
 
       - name: Install Qt (Windows)
@@ -208,14 +211,14 @@ jobs:
           version: ${{ matrix.qt-version }}
           host: 'windows'
           target: 'desktop'
-          arch: 'mingw_64'
+          arch: ${{ matrix.qt-arch }}
           cache: true
 
       - name: Install dependencies (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libgl1-mesa-dev
+          sudo apt-get install -y build-essential libgl1-mesa-dev libcurl4-openssl-dev
 
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos-latest'
@@ -225,7 +228,7 @@ jobs:
       - name: Install dependencies (Windows)
         if: matrix.os == 'windows-latest'
         run: |
-          choco install cmake ninja
+          choco install cmake ninja curl
 
       - name: Configure CMake (Unix)
         if: runner.os != 'Windows'
