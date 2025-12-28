@@ -194,24 +194,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Qt (Ubuntu/macOS)
-        if: runner.os != 'Windows'
+      - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
           version: ${{ matrix.qt-version }}
-          host: 'linux'
-          target: 'desktop'
-          arch: ${{ matrix.qt-arch }}
-          cache: true
-
-      - name: Install Qt (Windows)
-        if: runner.os == 'Windows'
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: ${{ matrix.qt-version }}
-          host: 'windows'
-          target: 'desktop'
-          arch: ${{ matrix.qt-arch }}
           cache: true
 
       - name: Install dependencies (Ubuntu)
