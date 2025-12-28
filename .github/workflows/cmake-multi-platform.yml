@@ -179,13 +179,13 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         include:
           - os: ubuntu-latest
-            qt-version: '6.9.0'
+            qt-version: '6.6.3'
             cmake-generator: 'Unix Makefiles'
           - os: macos-latest
-            qt-version: '6.9.0'
+            qt-version: '6.6.3'
             cmake-generator: 'Unix Makefiles'
           - os: windows-latest
-            qt-version: '6.9.0'
+            qt-version: '6.6.3'
             cmake-generator: 'Visual Studio 17 2022'
 
     steps:
@@ -199,7 +199,6 @@ jobs:
           host: 'linux'
           target: 'desktop'
           arch: 'gcc_64'
-          modules: 'qtnetworkauth'
           cache: true
 
       - name: Install Qt (Windows)
@@ -210,7 +209,6 @@ jobs:
           host: 'windows'
           target: 'desktop'
           arch: 'mingw_64'
-          modules: 'qtnetworkauth'
           cache: true
 
       - name: Install dependencies (Ubuntu)
