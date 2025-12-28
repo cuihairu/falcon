@@ -11,11 +11,34 @@
 #include "internal/thread_pool.hpp"
 #include <algorithm>
 #include <fstream>
+#include <iomanip>
 #include <sstream>
 #include <thread>
 #include <unordered_set>
 
 namespace falcon {
+
+namespace {
+constexpr int kTaskManagerStateVersion = 1;
+constexpr const char* kTaskManagerStateMagic = "falcon_task_state";
+
+template <typename Int>
+bool read_int(std::istream& in, Int& out) {
+    long long value = 0;
+    if (!(in >> value)) {
+        return false;
+    }
+    out = static_cast<Int>(value);
+    return true;
+}
+
+TaskStatus sanitize_status_for_restore(TaskStatus status) {
+    if (status == TaskStatus::Downloading || status == TaskStatus::Preparing) {
+        return TaskStatus::Paused;
+    }
+    return status;
+}
+} // namespace
 
 /**
  * @brief 任务管理器实现类
@@ -364,28 +387,236 @@ public:
     }
 
     bool save_state(const std::string& file_path) {
-        std::ofstream file(file_path);
+        std::ofstream file(file_path, std::ios::binary | std::ios::trunc);
         if (!file.is_open()) {
             return false;
         }
 
+        file << kTaskManagerStateMagic << " " << kTaskManagerStateVersion << "\n";
+
         // 保存任务状态
         std::lock_guard<std::mutex> lock(tasks_mutex_);
         for (const auto& [id, task] : tasks_) {
-            // TODO: 实现任务状态序列化
-            file << id << " " << static_cast<int>(task->status()) << "\n";
+            const auto& options = task->options();
+
+            file << "task "
+                 << id << " "
+                 << static_cast<int>(task->status()) << " "
+                 << task->downloaded_bytes() << " "
+                 << task->total_bytes() << " "
+                 << std::quoted(task->url()) << " "
+                 << std::quoted(task->output_path()) << " "
+                 << std::quoted(task->error_message()) << " "
+                 << options.max_connections << " "
+                 << options.timeout_seconds << " "
+                 << options.max_retries << " "
+                 << options.retry_delay_seconds << " "
+                 << std::quoted(options.output_directory) << " "
+                 << std::quoted(options.output_filename) << " "
+                 << options.speed_limit << " "
+                 << (options.resume_enabled ? 1 : 0) << " "
+                 << std::quoted(options.user_agent) << " "
+                 << std::quoted(options.proxy) << " "
+                 << std::quoted(options.proxy_type) << " "
+                 << (options.verify_ssl ? 1 : 0) << " "
+                 << std::quoted(options.referer) << " "
+                 << std::quoted(options.cookie_file) << " "
+                 << std::quoted(options.cookie_jar) << " "
+                 << options.min_segment_size << " "
+                 << (options.adaptive_segment_sizing ? 1 : 0) << " "
+                 << options.progress_interval_ms << " "
+                 << (options.create_directory ? 1 : 0) << " "
+                 << (options.overwrite_existing ? 1 : 0) << " "
+                 << options.headers.size();
+
+            for (const auto& [k, v] : options.headers) {
+                file << " " << std::quoted(k) << " " << std::quoted(v);
+            }
+            file << "\n";
         }
 
         return true;
     }
 
     bool load_state(const std::string& file_path) {
-        std::ifstream file(file_path);
+        std::ifstream file(file_path, std::ios::binary);
         if (!file.is_open()) {
             return false;
         }
 
-        // TODO: 实现任务状态反序列化
+        std::string magic;
+        if (!(file >> magic)) {
+            return false;
+        }
+
+        if (magic != kTaskManagerStateMagic) {
+            // Legacy format: "<id> <status>"
+            file.clear();
+            file.seekg(0);
+            std::string line;
+            while (std::getline(file, line)) {
+                if (line.empty()) continue;
+                std::istringstream in(line);
+                TaskId id = INVALID_TASK_ID;
+                int status_int = 0;
+                if (!(in >> id >> status_int)) {
+                    continue;
+                }
+                auto task = get_task(id);
+                if (!task) {
+                    continue;
+                }
+                if (status_int < 0 || status_int > 6) {
+                    continue;
+                }
+                task->set_status(static_cast<TaskStatus>(status_int));
+            }
+            return true;
+        }
+
+        int version = 0;
+        if (!(file >> version) || version != kTaskManagerStateVersion) {
+            return false;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(tasks_mutex_);
+            tasks_.clear();
+        }
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex_);
+            task_queue_ = std::priority_queue<TaskQueueItem>{};
+        }
+        {
+            std::lock_guard<std::mutex> lock(active_mutex_);
+            active_tasks_.clear();
+            active_count_.store(0);
+        }
+
+        std::string line;
+        std::getline(file, line); // consume remainder of header line
+        while (std::getline(file, line)) {
+            if (line.empty()) continue;
+
+            std::istringstream in(line);
+            std::string tag;
+            if (!(in >> tag) || tag != "task") {
+                continue;
+            }
+
+            TaskId id = INVALID_TASK_ID;
+            int status_int = 0;
+            Bytes downloaded_bytes = 0;
+            Bytes total_bytes = 0;
+            std::string url;
+            std::string output_path;
+            std::string error_message;
+
+            if (!(in >> id >> status_int >> downloaded_bytes >> total_bytes)) {
+                continue;
+            }
+            if (!(in >> std::quoted(url) >> std::quoted(output_path) >> std::quoted(error_message))) {
+                continue;
+            }
+
+            DownloadOptions options;
+
+            if (!(in >> options.max_connections >> options.timeout_seconds >> options.max_retries >>
+                  options.retry_delay_seconds)) {
+                continue;
+            }
+            if (!(in >> std::quoted(options.output_directory) >> std::quoted(options.output_filename))) {
+                continue;
+            }
+            if (!(in >> options.speed_limit)) {
+                continue;
+            }
+
+            int resume_enabled = 1;
+            if (!read_int(in, resume_enabled)) {
+                continue;
+            }
+            options.resume_enabled = resume_enabled != 0;
+
+            if (!(in >> std::quoted(options.user_agent) >> std::quoted(options.proxy) >>
+                  std::quoted(options.proxy_type))) {
+                continue;
+            }
+
+            int verify_ssl = 1;
+            if (!read_int(in, verify_ssl)) {
+                continue;
+            }
+            options.verify_ssl = verify_ssl != 0;
+
+            if (!(in >> std::quoted(options.referer) >> std::quoted(options.cookie_file) >>
+                  std::quoted(options.cookie_jar))) {
+                continue;
+            }
+
+            if (!(in >> options.min_segment_size)) {
+                continue;
+            }
+
+            int adaptive = 1;
+            if (!read_int(in, adaptive)) {
+                continue;
+            }
+            options.adaptive_segment_sizing = adaptive != 0;
+
+            if (!(in >> options.progress_interval_ms)) {
+                continue;
+            }
+
+            int create_dir = 1;
+            int overwrite = 0;
+            if (!read_int(in, create_dir) || !read_int(in, overwrite)) {
+                continue;
+            }
+            options.create_directory = create_dir != 0;
+            options.overwrite_existing = overwrite != 0;
+
+            std::size_t header_count = 0;
+            if (!(in >> header_count)) {
+                continue;
+            }
+            for (std::size_t i = 0; i < header_count; ++i) {
+                std::string k;
+                std::string v;
+                if (!(in >> std::quoted(k) >> std::quoted(v))) {
+                    break;
+                }
+                options.headers.emplace(std::move(k), std::move(v));
+            }
+
+            if (id == INVALID_TASK_ID || url.empty()) {
+                continue;
+            }
+
+            TaskStatus status = TaskStatus::Pending;
+            if (status_int >= 0 && status_int <= 6) {
+                status = static_cast<TaskStatus>(status_int);
+            }
+            status = sanitize_status_for_restore(status);
+
+            auto task = std::make_shared<DownloadTask>(id, url, options);
+            task->set_output_path(output_path);
+            if (!error_message.empty()) {
+                task->set_error(error_message);
+            }
+            task->update_progress(downloaded_bytes, total_bytes, 0);
+            task->set_status(status);
+
+            {
+                std::lock_guard<std::mutex> lock(tasks_mutex_);
+                if (tasks_.find(id) != tasks_.end()) {
+                    continue;
+                }
+                task->set_listener(this);
+                tasks_.emplace(id, std::move(task));
+            }
+        }
+
         return true;
     }
 

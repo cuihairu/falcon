@@ -57,6 +57,7 @@ add_executable(falcon_core_tests
     # 核心模块测试
     unit/download_task_test.cpp
     unit/task_manager_test.cpp
+    unit/task_manager_persistence_test.cpp
     unit/url_utils_test.cpp
     unit/bug_fix_test.cpp
     unit/thread_pool_test.cpp
