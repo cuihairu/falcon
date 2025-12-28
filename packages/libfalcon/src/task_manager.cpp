@@ -48,8 +48,9 @@ public:
     Impl(const TaskManagerConfig& config, EventDispatcher* event_dispatcher)
         : config_(config)
         , event_dispatcher_(event_dispatcher)
-        , download_pool_(0)
-        , running_(false) {}
+        , running_(false)
+        , state_pool_(1)
+        , download_pool_(0) {}
 
     ~Impl() {
         stop();
@@ -88,12 +89,21 @@ public:
         }
 
         // 停止所有任务
-        std::lock_guard<std::mutex> lock(tasks_mutex_);
-        for (auto& [id, task] : tasks_) {
-            if (task->is_active()) {
-                task->cancel();
+        std::vector<DownloadTask::Ptr> to_cancel;
+        {
+            std::lock_guard<std::mutex> lock(tasks_mutex_);
+            for (auto& [id, task] : tasks_) {
+                if (task->is_active()) {
+                    to_cancel.push_back(task);
+                }
             }
         }
+        for (auto& task : to_cancel) {
+            task->cancel();
+        }
+
+        // Flush pending state saves to avoid dangling async work
+        state_pool_.wait();
     }
 
     TaskId add_task(DownloadTask::Ptr task, TaskPriority /*priority*/) {
@@ -773,17 +783,24 @@ private:
     }
 
     void save_state_async() {
-        // 在新线程中保存状态，避免阻塞主循环
-        std::thread([this] {
-            if (!config_.state_file.empty()) {
-                save_state(config_.state_file);
-            }
-        }).detach();
+        if (config_.state_file.empty()) {
+            return;
+        }
+
+        bool expected = false;
+        if (!state_save_scheduled_.compare_exchange_strong(expected, true)) {
+            return;
+        }
+
+        const std::string path = config_.state_file;
+        state_pool_.submit([this, path] {
+            save_state(path);
+            state_save_scheduled_.store(false);
+        });
     }
 
     TaskManagerConfig config_;
     EventDispatcher* event_dispatcher_;
-    internal::ThreadPool download_pool_;
     std::atomic<size_t> active_count_{0};
 
     // 任务存储
@@ -807,6 +824,11 @@ private:
     std::atomic<bool> running_;
     std::thread worker_thread_;
     std::thread cleanup_thread_;
+
+    // Async state saving (must be destroyed before other members)
+    std::atomic<bool> state_save_scheduled_{false};
+    internal::ThreadPool state_pool_;
+    internal::ThreadPool download_pool_;
 };
 
 // TaskManager 实现
