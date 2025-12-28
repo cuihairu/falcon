@@ -168,3 +168,113 @@ jobs:
           fail_ci_if_error: false
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  desktop-build:
+    name: Desktop Application (Qt6)
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            qt-version: '6.9.0'
+            cmake-generator: 'Unix Makefiles'
+          - os: macos-latest
+            qt-version: '6.9.0'
+            cmake-generator: 'Unix Makefiles'
+          - os: windows-latest
+            qt-version: '6.9.0'
+            cmake-generator: 'Visual Studio 17 2022'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt (Ubuntu/macOS)
+        if: runner.os != 'Windows'
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ matrix.qt-version }}
+          host: 'linux'
+          target: 'desktop'
+          arch: 'gcc_64'
+          modules: 'qtnetworkauth'
+          cache: true
+
+      - name: Install Qt (Windows)
+        if: runner.os == 'Windows'
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ matrix.qt-version }}
+          host: 'windows'
+          target: 'desktop'
+          arch: 'mingw_64'
+          modules: 'qtnetworkauth'
+          cache: true
+
+      - name: Install dependencies (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libgl1-mesa-dev
+
+      - name: Install dependencies (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew install cmake ninja curl
+
+      - name: Install dependencies (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          choco install cmake ninja
+
+      - name: Configure CMake (Unix)
+        if: runner.os != 'Windows'
+        run: >
+          cmake -B ${{ github.workspace }}/build-desktop
+          -G "${{ matrix.cmake-generator }}"
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_PREFIX_PATH="${Qt6_DIR}"
+          -DFALCON_BUILD_TESTS=OFF
+          -DFALCON_BUILD_CLI=OFF
+          -DFALCON_BUILD_DESKTOP=ON
+          -DFALCON_BUILD_DAEMON=OFF
+          -DFALCON_BUILD_EXAMPLES=OFF
+          -DFALCON_ENABLE_HTTP=ON
+          -DFALCON_ENABLE_FTP=ON
+          -S ${{ github.workspace }}
+
+      - name: Configure CMake (Windows)
+        if: runner.os == 'Windows'
+        run: >
+          cmake -B ${{ github.workspace }}/build-desktop
+          -G "${{ matrix.cmake-generator }}"
+          -DCMAKE_PREFIX_PATH="${Env:Qt6_DIR}"
+          -DFALCON_BUILD_TESTS=OFF
+          -DFALCON_BUILD_CLI=OFF
+          -DFALCON_BUILD_DESKTOP=ON
+          -DFALCON_BUILD_DAEMON=OFF
+          -DFALCON_BUILD_EXAMPLES=OFF
+          -DFALCON_ENABLE_HTTP=ON
+          -DFALCON_ENABLE_FTP=ON
+          -S ${{ github.workspace }}
+
+      - name: Build
+        run: cmake --build ${{ github.workspace }}/build-desktop --config Release --parallel
+
+      - name: Upload artifacts (Unix)
+        if: runner.os != 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: falcon-desktop-${{ matrix.os }}
+          path: ${{ github.workspace }}/build-desktop/bin/falcon-desktop*
+          retention-days: 7
+
+      - name: Upload artifacts (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: falcon-desktop-${{ matrix.os }}
+          path: ${{ github.workspace }}/build-desktop/bin/Release/falcon-desktop.exe
+          retention-days: 7
