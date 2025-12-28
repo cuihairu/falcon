@@ -45,7 +45,7 @@ public:
 
 private:
     void setup_ui();
-    QWidget* create_tab_widget();
+    void create_tab_widget();
     void create_downloading_tab();
     void create_completed_tab();
     void create_trash_tab();

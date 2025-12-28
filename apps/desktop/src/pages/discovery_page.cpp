@@ -6,6 +6,7 @@
  */
 
 #include "discovery_page.hpp"
+#include "../styles.hpp"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -33,8 +34,19 @@ DiscoveryPage::~DiscoveryPage() = default;
 void DiscoveryPage::setup_ui()
 {
     auto* main_layout = new QVBoxLayout(this);
-    main_layout->setContentsMargins(10, 10, 10, 10);
-    main_layout->setSpacing(10);
+    main_layout->setContentsMargins(24, 24, 24, 24);
+    main_layout->setSpacing(16);
+
+    // 页面标题
+    auto* title_label = new QLabel("资源发现", this);
+    title_label->setStyleSheet(R"(
+        QLabel {
+            font-size: 24px;
+            font-weight: 700;
+            color: #323130;
+        }
+    )");
+    main_layout->addWidget(title_label);
 
     // 创建搜索栏
     search_bar_ = create_search_bar();
@@ -51,44 +63,6 @@ void DiscoveryPage::setup_ui()
     // 创建状态栏
     auto* status_bar = create_status_bar();
     main_layout->addWidget(status_bar);
-
-    // 设置样式
-    setStyleSheet(R"(
-        QTableWidget {
-            gridline-color: #eee;
-            selection-background-color: #0078d4;
-            selection-color: white;
-        }
-        QTableWidget::item {
-            padding: 8px;
-        }
-        QPushButton {
-            padding: 6px 12px;
-            border-radius: 4px;
-            border: 1px solid #0078d4;
-            background-color: #0078d4;
-            color: white;
-        }
-        QPushButton:hover {
-            background-color: #005a9e;
-        }
-        QPushButton:pressed {
-            background-color: #004578;
-        }
-        QLineEdit {
-            padding: 6px;
-            border: 1px solid #ccc;
-            border-radius: 4px;
-        }
-        QLineEdit:focus {
-            border-color: #0078d4;
-        }
-        QComboBox {
-            padding: 6px;
-            border: 1px solid #ccc;
-            border-radius: 4px;
-        }
-    )");
 }
 
 QWidget* DiscoveryPage::create_search_bar()
@@ -96,10 +70,11 @@ QWidget* DiscoveryPage::create_search_bar()
     auto* search_bar = new QWidget(this);
     auto* layout = new QHBoxLayout(search_bar);
     layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(10);
+    layout->setSpacing(8);
 
     // 搜索类型选择
     search_type_combo_ = new QComboBox(search_bar);
+    search_type_combo_->setStyleSheet(get_combo_stylesheet());
     search_type_combo_->addItem("🧲 磁力链接", "magnet");
     search_type_combo_->addItem("🌐 HTTP资源", "http");
     search_type_combo_->addItem("☁️ 云盘资源", "cloud");
@@ -108,20 +83,26 @@ QWidget* DiscoveryPage::create_search_bar()
 
     // 搜索输入框
     search_input_ = new QLineEdit(search_bar);
+    search_input_->setStyleSheet(get_input_stylesheet());
     search_input_->setPlaceholderText("输入搜索关键词...");
     search_input_->setMinimumWidth(400);
     layout->addWidget(search_input_, 1);
 
     // 搜索按钮
     search_button_ = new QPushButton("🔍 搜索", search_bar);
+    search_button_->setStyleSheet(get_button_stylesheet(true));
+    search_button_->setCursor(Qt::PointingHandCursor);
     layout->addWidget(search_button_);
 
     // 清空按钮
     clear_button_ = new QPushButton("✖️ 清空", search_bar);
+    clear_button_->setStyleSheet(get_button_stylesheet(false));
+    clear_button_->setCursor(Qt::PointingHandCursor);
     layout->addWidget(clear_button_);
 
     // 排序方式
     sort_combo_ = new QComboBox(search_bar);
+    sort_combo_->setStyleSheet(get_combo_stylesheet());
     sort_combo_->addItem("按相关性", "relevance");
     sort_combo_->addItem("按大小", "size");
     sort_combo_->addItem("按日期", "date");
@@ -143,11 +124,13 @@ QWidget* DiscoveryPage::create_filter_bar()
     auto* filter_bar = new QWidget(this);
     auto* layout = new QHBoxLayout(filter_bar);
     layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(10);
+    layout->setSpacing(8);
 
     // 分类过滤
     auto* category_label = new QLabel("分类:", filter_bar);
+    category_label->setStyleSheet("color: #605e5c; font-size: 13px;");
     category_filter_ = new QComboBox(filter_bar);
+    category_filter_->setStyleSheet(get_combo_stylesheet());
     category_filter_->addItem("全部", "all");
     category_filter_->addItem("视频", "video");
     category_filter_->addItem("音频", "audio");
@@ -159,22 +142,27 @@ QWidget* DiscoveryPage::create_filter_bar()
 
     // 大小过滤
     auto* size_label = new QLabel("大小:", filter_bar);
+    size_label->setStyleSheet("color: #605e5c; font-size: 13px;");
     layout->addWidget(size_label);
 
     min_size_edit_ = new QLineEdit(filter_bar);
+    min_size_edit_->setStyleSheet(get_input_stylesheet());
     min_size_edit_->setPlaceholderText("最小");
     min_size_edit_->setMaximumWidth(80);
     layout->addWidget(min_size_edit_);
 
     auto* to_label = new QLabel("-", filter_bar);
+    to_label->setStyleSheet("color: #605e5c; font-size: 13px;");
     layout->addWidget(to_label);
 
     max_size_edit_ = new QLineEdit(filter_bar);
+    max_size_edit_->setStyleSheet(get_input_stylesheet());
     max_size_edit_->setPlaceholderText("最大");
     max_size_edit_->setMaximumWidth(80);
     layout->addWidget(max_size_edit_);
 
     size_filter_ = new QComboBox(filter_bar);
+    size_filter_->setStyleSheet(get_combo_stylesheet());
     size_filter_->addItem("MB", "mb");
     size_filter_->addItem("GB", "gb");
     layout->addWidget(size_filter_);
@@ -198,6 +186,7 @@ void DiscoveryPage::create_results_table()
     results_table_->horizontalHeader()->setStretchLastSection(false);
     results_table_->setContextMenuPolicy(Qt::CustomContextMenu);
     results_table_->setAlternatingRowColors(true);
+    results_table_->setStyleSheet(get_table_stylesheet());
 
     // 设置列宽
     results_table_->setColumnWidth(0, 350);  // 标题
@@ -218,16 +207,28 @@ QWidget* DiscoveryPage::create_status_bar()
     auto* status_bar = new QWidget(this);
     auto* layout = new QHBoxLayout(status_bar);
     layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(10);
+    layout->setSpacing(8);
 
     status_label_ = new QLabel("就绪", status_bar);
-    status_label_->setStyleSheet("padding: 5px; color: gray;");
+    status_label_->setStyleSheet(R"(
+        QLabel {
+            padding: 8px;
+            color: #605e5c;
+            font-size: 13px;
+        }
+    )");
     layout->addWidget(status_label_);
 
     layout->addStretch();
 
     result_count_label_ = new QLabel("", status_bar);
-    result_count_label_->setStyleSheet("padding: 5px; color: gray;");
+    result_count_label_->setStyleSheet(R"(
+        QLabel {
+            padding: 8px;
+            color: #605e5c;
+            font-size: 13px;
+        }
+    )");
     layout->addWidget(result_count_label_);
 
     return status_bar;
@@ -250,7 +251,13 @@ void DiscoveryPage::perform_search()
     current_results_.clear();
 
     status_label_->setText("正在搜索...");
-    status_label_->setStyleSheet("padding: 5px; color: blue;");
+    status_label_->setStyleSheet(R"(
+        QLabel {
+            padding: 8px;
+            color: #0078d4;
+            font-size: 13px;
+        }
+    )");
 
     // 根据搜索类型执行不同的搜索
     if (settings_.search_type == "magnet") {
@@ -366,7 +373,11 @@ void DiscoveryPage::display_results(const QList<SearchResultItem>& results)
         op_layout->setSpacing(5);
 
         auto* download_btn = new QPushButton("下载", operation_widget);
+        download_btn->setStyleSheet(get_button_stylesheet(false));
+        download_btn->setCursor(Qt::PointingHandCursor);
         auto* copy_btn = new QPushButton("复制", operation_widget);
+        copy_btn->setStyleSheet(get_button_stylesheet(false));
+        copy_btn->setCursor(Qt::PointingHandCursor);
 
         op_layout->addWidget(download_btn);
         op_layout->addWidget(copy_btn);
@@ -392,7 +403,13 @@ void DiscoveryPage::display_results(const QList<SearchResultItem>& results)
     }
 
     status_label_->setText(QString("搜索完成，找到 %1 个结果").arg(results.size()));
-    status_label_->setStyleSheet("padding: 5px; color: green;");
+    status_label_->setStyleSheet(R"(
+        QLabel {
+            padding: 8px;
+            color: #107c10;
+            font-size: 13px;
+        }
+    )");
     result_count_label_->setText(QString("共 %1 个结果").arg(results.size()));
 }
 

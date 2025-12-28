@@ -6,6 +6,7 @@
  */
 
 #include "cloud_page.hpp"
+#include "../styles.hpp"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -20,6 +21,8 @@ namespace falcon::desktop {
 CloudPage::CloudPage(QWidget* parent)
     : QWidget(parent)
     , splitter_(nullptr)
+    , empty_state_widget_(nullptr)
+    , stacked_widget_(nullptr)
     , left_panel_(nullptr)
     , right_panel_(nullptr)
 {
@@ -31,11 +34,38 @@ CloudPage::~CloudPage() = default;
 void CloudPage::setup_ui()
 {
     auto* main_layout = new QVBoxLayout(this);
-    main_layout->setContentsMargins(10, 10, 10, 10);
-    main_layout->setSpacing(10);
+    main_layout->setContentsMargins(24, 24, 24, 24);
+    main_layout->setSpacing(16);
 
-    // 创建分割器
+    // 页面标题
+    auto* title_label = new QLabel("云盘资源", this);
+    title_label->setStyleSheet(R"(
+        QLabel {
+            font-size: 24px;
+            font-weight: 700;
+            color: #323130;
+        }
+    )");
+    main_layout->addWidget(title_label);
+
+    // 创建堆叠窗口用于视图切换
+    stacked_widget_ = new QStackedWidget(this);
+
+    // 创建空状态视图
+    create_empty_state();
+    stacked_widget_->addWidget(empty_state_widget_);
+
+    // 创建分割器（配置面板 + 文件浏览器）
     splitter_ = new QSplitter(Qt::Horizontal, this);
+    splitter_->setStyleSheet(R"(
+        QSplitter::handle {
+            background-color: #e1dfdd;
+            width: 1px;
+        }
+        QSplitter::handle:hover {
+            background-color: #0078d4;
+        }
+    )");
 
     // 创建左侧面板（存储配置）
     create_storage_selector();
@@ -49,53 +79,13 @@ void CloudPage::setup_ui()
     splitter_->setStretchFactor(0, 3);
     splitter_->setStretchFactor(1, 7);
 
-    main_layout->addWidget(splitter_);
+    // 将分割器添加到堆叠窗口
+    stacked_widget_->addWidget(splitter_);
 
-    // 设置样式
-    setStyleSheet(R"(
-        QSplitter::handle {
-            background-color: #ddd;
-            width: 2px;
-        }
-        QTableWidget {
-            gridline-color: #eee;
-            selection-background-color: #0078d4;
-            selection-color: white;
-        }
-        QTableWidget::item {
-            padding: 8px;
-        }
-        QPushButton {
-            padding: 6px 12px;
-            border-radius: 4px;
-            border: 1px solid #0078d4;
-            background-color: #0078d4;
-            color: white;
-        }
-        QPushButton:hover {
-            background-color: #005a9e;
-        }
-        QPushButton:pressed {
-            background-color: #004578;
-        }
-        QPushButton:disabled {
-            background-color: #ccc;
-            border-color: #bbb;
-        }
-        QLineEdit {
-            padding: 6px;
-            border: 1px solid #ccc;
-            border-radius: 4px;
-        }
-        QLineEdit:focus {
-            border-color: #0078d4;
-        }
-        QComboBox {
-            padding: 6px;
-            border: 1px solid #ccc;
-            border-radius: 4px;
-        }
-    )");
+    main_layout->addWidget(stacked_widget_);
+
+    // 初始显示空状态
+    show_empty_state();
 }
 
 void CloudPage::create_storage_selector()
@@ -103,17 +93,26 @@ void CloudPage::create_storage_selector()
     left_panel_ = new QWidget(this);
     auto* layout = new QVBoxLayout(left_panel_);
     layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(10);
+    layout->setSpacing(12);
 
     // 标题
     auto* title_label = new QLabel("云存储配置", left_panel_);
-    title_label->setStyleSheet("font-size: 16px; font-weight: bold; padding: 5px;");
+    title_label->setStyleSheet(R"(
+        QLabel {
+            font-size: 18px;
+            font-weight: 600;
+            color: #323130;
+            padding: 8px 0;
+        }
+    )");
     layout->addWidget(title_label);
 
     // 存储类型选择
     auto* type_layout = new QHBoxLayout();
     auto* type_label = new QLabel("类型:", left_panel_);
+    type_label->setStyleSheet("color: #605e5c; font-size: 13px;");
     storage_type_combo_ = new QComboBox(left_panel_);
+    storage_type_combo_->setStyleSheet(get_combo_stylesheet());
     storage_type_combo_->addItem("Amazon S3", "s3");
     storage_type_combo_->addItem("阿里云 OSS", "oss");
     storage_type_combo_->addItem("腾讯云 COS", "cos");
@@ -126,7 +125,9 @@ void CloudPage::create_storage_selector()
     // 端点
     auto* endpoint_layout = new QHBoxLayout();
     auto* endpoint_label = new QLabel("端点:", left_panel_);
+    endpoint_label->setStyleSheet("color: #605e5c; font-size: 13px;");
     endpoint_edit_ = new QLineEdit(left_panel_);
+    endpoint_edit_->setStyleSheet(get_input_stylesheet());
     endpoint_edit_->setPlaceholderText("s3.amazonaws.com");
     endpoint_layout->addWidget(endpoint_label);
     endpoint_layout->addWidget(endpoint_edit_);
@@ -135,7 +136,9 @@ void CloudPage::create_storage_selector()
     // 访问密钥
     auto* access_key_layout = new QHBoxLayout();
     auto* access_key_label = new QLabel("Access Key:", left_panel_);
+    access_key_label->setStyleSheet("color: #605e5c; font-size: 13px;");
     access_key_edit_ = new QLineEdit(left_panel_);
+    access_key_edit_->setStyleSheet(get_input_stylesheet());
     access_key_edit_->setEchoMode(QLineEdit::Password);
     access_key_layout->addWidget(access_key_label);
     access_key_layout->addWidget(access_key_edit_);
@@ -144,7 +147,9 @@ void CloudPage::create_storage_selector()
     // 密钥
     auto* secret_key_layout = new QHBoxLayout();
     auto* secret_key_label = new QLabel("Secret Key:", left_panel_);
+    secret_key_label->setStyleSheet("color: #605e5c; font-size: 13px;");
     secret_key_edit_ = new QLineEdit(left_panel_);
+    secret_key_edit_->setStyleSheet(get_input_stylesheet());
     secret_key_edit_->setEchoMode(QLineEdit::Password);
     secret_key_layout->addWidget(secret_key_label);
     secret_key_layout->addWidget(secret_key_edit_);
@@ -153,7 +158,9 @@ void CloudPage::create_storage_selector()
     // 区域
     auto* region_layout = new QHBoxLayout();
     auto* region_label = new QLabel("区域:", left_panel_);
+    region_label->setStyleSheet("color: #605e5c; font-size: 13px;");
     region_edit_ = new QLineEdit(left_panel_);
+    region_edit_->setStyleSheet(get_input_stylesheet());
     region_edit_->setPlaceholderText("us-east-1");
     region_layout->addWidget(region_label);
     region_layout->addWidget(region_edit_);
@@ -162,7 +169,9 @@ void CloudPage::create_storage_selector()
     // 存储桶
     auto* bucket_layout = new QHBoxLayout();
     auto* bucket_label = new QLabel("存储桶:", left_panel_);
+    bucket_label->setStyleSheet("color: #605e5c; font-size: 13px;");
     bucket_edit_ = new QLineEdit(left_panel_);
+    bucket_edit_->setStyleSheet(get_input_stylesheet());
     bucket_layout->addWidget(bucket_label);
     bucket_layout->addWidget(bucket_edit_);
     layout->addLayout(bucket_layout);
@@ -171,13 +180,19 @@ void CloudPage::create_storage_selector()
 
     // 连接按钮
     connect_button_ = new QPushButton("连接", left_panel_);
+    connect_button_->setStyleSheet(get_button_stylesheet(true));
+    connect_button_->setCursor(Qt::PointingHandCursor);
     layout->addWidget(connect_button_);
 
     disconnect_button_ = new QPushButton("断开连接", left_panel_);
     disconnect_button_->setEnabled(false);
+    disconnect_button_->setStyleSheet(get_button_stylesheet(false));
+    disconnect_button_->setCursor(Qt::PointingHandCursor);
     layout->addWidget(disconnect_button_);
 
     save_config_button_ = new QPushButton("保存配置", left_panel_);
+    save_config_button_->setStyleSheet(get_button_stylesheet(false));
+    save_config_button_->setCursor(Qt::PointingHandCursor);
     layout->addWidget(save_config_button_);
 
     // 连接信号
@@ -190,7 +205,13 @@ void CloudPage::create_storage_selector()
 
     // 连接状态
     connection_status_label_ = new QLabel("未连接", left_panel_);
-    connection_status_label_->setStyleSheet("color: gray; padding: 10px;");
+    connection_status_label_->setStyleSheet(R"(
+        QLabel {
+            color: #a19f9d;
+            padding: 12px;
+            font-size: 13px;
+        }
+    )");
     layout->addWidget(connection_status_label_);
 }
 
@@ -199,7 +220,7 @@ void CloudPage::create_file_browser()
     right_panel_ = new QWidget(this);
     auto* layout = new QVBoxLayout(right_panel_);
     layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(10);
+    layout->setSpacing(12);
 
     // 工具栏
     auto* toolbar = create_toolbar();
@@ -208,7 +229,9 @@ void CloudPage::create_file_browser()
     // 路径栏
     auto* path_layout = new QHBoxLayout();
     auto* path_label = new QLabel("路径:", right_panel_);
+    path_label->setStyleSheet("color: #605e5c; font-size: 13px;");
     current_path_edit_ = new QLineEdit(right_panel_);
+    current_path_edit_->setStyleSheet(get_input_stylesheet());
     current_path_edit_->setReadOnly(true);
     current_path_edit_->setText("/");
     path_layout->addWidget(path_label);
@@ -227,6 +250,7 @@ void CloudPage::create_file_browser()
     file_table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     file_table_->horizontalHeader()->setStretchLastSection(false);
     file_table_->setContextMenuPolicy(Qt::CustomContextMenu);
+    file_table_->setStyleSheet(get_table_stylesheet());
 
     // 设置列宽
     file_table_->setColumnWidth(0, 300);  // 名称
@@ -251,19 +275,25 @@ QWidget* CloudPage::create_toolbar()
     auto* toolbar = new QWidget(right_panel_);
     auto* layout = new QHBoxLayout(toolbar);
     layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(10);
+    layout->setSpacing(8);
 
     // 导航按钮
     up_button_ = new QPushButton("↑ 上级", toolbar);
     up_button_->setEnabled(false);
+    up_button_->setStyleSheet(get_button_stylesheet(false));
+    up_button_->setCursor(Qt::PointingHandCursor);
     layout->addWidget(up_button_);
 
     home_button_ = new QPushButton("⌂ 根目录", toolbar);
     home_button_->setEnabled(false);
+    home_button_->setStyleSheet(get_button_stylesheet(false));
+    home_button_->setCursor(Qt::PointingHandCursor);
     layout->addWidget(home_button_);
 
     refresh_button_ = new QPushButton("↻ 刷新", toolbar);
     refresh_button_->setEnabled(false);
+    refresh_button_->setStyleSheet(get_button_stylesheet(false));
+    refresh_button_->setCursor(Qt::PointingHandCursor);
     layout->addWidget(refresh_button_);
 
     layout->addStretch();
@@ -271,18 +301,26 @@ QWidget* CloudPage::create_toolbar()
     // 操作按钮
     upload_button_ = new QPushButton("↑ 上传", toolbar);
     upload_button_->setEnabled(false);
+    upload_button_->setStyleSheet(get_button_stylesheet(false));
+    upload_button_->setCursor(Qt::PointingHandCursor);
     layout->addWidget(upload_button_);
 
     download_button_ = new QPushButton("↓ 下载", toolbar);
     download_button_->setEnabled(false);
+    download_button_->setStyleSheet(get_button_stylesheet(false));
+    download_button_->setCursor(Qt::PointingHandCursor);
     layout->addWidget(download_button_);
 
     new_folder_button_ = new QPushButton("+ 新建文件夹", toolbar);
     new_folder_button_->setEnabled(false);
+    new_folder_button_->setStyleSheet(get_button_stylesheet(false));
+    new_folder_button_->setCursor(Qt::PointingHandCursor);
     layout->addWidget(new_folder_button_);
 
     delete_button_ = new QPushButton("× 删除", toolbar);
     delete_button_->setEnabled(false);
+    delete_button_->setStyleSheet(get_button_stylesheet(false));
+    delete_button_->setCursor(Qt::PointingHandCursor);
     layout->addWidget(delete_button_);
 
     // 连接信号
@@ -300,7 +338,13 @@ QWidget* CloudPage::create_toolbar()
 void CloudPage::create_status_bar()
 {
     status_label_ = new QLabel("就绪", right_panel_);
-    status_label_->setStyleSheet("padding: 5px; color: gray;");
+    status_label_->setStyleSheet(R"(
+        QLabel {
+            padding: 8px;
+            color: #605e5c;
+            font-size: 13px;
+        }
+    )");
 }
 
 void CloudPage::connect_to_storage()
@@ -329,7 +373,17 @@ void CloudPage::connect_to_storage()
     delete_button_->setEnabled(true);
 
     connection_status_label_->setText("已连接");
-    connection_status_label_->setStyleSheet("color: green; padding: 10px;");
+    connection_status_label_->setStyleSheet(R"(
+        QLabel {
+            color: #107c10;
+            padding: 12px;
+            font-size: 13px;
+            font-weight: 600;
+        }
+    )");
+
+    // 切换到浏览器面板
+    show_browser_panel();
 
     // 添加示例文件
     file_table_->setRowCount(0);
@@ -352,10 +406,19 @@ void CloudPage::disconnect_storage()
     delete_button_->setEnabled(false);
 
     connection_status_label_->setText("未连接");
-    connection_status_label_->setStyleSheet("color: gray; padding: 10px;");
+    connection_status_label_->setStyleSheet(R"(
+        QLabel {
+            color: #a19f9d;
+            padding: 12px;
+            font-size: 13px;
+        }
+    )");
 
     file_table_->setRowCount(0);
     current_path_edit_->clear();
+
+    // 返回空状态
+    show_empty_state();
 }
 
 void CloudPage::refresh_directory()
@@ -583,6 +646,82 @@ QString CloudPage::get_file_icon(const QString& filename) const
     } else {
         return "📄";
     }
+}
+
+void CloudPage::create_empty_state()
+{
+    empty_state_widget_ = new QWidget(this);
+    auto* layout = new QVBoxLayout(empty_state_widget_);
+    layout->setAlignment(Qt::AlignCenter);
+    layout->setSpacing(24);
+
+    // 云盘图标
+    auto* icon_label = new QLabel("☁️", empty_state_widget_);
+    icon_label->setStyleSheet(R"(
+        QLabel {
+            font-size: 80px;
+            color: #0078d4;
+        }
+    )");
+    icon_label->setAlignment(Qt::AlignCenter);
+    layout->addWidget(icon_label);
+
+    // 提示文本
+    auto* title_label = new QLabel("还没有添加云存储配置", empty_state_widget_);
+    title_label->setStyleSheet(R"(
+        QLabel {
+            font-size: 20px;
+            font-weight: 600;
+            color: #323130;
+        }
+    )");
+    title_label->setAlignment(Qt::AlignCenter);
+    layout->addWidget(title_label);
+
+    auto* desc_label = new QLabel("添加云存储配置后，即可浏览和管理您的云端文件", empty_state_widget_);
+    desc_label->setStyleSheet(R"(
+        QLabel {
+            font-size: 14px;
+            color: #605e5c;
+        }
+    )");
+    desc_label->setAlignment(Qt::AlignCenter);
+    layout->addWidget(desc_label);
+
+    layout->addSpacing(16);
+
+    // 添加配置按钮
+    auto* add_button = new QPushButton("➕ 添加云存储配置", empty_state_widget_);
+    add_button->setStyleSheet(get_button_stylesheet(true));
+    add_button->setCursor(Qt::PointingHandCursor);
+    add_button->setMinimumWidth(200);
+    connect(add_button, &QPushButton::clicked, this, [this]() {
+        show_config_panel();
+    });
+    layout->addWidget(add_button, 0, Qt::AlignCenter);
+
+    layout->addStretch();
+}
+
+void CloudPage::show_empty_state()
+{
+    stacked_widget_->setCurrentWidget(empty_state_widget_);
+}
+
+void CloudPage::show_config_panel()
+{
+    stacked_widget_->setCurrentWidget(splitter_);
+    // 默认显示左侧配置面板
+    left_panel_->show();
+    right_panel_->hide();
+}
+
+void CloudPage::show_browser_panel()
+{
+    stacked_widget_->setCurrentWidget(splitter_);
+    // 显示完整界面
+    left_panel_->show();
+    right_panel_->show();
 }
 
 } // namespace falcon::desktop

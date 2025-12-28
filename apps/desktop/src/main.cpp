@@ -7,6 +7,7 @@
 
 #include <QApplication>
 #include "main_window.hpp"
+#include "styles.hpp"
 
 int main(int argc, char* argv[])
 {
@@ -15,6 +16,9 @@ int main(int argc, char* argv[])
     app.setApplicationName("Falcon");
     app.setApplicationVersion("0.1.0");
     app.setOrganizationName("FalconTeam");
+
+    // 应用全局样式
+    app.setStyleSheet(falcon::desktop::get_global_stylesheet());
 
     falcon::desktop::MainWindow window;
     window.resize(1200, 800);

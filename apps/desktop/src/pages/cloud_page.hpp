@@ -14,6 +14,7 @@
 #include <QPushButton>
 #include <QLabel>
 #include <QSplitter>
+#include <QStackedWidget>
 
 namespace falcon::desktop {
 
@@ -82,7 +83,13 @@ private:
     QWidget* create_toolbar();
     void create_storage_selector();
     void create_file_browser();
+    void create_empty_state();
     void create_status_bar();
+
+    // 视图切换
+    void show_empty_state();
+    void show_config_panel();
+    void show_browser_panel();
 
     // 更新文件列表
     void update_file_list(const QString& path);
@@ -95,6 +102,8 @@ private:
 
     // 控件
     QSplitter* splitter_;
+    QWidget* empty_state_widget_;  // 空状态视图
+    QStackedWidget* stacked_widget_;  // 视图切换容器
 
     // 左侧面板 - 存储选择器
     QWidget* left_panel_;

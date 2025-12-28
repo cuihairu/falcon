@@ -30,6 +30,7 @@ public:
     bool isActive() const { return active_; }
 
 private:
+    void update_style(bool active);
     bool active_ = false;
 };
 

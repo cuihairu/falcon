@@ -25,6 +25,7 @@ set(SOURCES
 
 # 头文件
 set(HEADERS
+    src/styles.hpp
     src/main_window.hpp
     src/navigation/sidebar.hpp
     src/pages/download_page.hpp
