@@ -215,10 +215,10 @@ jobs:
         if: matrix.os == 'windows-latest'
         run: |
           choco install cmake ninja curl
-          # 安装 vcpkg 并使用它安装 libcurl
+          # 安装 vcpkg 并使用项目中的 vcpkg.json 安装依赖
           git clone https://github.com/Microsoft/vcpkg.git
           .\vcpkg\bootstrap-vcpkg.bat
-          .\vcpkg\vcpkg install curl --triplet x64-windows
+          .\vcpkg\vcpkg install --triplet x64-windows
 
       - name: Configure CMake (Unix)
         if: runner.os != 'Windows'
