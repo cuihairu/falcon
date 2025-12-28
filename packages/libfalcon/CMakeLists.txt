@@ -72,6 +72,11 @@ target_link_libraries(falcon
         Threads::Threads
 )
 
+# Windows Socket library
+if(WIN32)
+    target_link_libraries(falcon PUBLIC ws2_32)
+endif()
+
 # Optional: spdlog for logging
 find_package(spdlog QUIET)
 if(spdlog_FOUND)
