@@ -215,6 +215,10 @@ jobs:
         if: matrix.os == 'windows-latest'
         run: |
           choco install cmake ninja curl
+          # 安装 vcpkg 并使用它安装 libcurl
+          git clone https://github.com/Microsoft/vcpkg.git
+          .\vcpkg\bootstrap-vcpkg.bat
+          .\vcpkg\vcpkg install curl --triplet x64-windows
 
       - name: Configure CMake (Unix)
         if: runner.os != 'Windows'
@@ -238,6 +242,7 @@ jobs:
           cmake -B ${{ github.workspace }}/build-desktop
           -G "${{ matrix.cmake-generator }}"
           -DCMAKE_PREFIX_PATH="${Env:Qt6_DIR}"
+          -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake"
           -DFALCON_BUILD_TESTS=OFF
           -DFALCON_BUILD_CLI=OFF
           -DFALCON_BUILD_DESKTOP=ON
