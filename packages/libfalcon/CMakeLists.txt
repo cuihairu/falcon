@@ -106,6 +106,9 @@ if(OPENSSL_FOUND)
     target_compile_definitions(falcon PRIVATE FALCON_USE_OPENSSL)
 endif()
 
+# Optional: SQLite3 for config manager
+find_package(SQLite3 QUIET)
+
 # ============================================================================
 # Export symbols (Windows DLL)
 # ============================================================================
@@ -124,6 +127,7 @@ endif()
 option(FALCON_ENABLE_CLOUD_STORAGE "Enable cloud storage plugins" ON)
 option(FALCON_ENABLE_RESOURCE_SEARCH "Enable resource search functionality" ON)
 option(FALCON_ENABLE_RESOURCE_BROWSER "Enable resource browser functionality" ON)
+option(FALCON_ENABLE_CONFIG_MANAGER "Enable encrypted config manager (SQLite3)" ON)
 
 # ============================================================================
 # Protocol plugins
@@ -267,6 +271,29 @@ if(FALCON_ENABLE_RESOURCE_BROWSER)
         else()
             message(STATUS "OpenSSL not found: OSS/COS/Kodo/Upyun browsers will not be built")
         endif()
+    endif()
+endif()
+
+# Config manager (SQLite3 + OpenSSL + nlohmann_json)
+if(FALCON_ENABLE_CONFIG_MANAGER)
+    if(NOT SQLite3_FOUND OR NOT OPENSSL_FOUND OR NOT nlohmann_json_FOUND)
+        message(WARNING "Config manager requires SQLite3, OpenSSL, and nlohmann_json; disabling FALCON_ENABLE_CONFIG_MANAGER")
+        set(FALCON_ENABLE_CONFIG_MANAGER OFF CACHE BOOL "Enable encrypted config manager (SQLite3)" FORCE)
+    else()
+        target_sources(falcon PRIVATE
+            src/config_manager.cpp
+        )
+
+        if(TARGET SQLite::SQLite3)
+            target_link_libraries(falcon PRIVATE SQLite::SQLite3)
+        elseif(TARGET SQLite3::SQLite3)
+            target_link_libraries(falcon PRIVATE SQLite3::SQLite3)
+        else()
+            target_include_directories(falcon PRIVATE ${SQLite3_INCLUDE_DIRS})
+            target_link_libraries(falcon PRIVATE ${SQLite3_LIBRARIES})
+        endif()
+
+        target_compile_definitions(falcon PUBLIC FALCON_ENABLE_CONFIG_MANAGER)
     endif()
 endif()
 

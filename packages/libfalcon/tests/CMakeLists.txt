@@ -66,6 +66,7 @@ add_executable(falcon_core_tests
     unit/version_test.cpp
     unit/resource_browser_utils_test.cpp
     unit/password_manager_test.cpp
+    unit/config_manager_test.cpp
     unit/segment_downloader_test.cpp
     # aria2 风格核心功能测试
     unit/command_test.cpp
