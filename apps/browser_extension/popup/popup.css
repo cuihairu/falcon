@@ -80,3 +80,57 @@ button.link:hover {
   color: #666;
 }
 
+.divider {
+  height: 1px;
+  background: #e5e5e5;
+  margin: 10px 0;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 260px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.mediaItem {
+  border: 1px solid #e5e5e5;
+  border-radius: 10px;
+  padding: 8px;
+  background: #fff;
+}
+
+.mediaTitle {
+  font-weight: 700;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.mediaMeta {
+  color: #666;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.mediaUrl {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  color: #333;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-bottom: 8px;
+}
+
+.mediaActions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.mediaActions button {
+  padding: 5px 8px;
+  border-radius: 8px;
+}

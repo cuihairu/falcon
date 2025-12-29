@@ -2,6 +2,9 @@ const DEFAULT_SETTINGS = Object.freeze({
   enabled: true,
   apiBaseUrl: "http://127.0.0.1:51337",
   launchFalconIfUnavailable: true,
+  sniffMedia: true,
+  sniffIncludeSegments: false,
+  sniffMaxItemsPerTab: 80,
   disabledHosts: [],
 });
 
@@ -37,6 +40,8 @@ async function main() {
   document.title = i18n("optionsTitle");
   document.getElementById("title").textContent = i18n("optionsTitle");
   document.getElementById("enabledLabel").textContent = i18n("enabledLabel");
+  document.getElementById("sniffMediaLabel").textContent = i18n("sniffMediaLabel");
+  document.getElementById("sniffIncludeSegmentsLabel").textContent = i18n("sniffIncludeSegmentsLabel");
   document.getElementById("disabledSites").textContent = i18n("disabledSites");
   document.getElementById("apiEndpoint").textContent = i18n("apiEndpoint");
   document.getElementById("launchIfUnavailable").textContent = i18n("launchIfUnavailable");
@@ -45,12 +50,16 @@ async function main() {
   const settings = await loadSettings();
 
   const enabledEl = document.getElementById("enabled");
+  const sniffMediaEl = document.getElementById("sniffMedia");
+  const sniffIncludeSegmentsEl = document.getElementById("sniffIncludeSegments");
   const apiEl = document.getElementById("apiBaseUrl");
   const launchEl = document.getElementById("launchFalconIfUnavailable");
   const disabledEl = document.getElementById("disabledHosts");
   const statusEl = document.getElementById("status");
 
   enabledEl.checked = !!settings.enabled;
+  sniffMediaEl.checked = settings.sniffMedia !== false;
+  sniffIncludeSegmentsEl.checked = !!settings.sniffIncludeSegments;
   apiEl.value = settings.apiBaseUrl || DEFAULT_SETTINGS.apiBaseUrl;
   launchEl.checked = settings.launchFalconIfUnavailable !== false;
   disabledEl.value = (settings.disabledHosts || []).join("\n");
@@ -58,6 +67,9 @@ async function main() {
   document.getElementById("save").addEventListener("click", async () => {
     const next = {
       enabled: enabledEl.checked,
+      sniffMedia: sniffMediaEl.checked,
+      sniffIncludeSegments: sniffIncludeSegmentsEl.checked,
+      sniffMaxItemsPerTab: settings.sniffMaxItemsPerTab || DEFAULT_SETTINGS.sniffMaxItemsPerTab,
       apiBaseUrl: apiEl.value.trim() || DEFAULT_SETTINGS.apiBaseUrl,
       launchFalconIfUnavailable: launchEl.checked,
       disabledHosts: toLines(disabledEl.value),

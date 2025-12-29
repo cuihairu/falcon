@@ -150,6 +150,7 @@ void HttpIpcServer::handle_socket(QTcpSocket* socket)
 
     IncomingDownloadRequest request;
     request.url = url;
+    request.filename = obj.value("filename").toString().trimmed();
     request.referrer = obj.value("referrer").toString();
     request.user_agent = obj.value("user_agent").toString();
     emit download_requested(request);

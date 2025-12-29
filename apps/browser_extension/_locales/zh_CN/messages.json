@@ -11,6 +11,30 @@
   "enabledLabel": {
     "message": "拦截下载"
   },
+  "sniffMediaLabel": {
+    "message": "嗅探网页媒体资源"
+  },
+  "sniffIncludeSegmentsLabel": {
+    "message": "包含分片（ts/m4s）"
+  },
+  "snifferTitle": {
+    "message": "已检测到的媒体"
+  },
+  "snifferEmpty": {
+    "message": "暂未检测到媒体资源。"
+  },
+  "snifferClear": {
+    "message": "清空"
+  },
+  "sendToFalcon": {
+    "message": "发送到 Falcon"
+  },
+  "downloadInBrowser": {
+    "message": "浏览器下载"
+  },
+  "copyUrl": {
+    "message": "复制链接"
+  },
   "siteLabel": {
     "message": "当前站点"
   },
@@ -43,5 +67,11 @@
   },
   "saved": {
     "message": "已保存"
+  },
+  "done": {
+    "message": "完成"
+  },
+  "failed": {
+    "message": "失败"
   }
 }

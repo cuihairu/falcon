@@ -11,6 +11,30 @@
   "enabledLabel": {
     "message": "Intercept downloads"
   },
+  "sniffMediaLabel": {
+    "message": "Detect media on pages (sniffer)"
+  },
+  "sniffIncludeSegmentsLabel": {
+    "message": "Include video segments (ts/m4s)"
+  },
+  "snifferTitle": {
+    "message": "Detected media"
+  },
+  "snifferEmpty": {
+    "message": "No media detected yet."
+  },
+  "snifferClear": {
+    "message": "Clear"
+  },
+  "sendToFalcon": {
+    "message": "Send to Falcon"
+  },
+  "downloadInBrowser": {
+    "message": "Browser download"
+  },
+  "copyUrl": {
+    "message": "Copy URL"
+  },
   "siteLabel": {
     "message": "Site"
   },
@@ -43,5 +67,11 @@
   },
   "saved": {
     "message": "Saved"
+  },
+  "done": {
+    "message": "Done"
+  },
+  "failed": {
+    "message": "Failed"
   }
 }

@@ -181,7 +181,15 @@ void MainWindow::on_url_detected(const UrlInfo& url_info)
 
 void MainWindow::on_download_requested(const IncomingDownloadRequest& request)
 {
-    open_url(request.url);
+    UrlInfo url_info = UrlDetector::parse_url(request.url);
+    if (!request.filename.trimmed().isEmpty()) {
+        url_info.file_name = request.filename.trimmed();
+    }
+    if (!url_info.is_valid) {
+        QMessageBox::warning(this, tr("Invalid URL"), tr("Unrecognized download URL:\n%1").arg(request.url));
+        return;
+    }
+    on_url_detected(url_info);
 }
 
 } // namespace falcon::desktop

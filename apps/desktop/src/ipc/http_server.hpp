@@ -15,6 +15,7 @@ namespace falcon::desktop {
 
 struct IncomingDownloadRequest {
     QString url;
+    QString filename;
     QString referrer;
     QString user_agent;
 };

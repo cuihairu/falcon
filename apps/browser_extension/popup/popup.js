@@ -1,6 +1,10 @@
 const DEFAULT_SETTINGS = Object.freeze({
   enabled: true,
   apiBaseUrl: "http://127.0.0.1:51337",
+  launchFalconIfUnavailable: true,
+  sniffMedia: true,
+  sniffIncludeSegments: false,
+  sniffMaxItemsPerTab: 80,
   disabledHosts: [],
 });
 
@@ -64,10 +68,14 @@ async function main() {
   document.getElementById("siteLabel").textContent = i18n("siteLabel");
   document.getElementById("skipOnce").textContent = i18n("skipOnce");
   document.getElementById("openOptions").textContent = i18n("openOptions");
+  document.getElementById("snifferTitle").textContent = i18n("snifferTitle");
+  document.getElementById("snifferClear").textContent = i18n("snifferClear");
 
   const statusEl = document.getElementById("status");
   const enabledEl = document.getElementById("enabled");
   const toggleSiteEl = document.getElementById("toggleSite");
+  const snifferEmptyEl = document.getElementById("snifferEmpty");
+  const mediaListEl = document.getElementById("mediaList");
 
   const tab = await getActiveTab();
   const host = getHostname(tab?.url || "");
@@ -79,6 +87,88 @@ async function main() {
   const disabled = host ? isHostDisabled(host, settings.disabledHosts) : false;
   toggleSiteEl.textContent = disabled ? i18n("enableSite") : i18n("disableSite");
   toggleSiteEl.disabled = !host;
+
+  async function refreshMediaList() {
+    mediaListEl.replaceChildren();
+    snifferEmptyEl.textContent = "";
+
+    if (typeof tab?.id !== "number") {
+      snifferEmptyEl.textContent = i18n("snifferEmpty");
+      return;
+    }
+
+    const res = await chrome.runtime.sendMessage({ type: "getMediaForTab", tabId: tab.id });
+    const items = Array.isArray(res?.items) ? res.items : [];
+    if (items.length === 0) {
+      snifferEmptyEl.textContent = i18n("snifferEmpty");
+      return;
+    }
+
+    const shown = items.slice(0, 20);
+    for (const item of shown) {
+      const container = document.createElement("div");
+      container.className = "mediaItem";
+
+      const title = document.createElement("div");
+      title.className = "mediaTitle";
+      const name = item.filename || item.label || "";
+      title.textContent = `${item.label || "Media"}${name ? ` — ${name}` : ""}`;
+
+      const meta = document.createElement("div");
+      meta.className = "mediaMeta";
+      const uHost = getHostname(item.url || "");
+      const size = typeof item.size === "number" ? `${Math.round(item.size / 1024)} KB` : "";
+      meta.textContent = [uHost, item.mime || item.kind, size].filter(Boolean).join(" · ");
+
+      const url = document.createElement("div");
+      url.className = "mediaUrl";
+      url.title = item.url || "";
+      url.textContent = item.url || "";
+
+      const actions = document.createElement("div");
+      actions.className = "mediaActions";
+
+      const btnSend = document.createElement("button");
+      btnSend.textContent = i18n("sendToFalcon");
+      btnSend.addEventListener("click", async () => {
+        statusEl.textContent = "";
+        btnSend.disabled = true;
+        const ok = await chrome.runtime.sendMessage({
+          type: "sendUrlToFalcon",
+          url: item.url,
+          referrer: tab.url || "",
+          filename: item.filename || "",
+        });
+        statusEl.textContent = ok?.ok ? i18n("done") : i18n("failed");
+        btnSend.disabled = false;
+      });
+
+      const btnDownload = document.createElement("button");
+      btnDownload.textContent = i18n("downloadInBrowser");
+      btnDownload.addEventListener("click", async () => {
+        statusEl.textContent = "";
+        btnDownload.disabled = true;
+        const ok = await chrome.runtime.sendMessage({ type: "downloadInBrowser", url: item.url });
+        statusEl.textContent = ok?.ok ? i18n("done") : i18n("failed");
+        btnDownload.disabled = false;
+      });
+
+      const btnCopy = document.createElement("button");
+      btnCopy.textContent = i18n("copyUrl");
+      btnCopy.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(item.url || "");
+          statusEl.textContent = i18n("done");
+        } catch {
+          statusEl.textContent = i18n("failed");
+        }
+      });
+
+      actions.append(btnSend, btnDownload, btnCopy);
+      container.append(title, meta, url, actions);
+      mediaListEl.appendChild(container);
+    }
+  }
 
   enabledEl.addEventListener("change", async () => {
     const next = { ...settings, enabled: enabledEl.checked };
@@ -106,10 +196,17 @@ async function main() {
     statusEl.textContent = i18n("saved");
   });
 
+  document.getElementById("snifferClear").addEventListener("click", async () => {
+    if (typeof tab?.id !== "number") return;
+    await chrome.runtime.sendMessage({ type: "clearMediaForTab", tabId: tab.id });
+    await refreshMediaList();
+  });
+
   document.getElementById("openOptions").addEventListener("click", async () => {
     await chrome.runtime.openOptionsPage();
   });
+
+  await refreshMediaList();
 }
 
 main();
-
