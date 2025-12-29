@@ -443,6 +443,14 @@ URL：%1
       <translation>连接数：</translation>
     </message>
     <message>
+      <source>Referrer:</source>
+      <translation>来源页面：</translation>
+    </message>
+    <message>
+      <source>Cookies:</source>
+      <translation>Cookies：</translation>
+    </message>
+    <message>
       <source>Cancel</source>
       <translation>取消</translation>
     </message>
@@ -452,4 +460,3 @@ URL：%1
     </message>
   </context>
 </TS>
-

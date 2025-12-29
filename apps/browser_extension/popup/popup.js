@@ -133,11 +133,13 @@ async function main() {
       btnSend.addEventListener("click", async () => {
         statusEl.textContent = "";
         btnSend.disabled = true;
+        const ua = navigator.userAgent || "";
         const ok = await chrome.runtime.sendMessage({
           type: "sendUrlToFalcon",
           url: item.url,
-          referrer: tab.url || "",
+          referrer: item.requestReferrer || tab.url || "",
           filename: item.filename || "",
+          userAgent: item.requestUserAgent || ua,
         });
         statusEl.textContent = ok?.ok ? i18n("done") : i18n("failed");
         btnSend.disabled = false;

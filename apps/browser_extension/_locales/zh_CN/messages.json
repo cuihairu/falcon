@@ -62,6 +62,9 @@
   "launchIfUnavailable": {
     "message": "Falcon 未运行时尝试拉起（需要注册 falcon:// 协议）"
   },
+  "includeCookiesOnSend": {
+    "message": "发送到 Falcon 时包含 Cookies（用于已登录资源）"
+  },
   "save": {
     "message": "保存"
   },

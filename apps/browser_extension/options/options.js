@@ -5,6 +5,7 @@ const DEFAULT_SETTINGS = Object.freeze({
   sniffMedia: true,
   sniffIncludeSegments: false,
   sniffMaxItemsPerTab: 80,
+  includeCookiesOnSend: false,
   disabledHosts: [],
 });
 
@@ -45,6 +46,7 @@ async function main() {
   document.getElementById("disabledSites").textContent = i18n("disabledSites");
   document.getElementById("apiEndpoint").textContent = i18n("apiEndpoint");
   document.getElementById("launchIfUnavailable").textContent = i18n("launchIfUnavailable");
+  document.getElementById("includeCookiesOnSendLabel").textContent = i18n("includeCookiesOnSend");
   document.getElementById("save").textContent = i18n("save");
 
   const settings = await loadSettings();
@@ -54,6 +56,7 @@ async function main() {
   const sniffIncludeSegmentsEl = document.getElementById("sniffIncludeSegments");
   const apiEl = document.getElementById("apiBaseUrl");
   const launchEl = document.getElementById("launchFalconIfUnavailable");
+  const cookiesEl = document.getElementById("includeCookiesOnSend");
   const disabledEl = document.getElementById("disabledHosts");
   const statusEl = document.getElementById("status");
 
@@ -62,6 +65,7 @@ async function main() {
   sniffIncludeSegmentsEl.checked = !!settings.sniffIncludeSegments;
   apiEl.value = settings.apiBaseUrl || DEFAULT_SETTINGS.apiBaseUrl;
   launchEl.checked = settings.launchFalconIfUnavailable !== false;
+  cookiesEl.checked = !!settings.includeCookiesOnSend;
   disabledEl.value = (settings.disabledHosts || []).join("\n");
 
   document.getElementById("save").addEventListener("click", async () => {
@@ -72,6 +76,7 @@ async function main() {
       sniffMaxItemsPerTab: settings.sniffMaxItemsPerTab || DEFAULT_SETTINGS.sniffMaxItemsPerTab,
       apiBaseUrl: apiEl.value.trim() || DEFAULT_SETTINGS.apiBaseUrl,
       launchFalconIfUnavailable: launchEl.checked,
+      includeCookiesOnSend: cookiesEl.checked,
       disabledHosts: toLines(disabledEl.value),
     };
     await storageSet(next);

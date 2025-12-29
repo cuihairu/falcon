@@ -18,6 +18,7 @@ struct IncomingDownloadRequest {
     QString filename;
     QString referrer;
     QString user_agent;
+    QString cookies;
 };
 
 class HttpIpcServer : public QObject

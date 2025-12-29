@@ -33,6 +33,8 @@ AddDownloadDialog::AddDownloadDialog(const UrlInfo& url_info, QWidget* parent)
     , browse_button_(nullptr)
     , connections_spin_(nullptr)
     , user_agent_combo_(nullptr)
+    , referrer_edit_(nullptr)
+    , cookies_edit_(nullptr)
     , start_button_(nullptr)
     , cancel_button_(nullptr)
 {
@@ -69,6 +71,34 @@ int AddDownloadDialog::get_connections() const
 QString AddDownloadDialog::get_user_agent() const
 {
     return user_agent_combo_->currentText();
+}
+
+void AddDownloadDialog::set_request_referrer(const QString& referrer)
+{
+    if (referrer_edit_) {
+        referrer_edit_->setText(referrer);
+    }
+}
+
+void AddDownloadDialog::set_request_user_agent(const QString& user_agent)
+{
+    if (!user_agent_combo_) {
+        return;
+    }
+
+    const QString trimmed = user_agent.trimmed();
+    if (trimmed.isEmpty()) {
+        return;
+    }
+    user_agent_combo_->setCurrentText(trimmed);
+}
+
+void AddDownloadDialog::set_request_cookies(const QString& cookies)
+{
+    if (!cookies_edit_) {
+        return;
+    }
+    cookies_edit_->setPlainText(cookies);
 }
 
 //==============================================================================
@@ -232,6 +262,20 @@ QWidget* AddDownloadDialog::create_options_section_widget()
     user_agent_combo_->addItem("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
     user_agent_combo_->addItem("curl/7.68.0");
     layout->addRow(ua_label, user_agent_combo_);
+
+    // Referrer
+    auto* ref_label = new QLabel(tr("Referrer:"), this);
+    referrer_edit_ = new QLineEdit(this);
+    referrer_edit_->setPlaceholderText("https://example.com/");
+    layout->addRow(ref_label, referrer_edit_);
+
+    // Cookies
+    auto* cookie_label = new QLabel(tr("Cookies:"), this);
+    cookies_edit_ = new QPlainTextEdit(this);
+    cookies_edit_->setPlaceholderText("name=value; ...");
+    cookies_edit_->setMaximumBlockCount(50);
+    cookies_edit_->setFixedHeight(72);
+    layout->addRow(cookie_label, cookies_edit_);
 
     return group;
 }

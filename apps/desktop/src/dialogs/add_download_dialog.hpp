@@ -13,6 +13,7 @@
 #include <QLabel>
 #include <QComboBox>
 #include <QSpinBox>
+#include <QPlainTextEdit>
 
 #include "../utils/url_detector.hpp"
 
@@ -31,6 +32,10 @@ class AddDownloadDialog : public QDialog
 public:
     explicit AddDownloadDialog(const UrlInfo& url_info, QWidget* parent = nullptr);
     ~AddDownloadDialog() override = default;
+
+    void set_request_referrer(const QString& referrer);
+    void set_request_user_agent(const QString& user_agent);
+    void set_request_cookies(const QString& cookies);
 
     /**
      * @brief Get final download URL
@@ -97,6 +102,8 @@ private:
     QPushButton* browse_button_;
     QSpinBox* connections_spin_;
     QComboBox* user_agent_combo_;
+    QLineEdit* referrer_edit_;
+    QPlainTextEdit* cookies_edit_;
     QPushButton* start_button_;
     QPushButton* cancel_button_;
 };

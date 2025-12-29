@@ -62,6 +62,9 @@
   "launchIfUnavailable": {
     "message": "Launch Falcon if not running (requires falcon:// protocol handler)"
   },
+  "includeCookiesOnSend": {
+    "message": "Include cookies when sending to Falcon (for logged-in resources)"
+  },
   "save": {
     "message": "Save"
   },

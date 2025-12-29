@@ -189,7 +189,25 @@ void MainWindow::on_download_requested(const IncomingDownloadRequest& request)
         QMessageBox::warning(this, tr("Invalid URL"), tr("Unrecognized download URL:\n%1").arg(request.url));
         return;
     }
-    on_url_detected(url_info);
+    AddDownloadDialog dialog(url_info, this);
+    dialog.set_request_referrer(request.referrer);
+    dialog.set_request_user_agent(request.user_agent);
+    dialog.set_request_cookies(request.cookies);
+
+    if (dialog.exec() == QDialog::Accepted) {
+        QString url = dialog.get_url();
+        QString save_path = dialog.get_save_path();
+        QString file_name = dialog.get_file_name();
+        int connections = dialog.get_connections();
+
+        QMessageBox::information(
+            this,
+            tr("Download Added"),
+            tr("A download task was added:\n\nURL: %1\nSave path: %2\nFile name: %3\nConnections: %4")
+                .arg(url, save_path, file_name)
+                .arg(connections)
+        );
+    }
 }
 
 } // namespace falcon::desktop

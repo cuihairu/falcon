@@ -13,7 +13,7 @@
     "service_worker": "service_worker.js",
     "type": "module"
   },
-  "permissions": ["downloads", "storage", "notifications", "tabs", "webRequest"],
+  "permissions": ["downloads", "storage", "notifications", "tabs", "webRequest", "cookies"],
   "host_permissions": ["<all_urls>", "http://127.0.0.1/*", "http://localhost/*"],
   "minimum_chrome_version": "114"
 }

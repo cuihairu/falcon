@@ -5,6 +5,7 @@ const DEFAULT_SETTINGS = Object.freeze({
   sniffMedia: true,
   sniffIncludeSegments: false,
   sniffMaxItemsPerTab: 80,
+  includeCookiesOnSend: false,
   disabledHosts: [],
 });
 
@@ -132,6 +133,25 @@ function headerValue(headers, name) {
   const needle = name.toLowerCase();
   const h = headers.find((x) => String(x?.name || "").toLowerCase() === needle);
   return String(h?.value || "");
+}
+
+function getCookieHeaderForUrl(url) {
+  return new Promise((resolve) => {
+    try {
+      chrome.cookies.getAll({ url }, (cookies) => {
+        if (!Array.isArray(cookies) || cookies.length === 0) {
+          resolve("");
+          return;
+        }
+        const pairs = cookies
+          .filter((c) => c && typeof c.name === "string" && typeof c.value === "string")
+          .map((c) => `${c.name}=${c.value}`);
+        resolve(pairs.join("; "));
+      });
+    } catch {
+      resolve("");
+    }
+  });
 }
 
 function isLikelySegmentUrl(url) {
@@ -321,6 +341,47 @@ chrome.webRequest.onHeadersReceived.addListener(
   ["responseHeaders", "extraHeaders"],
 );
 
+chrome.webRequest.onBeforeSendHeaders.addListener(
+  async (details) => {
+    try {
+      if (!details || typeof details.tabId !== "number" || details.tabId < 0) return;
+      if (!details.url || details.url.startsWith("blob:")) return;
+
+      const settings = await getSettings();
+      if (!settings.sniffMedia) return;
+
+      const host = getHostnameSafe(details.url);
+      if (host && isHostDisabled(host, settings.disabledHosts)) return;
+
+      const classification = classifyMediaUrl(details.url, "");
+      if (!classification) return;
+
+      if (!settings.sniffIncludeSegments && isLikelySegmentUrl(details.url)) {
+        return;
+      }
+
+      const referrer = headerValue(details.requestHeaders, "referer");
+      const userAgent = headerValue(details.requestHeaders, "user-agent");
+      await upsertMediaItemForTab(
+        details.tabId,
+        {
+          url: details.url,
+          kind: classification.kind,
+          label: classification.label,
+          requestReferrer: referrer,
+          requestUserAgent: userAgent,
+          seenAt: Date.now(),
+        },
+        Math.max(10, Math.min(400, settings.sniffMaxItemsPerTab || DEFAULT_SETTINGS.sniffMaxItemsPerTab)),
+      );
+    } catch {
+      // Ignore sniffer errors.
+    }
+  },
+  { urls: ["<all_urls>"] },
+  ["requestHeaders", "extraHeaders"],
+);
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     if (msg?.type === "getMediaForTab" && typeof msg.tabId === "number") {
@@ -335,11 +396,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
     if (msg?.type === "sendUrlToFalcon" && typeof msg.url === "string") {
       const settings = await getSettings();
+      const cookies = settings.includeCookiesOnSend ? await getCookieHeaderForUrl(msg.url) : "";
+      const cookiesSafe = cookies.length > 8192 ? cookies.slice(0, 8192) : cookies;
       const ok = await sendToFalcon(settings.apiBaseUrl, {
         url: msg.url,
         referrer: msg.referrer || "",
         filename: msg.filename || "",
         user_agent: msg.userAgent || "",
+        cookies: cookiesSafe,
       });
       if (!ok && settings.launchFalconIfUnavailable) {
         await tryLaunchFalcon(msg.url);

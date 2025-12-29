@@ -153,6 +153,7 @@ void HttpIpcServer::handle_socket(QTcpSocket* socket)
     request.filename = obj.value("filename").toString().trimmed();
     request.referrer = obj.value("referrer").toString();
     request.user_agent = obj.value("user_agent").toString();
+    request.cookies = obj.value("cookies").toString();
     emit download_requested(request);
 
     write_json(
