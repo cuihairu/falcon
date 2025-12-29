@@ -13,6 +13,9 @@
 #include <QPushButton>
 #include <QProgressBar>
 #include <QLabel>
+#include <QTimer>
+
+#include <falcon/download_task.hpp>
 
 namespace falcon::desktop {
 
@@ -43,6 +46,8 @@ public:
     explicit DownloadPage(QWidget* parent = nullptr);
     ~DownloadPage() override;
 
+    void add_engine_task(const falcon::DownloadTask::Ptr& task);
+
 private:
     void setup_ui();
     void create_tab_widget();
@@ -57,6 +62,9 @@ private:
 
     // 更新任务状态
     void update_task_status();
+    void refresh_engine_tasks();
+    static QString format_bytes(uint64_t bytes);
+    static QString format_speed(uint64_t bytes_per_second);
 
     // 控件
     QTabWidget* tab_widget_;
@@ -80,6 +88,10 @@ private:
     QPushButton* cancel_button_;
     QPushButton* delete_button_;
     QPushButton* clean_button_;
+
+    QTimer* refresh_timer_;
+    QHash<qulonglong, int> row_by_task_id_;
+    QList<falcon::DownloadTask::Ptr> engine_tasks_;
 };
 
 } // namespace falcon::desktop

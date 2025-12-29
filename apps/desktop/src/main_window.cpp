@@ -31,12 +31,15 @@ MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
     , side_bar_(nullptr)
     , content_stack_(nullptr)
+    , download_page_(nullptr)
     , clipboard_monitor_(nullptr)
     , ipc_server_(nullptr)
+    , download_engine_(nullptr)
 {
     setup_ui();
     setup_clipboard_monitor();
     setup_ipc_server();
+    ensure_download_engine();
 }
 
 MainWindow::~MainWindow()
@@ -82,6 +85,69 @@ void MainWindow::open_url(const QString& url)
     on_url_detected(url_info);
 }
 
+void MainWindow::ensure_download_engine()
+{
+    if (download_engine_) {
+        return;
+    }
+    download_engine_ = std::make_unique<falcon::DownloadEngine>();
+}
+
+void MainWindow::show_add_download_dialog(UrlInfo url_info, const IncomingDownloadRequest* request_context)
+{
+    if (request_context) {
+        if (!request_context->filename.trimmed().isEmpty()) {
+            url_info.file_name = request_context->filename.trimmed();
+        }
+    }
+
+    AddDownloadDialog dialog(url_info, this);
+    if (request_context) {
+        dialog.set_request_referrer(request_context->referrer);
+        dialog.set_request_user_agent(request_context->user_agent);
+        dialog.set_request_cookies(request_context->cookies);
+    }
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    ensure_download_engine();
+
+    falcon::DownloadOptions options;
+    options.max_connections = static_cast<std::size_t>(dialog.get_connections());
+    options.output_directory = dialog.get_save_path().toStdString();
+    options.output_filename = dialog.get_file_name().toStdString();
+    options.user_agent = dialog.get_user_agent().toStdString();
+    options.referer = dialog.get_referrer().toStdString();
+
+    const QString cookies = dialog.get_cookies();
+    if (!cookies.isEmpty()) {
+        options.headers["Cookie"] = cookies.toStdString();
+    }
+
+    const std::string url = dialog.get_url().toStdString();
+    auto task = download_engine_->add_task(url, options);
+    if (!task) {
+        QMessageBox::warning(this, tr("Download"), tr("URL is not supported."));
+        return;
+    }
+
+    (void)download_engine_->start_task(task->id());
+
+    if (download_page_) {
+        download_page_->add_engine_task(task);
+    }
+
+    QMessageBox::information(
+        this,
+        tr("Download Added"),
+        tr("A download task was added:\n\nURL: %1\nSave path: %2\nFile name: %3\nConnections: %4")
+            .arg(dialog.get_url(), dialog.get_save_path(), dialog.get_file_name())
+            .arg(dialog.get_connections())
+    );
+}
+
 void MainWindow::create_side_bar()
 {
     side_bar_ = new SideBar(this);
@@ -113,8 +179,8 @@ void MainWindow::create_content_area()
 void MainWindow::create_pages()
 {
     // 下载页面
-    auto* download_page = new DownloadPage(this);
-    content_stack_->addWidget(download_page);
+    download_page_ = new DownloadPage(this);
+    content_stack_->addWidget(download_page_);
 
     // 云盘页面
     auto* cloud_page = new CloudPage(this);
@@ -157,57 +223,18 @@ void MainWindow::setup_ipc_server()
 
 void MainWindow::on_url_detected(const UrlInfo& url_info)
 {
-    // 显示下载对话框
-    AddDownloadDialog dialog(url_info, this);
-
-    if (dialog.exec() == QDialog::Accepted) {
-        // TODO: 实际启动下载任务
-        // 这里应该调用下载管理器来创建新的下载任务
-        QString url = dialog.get_url();
-        QString save_path = dialog.get_save_path();
-        QString file_name = dialog.get_file_name();
-        int connections = dialog.get_connections();
-
-        // 临时显示消息框，实际应该添加到下载列表
-        QMessageBox::information(
-            this,
-            tr("Download Added"),
-            tr("A download task was added:\n\nURL: %1\nSave path: %2\nFile name: %3\nConnections: %4")
-                .arg(url, save_path, file_name)
-                .arg(connections)
-        );
-    }
+    show_add_download_dialog(url_info, nullptr);
 }
 
 void MainWindow::on_download_requested(const IncomingDownloadRequest& request)
 {
-    UrlInfo url_info = UrlDetector::parse_url(request.url);
-    if (!request.filename.trimmed().isEmpty()) {
-        url_info.file_name = request.filename.trimmed();
-    }
+    const UrlInfo url_info = UrlDetector::parse_url(request.url);
     if (!url_info.is_valid) {
         QMessageBox::warning(this, tr("Invalid URL"), tr("Unrecognized download URL:\n%1").arg(request.url));
         return;
     }
-    AddDownloadDialog dialog(url_info, this);
-    dialog.set_request_referrer(request.referrer);
-    dialog.set_request_user_agent(request.user_agent);
-    dialog.set_request_cookies(request.cookies);
 
-    if (dialog.exec() == QDialog::Accepted) {
-        QString url = dialog.get_url();
-        QString save_path = dialog.get_save_path();
-        QString file_name = dialog.get_file_name();
-        int connections = dialog.get_connections();
-
-        QMessageBox::information(
-            this,
-            tr("Download Added"),
-            tr("A download task was added:\n\nURL: %1\nSave path: %2\nFile name: %3\nConnections: %4")
-                .arg(url, save_path, file_name)
-                .arg(connections)
-        );
-    }
+    show_add_download_dialog(url_info, &request);
 }
 
 } // namespace falcon::desktop

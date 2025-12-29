@@ -14,6 +14,7 @@
 #include <QInputDialog>
 #include <QProgressBar>
 #include <QStyle>
+#include <falcon/event_listener.hpp>
 
 namespace falcon::desktop {
 
@@ -30,8 +31,14 @@ DownloadPage::DownloadPage(QWidget* parent)
     , cancel_button_(nullptr)
     , delete_button_(nullptr)
     , clean_button_(nullptr)
+    , refresh_timer_(nullptr)
 {
     setup_ui();
+
+    refresh_timer_ = new QTimer(this);
+    refresh_timer_->setInterval(500);
+    connect(refresh_timer_, &QTimer::timeout, this, &DownloadPage::refresh_engine_tasks);
+    refresh_timer_->start();
 }
 
 DownloadPage::~DownloadPage() = default;
@@ -296,6 +303,107 @@ void DownloadPage::add_new_task()
 void DownloadPage::update_task_status()
 {
     // TODO: Update status from backend
+}
+
+QString DownloadPage::format_bytes(uint64_t bytes)
+{
+    static const char* units[] = {"B", "KB", "MB", "GB", "TB"};
+    int unit = 0;
+    double size = static_cast<double>(bytes);
+    while (size >= 1024.0 && unit < 4) {
+        size /= 1024.0;
+        ++unit;
+    }
+    if (unit == 0) {
+        return QString::number(bytes) + " B";
+    }
+    return QString("%1 %2").arg(size, 0, 'f', 1).arg(units[unit]);
+}
+
+QString DownloadPage::format_speed(uint64_t bytes_per_second)
+{
+    if (bytes_per_second == 0) {
+        return "0 B/s";
+    }
+    return format_bytes(bytes_per_second) + "/s";
+}
+
+void DownloadPage::add_engine_task(const falcon::DownloadTask::Ptr& task)
+{
+    if (!task) {
+        return;
+    }
+
+    const qulonglong id = static_cast<qulonglong>(task->id());
+    if (row_by_task_id_.contains(id)) {
+        return;
+    }
+
+    engine_tasks_.push_back(task);
+
+    const int row = downloading_table_->rowCount();
+    downloading_table_->insertRow(row);
+    row_by_task_id_.insert(id, row);
+
+    const QString filename = !task->options().output_filename.empty()
+        ? QString::fromStdString(task->options().output_filename)
+        : QString::fromStdString(task->file_info().filename);
+    const QString save_dir = QString::fromStdString(task->options().output_directory);
+
+    auto set_item = [&](int col, const QString& text) {
+        auto* item = new QTableWidgetItem(text);
+        item->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        downloading_table_->setItem(row, col, item);
+    };
+
+    set_item(0, filename.isEmpty() ? tr("(unknown)") : filename);
+    set_item(1, "-");
+    set_item(3, "0 B/s");
+    set_item(4, QString::fromUtf8(falcon::to_string(task->status())));
+    set_item(5, save_dir);
+    set_item(6, "...");
+
+    auto* progress_bar = new QProgressBar(this);
+    progress_bar->setRange(0, 100);
+    progress_bar->setValue(0);
+    progress_bar->setTextVisible(false);
+    downloading_table_->setCellWidget(row, 2, progress_bar);
+}
+
+void DownloadPage::refresh_engine_tasks()
+{
+    for (const auto& task : engine_tasks_) {
+        if (!task) {
+            continue;
+        }
+
+        const qulonglong id = static_cast<qulonglong>(task->id());
+        auto it = row_by_task_id_.find(id);
+        if (it == row_by_task_id_.end()) {
+            continue;
+        }
+
+        const int row = it.value();
+
+        const uint64_t total = static_cast<uint64_t>(task->total_bytes());
+        const uint64_t speed = static_cast<uint64_t>(task->speed());
+        const int pct = static_cast<int>(task->progress() * 100.0f);
+
+        if (auto* size_item = downloading_table_->item(row, 1)) {
+            size_item->setText(total > 0 ? format_bytes(total) : "-");
+        }
+        if (auto* speed_item = downloading_table_->item(row, 3)) {
+            speed_item->setText(format_speed(speed));
+        }
+        if (auto* status_item = downloading_table_->item(row, 4)) {
+            status_item->setText(QString::fromUtf8(falcon::to_string(task->status())));
+        }
+        if (auto* widget = downloading_table_->cellWidget(row, 2)) {
+            if (auto* bar = qobject_cast<QProgressBar*>(widget)) {
+                bar->setValue(std::max(0, std::min(100, pct)));
+            }
+        }
+    }
 }
 
 } // namespace falcon::desktop

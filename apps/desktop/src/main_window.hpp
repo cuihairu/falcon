@@ -11,9 +11,12 @@
 #include <memory>
 #include <QStackedWidget>
 
+#include <falcon/download_engine.hpp>
+
 namespace falcon::desktop {
 
 class SideBar;
+class DownloadPage;
 class ClipboardMonitor;
 class HttpIpcServer;
 struct UrlInfo;
@@ -50,6 +53,8 @@ private:
     void create_pages();
     void setup_clipboard_monitor();
     void setup_ipc_server();
+    void ensure_download_engine();
+    void show_add_download_dialog(UrlInfo url_info, const IncomingDownloadRequest* request_context);
 
     // 侧边导航栏
     SideBar* side_bar_;
@@ -57,11 +62,17 @@ private:
     // 内容区域
     QStackedWidget* content_stack_;
 
+    // 页面实例
+    DownloadPage* download_page_;
+
     // 剪切板监听
     ClipboardMonitor* clipboard_monitor_;
 
     // 浏览器扩展 IPC
     HttpIpcServer* ipc_server_;
+
+    // 核心下载引擎
+    std::unique_ptr<falcon::DownloadEngine> download_engine_;
 
     // 页面索引
     enum PageIndex {

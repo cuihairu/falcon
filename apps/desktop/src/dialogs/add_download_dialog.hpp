@@ -37,6 +37,9 @@ public:
     void set_request_user_agent(const QString& user_agent);
     void set_request_cookies(const QString& cookies);
 
+    QString get_referrer() const;
+    QString get_cookies() const;
+
     /**
      * @brief Get final download URL
      * @return Download URL

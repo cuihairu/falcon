@@ -73,6 +73,16 @@ QString AddDownloadDialog::get_user_agent() const
     return user_agent_combo_->currentText();
 }
 
+QString AddDownloadDialog::get_referrer() const
+{
+    return referrer_edit_ ? referrer_edit_->text().trimmed() : QString();
+}
+
+QString AddDownloadDialog::get_cookies() const
+{
+    return cookies_edit_ ? cookies_edit_->toPlainText().trimmed() : QString();
+}
+
 void AddDownloadDialog::set_request_referrer(const QString& referrer)
 {
     if (referrer_edit_) {

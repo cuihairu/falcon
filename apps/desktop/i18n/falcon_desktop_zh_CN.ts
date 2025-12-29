@@ -21,6 +21,14 @@
       <translation>已添加下载</translation>
     </message>
     <message>
+      <source>Download</source>
+      <translation>下载</translation>
+    </message>
+    <message>
+      <source>URL is not supported.</source>
+      <translation>不支持该链接。</translation>
+    </message>
+    <message>
       <source>A download task was added:
 
 URL: %1
@@ -113,6 +121,10 @@ URL：%1
     <message>
       <source>Waiting</source>
       <translation>等待中</translation>
+    </message>
+    <message>
+      <source>(unknown)</source>
+      <translation>（未知）</translation>
     </message>
     <message>
       <source>New Download Task</source>
