@@ -8,31 +8,12 @@
 #pragma once
 
 #include <QWidget>
-#include <QPushButton>
+#include <QListWidget>
+#include <QToolButton>
 #include <QVBoxLayout>
 #include <QPropertyAnimation>
 
 namespace falcon::desktop {
-
-/**
- * @brief 侧边导航按钮
- */
-class SideBarButton : public QPushButton
-{
-    Q_OBJECT
-
-public:
-    explicit SideBarButton(const QString& icon_text,
-                          const QString& tooltip,
-                          QWidget* parent = nullptr);
-
-    void setActive(bool active);
-    bool isActive() const { return active_; }
-
-private:
-    void update_style(bool active);
-    bool active_ = false;
-};
 
 /**
  * @brief 侧边导航栏
@@ -60,20 +41,17 @@ signals:
 
 private:
     void setup_ui();
-    void create_buttons();
-    void update_button_states();
+    void create_nav_list();
+    void set_expanded(bool expanded);
 
     // 布局
     QVBoxLayout* layout_;
 
-    // 按钮
-    SideBarButton* download_button_;
-    SideBarButton* cloud_button_;
-    SideBarButton* discovery_button_;
-    SideBarButton* settings_button_;
+    // 导航列表
+    QListWidget* nav_list_;
 
     // 收起按钮
-    QPushButton* toggle_button_;
+    QToolButton* toggle_button_;
 
     // 状态
     bool expanded_ = true;

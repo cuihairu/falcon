@@ -6,7 +6,6 @@
  */
 
 #include "discovery_page.hpp"
-#include "../styles.hpp"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -18,6 +17,7 @@
 #include <QMenu>
 #include <QProgressBar>
 #include <QApplication>
+#include <QStyle>
 
 namespace falcon::desktop {
 
@@ -38,14 +38,11 @@ void DiscoveryPage::setup_ui()
     main_layout->setSpacing(16);
 
     // 页面标题
-    auto* title_label = new QLabel("资源发现", this);
-    title_label->setStyleSheet(R"(
-        QLabel {
-            font-size: 24px;
-            font-weight: 700;
-            color: #323130;
-        }
-    )");
+    auto* title_label = new QLabel(tr("Discovery"), this);
+    auto title_font = title_label->font();
+    title_font.setPointSize(20);
+    title_font.setBold(true);
+    title_label->setFont(title_font);
     main_layout->addWidget(title_label);
 
     // 创建搜索栏
@@ -74,39 +71,36 @@ QWidget* DiscoveryPage::create_search_bar()
 
     // 搜索类型选择
     search_type_combo_ = new QComboBox(search_bar);
-    search_type_combo_->setStyleSheet(get_combo_stylesheet());
-    search_type_combo_->addItem("🧲 磁力链接", "magnet");
-    search_type_combo_->addItem("🌐 HTTP资源", "http");
-    search_type_combo_->addItem("☁️ 云盘资源", "cloud");
-    search_type_combo_->addItem("📡 FTP资源", "ftp");
+    search_type_combo_->addItem(tr("Magnet"), "magnet");
+    search_type_combo_->addItem(tr("HTTP"), "http");
+    search_type_combo_->addItem(tr("Cloud"), "cloud");
+    search_type_combo_->addItem(tr("FTP"), "ftp");
     layout->addWidget(search_type_combo_);
 
     // 搜索输入框
     search_input_ = new QLineEdit(search_bar);
-    search_input_->setStyleSheet(get_input_stylesheet());
-    search_input_->setPlaceholderText("输入搜索关键词...");
+    search_input_->setPlaceholderText(tr("Enter keywords..."));
     search_input_->setMinimumWidth(400);
     layout->addWidget(search_input_, 1);
 
     // 搜索按钮
-    search_button_ = new QPushButton("🔍 搜索", search_bar);
-    search_button_->setStyleSheet(get_button_stylesheet(true));
+    search_button_ = new QPushButton(tr("Search"), search_bar);
+    search_button_->setIcon(style()->standardIcon(QStyle::SP_FileDialogContentsView));
     search_button_->setCursor(Qt::PointingHandCursor);
     layout->addWidget(search_button_);
 
     // 清空按钮
-    clear_button_ = new QPushButton("✖️ 清空", search_bar);
-    clear_button_->setStyleSheet(get_button_stylesheet(false));
+    clear_button_ = new QPushButton(tr("Clear"), search_bar);
+    clear_button_->setIcon(style()->standardIcon(QStyle::SP_DialogResetButton));
     clear_button_->setCursor(Qt::PointingHandCursor);
     layout->addWidget(clear_button_);
 
     // 排序方式
     sort_combo_ = new QComboBox(search_bar);
-    sort_combo_->setStyleSheet(get_combo_stylesheet());
-    sort_combo_->addItem("按相关性", "relevance");
-    sort_combo_->addItem("按大小", "size");
-    sort_combo_->addItem("按日期", "date");
-    sort_combo_->addItem("按种子数", "seeders");
+    sort_combo_->addItem(tr("Relevance"), "relevance");
+    sort_combo_->addItem(tr("Size"), "size");
+    sort_combo_->addItem(tr("Date"), "date");
+    sort_combo_->addItem(tr("Seeders"), "seeders");
     layout->addWidget(sort_combo_);
 
     // 连接信号
@@ -127,44 +121,37 @@ QWidget* DiscoveryPage::create_filter_bar()
     layout->setSpacing(8);
 
     // 分类过滤
-    auto* category_label = new QLabel("分类:", filter_bar);
-    category_label->setStyleSheet("color: #605e5c; font-size: 13px;");
+    auto* category_label = new QLabel(tr("Category:"), filter_bar);
     category_filter_ = new QComboBox(filter_bar);
-    category_filter_->setStyleSheet(get_combo_stylesheet());
-    category_filter_->addItem("全部", "all");
-    category_filter_->addItem("视频", "video");
-    category_filter_->addItem("音频", "audio");
-    category_filter_->addItem("文档", "document");
-    category_filter_->addItem("软件", "software");
-    category_filter_->addItem("图片", "image");
+    category_filter_->addItem(tr("All"), "all");
+    category_filter_->addItem(tr("Video"), "video");
+    category_filter_->addItem(tr("Audio"), "audio");
+    category_filter_->addItem(tr("Document"), "document");
+    category_filter_->addItem(tr("Software"), "software");
+    category_filter_->addItem(tr("Image"), "image");
     layout->addWidget(category_label);
     layout->addWidget(category_filter_);
 
     // 大小过滤
-    auto* size_label = new QLabel("大小:", filter_bar);
-    size_label->setStyleSheet("color: #605e5c; font-size: 13px;");
+    auto* size_label = new QLabel(tr("Size:"), filter_bar);
     layout->addWidget(size_label);
 
     min_size_edit_ = new QLineEdit(filter_bar);
-    min_size_edit_->setStyleSheet(get_input_stylesheet());
-    min_size_edit_->setPlaceholderText("最小");
+    min_size_edit_->setPlaceholderText(tr("Min"));
     min_size_edit_->setMaximumWidth(80);
     layout->addWidget(min_size_edit_);
 
     auto* to_label = new QLabel("-", filter_bar);
-    to_label->setStyleSheet("color: #605e5c; font-size: 13px;");
     layout->addWidget(to_label);
 
     max_size_edit_ = new QLineEdit(filter_bar);
-    max_size_edit_->setStyleSheet(get_input_stylesheet());
-    max_size_edit_->setPlaceholderText("最大");
+    max_size_edit_->setPlaceholderText(tr("Max"));
     max_size_edit_->setMaximumWidth(80);
     layout->addWidget(max_size_edit_);
 
     size_filter_ = new QComboBox(filter_bar);
-    size_filter_->setStyleSheet(get_combo_stylesheet());
-    size_filter_->addItem("MB", "mb");
-    size_filter_->addItem("GB", "gb");
+    size_filter_->addItem(tr("MB"), "mb");
+    size_filter_->addItem(tr("GB"), "gb");
     layout->addWidget(size_filter_);
 
     layout->addStretch();
@@ -177,7 +164,13 @@ void DiscoveryPage::create_results_table()
     results_table_ = new QTableWidget(this);
     results_table_->setColumnCount(7);
     results_table_->setHorizontalHeaderLabels({
-        "标题", "大小", "来源", "类型", "种子数", "下载中", "操作"
+        tr("Title"),
+        tr("Size"),
+        tr("Source"),
+        tr("Type"),
+        tr("Seeders"),
+        tr("Leechers"),
+        tr("Actions")
     });
 
     results_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -186,7 +179,6 @@ void DiscoveryPage::create_results_table()
     results_table_->horizontalHeader()->setStretchLastSection(false);
     results_table_->setContextMenuPolicy(Qt::CustomContextMenu);
     results_table_->setAlternatingRowColors(true);
-    results_table_->setStyleSheet(get_table_stylesheet());
 
     // 设置列宽
     results_table_->setColumnWidth(0, 350);  // 标题
@@ -209,26 +201,12 @@ QWidget* DiscoveryPage::create_status_bar()
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(8);
 
-    status_label_ = new QLabel("就绪", status_bar);
-    status_label_->setStyleSheet(R"(
-        QLabel {
-            padding: 8px;
-            color: #605e5c;
-            font-size: 13px;
-        }
-    )");
+    status_label_ = new QLabel(tr("Ready"), status_bar);
     layout->addWidget(status_label_);
 
     layout->addStretch();
 
     result_count_label_ = new QLabel("", status_bar);
-    result_count_label_->setStyleSheet(R"(
-        QLabel {
-            padding: 8px;
-            color: #605e5c;
-            font-size: 13px;
-        }
-    )");
     layout->addWidget(result_count_label_);
 
     return status_bar;
@@ -238,7 +216,7 @@ void DiscoveryPage::perform_search()
 {
     QString keyword = search_input_->text().trimmed();
     if (keyword.isEmpty()) {
-        QMessageBox::warning(this, "提示", "请输入搜索关键词");
+        QMessageBox::warning(this, tr("Notice"), tr("Please enter keywords."));
         return;
     }
 
@@ -250,14 +228,7 @@ void DiscoveryPage::perform_search()
     results_table_->setRowCount(0);
     current_results_.clear();
 
-    status_label_->setText("正在搜索...");
-    status_label_->setStyleSheet(R"(
-        QLabel {
-            padding: 8px;
-            color: #0078d4;
-            font-size: 13px;
-        }
-    )");
+    status_label_->setText(tr("Searching..."));
 
     // 根据搜索类型执行不同的搜索
     if (settings_.search_type == "magnet") {
@@ -278,21 +249,21 @@ void DiscoveryPage::search_magnet_links(const QString& /*keyword*/)
 
     QList<SearchResultItem> results;
     results.append({
-        "示例电影 2025 BluRay 1080p",
+        tr("Sample Movie 2025 BluRay 1080p"),
         "magnet:?xt=urn:btih:example1",
         "4.2 GB",
-        "示例站点1",
-        "视频",
+        tr("Sample Site 1"),
+        tr("Video"),
         "2025-12-27",
         1523,
         456
     });
     results.append({
-        "示例软件包 v2.0",
+        tr("Sample Package v2.0"),
         "magnet:?xt=urn:btih:example2",
         "850 MB",
-        "示例站点2",
-        "软件",
+        tr("Sample Site 2"),
+        tr("Software"),
         "2025-12-26",
         892,
         234
@@ -306,11 +277,11 @@ void DiscoveryPage::search_http_resources(const QString& /*keyword*/)
     // TODO: 集成实际的HTTP资源搜索
     QList<SearchResultItem> results;
     results.append({
-        "示例文档.pdf",
+        tr("Sample Document.pdf"),
         "https://example.com/doc1.pdf",
         "2.5 MB",
-        "示例下载站",
-        "文档",
+        tr("Sample Host"),
+        tr("Document"),
         "2025-12-25",
         0,
         0
@@ -324,11 +295,11 @@ void DiscoveryPage::search_cloud_resources(const QString& /*keyword*/)
     // TODO: 集成网盘资源搜索
     QList<SearchResultItem> results;
     results.append({
-        "示例资源包.zip",
+        tr("Sample Archive.zip"),
         "https://pan.example.com/s/xxx",
         "1.2 GB",
-        "百度网盘",
-        "压缩包",
+        tr("Cloud Drive"),
+        tr("Archive"),
         "2025-12-24",
         0,
         0
@@ -372,11 +343,11 @@ void DiscoveryPage::display_results(const QList<SearchResultItem>& results)
         op_layout->setContentsMargins(5, 2, 5, 2);
         op_layout->setSpacing(5);
 
-        auto* download_btn = new QPushButton("下载", operation_widget);
-        download_btn->setStyleSheet(get_button_stylesheet(false));
+        auto* download_btn = new QPushButton(tr("Download"), operation_widget);
+        download_btn->setIcon(style()->standardIcon(QStyle::SP_ArrowDown));
         download_btn->setCursor(Qt::PointingHandCursor);
-        auto* copy_btn = new QPushButton("复制", operation_widget);
-        copy_btn->setStyleSheet(get_button_stylesheet(false));
+        auto* copy_btn = new QPushButton(tr("Copy"), operation_widget);
+        copy_btn->setIcon(style()->standardIcon(QStyle::SP_DialogOpenButton));
         copy_btn->setCursor(Qt::PointingHandCursor);
 
         op_layout->addWidget(download_btn);
@@ -389,28 +360,21 @@ void DiscoveryPage::display_results(const QList<SearchResultItem>& results)
         connect(download_btn, &QPushButton::clicked, this, [this, row]() {
             if (row < current_results_.size()) {
                 // TODO: 添加到下载任务
-                QMessageBox::information(this, "下载",
-                    QString("开始下载: %1\n链接: %2").arg(current_results_[row].title).arg(current_results_[row].url));
+                QMessageBox::information(this, tr("Download"),
+                    tr("Download: %1\nURL: %2").arg(current_results_[row].title, current_results_[row].url));
             }
         });
 
         connect(copy_btn, &QPushButton::clicked, this, [this, row]() {
             if (row < current_results_.size()) {
                 QApplication::clipboard()->setText(current_results_[row].url);
-                status_label_->setText("链接已复制到剪贴板");
+                status_label_->setText(tr("Copied to clipboard."));
             }
         });
     }
 
-    status_label_->setText(QString("搜索完成，找到 %1 个结果").arg(results.size()));
-    status_label_->setStyleSheet(R"(
-        QLabel {
-            padding: 8px;
-            color: #107c10;
-            font-size: 13px;
-        }
-    )");
-    result_count_label_->setText(QString("共 %1 个结果").arg(results.size()));
+    status_label_->setText(tr("Done. %1 result(s).").arg(results.size()));
+    result_count_label_->setText(tr("%1 result(s).").arg(results.size()));
 }
 
 void DiscoveryPage::clear_search()
@@ -418,7 +382,7 @@ void DiscoveryPage::clear_search()
     search_input_->clear();
     results_table_->setRowCount(0);
     current_results_.clear();
-    status_label_->setText("就绪");
+    status_label_->setText(tr("Ready"));
     result_count_label_->clear();
 }
 
@@ -426,12 +390,12 @@ void DiscoveryPage::download_selected()
 {
     auto selected_rows = results_table_->selectionModel()->selectedRows();
     if (selected_rows.isEmpty()) {
-        QMessageBox::warning(this, "提示", "请先选择要下载的资源");
+        QMessageBox::warning(this, tr("Notice"), tr("Select items first."));
         return;
     }
 
     // TODO: 批量添加到下载任务
-    QMessageBox::information(this, "下载", QString("已添加 %1 个任务到下载队列").arg(selected_rows.size()));
+    QMessageBox::information(this, tr("Download"), tr("Added %1 task(s) to queue.").arg(selected_rows.size()));
 }
 
 void DiscoveryPage::copy_link()
@@ -444,7 +408,7 @@ void DiscoveryPage::copy_link()
     int row = selected_rows.first().row();
     if (row < current_results_.size()) {
         QApplication::clipboard()->setText(current_results_[row].url);
-        status_label_->setText("链接已复制到剪贴板");
+        status_label_->setText(tr("Copied to clipboard."));
     }
 }
 
@@ -485,31 +449,37 @@ void DiscoveryPage::show_item_details(int row)
 
     const auto& item = current_results_[row];
 
-    QString details = QString(
-        "标题: %1\n"
-        "大小: %2\n"
-        "来源: %3\n"
-        "类型: %4\n"
-        "发布日期: %5\n"
-        "链接: %6"
-    ).arg(item.title).arg(item.size).arg(item.source).arg(item.type).arg(item.date).arg(item.url);
+    QString details = tr(
+        "Title: %1\n"
+        "Size: %2\n"
+        "Source: %3\n"
+        "Type: %4\n"
+        "Date: %5\n"
+        "URL: %6"
+    ).arg(item.title)
+     .arg(item.size)
+     .arg(item.source)
+     .arg(item.type)
+     .arg(item.date)
+     .arg(item.url);
 
     if (item.seeders > 0) {
-        details += QString("\n种子数: %1\n下载中: %2").arg(format_number(item.seeders)).arg(format_number(item.leechers));
+        details += QString("\n%1: %2\n%3: %4")
+            .arg(tr("Seeders"), format_number(item.seeders), tr("Leechers"), format_number(item.leechers));
     }
 
-    QMessageBox::information(this, "资源详情", details);
+    QMessageBox::information(this, tr("Details"), details);
 }
 
 void DiscoveryPage::show_context_menu(const QPoint& pos)
 {
     QMenu menu(this);
 
-    auto* download_action = menu.addAction("📥 下载");
-    auto* copy_action = menu.addAction("📋 复制链接");
-    auto* open_action = menu.addAction("🌐 在浏览器中打开");
+    auto* download_action = menu.addAction(style()->standardIcon(QStyle::SP_ArrowDown), tr("Download"));
+    auto* copy_action = menu.addAction(style()->standardIcon(QStyle::SP_DialogOpenButton), tr("Copy URL"));
+    auto* open_action = menu.addAction(style()->standardIcon(QStyle::SP_DirLinkIcon), tr("Open in Browser"));
     menu.addSeparator();
-    auto* queue_action = menu.addAction("📝 添加到下载队列");
+    auto* queue_action = menu.addAction(style()->standardIcon(QStyle::SP_FileDialogListView), tr("Add to Queue"));
 
     QAction* action = menu.exec(results_table_->mapToGlobal(pos));
 
@@ -528,13 +498,13 @@ void DiscoveryPage::add_to_download_queue()
 {
     auto selected_rows = results_table_->selectionModel()->selectedRows();
     if (selected_rows.isEmpty()) {
-        QMessageBox::warning(this, "提示", "请先选择要添加的资源");
+        QMessageBox::warning(this, tr("Notice"), tr("Select items first."));
         return;
     }
 
     // TODO: 添加到下载队列（不立即开始）
-    QMessageBox::information(this, "添加到队列",
-        QString("已添加 %1 个任务到下载队列").arg(selected_rows.size()));
+    QMessageBox::information(this, tr("Queue"),
+        tr("Added %1 task(s) to queue.").arg(selected_rows.size()));
 }
 
 QString DiscoveryPage::format_number(int num) const

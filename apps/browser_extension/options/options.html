@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Options</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <div class="container">
+      <h1 id="title"></h1>
+
+      <label class="row toggle">
+        <input type="checkbox" id="enabled" />
+        <span id="enabledLabel"></span>
+      </label>
+
+      <div class="row field">
+        <label for="apiBaseUrl" id="apiEndpoint"></label>
+        <input type="text" id="apiBaseUrl" spellcheck="false" />
+      </div>
+
+      <label class="row toggle">
+        <input type="checkbox" id="launchFalconIfUnavailable" />
+        <span id="launchIfUnavailable"></span>
+      </label>
+
+      <div class="row field">
+        <label for="disabledHosts" id="disabledSites"></label>
+        <textarea id="disabledHosts" rows="10" spellcheck="false"></textarea>
+      </div>
+
+      <div class="row actions">
+        <button id="save"></button>
+        <span class="status" id="status"></span>
+      </div>
+    </div>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

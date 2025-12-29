@@ -13,6 +13,8 @@
 #include "pages/settings_page.hpp"
 #include "dialogs/add_download_dialog.hpp"
 #include "utils/clipboard_monitor.hpp"
+#include "utils/url_detector.hpp"
+#include "ipc/http_server.hpp"
 
 #include <QHBoxLayout>
 #include <QWidget>
@@ -21,14 +23,20 @@
 
 namespace falcon::desktop {
 
+namespace {
+constexpr quint16 kIpcPort = 51337;
+} // namespace
+
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
     , side_bar_(nullptr)
     , content_stack_(nullptr)
     , clipboard_monitor_(nullptr)
+    , ipc_server_(nullptr)
 {
     setup_ui();
     setup_clipboard_monitor();
+    setup_ipc_server();
 }
 
 MainWindow::~MainWindow()
@@ -36,11 +44,14 @@ MainWindow::~MainWindow()
     if (clipboard_monitor_) {
         clipboard_monitor_->stop();
     }
+    if (ipc_server_) {
+        ipc_server_->stop();
+    }
 }
 
 void MainWindow::setup_ui()
 {
-    setWindowTitle("Falcon 下载器");
+    setWindowTitle(tr("Falcon Downloader"));
     resize(1200, 800);
 
     // 创建中心部件
@@ -59,6 +70,16 @@ void MainWindow::setup_ui()
     // 创建内容区域
     create_content_area();
     main_layout->addWidget(content_stack_, 1); // 内容区域占据剩余空间
+}
+
+void MainWindow::open_url(const QString& url)
+{
+    const UrlInfo url_info = UrlDetector::parse_url(url);
+    if (!url_info.is_valid) {
+        QMessageBox::warning(this, tr("Invalid URL"), tr("Unrecognized download URL:\n%1").arg(url));
+        return;
+    }
+    on_url_detected(url_info);
 }
 
 void MainWindow::create_side_bar()
@@ -127,6 +148,13 @@ void MainWindow::setup_clipboard_monitor()
     // clipboard_monitor_->start();
 }
 
+void MainWindow::setup_ipc_server()
+{
+    ipc_server_ = new HttpIpcServer(this);
+    connect(ipc_server_, &HttpIpcServer::download_requested, this, &MainWindow::on_download_requested);
+    ipc_server_->start(kIpcPort);
+}
+
 void MainWindow::on_url_detected(const UrlInfo& url_info)
 {
     // 显示下载对话框
@@ -143,14 +171,17 @@ void MainWindow::on_url_detected(const UrlInfo& url_info)
         // 临时显示消息框，实际应该添加到下载列表
         QMessageBox::information(
             this,
-            "开始下载",
-            QString("已添加下载任务：\n\nURL: %1\n保存路径: %2\n文件名: %3\n连接数: %4")
-                .arg(url)
-                .arg(save_path)
-                .arg(file_name)
+            tr("Download Added"),
+            tr("A download task was added:\n\nURL: %1\nSave path: %2\nFile name: %3\nConnections: %4")
+                .arg(url, save_path, file_name)
                 .arg(connections)
         );
     }
+}
+
+void MainWindow::on_download_requested(const IncomingDownloadRequest& request)
+{
+    open_url(request.url);
 }
 
 } // namespace falcon::desktop

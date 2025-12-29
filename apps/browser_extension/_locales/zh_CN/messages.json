@@ -1,0 +1,47 @@
+{
+  "extensionName": {
+    "message": "Falcon 下载助手"
+  },
+  "extensionDescription": {
+    "message": "将浏览器下载交给 Falcon（支持按站点禁用与单次跳过）。"
+  },
+  "popupTitle": {
+    "message": "Falcon"
+  },
+  "enabledLabel": {
+    "message": "拦截下载"
+  },
+  "siteLabel": {
+    "message": "当前站点"
+  },
+  "disableSite": {
+    "message": "在此站点禁用"
+  },
+  "enableSite": {
+    "message": "在此站点启用"
+  },
+  "skipOnce": {
+    "message": "本标签页下一次下载跳过"
+  },
+  "openOptions": {
+    "message": "选项"
+  },
+  "optionsTitle": {
+    "message": "Falcon 下载助手 — 选项"
+  },
+  "disabledSites": {
+    "message": "禁用站点列表（每行一个域名）"
+  },
+  "apiEndpoint": {
+    "message": "Falcon API 地址"
+  },
+  "launchIfUnavailable": {
+    "message": "Falcon 未运行时尝试拉起（需要注册 falcon:// 协议）"
+  },
+  "save": {
+    "message": "保存"
+  },
+  "saved": {
+    "message": "已保存"
+  }
+}

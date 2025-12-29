@@ -15,7 +15,9 @@ namespace falcon::desktop {
 
 class SideBar;
 class ClipboardMonitor;
+class HttpIpcServer;
 struct UrlInfo;
+struct IncomingDownloadRequest;
 
 /**
  * @brief 主窗口类
@@ -30,11 +32,16 @@ public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override;
 
+public slots:
+    void open_url(const QString& url);
+
 private slots:
     /**
      * @brief Handle detected URL from clipboard
      */
     void on_url_detected(const UrlInfo& url_info);
+
+    void on_download_requested(const IncomingDownloadRequest& request);
 
 private:
     void setup_ui();
@@ -42,6 +49,7 @@ private:
     void create_content_area();
     void create_pages();
     void setup_clipboard_monitor();
+    void setup_ipc_server();
 
     // 侧边导航栏
     SideBar* side_bar_;
@@ -51,6 +59,9 @@ private:
 
     // 剪切板监听
     ClipboardMonitor* clipboard_monitor_;
+
+    // 浏览器扩展 IPC
+    HttpIpcServer* ipc_server_;
 
     // 页面索引
     enum PageIndex {

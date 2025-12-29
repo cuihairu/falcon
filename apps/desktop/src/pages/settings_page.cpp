@@ -6,7 +6,6 @@
  */
 
 #include "settings_page.hpp"
-#include "../styles.hpp"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -15,6 +14,7 @@
 #include <QFileDialog>
 #include <QLabel>
 #include <QHeaderView>
+#include <QStyle>
 
 namespace falcon::desktop {
 
@@ -81,7 +81,7 @@ void SettingsPage::browse_download_dir()
 {
     QString dir = QFileDialog::getExistingDirectory(
         this,
-        "选择默认下载目录",
+        tr("Select default download directory"),
         download_dir_edit_->text(),
         QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks
     );
@@ -128,14 +128,11 @@ void SettingsPage::setup_ui()
     main_layout->setSpacing(20);
 
     // Page title
-    auto* title_label = new QLabel("设置", this);
-    title_label->setStyleSheet(R"(
-        QLabel {
-            font-size: 24px;
-            font-weight: 700;
-            color: #323130;
-        }
-    )");
+    auto* title_label = new QLabel(tr("Settings"), this);
+    auto title_font = title_label->font();
+    title_font.setPointSize(20);
+    title_font.setBold(true);
+    title_label->setFont(title_font);
     main_layout->addWidget(title_label);
 
     // Scroll area for settings
@@ -160,58 +157,19 @@ void SettingsPage::setup_ui()
 
 QWidget* SettingsPage::create_clipboard_section_widget()
 {
-    auto* group = new QGroupBox("剪切板监听", this);
-    group->setStyleSheet(R"(
-        QGroupBox {
-            font-size: 16px;
-            font-weight: 600;
-            color: #323130;
-            border: 1px solid #E2E8F0;
-            border-radius: 8px;
-            margin-top: 12px;
-            padding-top: 8px;
-        }
-        QGroupBox::title {
-            subcontrol-origin: margin;
-            left: 12px;
-            padding: 0 4px 0 4px;
-        }
-    )");
+    auto* group = new QGroupBox(tr("Clipboard Monitoring"), this);
 
     auto* layout = new QVBoxLayout(group);
     layout->setSpacing(16);
     layout->setContentsMargins(16, 20, 16, 16);
 
     // Enable monitoring checkbox
-    clipboard_monitoring_checkbox_ = new QCheckBox("启用剪切板监听", this);
-    clipboard_monitoring_checkbox_->setStyleSheet(R"(
-        QCheckBox {
-            font-size: 14px;
-            color: #2D3748;
-            spacing: 8px;
-        }
-        QCheckBox::indicator {
-            width: 18px;
-            height: 18px;
-            border-radius: 4px;
-            border: 2px solid #CBD5E0;
-            background: white;
-        }
-        QCheckBox::indicator:checked {
-            background: #5C6BC0;
-            border-color: #5C6BC0;
-            image: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTgiIGhlaWdodD0iMTgiIHZpZXdCb3g9IjAgMCAxOCAxOCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTE0IDZMNyAxM0w0IDEwIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPgo8L3N2Zz4K);
-        }
-        QCheckBox::indicator:hover {
-            border-color: #5C6BC0;
-        }
-    )");
+    clipboard_monitoring_checkbox_ = new QCheckBox(tr("Enable clipboard monitoring"), this);
 
     auto* desc_label = new QLabel(
-        "启用后将自动检测剪切板中的下载链接（HTTP、FTP、磁力链接等）",
+        tr("Detect download links from clipboard automatically (HTTP, FTP, magnet, etc.)."),
         this
     );
-    desc_label->setStyleSheet("color: #718096; font-size: 13px; padding-left: 26px;");
     desc_label->setWordWrap(true);
 
     layout->addWidget(clipboard_monitoring_checkbox_);
@@ -219,17 +177,14 @@ QWidget* SettingsPage::create_clipboard_section_widget()
 
     // Detection delay
     auto* delay_layout = new QHBoxLayout();
-    auto* delay_label = new QLabel("检测间隔:", this);
-    delay_label->setStyleSheet("color: #605e5c; font-size: 13px;");
+    auto* delay_label = new QLabel(tr("Detection interval:"), this);
 
     clipboard_delay_spin_ = new QSpinBox(this);
     clipboard_delay_spin_->setRange(500, 10000);
     clipboard_delay_spin_->setValue(1000);
     clipboard_delay_spin_->setSuffix(" ms");
-    clipboard_delay_spin_->setStyleSheet(get_combo_stylesheet());
 
-    auto* delay_hint = new QLabel("(避免重复检测)", this);
-    delay_hint->setStyleSheet("color: #A0AEC0; font-size: 12px;");
+    auto* delay_hint = new QLabel(tr("(avoid duplicate triggers)"), this);
 
     delay_layout->addWidget(delay_label);
     delay_layout->addWidget(clipboard_delay_spin_);
@@ -243,23 +198,7 @@ QWidget* SettingsPage::create_clipboard_section_widget()
 
 QWidget* SettingsPage::create_download_section_widget()
 {
-    auto* group = new QGroupBox("下载设置", this);
-    group->setStyleSheet(R"(
-        QGroupBox {
-            font-size: 16px;
-            font-weight: 600;
-            color: #323130;
-            border: 1px solid #E2E8F0;
-            border-radius: 8px;
-            margin-top: 12px;
-            padding-top: 8px;
-        }
-        QGroupBox::title {
-            subcontrol-origin: margin;
-            left: 12px;
-            padding: 0 4px 0 4px;
-        }
-    )");
+    auto* group = new QGroupBox(tr("Downloads"), this);
 
     auto* layout = new QFormLayout(group);
     layout->setSpacing(16);
@@ -267,18 +206,16 @@ QWidget* SettingsPage::create_download_section_widget()
     layout->setLabelAlignment(Qt::AlignRight);
 
     // Default download directory
-    auto* dir_label = new QLabel("默认下载目录:", this);
-    dir_label->setStyleSheet("color: #605e5c; font-size: 13px;");
+    auto* dir_label = new QLabel(tr("Default download directory:"), this);
 
     auto* dir_layout = new QHBoxLayout();
     dir_layout->setSpacing(8);
     download_dir_edit_ = new QLineEdit(QDir::homePath() + "/Downloads", this);
-    download_dir_edit_->setStyleSheet(get_input_stylesheet());
     download_dir_edit_->setReadOnly(true);
     dir_layout->addWidget(download_dir_edit_, 1);
 
-    auto* browse_btn = new QPushButton("浏览...", this);
-    browse_btn->setStyleSheet(get_button_stylesheet(false));
+    auto* browse_btn = new QPushButton(tr("Browse..."), this);
+    browse_btn->setIcon(style()->standardIcon(QStyle::SP_DirOpenIcon));
     browse_btn->setCursor(Qt::PointingHandCursor);
     connect(browse_btn, &QPushButton::clicked, this, &SettingsPage::browse_download_dir);
     dir_layout->addWidget(browse_btn);
@@ -286,12 +223,10 @@ QWidget* SettingsPage::create_download_section_widget()
     layout->addRow(dir_label, dir_layout);
 
     // Maximum concurrent downloads
-    auto* max_label = new QLabel("最大并发下载数:", this);
-    max_label->setStyleSheet("color: #605e5c; font-size: 13px;");
+    auto* max_label = new QLabel(tr("Max concurrent downloads:"), this);
     max_downloads_spin_ = new QSpinBox(this);
     max_downloads_spin_->setRange(1, 10);
     max_downloads_spin_->setValue(3);
-    max_downloads_spin_->setStyleSheet(get_combo_stylesheet());
     layout->addRow(max_label, max_downloads_spin_);
 
     return group;
@@ -299,23 +234,7 @@ QWidget* SettingsPage::create_download_section_widget()
 
 QWidget* SettingsPage::create_connection_section_widget()
 {
-    auto* group = new QGroupBox("连接设置", this);
-    group->setStyleSheet(R"(
-        QGroupBox {
-            font-size: 16px;
-            font-weight: 600;
-            color: #323130;
-            border: 1px solid #E2E8F0;
-            border-radius: 8px;
-            margin-top: 12px;
-            padding-top: 8px;
-        }
-        QGroupBox::title {
-            subcontrol-origin: margin;
-            left: 12px;
-            padding: 0 4px 0 4px;
-        }
-    )");
+    auto* group = new QGroupBox(tr("Connection"), this);
 
     auto* layout = new QFormLayout(group);
     layout->setSpacing(16);
@@ -323,31 +242,25 @@ QWidget* SettingsPage::create_connection_section_widget()
     layout->setLabelAlignment(Qt::AlignRight);
 
     // Default connections
-    auto* conn_label = new QLabel("默认连接数:", this);
-    conn_label->setStyleSheet("color: #605e5c; font-size: 13px;");
+    auto* conn_label = new QLabel(tr("Default connections:"), this);
     default_connections_spin_ = new QSpinBox(this);
     default_connections_spin_->setRange(1, 16);
     default_connections_spin_->setValue(4);
-    default_connections_spin_->setStyleSheet(get_combo_stylesheet());
     layout->addRow(conn_label, default_connections_spin_);
 
     // Connection timeout
-    auto* timeout_label = new QLabel("连接超时:", this);
-    timeout_label->setStyleSheet("color: #605e5c; font-size: 13px;");
+    auto* timeout_label = new QLabel(tr("Connection timeout:"), this);
     connection_timeout_spin_ = new QSpinBox(this);
     connection_timeout_spin_->setRange(5, 120);
     connection_timeout_spin_->setValue(30);
     connection_timeout_spin_->setSuffix(" s");
-    connection_timeout_spin_->setStyleSheet(get_combo_stylesheet());
     layout->addRow(timeout_label, connection_timeout_spin_);
 
     // Retry count
-    auto* retry_label = new QLabel("重试次数:", this);
-    retry_label->setStyleSheet("color: #605e5c; font-size: 13px;");
+    auto* retry_label = new QLabel(tr("Retry count:"), this);
     retry_count_spin_ = new QSpinBox(this);
     retry_count_spin_->setRange(0, 10);
     retry_count_spin_->setValue(3);
-    retry_count_spin_->setStyleSheet(get_combo_stylesheet());
     layout->addRow(retry_label, retry_count_spin_);
 
     return group;
@@ -355,76 +268,17 @@ QWidget* SettingsPage::create_connection_section_widget()
 
 QWidget* SettingsPage::create_notification_section_widget()
 {
-    auto* group = new QGroupBox("通知设置", this);
-    group->setStyleSheet(R"(
-        QGroupBox {
-            font-size: 16px;
-            font-weight: 600;
-            color: #323130;
-            border: 1px solid #E2E8F0;
-            border-radius: 8px;
-            margin-top: 12px;
-            padding-top: 8px;
-        }
-        QGroupBox::title {
-            subcontrol-origin: margin;
-            left: 12px;
-            padding: 0 4px 0 4px;
-        }
-    )");
+    auto* group = new QGroupBox(tr("Notifications"), this);
 
     auto* layout = new QVBoxLayout(group);
     layout->setSpacing(16);
     layout->setContentsMargins(16, 20, 16, 16);
 
-    notifications_checkbox_ = new QCheckBox("启用通知", this);
+    notifications_checkbox_ = new QCheckBox(tr("Enable notifications"), this);
     notifications_checkbox_->setChecked(true);
-    notifications_checkbox_->setStyleSheet(R"(
-        QCheckBox {
-            font-size: 14px;
-            color: #2D3748;
-            spacing: 8px;
-        }
-        QCheckBox::indicator {
-            width: 18px;
-            height: 18px;
-            border-radius: 4px;
-            border: 2px solid #CBD5E0;
-            background: white;
-        }
-        QCheckBox::indicator:checked {
-            background: #5C6BC0;
-            border-color: #5C6BC0;
-        }
-        QCheckBox::indicator:hover {
-            border-color: #5C6BC0;
-        }
-    )");
     layout->addWidget(notifications_checkbox_);
 
-    sound_notification_checkbox_ = new QCheckBox("提示音", this);
-    sound_notification_checkbox_->setStyleSheet(R"(
-        QCheckBox {
-            font-size: 14px;
-            color: #2D3748;
-            spacing: 8px;
-            padding-left: 20px;
-        }
-        QCheckBox::indicator {
-            width: 18px;
-            height: 18px;
-            border-radius: 4px;
-            border: 2px solid #CBD5E0;
-            background: white;
-        }
-        QCheckBox::indicator:checked {
-            background: #5C6BC0;
-            border-color: #5C6BC0;
-        }
-        QCheckBox::indicator:hover {
-            border-color: #5C6BC0;
-        }
-    )");
+    sound_notification_checkbox_ = new QCheckBox(tr("Sound"), this);
     layout->addWidget(sound_notification_checkbox_);
 
     return group;
@@ -438,15 +292,15 @@ QLayout* SettingsPage::create_action_buttons_layout()
 
     layout->addStretch();
 
-    reset_button_ = new QPushButton("恢复默认", this);
-    reset_button_->setStyleSheet(get_button_stylesheet(false));
+    reset_button_ = new QPushButton(tr("Reset"), this);
+    reset_button_->setIcon(style()->standardIcon(QStyle::SP_DialogResetButton));
     reset_button_->setCursor(Qt::PointingHandCursor);
     reset_button_->setMinimumWidth(100);
     connect(reset_button_, &QPushButton::clicked, this, &SettingsPage::reset_to_defaults);
     layout->addWidget(reset_button_);
 
-    apply_button_ = new QPushButton("应用设置", this);
-    apply_button_->setStyleSheet(get_button_stylesheet(true));
+    apply_button_ = new QPushButton(tr("Apply"), this);
+    apply_button_->setIcon(style()->standardIcon(QStyle::SP_DialogApplyButton));
     apply_button_->setCursor(Qt::PointingHandCursor);
     apply_button_->setMinimumWidth(100);
     connect(apply_button_, &QPushButton::clicked, this, &SettingsPage::apply_settings);

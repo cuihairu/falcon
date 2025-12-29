@@ -1,250 +1,132 @@
 /**
  * @file sidebar.cpp
- * @brief Sidebar implementation with modern styling
+ * @brief Sidebar implementation (platform-native look)
  * @author Falcon Team
  * @date 2025-12-28
  */
 
 #include "sidebar.hpp"
-#include "../styles.hpp"
 
-#include <QHBoxLayout>
-#include <QLabel>
-#include <QPropertyAnimation>
+#include <QListWidgetItem>
+#include <QSignalBlocker>
+#include <QStyle>
 #include <QEasingCurve>
 
 namespace falcon::desktop {
 
-//==============================================================================
-// SideBarButton Implementation
-//==============================================================================
-
-SideBarButton::SideBarButton(const QString& icon_text,
-                               const QString& tooltip,
-                               QWidget* parent)
-    : QPushButton(parent)
-{
-    setText(icon_text);
-    setToolTip(tooltip);
-    setCheckable(false);
-    setFixedHeight(50); // Slightly more compact
-    setCursor(Qt::PointingHandCursor);
-
-    // Initial style
-    update_style(false);
-}
-
-void SideBarButton::update_style(bool active)
-{
-    if (active) {
-        setStyleSheet(R"(
-            QPushButton {
-                background-color: #EDF2F7; /* Light gray background for active */
-                color: #5C6BC0; /* Brand color text */
-                border: none;
-                border-left: 4px solid #5C6BC0; /* Brand color indicator */
-                text-align: left;
-                padding-left: 16px;
-                font-size: 14px;
-                font-weight: 600;
-                border-radius: 0 4px 4px 0; /* Rounded on the right */
-                margin-right: 8px; /* Spacing from right edge */
-            }
-        )");
-    } else {
-        setStyleSheet(R"(
-            QPushButton {
-                background-color: transparent;
-                color: #718096; /* Secondary text color */
-                border: none;
-                border-left: 4px solid transparent;
-                text-align: left;
-                padding-left: 16px;
-                font-size: 14px;
-                font-weight: 500;
-                border-radius: 0 4px 4px 0;
-                margin-right: 8px;
-            }
-            QPushButton:hover {
-                background-color: #F7FAFC;
-                color: #4A5568;
-            }
-        )");
-    }
-}
-
-void SideBarButton::setActive(bool active)
-{
-    active_ = active;
-    update_style(active);
-}
-
-//==============================================================================
-// SideBar Implementation
-//==============================================================================
+namespace {
+constexpr int kNavItemHeight = 44;
+constexpr int kNavIconSizeExpanded = 18;
+constexpr int kNavIconSizeCollapsed = 22;
+} // namespace
 
 SideBar::SideBar(QWidget* parent)
     : QWidget(parent)
     , layout_(nullptr)
-    , download_button_(nullptr)
-    , cloud_button_(nullptr)
-    , discovery_button_(nullptr)
-    , settings_button_(nullptr)
+    , nav_list_(nullptr)
     , toggle_button_(nullptr)
     , width_animation_(new QPropertyAnimation(this, "maximumWidth"))
 {
     setup_ui();
 
     // Animation config
-    width_animation_->setDuration(250); // Slightly slower for smoothness
-    width_animation_->setEasingCurve(QEasingCurve::OutCubic); // Smoother easing
+    width_animation_->setDuration(200);
+    width_animation_->setEasingCurve(QEasingCurve::OutCubic);
 }
 
 SideBar::~SideBar() = default;
 
 void SideBar::setup_ui()
 {
-    setFixedWidth(expanded_width_);
-    setStyleSheet(R"(
-        QWidget {
-            background-color: #FFFFFF;
-            border-right: 1px solid #E2E8F0;
-        }
-    )");
-
     layout_ = new QVBoxLayout(this);
-    layout_->setContentsMargins(0, 24, 0, 24);
-    layout_->setSpacing(4); // Tighter spacing
+    layout_->setContentsMargins(8, 8, 8, 8);
+    layout_->setSpacing(8);
 
-    // Buttons
-    create_buttons();
+    create_nav_list();
+    layout_->addWidget(nav_list_, 1);
 
-    // Spacer
-    layout_->addStretch();
-
-    // Toggle button
-    toggle_button_ = new QPushButton("◀", this);
-    toggle_button_->setFixedSize(32, 32);
+    toggle_button_ = new QToolButton(this);
+    toggle_button_->setAutoRaise(true);
     toggle_button_->setCursor(Qt::PointingHandCursor);
-    toggle_button_->setStyleSheet(R"(
-        QPushButton {
-            background-color: transparent;
-            color: #A0AEC0;
-            border: 1px solid #E2E8F0;
-            border-radius: 16px;
-            font-size: 12px;
-            font-weight: bold;
-        }
-        QPushButton:hover {
-            background-color: #F7FAFC;
-            color: #718096;
-            border-color: #CBD5E0;
-        }
-        QPushButton:pressed {
-            background-color: #EDF2F7;
-        }
-    )");
-    layout_->addWidget(toggle_button_, 0, Qt::AlignCenter);
+    layout_->addWidget(toggle_button_, 0, Qt::AlignHCenter);
+    connect(toggle_button_, &QToolButton::clicked, this, &SideBar::toggle);
 
-    connect(toggle_button_, &QPushButton::clicked, this, &SideBar::toggle);
+    setMaximumWidth(expanded_width_);
+    setMinimumWidth(expanded_width_);
+    set_expanded(true);
 
-    // Default active
-    download_button_->setActive(true);
+    nav_list_->setCurrentRow(0);
 }
 
-void SideBar::create_buttons()
+void SideBar::create_nav_list()
 {
-    // Downloads
-    download_button_ = new SideBarButton("⬇  Downloads", "Manage Downloads", this);
-    download_button_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    layout_->addWidget(download_button_);
+    nav_list_ = new QListWidget(this);
+    nav_list_->setFrameShape(QFrame::NoFrame);
+    nav_list_->setSelectionMode(QAbstractItemView::SingleSelection);
+    nav_list_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    nav_list_->setFocusPolicy(Qt::NoFocus);
+    nav_list_->setUniformItemSizes(true);
 
-    connect(download_button_, &SideBarButton::clicked, this, [this]() {
-        update_button_states();
-        download_button_->setActive(true);
-        emit downloadClicked();
+    auto add_item = [this](const QString& title, QStyle::StandardPixmap icon) {
+        auto* item = new QListWidgetItem(style()->standardIcon(icon), title);
+        item->setData(Qt::UserRole, title);
+        item->setToolTip(title);
+        item->setSizeHint(QSize(0, kNavItemHeight));
+        nav_list_->addItem(item);
+    };
+
+    add_item(tr("Downloads"), QStyle::SP_ArrowDown);
+    add_item(tr("Cloud"), QStyle::SP_DriveNetIcon);
+    add_item(tr("Discovery"), QStyle::SP_FileDialogContentsView);
+    add_item(tr("Settings"), QStyle::SP_FileDialogDetailedView);
+
+    connect(nav_list_, &QListWidget::currentRowChanged, this, [this](int row) {
+        switch (row) {
+        case 0: emit downloadClicked(); break;
+        case 1: emit cloudClicked(); break;
+        case 2: emit discoveryClicked(); break;
+        case 3: emit settingsClicked(); break;
+        default: break;
+        }
     });
-
-    // Cloud
-    cloud_button_ = new SideBarButton("☁  Cloud", "Cloud Storage", this);
-    cloud_button_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    layout_->addWidget(cloud_button_);
-
-    connect(cloud_button_, &SideBarButton::clicked, this, [this]() {
-        update_button_states();
-        cloud_button_->setActive(true);
-        emit cloudClicked();
-    });
-
-    // Discovery
-    discovery_button_ = new SideBarButton("🔍  Discovery", "Search & Find", this);
-    discovery_button_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    layout_->addWidget(discovery_button_);
-
-    connect(discovery_button_, &SideBarButton::clicked, this, [this]() {
-        update_button_states();
-        discovery_button_->setActive(true);
-        emit discoveryClicked();
-    });
-
-    // Settings
-    settings_button_ = new SideBarButton("⚙  Settings", "Application Settings", this);
-    settings_button_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    layout_->addWidget(settings_button_);
-
-    connect(settings_button_, &SideBarButton::clicked, this, [this]() {
-        update_button_states();
-        settings_button_->setActive(true);
-        emit settingsClicked();
-    });
-}
-
-void SideBar::update_button_states()
-{
-    download_button_->setActive(false);
-    cloud_button_->setActive(false);
-    discovery_button_->setActive(false);
-    settings_button_->setActive(false);
 }
 
 void SideBar::expand()
 {
-    expanded_ = true;
+    if (expanded_) {
+        return;
+    }
+    set_expanded(true);
 
-    width_animation_->setStartValue(collapsed_width_);
+    width_animation_->stop();
+    setMinimumWidth(collapsed_width_);
+    QObject::disconnect(width_animation_, nullptr, this, nullptr);
+    width_animation_->setStartValue(maximumWidth());
     width_animation_->setEndValue(expanded_width_);
+    connect(width_animation_, &QPropertyAnimation::finished, this, [this]() {
+        setMinimumWidth(expanded_width_);
+        setMaximumWidth(expanded_width_);
+    });
     width_animation_->start();
-
-    setMaximumWidth(expanded_width_);
-    setMinimumWidth(expanded_width_);
-
-    toggle_button_->setText("◀");
-
-    // Expand text
-    download_button_->setText("⬇  Downloads");
-    cloud_button_->setText("☁  Cloud");
-    discovery_button_->setText("🔍  Discovery");
-    settings_button_->setText("⚙  Settings");
 }
 
 void SideBar::collapse()
 {
-    expanded_ = false;
+    if (!expanded_) {
+        return;
+    }
+    set_expanded(false);
 
-    width_animation_->setStartValue(expanded_width_);
-    width_animation_->setEndValue(collapsed_width_);
-    width_animation_->start();
-
-    setMaximumWidth(collapsed_width_);
+    width_animation_->stop();
     setMinimumWidth(collapsed_width_);
-
-    toggle_button_->setText("▶");
-
-    // Icons only
-    download_button_->setText("⬇");
-    cloud_button_->setText("☁");
-    discovery_button_->setText("🔍");
-    settings_button_->setText("⚙");
+    QObject::disconnect(width_animation_, nullptr, this, nullptr);
+    width_animation_->setStartValue(maximumWidth());
+    width_animation_->setEndValue(collapsed_width_);
+    connect(width_animation_, &QPropertyAnimation::finished, this, [this]() {
+        setMinimumWidth(collapsed_width_);
+        setMaximumWidth(collapsed_width_);
+    });
+    width_animation_->start();
 }
 
 void SideBar::toggle()
@@ -253,6 +135,38 @@ void SideBar::toggle()
         collapse();
     } else {
         expand();
+    }
+}
+
+void SideBar::set_expanded(bool expanded)
+{
+    expanded_ = expanded;
+
+    const QSignalBlocker blocker(nav_list_);
+    if (expanded_) {
+        toggle_button_->setToolTip(tr("Collapse sidebar"));
+        toggle_button_->setIcon(style()->standardIcon(QStyle::SP_ArrowLeft));
+        nav_list_->setViewMode(QListView::ListMode);
+        nav_list_->setIconSize(QSize(kNavIconSizeExpanded, kNavIconSizeExpanded));
+        nav_list_->setSpacing(2);
+
+        for (int i = 0; i < nav_list_->count(); ++i) {
+            auto* item = nav_list_->item(i);
+            item->setText(item->data(Qt::UserRole).toString());
+        }
+    } else {
+        toggle_button_->setToolTip(tr("Expand sidebar"));
+        toggle_button_->setIcon(style()->standardIcon(QStyle::SP_ArrowRight));
+        nav_list_->setViewMode(QListView::IconMode);
+        nav_list_->setIconSize(QSize(kNavIconSizeCollapsed, kNavIconSizeCollapsed));
+        nav_list_->setGridSize(QSize(collapsed_width_ - 16, kNavItemHeight + 10));
+        nav_list_->setMovement(QListView::Static);
+        nav_list_->setSpacing(4);
+
+        for (int i = 0; i < nav_list_->count(); ++i) {
+            auto* item = nav_list_->item(i);
+            item->setText(QString());
+        }
     }
 }
 

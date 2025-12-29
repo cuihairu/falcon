@@ -6,7 +6,6 @@
  */
 
 #include "download_page.hpp"
-#include "../styles.hpp"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -14,6 +13,7 @@
 #include <QFileDialog>
 #include <QInputDialog>
 #include <QProgressBar>
+#include <QStyle>
 
 namespace falcon::desktop {
 
@@ -47,15 +47,11 @@ void DownloadPage::setup_ui()
     header_layout->setSpacing(16);
 
     // Page Title
-    auto* title_label = new QLabel("Downloads", this);
-    title_label->setStyleSheet(R"(
-        QLabel {
-            font-size: 28px;
-            font-weight: 700;
-            color: #2D3748;
-            border: none;
-        }
-    )");
+    auto* title_label = new QLabel(tr("Downloads"), this);
+    auto title_font = title_label->font();
+    title_font.setPointSize(20);
+    title_font.setBold(true);
+    title_label->setFont(title_font);
     header_layout->addWidget(title_label);
     
     header_layout->addStretch();
@@ -75,11 +71,11 @@ QWidget* DownloadPage::create_toolbar()
     auto* toolbar = new QWidget(this);
     auto* layout = new QHBoxLayout(toolbar);
     layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(12);
+    layout->setSpacing(8);
 
     // Primary Action: New Task
-    new_task_button_ = new QPushButton("➕ New Task", toolbar);
-    new_task_button_->setStyleSheet(get_button_stylesheet(true));
+    new_task_button_ = new QPushButton(tr("New Task"), toolbar);
+    new_task_button_->setIcon(style()->standardIcon(QStyle::SP_FileDialogNewFolder));
     new_task_button_->setCursor(Qt::PointingHandCursor);
     new_task_button_->setMinimumHeight(36);
     connect(new_task_button_, &QPushButton::clicked, this, &DownloadPage::add_new_task);
@@ -96,36 +92,37 @@ QWidget* DownloadPage::create_toolbar()
     actions_layout->setContentsMargins(0, 0, 0, 0);
     actions_layout->setSpacing(4);
 
-    auto create_action_btn = [this, actions_layout](QPushButton*& btn, const QString& text, const QString& tooltip) {
-        btn = new QPushButton(text, this);
+    auto create_action_btn = [this, actions_layout](QPushButton*& btn, QStyle::StandardPixmap icon, const QString& tooltip) {
+        btn = new QPushButton(this);
         btn->setEnabled(false); // Default disabled until selection
-        btn->setStyleSheet(get_icon_button_stylesheet());
+        btn->setIcon(style()->standardIcon(icon));
+        btn->setFlat(true);
         btn->setToolTip(tooltip);
         btn->setCursor(Qt::PointingHandCursor);
-        btn->setFixedSize(36, 36);
+        btn->setFixedSize(32, 32);
         actions_layout->addWidget(btn);
     };
 
-    create_action_btn(pause_button_, "⏸", "Pause");
-    create_action_btn(resume_button_, "▶", "Resume");
-    create_action_btn(cancel_button_, "✕", "Cancel");
+    create_action_btn(pause_button_, QStyle::SP_MediaPause, tr("Pause"));
+    create_action_btn(resume_button_, QStyle::SP_MediaPlay, tr("Resume"));
+    create_action_btn(cancel_button_, QStyle::SP_BrowserStop, tr("Cancel"));
     
     // Separator line
     auto* line = new QFrame(actions_container);
     line->setFrameShape(QFrame::VLine);
     line->setFrameShadow(QFrame::Sunken);
-    line->setStyleSheet("background-color: #E2E8F0; width: 1px;");
     line->setFixedHeight(20);
     actions_layout->addWidget(line);
 
-    create_action_btn(delete_button_, "🗑", "Delete");
+    create_action_btn(delete_button_, QStyle::SP_TrashIcon, tr("Delete"));
 
     // Clean button is always enabled usually
-    clean_button_ = new QPushButton("🧹", this);
-    clean_button_->setStyleSheet(get_icon_button_stylesheet());
-    clean_button_->setToolTip("Clear Completed");
+    clean_button_ = new QPushButton(this);
+    clean_button_->setIcon(style()->standardIcon(QStyle::SP_DialogResetButton));
+    clean_button_->setFlat(true);
+    clean_button_->setToolTip(tr("Clear Completed"));
     clean_button_->setCursor(Qt::PointingHandCursor);
-    clean_button_->setFixedSize(36, 36);
+    clean_button_->setFixedSize(32, 32);
     actions_layout->addWidget(clean_button_);
 
     layout->addWidget(actions_container);
@@ -137,8 +134,11 @@ void DownloadPage::create_tab_widget()
 {
     tab_widget_ = new QTabWidget(this);
     tab_widget_->setTabPosition(QTabWidget::North);
-    tab_widget_->setDocumentMode(true); // Removes the border around the tab content
-    tab_widget_->setStyleSheet(get_tab_stylesheet());
+#ifdef Q_OS_MAC
+    tab_widget_->setDocumentMode(true);
+#else
+    tab_widget_->setDocumentMode(false);
+#endif
 
     // Create Tabs
     create_downloading_tab();
@@ -152,7 +152,13 @@ void DownloadPage::create_downloading_tab()
     downloading_table_ = new QTableWidget(this);
     downloading_table_->setColumnCount(7);
     downloading_table_->setHorizontalHeaderLabels({
-        "File Name", "Size", "Progress", "Speed", "Status", "Path", "Actions"
+        tr("File Name"),
+        tr("Size"),
+        tr("Progress"),
+        tr("Speed"),
+        tr("Status"),
+        tr("Save Path"),
+        tr("Actions")
     });
 
     // Table settings
@@ -164,7 +170,6 @@ void DownloadPage::create_downloading_tab()
     downloading_table_->verticalHeader()->setVisible(false);
     downloading_table_->horizontalHeader()->setStretchLastSection(true);
     downloading_table_->horizontalHeader()->setHighlightSections(false);
-    downloading_table_->setStyleSheet(get_table_stylesheet());
 
     // Column widths
     downloading_table_->setColumnWidth(0, 300); // Name
@@ -175,7 +180,7 @@ void DownloadPage::create_downloading_tab()
     downloading_table_->setColumnWidth(5, 250); // Path
     // Last section stretches
 
-    tab_widget_->addTab(downloading_table_, "Downloading");
+    tab_widget_->addTab(downloading_table_, tr("Downloading"));
 }
 
 void DownloadPage::create_completed_tab()
@@ -183,7 +188,12 @@ void DownloadPage::create_completed_tab()
     completed_table_ = new QTableWidget(this);
     completed_table_->setColumnCount(6);
     completed_table_->setHorizontalHeaderLabels({
-        "File Name", "Size", "Date", "Path", "Type", "Actions"
+        tr("File Name"),
+        tr("Size"),
+        tr("Completed At"),
+        tr("Save Path"),
+        tr("Type"),
+        tr("Actions")
     });
 
     completed_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -192,9 +202,8 @@ void DownloadPage::create_completed_tab()
     completed_table_->setShowGrid(false);
     completed_table_->verticalHeader()->setVisible(false);
     completed_table_->horizontalHeader()->setStretchLastSection(true);
-    completed_table_->setStyleSheet(get_table_stylesheet());
 
-    tab_widget_->addTab(completed_table_, "Completed");
+    tab_widget_->addTab(completed_table_, tr("Completed"));
 }
 
 void DownloadPage::create_trash_tab()
@@ -202,7 +211,11 @@ void DownloadPage::create_trash_tab()
     trash_table_ = new QTableWidget(this);
     trash_table_->setColumnCount(5);
     trash_table_->setHorizontalHeaderLabels({
-        "File Name", "Size", "Deleted At", "Reason", "Actions"
+        tr("File Name"),
+        tr("Size"),
+        tr("Deleted At"),
+        tr("Reason"),
+        tr("Actions")
     });
 
     trash_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -211,9 +224,8 @@ void DownloadPage::create_trash_tab()
     trash_table_->setShowGrid(false);
     trash_table_->verticalHeader()->setVisible(false);
     trash_table_->horizontalHeader()->setStretchLastSection(true);
-    trash_table_->setStyleSheet(get_table_stylesheet());
 
-    tab_widget_->addTab(trash_table_, "Trash");
+    tab_widget_->addTab(trash_table_, tr("Trash"));
 }
 
 void DownloadPage::create_history_tab()
@@ -221,7 +233,12 @@ void DownloadPage::create_history_tab()
     history_table_ = new QTableWidget(this);
     history_table_->setColumnCount(6);
     history_table_->setHorizontalHeaderLabels({
-        "File Name", "Size", "Started", "Finished", "Status", "Actions"
+        tr("File Name"),
+        tr("Size"),
+        tr("Started At"),
+        tr("Finished At"),
+        tr("Status"),
+        tr("Actions")
     });
 
     history_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -230,22 +247,21 @@ void DownloadPage::create_history_tab()
     history_table_->setShowGrid(false);
     history_table_->verticalHeader()->setVisible(false);
     history_table_->horizontalHeader()->setStretchLastSection(true);
-    history_table_->setStyleSheet(get_table_stylesheet());
 
-    tab_widget_->addTab(history_table_, "History");
+    tab_widget_->addTab(history_table_, tr("History"));
 }
 
 void DownloadPage::add_new_task()
 {
-    QString url = QInputDialog::getText(this, "New Download Task",
-                                       "Enter download URL (HTTP/HTTPS/Magnet):",
+    QString url = QInputDialog::getText(this, tr("New Download Task"),
+                                       tr("Enter download URL (HTTP/HTTPS/Magnet):"),
                                        QLineEdit::Normal);
 
     if (!url.isEmpty()) {
         QString save_path = QFileDialog::getSaveFileName(
-            this, "Select Save Location",
+            this, tr("Select Save Location"),
             QDir::homePath() + "/Downloads",
-            "All Files (*.*)"
+            tr("All Files (*.*)")
         );
 
         if (!save_path.isEmpty()) {
@@ -263,7 +279,7 @@ void DownloadPage::add_new_task()
             set_item(1, "0 MB");
             // Col 2 is progress bar
             set_item(3, "0 KB/s");
-            set_item(4, "Waiting");
+            set_item(4, tr("Waiting"));
             set_item(5, save_path);
             set_item(6, "...");
 
@@ -271,7 +287,7 @@ void DownloadPage::add_new_task()
             auto* progress_bar = new QProgressBar(this);
             progress_bar->setRange(0, 100);
             progress_bar->setValue(0);
-            progress_bar->setStyleSheet(get_progress_stylesheet());
+            progress_bar->setTextVisible(false);
             downloading_table_->setCellWidget(row, 2, progress_bar);
         }
     }

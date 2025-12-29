@@ -1,0 +1,47 @@
+{
+  "extensionName": {
+    "message": "Falcon Download Helper"
+  },
+  "extensionDescription": {
+    "message": "Send browser downloads to Falcon (with per-site disable and skip)."
+  },
+  "popupTitle": {
+    "message": "Falcon"
+  },
+  "enabledLabel": {
+    "message": "Intercept downloads"
+  },
+  "siteLabel": {
+    "message": "Site"
+  },
+  "disableSite": {
+    "message": "Disable on this site"
+  },
+  "enableSite": {
+    "message": "Enable on this site"
+  },
+  "skipOnce": {
+    "message": "Skip next download (this tab)"
+  },
+  "openOptions": {
+    "message": "Options"
+  },
+  "optionsTitle": {
+    "message": "Falcon Download Helper — Options"
+  },
+  "disabledSites": {
+    "message": "Disabled sites (one host per line)"
+  },
+  "apiEndpoint": {
+    "message": "Falcon API endpoint"
+  },
+  "launchIfUnavailable": {
+    "message": "Launch Falcon if not running (requires falcon:// protocol handler)"
+  },
+  "save": {
+    "message": "Save"
+  },
+  "saved": {
+    "message": "Saved"
+  }
+}

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Falcon</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <div class="container">
+      <div class="row header">
+        <div class="title" id="title"></div>
+        <button class="link" id="openOptions"></button>
+      </div>
+
+      <label class="row toggle">
+        <input type="checkbox" id="enabled" />
+        <span id="enabledLabel"></span>
+      </label>
+
+      <div class="row">
+        <div class="muted" id="siteLabel"></div>
+        <div class="mono" id="siteHost">-</div>
+      </div>
+
+      <div class="row buttons">
+        <button id="toggleSite"></button>
+        <button id="skipOnce"></button>
+      </div>
+
+      <div class="row status mono" id="status"></div>
+    </div>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
+

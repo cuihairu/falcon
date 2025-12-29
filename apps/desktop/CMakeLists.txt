@@ -8,7 +8,8 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
 # 查找 Qt6
-find_package(Qt6 REQUIRED COMPONENTS Core Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network)
+find_package(Qt6 OPTIONAL_COMPONENTS LinguistTools)
 
 # 设置输出目录
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
@@ -25,6 +26,7 @@ set(SOURCES
     src/dialogs/add_download_dialog.cpp
     src/utils/url_detector.cpp
     src/utils/clipboard_monitor.cpp
+    src/ipc/http_server.cpp
 )
 
 # 头文件
@@ -39,6 +41,7 @@ set(HEADERS
     src/dialogs/add_download_dialog.hpp
     src/utils/url_detector.hpp
     src/utils/clipboard_monitor.hpp
+    src/ipc/http_server.hpp
 )
 
 # UI 文件（如果使用 Qt Designer）
@@ -48,6 +51,14 @@ set(UI_FILES
 
 # 创建可执行文件
 add_executable(falcon-desktop ${SOURCES} ${HEADERS} ${UI_FILES})
+
+# Translations (optional; requires Qt Linguist Tools)
+set(TRANSLATION_TS_FILES
+    ${CMAKE_CURRENT_SOURCE_DIR}/i18n/falcon_desktop_zh_CN.ts
+)
+if (Qt6LinguistTools_FOUND)
+    qt_add_translations(falcon-desktop TS_FILES ${TRANSLATION_TS_FILES})
+endif()
 
 # 包含目录
 target_include_directories(falcon-desktop PRIVATE
@@ -59,6 +70,7 @@ target_include_directories(falcon-desktop PRIVATE
 target_link_libraries(falcon-desktop PRIVATE
     Qt6::Core
     Qt6::Widgets
+    Qt6::Network
     falcon
 )
 
@@ -67,4 +79,10 @@ install(TARGETS falcon-desktop
     RUNTIME DESTINATION bin
     LIBRARY DESTINATION lib
     ARCHIVE DESTINATION lib
+)
+
+install(FILES
+    ${CMAKE_CURRENT_BINARY_DIR}/falcon_desktop_zh_CN.qm
+    DESTINATION bin/i18n
+    OPTIONAL
 )

@@ -97,9 +97,6 @@ private:
     // 格式化文件大小
     QString format_size(uint64_t bytes) const;
 
-    // 获取文件类型图标
-    QString get_file_icon(const QString& filename) const;
-
     // 控件
     QSplitter* splitter_;
     QWidget* empty_state_widget_;  // 空状态视图
