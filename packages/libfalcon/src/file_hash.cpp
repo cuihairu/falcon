@@ -239,7 +239,7 @@ std::vector<bool> PieceHashVerifier::verify(const std::string& file_path) const 
                       }));
     }
 
-    std::size_t valid_count = std::count(results.begin(), results.end(), true);
+    const auto valid_count = std::count(results.begin(), results.end(), true);
     FALCON_LOG_INFO("分块哈希验证完成: " << valid_count << "/" << results.size() << " 通过");
 
     return results;

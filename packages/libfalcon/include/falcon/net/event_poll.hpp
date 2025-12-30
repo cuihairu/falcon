@@ -242,7 +242,7 @@ private:
     bool set_error(const std::string& msg);
 };
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
 /**
  * @brief kqueue 实现 (macOS/BSD)
  *
@@ -280,7 +280,7 @@ private:
     short to_filter(int events) const;
     short to_flags(int events) const;
 };
-#endif // __APPLE__
+#endif // kqueue platforms
 
 /**
  * @brief poll 实现 (通用 fallback)

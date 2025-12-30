@@ -19,6 +19,7 @@
 
 #include <string.h>
 #include <errno.h>
+#include <limits>
 
 namespace falcon::net {
 
@@ -112,7 +113,11 @@ int PollEventPoll::poll(int timeout_ms) {
         return -1;
     }
 #else
-    int nfds = ::poll(poll_fds_.data(), poll_fds_.size(), timeout_ms);
+    if (poll_fds_.size() > std::numeric_limits<nfds_t>::max()) {
+        set_error("poll() 失败: 文件描述符数量超出 nfds_t 范围");
+        return -1;
+    }
+    int nfds = ::poll(poll_fds_.data(), static_cast<nfds_t>(poll_fds_.size()), timeout_ms);
     if (nfds < 0) {
         if (errno == EINTR) {
             return 0;  // 被信号中断

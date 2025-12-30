@@ -16,6 +16,8 @@
 #include <string.h>
 #include <errno.h>
 #include <fcntl.h>  // for fcntl, F_GETFL, F_SETFL, O_NONBLOCK
+#include <algorithm>
+#include <cstddef>
 
 namespace falcon::net {
 
@@ -193,8 +195,13 @@ int KqueueEventPoll::poll(int timeout_ms) {
         return -1;
     }
 
+    if (max_events_ <= 0) {
+        set_error("max_events 无效: " + std::to_string(max_events_));
+        return -1;
+    }
+
     // 分配事件数组
-    std::vector<struct kevent> kevents(max_events_);
+    std::vector<struct kevent> kevents(static_cast<std::size_t>(max_events_));
 
     // 计算超时
     struct timespec timeout = {};
@@ -217,7 +224,7 @@ int KqueueEventPoll::poll(int timeout_ms) {
 
     // 处理就绪事件
     for (int i = 0; i < nevents; ++i) {
-        const auto& ev = kevents[i];
+        const auto& ev = kevents[static_cast<std::size_t>(i)];
         int fd = static_cast<int>(ev.ident);
 
         auto it = events_.find(fd);

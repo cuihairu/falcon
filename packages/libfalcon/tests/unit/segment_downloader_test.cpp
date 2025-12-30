@@ -76,7 +76,8 @@ static bool mock_segment_download(
     Bytes written = 0;
     while (written < size) {
         Bytes to_write = std::min(static_cast<Bytes>(buffer.size()), size - written);
-        file.write(reinterpret_cast<const char*>(buffer.data()), to_write);
+        file.write(reinterpret_cast<const char*>(buffer.data()),
+                   static_cast<std::streamsize>(to_write));
         written += to_write;
 
         // Check for cancellation periodically

@@ -30,7 +30,7 @@ public:
         for (size_t i = 1; i <= query.limit; ++i) {
             SearchResult result;
             result.title = query.keyword + " - Result " + std::to_string(i);
-            result.url = "https://mocksite.com/file" + std::to_string(i) + ".zip";
+            result.url = "https://mocksite.com/" + name_ + "/file" + std::to_string(i) + ".zip";
             result.source = name_;
             result.size = i * 100 * 1024 * 1024; // 100MB increments
             result.seeds = static_cast<int>((query.limit - i) * 2);
@@ -221,7 +221,7 @@ TEST_F(SearchBasicTest, MultipleProviders) {
 
     SearchQuery query;
     query.keyword = "Multi Engine";
-    query.limit = 5;
+    query.limit = 50;
 
     auto results = manager_->search_all(query);
     EXPECT_GT(results.size(), 0);

@@ -24,8 +24,6 @@ add_library(falcon
     src/version.cpp
     # aria2 风格命令系统
     src/commands/http_commands.cpp
-    src/net/event_poll_epoll.cpp
-    src/net/event_poll_kqueue.cpp
     src/net/event_poll_poll.cpp
     src/net/event_poll_factory.cpp
     src/net/socket_pool.cpp
@@ -39,6 +37,16 @@ add_library(falcon
     # Resource browser - TODO: Fix compilation issues
     # src/resource_browser.cpp
 )
+
+# Platform-specific event poll implementations
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_sources(falcon PRIVATE src/net/event_poll_epoll.cpp)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR
+       CMAKE_SYSTEM_NAME STREQUAL "FreeBSD" OR
+       CMAKE_SYSTEM_NAME STREQUAL "NetBSD" OR
+       CMAKE_SYSTEM_NAME STREQUAL "OpenBSD")
+    target_sources(falcon PRIVATE src/net/event_poll_kqueue.cpp)
+endif()
 
 # Alias for consistent usage
 add_library(Falcon::falcon ALIAS falcon)

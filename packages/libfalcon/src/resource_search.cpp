@@ -676,9 +676,19 @@ std::vector<SearchResult> ResourceSearchManager::search_all(const SearchQuery& q
         }
     }
 
-    // 按置信度排序
+    // 全局排序：优先按查询参数，其次按置信度
     std::sort(unique_results.begin(), unique_results.end(),
-        [](const SearchResult& a, const SearchResult& b) {
+        [&](const SearchResult& a, const SearchResult& b) {
+            if (query.sort_by == "size") {
+                return query.sort_desc ? a.size > b.size : a.size < b.size;
+            }
+            if (query.sort_by == "seeds") {
+                return query.sort_desc ? a.seeds > b.seeds : a.seeds < b.seeds;
+            }
+            if (query.sort_by == "date") {
+                return query.sort_desc ? a.publish_date > b.publish_date
+                                       : a.publish_date < b.publish_date;
+            }
             return a.confidence > b.confidence;
         });
 

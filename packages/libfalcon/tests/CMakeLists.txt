@@ -88,7 +88,6 @@ endif()
 target_link_libraries(falcon_core_tests
     PRIVATE
         falcon
-        GTest::gtest
         GTest::gtest_main
 )
 
@@ -111,7 +110,6 @@ add_executable(falcon_http_tests
 target_link_libraries(falcon_http_tests
     PRIVATE
         falcon
-        GTest::gtest
         GTest::gtest_main
 )
 
@@ -141,7 +139,6 @@ add_executable(falcon_integration_tests
 target_link_libraries(falcon_integration_tests
     PRIVATE
         falcon
-        GTest::gtest
         GTest::gtest_main
 )
 
@@ -189,7 +186,6 @@ if(FALCON_ENABLE_CLOUD_STORAGE)
     target_link_libraries(falcon_cloud_storage_tests
         PRIVATE
             falcon
-            GTest::gtest
             GTest::gtest_main
     )
 
@@ -206,7 +202,6 @@ if(FALCON_ENABLE_RESOURCE_SEARCH)
     target_link_libraries(falcon_resource_search_tests
         PRIVATE
             falcon
-            GTest::gtest
             GTest::gtest_main
     )
 
@@ -224,7 +219,6 @@ if(FALCON_ENABLE_RESOURCE_BROWSER)
     target_link_libraries(falcon_resource_browser_tests
         PRIVATE
             falcon
-            GTest::gtest
             GTest::gtest_main
     )
 

@@ -14,6 +14,8 @@
 #include <algorithm>
 #include <ctime>
 #include <iomanip>
+#include <climits>
+#include <cstdio>
 #include <cstring>
 #include <openssl/md5.h>
 #include <openssl/hmac.h>
@@ -116,7 +118,7 @@ public:
         // 转换为十六进制字符串
         char md5_str[33];
         for (unsigned int i = 0; i < md5_len && i < 16; i++) {
-            sprintf(md5_str + i * 2, "%02x", md5_value[i]);
+            std::snprintf(md5_str + i * 2, sizeof(md5_str) - i * 2, "%02x", md5_value[i]);
         }
         md5_str[32] = '\0';
 
@@ -125,8 +127,12 @@ public:
         // 使用 OpenSSL 3.0 HMAC API 计算 HMAC-MD5
         unsigned char hmac[EVP_MAX_MD_SIZE];
         unsigned int hmac_len = 0;
+        if (password_md5.length() > static_cast<std::size_t>(INT_MAX)) {
+            FALCON_LOG_ERROR("password_md5 长度过大，无法传递给 OpenSSL HMAC");
+            return "";
+        }
         unsigned char* result = HMAC(EVP_md5(),
-            password_md5.c_str(), password_md5.length(),
+            password_md5.c_str(), static_cast<int>(password_md5.length()),
             (unsigned char*)sign_str.c_str(), sign_str.length(),
             hmac, &hmac_len);
 
@@ -201,6 +207,7 @@ public:
     }
 
     RemoteResource parse_upyun_object(const json& obj, const ListOptions& options) {
+        (void)options;
         RemoteResource res;
 
         if (obj.contains("name")) {
@@ -270,10 +277,14 @@ public:
     }
 
     std::string base64_encode(const unsigned char* data, size_t length) {
+        if (length > static_cast<std::size_t>(INT_MAX)) {
+            FALCON_LOG_ERROR("Base64 输入过大，无法传递给 OpenSSL BIO_write");
+            return "";
+        }
         BIO* b64 = BIO_new(BIO_f_base64());
         BIO* bmem = BIO_new(BIO_s_mem());
         b64 = BIO_push(b64, bmem);
-        BIO_write(b64, data, length);
+        BIO_write(b64, data, static_cast<int>(length));
         BIO_flush(b64);
 
         BUF_MEM* bptr;
@@ -501,6 +512,7 @@ RemoteResource UpyunBrowser::get_resource_info(const std::string& path) {
 }
 
 bool UpyunBrowser::create_directory(const std::string& path, bool recursive) {
+    (void)recursive;
     std::string uri = path;
     if (uri[0] != '/') {
         uri = "/" + uri;

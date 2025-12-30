@@ -25,7 +25,7 @@ using namespace falcon;
  */
 std::string create_test_file(const std::string& path, const std::string& content) {
     std::ofstream file(path, std::ios::binary);
-    file.write(content.data(), content.size());
+    file.write(content.data(), static_cast<std::streamsize>(content.size()));
     file.close();
     return path;
 }
@@ -122,7 +122,8 @@ TEST(FileHashTest, CalculateMD5BinaryData) {
     }
 
     std::ofstream file(path, std::ios::binary);
-    file.write(reinterpret_cast<const char*>(binary_data.data()), binary_data.size());
+    file.write(reinterpret_cast<const char*>(binary_data.data()),
+               static_cast<std::streamsize>(binary_data.size()));
     file.close();
 
     auto result = FileHasher::calculate(path, HashAlgorithm::MD5);

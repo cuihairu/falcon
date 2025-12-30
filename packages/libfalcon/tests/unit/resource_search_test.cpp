@@ -137,12 +137,52 @@ TEST_F(ResourceSearchTest, SearchResultValidation) {
 
 // 测试搜索结果过滤
 TEST_F(ResourceSearchTest, ResultFiltering) {
-    std::vector<SearchResult> results = {
-        {"Test1", "magnet:?xt=1", "Engine1", 100 * 1024 * 1024, "", 5, 2, 0.8},
-        {"Test2", "magnet:?xt=2", "Engine1", 50 * 1024 * 1024, "", 3, 1, 0.6},
-        {"Test3", "magnet:?xt=3", "Engine1", 200 * 1024 * 1024, "", 10, 5, 0.9},
-        {"Test4", "magnet:?xt=4", "Engine2", 75 * 1024 * 1024, "", 2, 1, 0.5}
-    };
+    std::vector<SearchResult> results;
+    results.reserve(4);
+    {
+        SearchResult r;
+        r.title = "Test1";
+        r.url = "magnet:?xt=1";
+        r.source = "Engine1";
+        r.size = 100 * 1024 * 1024;
+        r.seeds = 5;
+        r.peers = 2;
+        r.confidence = 0.8;
+        results.push_back(std::move(r));
+    }
+    {
+        SearchResult r;
+        r.title = "Test2";
+        r.url = "magnet:?xt=2";
+        r.source = "Engine1";
+        r.size = 50 * 1024 * 1024;
+        r.seeds = 3;
+        r.peers = 1;
+        r.confidence = 0.6;
+        results.push_back(std::move(r));
+    }
+    {
+        SearchResult r;
+        r.title = "Test3";
+        r.url = "magnet:?xt=3";
+        r.source = "Engine1";
+        r.size = 200 * 1024 * 1024;
+        r.seeds = 10;
+        r.peers = 5;
+        r.confidence = 0.9;
+        results.push_back(std::move(r));
+    }
+    {
+        SearchResult r;
+        r.title = "Test4";
+        r.url = "magnet:?xt=4";
+        r.source = "Engine2";
+        r.size = 75 * 1024 * 1024;
+        r.seeds = 2;
+        r.peers = 1;
+        r.confidence = 0.5;
+        results.push_back(std::move(r));
+    }
 
     SearchQuery query;
     query.limit = 3;
@@ -164,11 +204,41 @@ TEST_F(ResourceSearchTest, ResultFiltering) {
 
 // 测试结果排序
 TEST_F(ResourceSearchTest, ResultSorting) {
-    std::vector<SearchResult> results = {
-        {"Test1", "magnet:?xt=1", "Engine1", 100, "", 5, 2, 0.8},
-        {"Test2", "magnet:?xt=2", "Engine1", 200, "", 3, 1, 0.9},
-        {"Test3", "magnet:?xt=3", "Engine1", 50, "", 10, 5, 0.7}
-    };
+    std::vector<SearchResult> results;
+    results.reserve(3);
+    {
+        SearchResult r;
+        r.title = "Test1";
+        r.url = "magnet:?xt=1";
+        r.source = "Engine1";
+        r.size = 100;
+        r.seeds = 5;
+        r.peers = 2;
+        r.confidence = 0.8;
+        results.push_back(std::move(r));
+    }
+    {
+        SearchResult r;
+        r.title = "Test2";
+        r.url = "magnet:?xt=2";
+        r.source = "Engine1";
+        r.size = 200;
+        r.seeds = 3;
+        r.peers = 1;
+        r.confidence = 0.9;
+        results.push_back(std::move(r));
+    }
+    {
+        SearchResult r;
+        r.title = "Test3";
+        r.url = "magnet:?xt=3";
+        r.source = "Engine1";
+        r.size = 50;
+        r.seeds = 10;
+        r.peers = 5;
+        r.confidence = 0.7;
+        results.push_back(std::move(r));
+    }
 
     SearchQuery query;
     query.sort_by = "seeds";
@@ -212,12 +282,56 @@ TEST_F(ResourceSearchTest, SearchEngineConfigStructure) {
 
 // 测试去重功能
 TEST_F(ResourceSearchTest, DeduplicateResults) {
-    std::vector<SearchResult> results = {
-        {"Test1", "magnet:?xt=hash1", "Engine1", 100, "hash1", 5, 2, 0.8},
-        {"Test2", "magnet:?xt=hash2", "Engine2", 100, "hash2", 5, 2, 0.8},
-        {"Test1 Duplicate", "magnet:?xt=hash1", "Engine3", 200, "hash1", 5, 2, 0.8}, // 相同哈希
-        {"Test3", "https://example.com/file3.torrent", "Engine4", 300, "", 10, 5, 0.9}
-    };
+    std::vector<SearchResult> results;
+    results.reserve(4);
+
+    {
+        SearchResult r;
+        r.title = "Test1";
+        r.url = "magnet:?xt=hash1";
+        r.source = "Engine1";
+        r.size = 100;
+        r.seeds = 5;
+        r.peers = 2;
+        r.confidence = 0.8;
+        r.hash = "hash1";
+        results.push_back(std::move(r));
+    }
+    {
+        SearchResult r;
+        r.title = "Test2";
+        r.url = "magnet:?xt=hash2";
+        r.source = "Engine2";
+        r.size = 100;
+        r.seeds = 5;
+        r.peers = 2;
+        r.confidence = 0.8;
+        r.hash = "hash2";
+        results.push_back(std::move(r));
+    }
+    {
+        SearchResult r;
+        r.title = "Test1 Duplicate";
+        r.url = "magnet:?xt=hash1";
+        r.source = "Engine3";
+        r.size = 200;
+        r.seeds = 5;
+        r.peers = 2;
+        r.confidence = 0.8;
+        r.hash = "hash1"; // 相同哈希
+        results.push_back(std::move(r));
+    }
+    {
+        SearchResult r;
+        r.title = "Test3";
+        r.url = "https://example.com/file3.torrent";
+        r.source = "Engine4";
+        r.size = 300;
+        r.seeds = 10;
+        r.peers = 5;
+        r.confidence = 0.9;
+        results.push_back(std::move(r));
+    }
 
     // 模拟去重逻辑
     std::unordered_set<std::string> seen_hashes;
@@ -244,6 +358,35 @@ TEST_F(ResourceSearchTest, MagnetLinkParsing) {
     SearchResult result;
     result.url = magnet_url;
 
+    auto url_decode = [](const std::string& s) -> std::string {
+        std::string out;
+        out.reserve(s.size());
+        for (std::size_t i = 0; i < s.size(); ++i) {
+            const char c = s[i];
+            if (c == '+') {
+                out.push_back(' ');
+                continue;
+            }
+            if (c == '%' && i + 2 < s.size()) {
+                auto hex = [](char h) -> int {
+                    if (h >= '0' && h <= '9') return h - '0';
+                    if (h >= 'a' && h <= 'f') return 10 + (h - 'a');
+                    if (h >= 'A' && h <= 'F') return 10 + (h - 'A');
+                    return -1;
+                };
+                int hi = hex(s[i + 1]);
+                int lo = hex(s[i + 2]);
+                if (hi >= 0 && lo >= 0) {
+                    out.push_back(static_cast<char>((hi << 4) | lo));
+                    i += 2;
+                    continue;
+                }
+            }
+            out.push_back(c);
+        }
+        return out;
+    };
+
     // 提取哈希
     size_t hash_pos = magnet_url.find("btih:");
     if (hash_pos != std::string::npos) {
@@ -257,10 +400,7 @@ TEST_F(ResourceSearchTest, MagnetLinkParsing) {
     if (dn_pos != std::string::npos) {
         size_t dn_end = magnet_url.find("&", dn_pos);
         if (dn_end == std::string::npos) dn_end = magnet_url.length();
-        // URL解码（简化版）
-        std::string encoded = magnet_url.substr(dn_pos + 3, dn_end - dn_pos - 3);
-        std::replace(encoded.begin(), encoded.end(), '+', ' ');
-        result.title = encoded;
+        result.title = url_decode(magnet_url.substr(dn_pos + 3, dn_end - dn_pos - 3));
     }
 
     EXPECT_EQ(result.hash, "testhash123456789abcdef");
@@ -274,7 +414,7 @@ TEST_F(ResourceSearchTest, ParseFileSize) {
     auto parse_size = [](const std::string& size_str) -> size_t {
         if (size_str.empty()) return 0;
 
-        size_t value = 0;
+        double value = 0.0;
         std::istringstream ss(size_str);
         ss >> value;
 
@@ -282,11 +422,11 @@ TEST_F(ResourceSearchTest, ParseFileSize) {
         ss >> suffix;
 
         switch (std::toupper(suffix)) {
-            case 'K': return value * 1024;
-            case 'M': return value * 1024 * 1024;
-            case 'G': return value * 1024 * 1024 * 1024;
-            case 'T': return value * 1024ULL * 1024 * 1024 * 1024;
-            default: return value;
+            case 'K': return static_cast<size_t>(value * 1024.0);
+            case 'M': return static_cast<size_t>(value * 1024.0 * 1024.0);
+            case 'G': return static_cast<size_t>(value * 1024.0 * 1024.0 * 1024.0);
+            case 'T': return static_cast<size_t>(value * 1024.0 * 1024.0 * 1024.0 * 1024.0);
+            default: return static_cast<size_t>(value);
         }
     };
 
@@ -302,16 +442,16 @@ TEST_F(ResourceSearchTest, PerformanceLargeResultSet) {
     // 生成大量测试数据
     std::vector<SearchResult> results;
     for (int i = 0; i < 10000; ++i) {
-        results.push_back({
-            "Test " + std::to_string(i),
-            "magnet:?xt=hash" + std::to_string(i),
-            "Engine1",
-            100 * 1024 * 1024,
-            "hash" + std::to_string(i),
-            i % 100,
-            i % 50,
-            0.5 + (i % 100) / 100.0
-        });
+        SearchResult r;
+        r.title = "Test " + std::to_string(i);
+        r.url = "magnet:?xt=hash" + std::to_string(i);
+        r.source = "Engine1";
+        r.size = 100 * 1024 * 1024;
+        r.seeds = i % 100;
+        r.peers = i % 50;
+        r.confidence = 0.5 + (i % 100) / 100.0;
+        r.hash = "hash" + std::to_string(i);
+        results.push_back(std::move(r));
     }
 
     auto start = std::chrono::high_resolution_clock::now();

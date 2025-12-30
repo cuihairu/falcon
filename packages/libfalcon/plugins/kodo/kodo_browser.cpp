@@ -14,6 +14,8 @@
 #include <algorithm>
 #include <ctime>
 #include <iomanip>
+#include <climits>
+#include <cstdlib>
 #include <cstring>
 #include <openssl/hmac.h>
 #include <openssl/bio.h>
@@ -107,10 +109,14 @@ public:
 
     std::string encode_base64_url(const std::string& str) {
         // Base64 URL安全编码
+        if (str.length() > static_cast<std::size_t>(INT_MAX)) {
+            FALCON_LOG_ERROR("Base64 输入过大，无法传递给 OpenSSL BIO_write");
+            return "";
+        }
         BIO* b64 = BIO_new(BIO_f_base64());
         BIO* bmem = BIO_new(BIO_s_mem());
         b64 = BIO_push(b64, bmem);
-        BIO_write(b64, str.c_str(), str.length());
+        BIO_write(b64, str.c_str(), static_cast<int>(str.length()));
         BIO_flush(b64);
 
         BUF_MEM* bptr;
@@ -140,7 +146,11 @@ public:
         // HMAC-SHA1签名
         unsigned char hmac[EVP_MAX_MD_SIZE];
         unsigned int hmac_len;
-        HMAC(EVP_sha1(), config_.secret_key.c_str(), config_.secret_key.length(),
+        if (config_.secret_key.length() > static_cast<std::size_t>(INT_MAX)) {
+            FALCON_LOG_ERROR("secret_key 过长，无法传递给 OpenSSL HMAC");
+            return "";
+        }
+        HMAC(EVP_sha1(), config_.secret_key.c_str(), static_cast<int>(config_.secret_key.length()),
              (unsigned char*)sign_str.c_str(), sign_str.length(),
              hmac, &hmac_len);
 
@@ -148,7 +158,12 @@ public:
         BIO* b64 = BIO_new(BIO_f_base64());
         BIO* bmem = BIO_new(BIO_s_mem());
         b64 = BIO_push(b64, bmem);
-        BIO_write(b64, hmac, hmac_len);
+        if (hmac_len > static_cast<unsigned int>(INT_MAX)) {
+            FALCON_LOG_ERROR("HMAC 输出过大，无法传递给 OpenSSL BIO_write");
+            BIO_free_all(b64);
+            return "";
+        }
+        BIO_write(b64, hmac, static_cast<int>(hmac_len));
         BIO_flush(b64);
 
         BUF_MEM* bptr;
@@ -165,7 +180,7 @@ public:
         const std::string& method,
         const std::string& url,
         const std::string& body = "",
-        bool is_rsf = false) {
+        bool /*is_rsf*/ = false) {
 
         curl_easy_setopt(curl_, CURLOPT_URL, url.c_str());
         curl_easy_setopt(curl_, CURLOPT_CUSTOMREQUEST, method.c_str());
@@ -207,6 +222,7 @@ public:
     }
 
     RemoteResource parse_kodo_object(const json& obj, const ListOptions& options) {
+        (void)options;
         RemoteResource res;
 
         if (obj.contains("key")) {
@@ -276,7 +292,9 @@ public:
         result.reserve(length);
 
         for (size_t i = 0; i < length; ++i) {
-            result += charset[rand() % (sizeof(charset) - 1)];
+            const std::size_t idx =
+                static_cast<std::size_t>(std::rand()) % (sizeof(charset) - 1);
+            result += charset[idx];
         }
 
         return result;
@@ -490,6 +508,7 @@ RemoteResource KodoBrowser::get_resource_info(const std::string& path) {
 }
 
 bool KodoBrowser::create_directory(const std::string& path, bool recursive) {
+    (void)recursive;
     // 七牛云没有真正的目录概念，可以通过创建空对象模拟目录
     std::string dir_path = path;
     if (dir_path.empty() || dir_path.back() != '/') {
