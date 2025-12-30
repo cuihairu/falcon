@@ -110,6 +110,11 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
+        if (!engine.start_task(task->id())) {
+            cerr << "Error: Failed to start download task" << endl;
+            return 1;
+        }
+
         // Wait for download to complete
         while (!task->is_finished()) {
             this_thread::sleep_for(chrono::milliseconds(100));

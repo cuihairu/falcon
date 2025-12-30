@@ -76,6 +76,11 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
+        if (!engine.start_task(task->id())) {
+            std::cerr << "Failed to start download task.\n";
+            return 1;
+        }
+
         std::cout << "Download started. Task ID: " << task->id() << "\n";
         std::cout << "URL: " << task->url() << "\n";
 
@@ -84,11 +89,17 @@ int main(int argc, char* argv[]) {
 
         // 输出最终统计
         auto stats = task->get_progress_info();
-        std::cout << "\n\nDownload finished!\n";
-        std::cout << "Total downloaded: " << stats.downloaded_bytes << " bytes\n";
-        std::cout << "Time elapsed: "
-                  << std::chrono::duration_cast<std::chrono::seconds>(stats.elapsed).count()
-                  << " seconds\n";
+        if (task->status() == falcon::TaskStatus::Completed) {
+            std::cout << "\n\nDownload finished!\n";
+            std::cout << "Total downloaded: " << stats.downloaded_bytes << " bytes\n";
+            std::cout << "Time elapsed: "
+                      << std::chrono::duration_cast<std::chrono::seconds>(stats.elapsed).count()
+                      << " seconds\n";
+            return 0;
+        }
+
+        std::cerr << "\n\nDownload failed: " << task->error_message() << "\n";
+        return 1;
 
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << "\n";
