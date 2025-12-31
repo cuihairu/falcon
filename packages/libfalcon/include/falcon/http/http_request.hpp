@@ -10,6 +10,7 @@
 #include <falcon/types.hpp>
 #include <string>
 #include <map>
+#include <sstream>
 
 namespace falcon {
 
@@ -34,8 +35,18 @@ public:
     }
 
     std::string to_string() const {
-        // TODO: 构建完整的 HTTP 请求字符串
-        return method_ + " " + url_ + " HTTP/1.1\r\n";
+        std::ostringstream oss;
+        std::string target = url_.empty() ? "/" : url_;
+        if (!target.empty() && target[0] != '/') {
+            target = "/" + target;
+        }
+
+        oss << method_ << " " << target << " HTTP/1.1\r\n";
+        for (const auto& [k, v] : headers_) {
+            oss << k << ": " << v << "\r\n";
+        }
+        oss << "\r\n";
+        return oss.str();
     }
 
 private:

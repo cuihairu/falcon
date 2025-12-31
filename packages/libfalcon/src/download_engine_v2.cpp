@@ -219,20 +219,49 @@ void DownloadEngineV2::run() {
 }
 
 void DownloadEngineV2::execute_commands() {
-    std::lock_guard<std::mutex> lock(command_queue_mutex_);
-    const std::size_t round = command_queue_.size();
-    for (std::size_t i = 0; i < round; ++i) {
-        auto command = std::move(command_queue_.front());
-        command_queue_.pop_front();
+    std::size_t round = 0;
+    {
+        std::lock_guard<std::mutex> lock(command_queue_mutex_);
+        round = command_queue_.size();
+    }
 
-        // 执行命令
+    for (std::size_t i = 0; i < round; ++i) {
+        std::unique_ptr<Command> command;
+        {
+            std::lock_guard<std::mutex> lock(command_queue_mutex_);
+            if (command_queue_.empty()) {
+                break;
+            }
+            command = std::move(command_queue_.front());
+            command_queue_.pop_front();
+        }
+
+        if (!command) {
+            continue;
+        }
+
+        // 执行命令（不要持有队列锁，避免阻塞 socket 回调入队）
         bool completed = command->execute(this);
 
-        if (!completed) {
-            // 命令未完成，放回队列末尾（下一轮再执行，避免在同一轮内忙等）
+        if (completed) {
+            continue;
+        }
+
+        // 未完成：若该命令已注册 socket 等待事件，则将其挂起等待回调重新入队
+        bool parked = false;
+        {
+            std::lock_guard<std::mutex> lock(socket_map_mutex_);
+            auto it = socket_wait_map_.find(command->id());
+            if (it != socket_wait_map_.end()) {
+                waiting_commands_[command->id()] = std::move(command);
+                parked = true;
+            }
+        }
+
+        if (!parked) {
+            std::lock_guard<std::mutex> lock(command_queue_mutex_);
             command_queue_.push_back(std::move(command));
         }
-        // else: 命令已完成，自动销毁
     }
 }
 
@@ -262,19 +291,59 @@ void DownloadEngineV2::update_task_status() {
 bool DownloadEngineV2::register_socket_event(int fd, int events, CommandId command_id) {
     std::lock_guard<std::mutex> lock(socket_map_mutex_);
 
-    // 注册到 EventPoll
-    auto callback = [this](int socket_fd, int ready_events, void* /*user_data*/) {
-        // 查找对应的命令并重新加入队列
-        std::lock_guard<std::mutex> lock(command_queue_mutex_);
+    // 记录等待信息（供 execute_commands() 将命令移出队列）
+    socket_wait_map_[command_id] = SocketWait{fd, events};
 
-        // TODO: 根据 command_id 找到对应的命令并重新激活
-        // 这里简化处理：假设所有等待事件的命令都会被重新加入队列
-        FALCON_LOG_DEBUG("Socket 事件就绪: fd=" << socket_fd << ", events=" << ready_events);
+    auto callback = [this](int socket_fd, int ready_events, void* /*user_data*/) {
+        std::unique_ptr<Command> resumed;
+        CommandId cmd_id = 0;
+        {
+            std::lock_guard<std::mutex> lock(socket_map_mutex_);
+            auto it = socket_command_map_.find(socket_fd);
+            if (it == socket_command_map_.end()) {
+                FALCON_LOG_DEBUG("Socket 事件就绪但无关联命令: fd=" << socket_fd);
+                return;
+            }
+            cmd_id = it->second;
+
+            auto w_it = waiting_commands_.find(cmd_id);
+            if (w_it != waiting_commands_.end()) {
+                resumed = std::move(w_it->second);
+                waiting_commands_.erase(w_it);
+            }
+
+            socket_wait_map_.erase(cmd_id);
+            socket_command_map_.erase(it);
+        }
+
+        // one-shot: 事件就绪后移除监听；失败则忽略（平台可能已自动删除）
+        event_poll_->remove_event(socket_fd);
+
+        if (!resumed) {
+            FALCON_LOG_DEBUG("Socket 事件就绪但命令不存在: fd=" << socket_fd << ", cmd=" << cmd_id);
+            return;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(command_queue_mutex_);
+            command_queue_.push_back(std::move(resumed));
+        }
+
+        FALCON_LOG_DEBUG("Socket 事件就绪: fd=" << socket_fd << ", events=" << ready_events
+                                              << ", 恢复命令=" << cmd_id);
     };
 
-    if (!event_poll_->add_event(fd, events, callback)) {
-        FALCON_LOG_ERROR("注册 Socket 事件失败: fd=" << fd);
-        return false;
+    // 已存在则修改事件，否则新增事件
+    if (socket_command_map_.find(fd) != socket_command_map_.end()) {
+        if (!event_poll_->modify_event(fd, events)) {
+            FALCON_LOG_ERROR("修改 Socket 事件失败: fd=" << fd);
+            return false;
+        }
+    } else {
+        if (!event_poll_->add_event(fd, events, callback)) {
+            FALCON_LOG_ERROR("注册 Socket 事件失败: fd=" << fd);
+            return false;
+        }
     }
 
     socket_command_map_[fd] = command_id;

@@ -493,6 +493,12 @@ TEST_F(DownloadIntegrationTest, LocalHttpDownloadFileV2) {
 
     std::filesystem::path output_file = test_dir_ / "v2_test.json";
     ASSERT_TRUE(std::filesystem::exists(output_file));
+    EXPECT_EQ(std::filesystem::file_size(output_file), payload.size());
+
+    std::ifstream file(output_file, std::ios::binary);
+    std::string downloaded((std::istreambuf_iterator<char>(file)),
+                           std::istreambuf_iterator<char>());
+    EXPECT_EQ(downloaded, payload);
 }
 
 TEST_F(DownloadIntegrationTest, LocalHttpSegmentedDownloadFileV2) {

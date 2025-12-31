@@ -23,6 +23,7 @@
 #include <atomic>
 #include <mutex>
 #include <chrono>
+#include <unordered_map>
 
 namespace falcon {
 
@@ -225,6 +226,12 @@ private:
 
     // Socket 事件注册
     std::map<int, CommandId> socket_command_map_;
+    struct SocketWait {
+        int fd = -1;
+        int events = 0;
+    };
+    std::unordered_map<CommandId, SocketWait> socket_wait_map_;
+    std::unordered_map<CommandId, std::unique_ptr<Command>> waiting_commands_;
     std::mutex socket_map_mutex_;
 
     // 状态

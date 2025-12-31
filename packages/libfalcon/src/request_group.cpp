@@ -8,14 +8,11 @@
 #include <falcon/request_group.hpp>
 #include <falcon/logger.hpp>
 #include <falcon/download_engine_v2.hpp>
+#include <falcon/commands/http_commands.hpp>
 
 #include <algorithm>
 #include <filesystem>
 #include <string_view>
-
-#if defined(FALCON_ENABLE_HTTP_PLUGIN) || defined(FALCON_ENABLE_HTTP)
-#include "../plugins/http/http_handler.hpp"
-#endif
 
 namespace falcon {
 
@@ -73,103 +70,6 @@ std::string build_output_path_for_options(const std::string& url, const Download
 bool starts_with(std::string_view s, std::string_view prefix) {
     return s.size() >= prefix.size() && s.substr(0, prefix.size()) == prefix;
 }
-
-class RequestGroupDownloadCommand final : public AbstractCommand {
-public:
-    explicit RequestGroupDownloadCommand(TaskId task_id)
-        : AbstractCommand(task_id) {}
-
-    ~RequestGroupDownloadCommand() override {
-        if (worker_.joinable()) {
-            worker_.join();
-        }
-    }
-
-    const char* name() const override { return "RequestGroupDownload"; }
-
-    bool execute(DownloadEngineV2* engine) override {
-        if (!engine) {
-            return handle_result(ExecutionResult::ERROR_OCCURRED);
-        }
-
-        auto* group_man = engine->request_group_man();
-        auto* group = group_man ? group_man->find_group(get_task_id()) : nullptr;
-        if (!group) {
-            return handle_result(ExecutionResult::OK);
-        }
-
-        auto task = group->download_task();
-        if (!task) {
-            group->set_error_message("RequestGroup 缺少下载任务对象");
-            group->set_status(RequestGroupStatus::FAILED);
-            return handle_result(ExecutionResult::OK);
-        }
-
-        if (!started_) {
-            // Start download in background to keep the event loop responsive.
-            started_ = true;
-
-            task->mark_started();
-            task->set_status(TaskStatus::Downloading);
-
-            worker_ = std::thread([task]() {
-                try {
-                    auto handler = task->get_handler();
-                    if (!handler) {
-                        task->set_error("No protocol handler available for RequestGroup");
-                        task->set_status(TaskStatus::Failed);
-                        return;
-                    }
-
-                    handler->download(task, /*listener=*/nullptr);
-
-                    if (task->status() == TaskStatus::Downloading) {
-                        // Handlers are expected to set final status; treat missing transition as failure.
-                        task->set_error("Handler returned without final status");
-                        task->set_status(TaskStatus::Failed);
-                    }
-                } catch (const std::exception& e) {
-                    task->set_error(e.what());
-                    task->set_status(TaskStatus::Failed);
-                }
-            });
-
-            mark_active();
-            return false;
-        }
-
-        // Poll completion
-        TaskStatus st = task->status();
-        if (st == TaskStatus::Completed) {
-            if (worker_.joinable()) worker_.join();
-            group->set_status(RequestGroupStatus::COMPLETED);
-            return handle_result(ExecutionResult::OK);
-        }
-        if (st == TaskStatus::Failed) {
-            if (worker_.joinable()) worker_.join();
-            group->set_error_message(task->error_message());
-            group->set_status(RequestGroupStatus::FAILED);
-            return handle_result(ExecutionResult::OK);
-        }
-        if (st == TaskStatus::Cancelled) {
-            if (worker_.joinable()) worker_.join();
-            group->set_status(RequestGroupStatus::REMOVED);
-            return handle_result(ExecutionResult::OK);
-        }
-        if (st == TaskStatus::Paused) {
-            if (worker_.joinable()) worker_.join();
-            group->set_status(RequestGroupStatus::PAUSED);
-            return handle_result(ExecutionResult::OK);
-        }
-
-        mark_active();
-        return false;
-    }
-
-private:
-    bool started_ = false;
-    std::thread worker_;
-};
 } // namespace
 
 //==============================================================================
@@ -222,15 +122,15 @@ bool RequestGroup::init() {
     download_task_ = std::make_shared<DownloadTask>(id_, url, options_);
     download_task_->set_output_path(build_output_path_for_options(url, options_));
 
-#if defined(FALCON_ENABLE_HTTP_PLUGIN) || defined(FALCON_ENABLE_HTTP)
-    if (starts_with(url, "http://") || starts_with(url, "https://")) {
-        auto handler = std::make_shared<plugins::HttpHandler>();
-        download_task_->set_handler(handler);
+    if (starts_with(url, "http://")) {
         return true;
     }
-#endif
 
-    set_error_message("V2 当前仅支持 HTTP/HTTPS（且需启用 HTTP 插件）");
+    if (starts_with(url, "https://")) {
+        set_error_message("V2 socket 命令链路暂不支持 https://");
+    } else {
+        set_error_message("V2 当前仅支持 http://");
+    }
     status_ = RequestGroupStatus::FAILED;
     return false;
 }
@@ -238,15 +138,15 @@ bool RequestGroup::init() {
 std::unique_ptr<Command> RequestGroup::create_initial_command() {
     FALCON_LOG_DEBUG("创建初始命令: id=" << id_ << ", url=" << current_uri());
 
-    if (!init() || !download_task_ || !download_task_->get_handler()) {
+    if (!init() || !download_task_) {
         if (status_ != RequestGroupStatus::FAILED) {
-            set_error_message("初始化失败或缺少协议处理器");
+            set_error_message("初始化失败");
             status_ = RequestGroupStatus::FAILED;
         }
         return nullptr;
     }
 
-    return std::make_unique<RequestGroupDownloadCommand>(id_);
+    return std::make_unique<HttpInitiateConnectionCommand>(id_, current_uri(), options_);
 }
 
 RequestGroup::Progress RequestGroup::get_progress() const {

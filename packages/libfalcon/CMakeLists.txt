@@ -23,6 +23,7 @@ add_library(falcon
     src/password_manager.cpp
     src/version.cpp
     # aria2 风格命令系统
+    src/commands/command.cpp
     src/commands/http_commands.cpp
     src/net/event_poll_poll.cpp
     src/net/event_poll_factory.cpp

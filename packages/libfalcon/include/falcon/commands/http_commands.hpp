@@ -18,6 +18,7 @@
 #include <memory>
 #include <string>
 #include <map>
+#include <fstream>
 
 namespace falcon {
 
@@ -113,6 +114,7 @@ private:
     bool connect_socket();
     bool setup_tls();
     bool prepare_http_request();
+    ExecutionResult send_http_request(DownloadEngineV2* engine);
 
     std::string url_;
     DownloadOptions options_;
@@ -121,8 +123,15 @@ private:
     std::shared_ptr<HttpRequest> http_request_;
     std::shared_ptr<net::PooledSocket> pooled_socket_;  // Socket Pool 中的连接
     std::string host_;
+    std::string path_ = "/";
     uint16_t port_ = 80;
     bool use_https_ = false;
+
+    std::string resolved_ip_;
+    bool connect_in_progress_ = false;
+
+    std::string request_data_;
+    std::size_t request_sent_ = 0;
 };
 
 /**
@@ -204,12 +213,12 @@ public:
     }
 
 private:
-    bool receive_response_headers();
+    ExecutionResult receive_response_headers(DownloadEngineV2* engine);
     bool parse_headers();
     bool parse_status_line(const std::string& line);
     bool parse_header_line(const std::string& line);
     bool handle_redirect();
-    bool determine_download_strategy();
+    bool determine_download_strategy(DownloadEngineV2* engine);
 
     int socket_fd_;
     std::shared_ptr<HttpRequest> http_request_;
@@ -218,6 +227,7 @@ private:
 
     // 响应解析状态
     std::string response_buffer_;
+    std::string initial_body_;
     bool headers_received_ = false;
     int status_code_ = 0;
     std::map<std::string, std::string> headers_;
@@ -260,7 +270,8 @@ public:
                         std::shared_ptr<HttpResponse> response,
                         SegmentId segment_id,
                         Bytes offset,
-                        Bytes length = 0);
+                        Bytes length = 0,
+                        std::string initial_data = {});
 
     ~HttpDownloadCommand() override;
 
@@ -292,8 +303,8 @@ public:
     }
 
 private:
-    bool receive_data();
-    bool write_to_segment(const char* data, std::size_t size);
+    ExecutionResult receive_data(DownloadEngineV2* engine);
+    bool write_to_segment(const char* data, std::size_t size, DownloadEngineV2* engine);
     bool handle_chunked_encoding();
     void update_progress();
     bool check_completion();
@@ -309,6 +320,10 @@ private:
     Bytes downloaded_bytes_ = 0;
     Speed download_speed_ = 0;
     bool download_complete_ = false;
+    bool file_opened_ = false;
+    std::string initial_data_;
+    bool initial_written_ = false;
+    std::ofstream output_;
 
     // 分块传输编码状态
     bool chunked_encoding_ = false;
