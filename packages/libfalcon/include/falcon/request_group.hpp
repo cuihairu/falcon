@@ -166,6 +166,11 @@ public:
     Progress get_progress() const;
 
     /**
+     * @brief 获取内部 DownloadTask（用于复用现有下载器/插件逻辑）
+     */
+    [[nodiscard]] DownloadTask::Ptr download_task() const noexcept;
+
+    /**
      * @brief 检查是否完成
      */
     bool is_completed() const {
@@ -231,6 +236,7 @@ private:
     DownloadOptions options_;
     std::vector<FileInfo> files_;
     std::unique_ptr<SegmentDownloader> segment_downloader_;
+    DownloadTask::Ptr download_task_;
 
     // 下载状态
     Bytes downloaded_bytes_ = 0;
@@ -324,7 +330,16 @@ public:
      * @brief 检查是否所有组已完成
      */
     bool all_completed() const {
-        return request_groups_.empty() && reserved_groups_.empty();
+        for (const auto& group : all_groups_) {
+            if (!group) continue;
+            auto st = group->status();
+            if (st != RequestGroupStatus::COMPLETED &&
+                st != RequestGroupStatus::FAILED &&
+                st != RequestGroupStatus::REMOVED) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -347,6 +362,11 @@ public:
     const std::vector<std::unique_ptr<RequestGroup>>& all_groups() const {
         return all_groups_;
     }
+
+    /**
+     * @brief 清理活动队列中的已完成任务，释放并发槽位
+     */
+    void cleanup_finished_active();
 
 private:
     std::size_t max_concurrent_;

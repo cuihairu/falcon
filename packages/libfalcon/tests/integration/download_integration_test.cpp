@@ -3,6 +3,7 @@
 
 #include <falcon/download_engine.hpp>
 #include <falcon/download_options.hpp>
+#include <falcon/download_engine_v2.hpp>
 #include <gtest/gtest.h>
 
 #include <fstream>
@@ -459,6 +460,79 @@ TEST_F(DownloadIntegrationTest, LocalHttpSegmentedDownloadFile) {
     std::vector<std::uint8_t> downloaded((std::istreambuf_iterator<char>(file)),
                                          std::istreambuf_iterator<char>());
 
+    ASSERT_EQ(downloaded.size(), payload.size());
+    EXPECT_EQ(std::memcmp(downloaded.data(), payload.data(), payload.size()), 0);
+}
+
+TEST_F(DownloadIntegrationTest, LocalHttpDownloadFileV2) {
+    LocalHttpServer server;
+    const std::string payload = R"({"hello":"world"})";
+    server.add_file("/test.json",
+                    std::vector<std::uint8_t>(payload.begin(), payload.end()),
+                    "application/json");
+    ASSERT_TRUE(server.start());
+
+    EngineConfigV2 config;
+    config.max_concurrent_tasks = 2;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options;
+    options.output_directory = test_dir_.string();
+    options.output_filename = "v2_test.json";
+    options.max_connections = 1;
+    options.timeout_seconds = 10;
+    options.resume_enabled = false;
+
+    TaskId task_id = engine.add_download(server.base_url() + "/test.json", options);
+    engine.run();
+
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+    EXPECT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+
+    std::filesystem::path output_file = test_dir_ / "v2_test.json";
+    ASSERT_TRUE(std::filesystem::exists(output_file));
+}
+
+TEST_F(DownloadIntegrationTest, LocalHttpSegmentedDownloadFileV2) {
+    LocalHttpServer server;
+
+    std::vector<std::uint8_t> payload(512 * 1024);
+    for (std::size_t i = 0; i < payload.size(); ++i) {
+        payload[i] = static_cast<std::uint8_t>(i % 251);
+    }
+
+    server.add_file("/blob.bin", payload, "application/octet-stream");
+    ASSERT_TRUE(server.start());
+
+    EngineConfigV2 config;
+    config.max_concurrent_tasks = 2;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options;
+    options.output_directory = test_dir_.string();
+    options.output_filename = "v2_blob.bin";
+    options.max_connections = 4;
+    options.min_segment_size = 64 * 1024;
+    options.timeout_seconds = 10;
+    options.resume_enabled = false;
+
+    TaskId task_id = engine.add_download(server.base_url() + "/blob.bin", options);
+    engine.run();
+
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+    EXPECT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+
+    std::filesystem::path output_file = test_dir_ / "v2_blob.bin";
+    ASSERT_TRUE(std::filesystem::exists(output_file));
+    EXPECT_EQ(std::filesystem::file_size(output_file), payload.size());
+
+    std::ifstream file(output_file, std::ios::binary);
+    std::vector<std::uint8_t> downloaded((std::istreambuf_iterator<char>(file)),
+                                         std::istreambuf_iterator<char>());
     ASSERT_EQ(downloaded.size(), payload.size());
     EXPECT_EQ(std::memcmp(downloaded.data(), payload.data(), payload.size()), 0);
 }

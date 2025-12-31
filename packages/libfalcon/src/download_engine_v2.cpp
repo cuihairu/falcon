@@ -77,21 +77,42 @@ bool DownloadEngineV2::resume_task(TaskId id) {
 
 bool DownloadEngineV2::cancel_task(TaskId id) {
     FALCON_LOG_INFO("取消任务: id=" << id);
+    auto* group = request_group_man_->find_group(id);
+    if (group) {
+        if (auto task = group->download_task()) {
+            task->cancel();
+        }
+    }
     return request_group_man_->remove_group(id);
 }
 
 void DownloadEngineV2::pause_all() {
     FALCON_LOG_INFO("暂停所有任务");
-    // TODO: 遍历所有活动任务并暂停
+    for (const auto& group : request_group_man_->all_groups()) {
+        if (group && group->status() == RequestGroupStatus::ACTIVE) {
+            pause_task(group->id());
+        }
+    }
 }
 
 void DownloadEngineV2::resume_all() {
     FALCON_LOG_INFO("恢复所有任务");
-    // TODO: 遍历所有暂停任务并恢复
+    for (const auto& group : request_group_man_->all_groups()) {
+        if (group && group->status() == RequestGroupStatus::PAUSED) {
+            resume_task(group->id());
+        }
+    }
 }
 
 void DownloadEngineV2::cancel_all() {
     FALCON_LOG_INFO("取消所有任务");
+    for (const auto& group : request_group_man_->all_groups()) {
+        if (group && (group->status() == RequestGroupStatus::ACTIVE ||
+                      group->status() == RequestGroupStatus::WAITING ||
+                      group->status() == RequestGroupStatus::PAUSED)) {
+            cancel_task(group->id());
+        }
+    }
     shutdown();
 }
 
@@ -119,10 +140,35 @@ DownloadEngineV2::Statistics DownloadEngineV2::get_statistics() const {
     Statistics stats;
     stats.active_tasks = request_group_man_->active_count();
     stats.waiting_tasks = request_group_man_->waiting_count();
-    stats.completed_tasks = completed_count_;
-    stats.stopped_tasks = stopped_count_;
-    stats.global_download_speed = 0;  // TODO: 计算实际速度
-    stats.total_downloaded = total_downloaded_.load();
+
+    Speed total_speed = 0;
+    Bytes total_downloaded = 0;
+    std::size_t completed = 0;
+    std::size_t stopped = 0;
+
+    for (const auto& group : request_group_man_->all_groups()) {
+        if (!group) continue;
+        auto p = group->get_progress();
+        total_downloaded += p.downloaded;
+        total_speed += p.speed;
+
+        switch (group->status()) {
+            case RequestGroupStatus::COMPLETED:
+                ++completed;
+                break;
+            case RequestGroupStatus::FAILED:
+            case RequestGroupStatus::REMOVED:
+                ++stopped;
+                break;
+            default:
+                break;
+        }
+    }
+
+    stats.completed_tasks = completed;
+    stats.stopped_tasks = stopped;
+    stats.global_download_speed = total_speed;
+    stats.total_downloaded = total_downloaded;
     return stats;
 }
 
@@ -174,8 +220,8 @@ void DownloadEngineV2::run() {
 
 void DownloadEngineV2::execute_commands() {
     std::lock_guard<std::mutex> lock(command_queue_mutex_);
-
-    while (!command_queue_.empty()) {
+    const std::size_t round = command_queue_.size();
+    for (std::size_t i = 0; i < round; ++i) {
         auto command = std::move(command_queue_.front());
         command_queue_.pop_front();
 
@@ -183,7 +229,7 @@ void DownloadEngineV2::execute_commands() {
         bool completed = command->execute(this);
 
         if (!completed) {
-            // 命令未完成，放回队列末尾
+            // 命令未完成，放回队列末尾（下一轮再执行，避免在同一轮内忙等）
             command_queue_.push_back(std::move(command));
         }
         // else: 命令已完成，自动销毁
@@ -210,8 +256,7 @@ void DownloadEngineV2::cleanup_completed_commands() {
 }
 
 void DownloadEngineV2::update_task_status() {
-    // TODO: 检查任务状态并更新
-    // 例如：检查下载完成、失败、超时等情况
+    request_group_man_->cleanup_finished_active();
 }
 
 bool DownloadEngineV2::register_socket_event(int fd, int events, CommandId command_id) {

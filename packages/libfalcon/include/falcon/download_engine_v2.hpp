@@ -231,11 +231,6 @@ private:
     std::atomic<int> halt_requested_{0};
     bool running_ = false;
 
-    // 统计信息
-    std::atomic<Bytes> total_downloaded_{0};
-    std::size_t completed_count_ = 0;
-    std::size_t stopped_count_ = 0;
-
     // 配置
     EngineConfigV2 config_;
 };
