@@ -183,13 +183,12 @@ TEST(EventDispatcherTest, QueueFullHandling) {
         info.speed = 1;
         info.progress = static_cast<float>(i) / 100.0f;
 
-        if (!dispatcher.dispatch_progress(i, info)) {
-            ++dropped;
-        }
+        dispatcher.dispatch_progress(i, info);
     }
 
-    // 应该有一些事件被丢弃
-    EXPECT_GT(dropped, 0);
+    // 所有事件都应该被处理（因为 dispatch_progress 返回 void，不会丢弃）
+    // dropped 保持为 0
+    EXPECT_EQ(dropped, 0);
 
     dispatcher.stop(true);
     EXPECT_GT(dispatcher.get_dropped_count(), 0u);

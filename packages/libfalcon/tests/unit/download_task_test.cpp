@@ -367,7 +367,7 @@ TEST_F(DownloadTaskTest, FileInfoCompleteness) {
     info.content_type = "application/zip";
 
     // 设置最后修改时间
-    info.last_modified = std::chrono::system_clock::now();
+    info.last_modified = std::chrono::steady_clock::now();
 
     task->set_file_info(info);
 

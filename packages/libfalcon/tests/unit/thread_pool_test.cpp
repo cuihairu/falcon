@@ -328,7 +328,7 @@ TEST_F(ThreadPoolTest, ExceptionDoesNotAffectOtherTasks) {
 
     // 添加一些会抛异常的任务
     for (int i = 0; i < 5; ++i) {
-        futures.push_back(pool_->submit([&success_count, &fail_count]() {
+        futures.push_back(pool_->submit([&, i]() {
             if (i % 2 == 0) {
                 throw std::runtime_error("Intentional error");
             }
