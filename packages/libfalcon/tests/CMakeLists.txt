@@ -64,11 +64,14 @@ add_executable(falcon_core_tests
     unit/plugin_manager_test.cpp
     unit/event_dispatcher_test.cpp
     unit/download_engine_test.cpp
+    unit/download_engine_v2_test.cpp
+    unit/incremental_download_test.cpp
     unit/version_test.cpp
     unit/resource_browser_utils_test.cpp
     unit/password_manager_test.cpp
     unit/config_manager_test.cpp
     unit/segment_downloader_test.cpp
+    unit/common_utils_test.cpp
     # aria2 风格核心功能测试
     unit/command_test.cpp
     unit/event_poll_test.cpp
