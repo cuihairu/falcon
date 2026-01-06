@@ -1,89 +1,140 @@
 # Falcon 文档
 
-本目录包含项目的完整文档。
+本目录使用 **VuePress 2** 构建项目文档。
 
----
+## 快速开始
 
-## 目录结构
+### 安装依赖
+
+```bash
+cd docs
+npm install
+```
+
+### 开发模式
+
+```bash
+npm run docs:dev
+```
+
+访问 http://localhost:8080 查看文档。
+
+### 构建文档
+
+```bash
+npm run docs:build
+```
+
+构建后的文件位于 `src/.vuepress/dist/`。
+
+## 文档结构
 
 ```
 docs/
-├── api/                # API 文档（Doxygen 生成）
-├── user_guide.md       # 用户指南
-├── developer_guide.md  # 开发者指南
-└── decisions/          # 架构决策记录 (ADR)
-    └── ADR-001-async-model.md
+├── package.json              # npm 配置
+├── README.md                 # 本文件
+├── src/                      # VuePress 源文件
+│   ├── README.md             # 首页
+│   ├── .vuepress/            # VuePress 配置
+│   │   ├── config.ts         # 主配置
+│   │   ├── theme.ts          # 主题配置
+│   │   ├── navbar.ts         # 导航栏
+│   │   └── sidebar.ts        # 侧边栏
+│   ├── guide/                # 用户指南
+│   │   ├── README.md         # 项目介绍
+│   │   ├── getting-started.md # 快速开始
+│   │   ├── installation.md    # 安装说明
+│   │   └── usage.md          # 使用指南
+│   ├── protocols/            # 协议文档
+│   │   ├── README.md         # 协议概述
+│   │   ├── http.md           # HTTP/HTTPS
+│   │   ├── ftp.md            # FTP
+│   │   ├── bittorrent.md     # BitTorrent
+│   │   ├── private.md        # 私有协议
+│   │   └── streaming.md      # HLS/DASH
+│   ├── developer/            # 开发者文档
+│   │   ├── README.md         # 开发者指南
+│   │   ├── architecture.md   # 架构设计
+│   │   ├── coding-standards.md # 编码规范
+│   │   ├── testing.md        # 测试指南
+│   │   ├── plugins.md        # 插件开发
+│   │   ├── debugging.md      # 调试技巧
+│   │   └── release.md        # 发布流程
+│   ├── api/                  # API 参考
+│   │   ├── README.md         # API 概述
+│   │   ├── core.md           # 核心 API
+│   │   ├── plugins.md        # 插件 API
+│   │   └── events.md         # 事件 API
+│   └── faq.md                # 常见问题
+└── [旧文档保留在根目录]
+    ├── api_guide.md
+    ├── developer_guide.md
+    ├── protocols_guide.md
+    └── ...
 ```
 
----
+## VuePress 组件
 
-## 文档生成（Doxygen）
-
-### 安装 Doxygen
-
-```bash
-# macOS
-brew install doxygen graphviz
-
-# Ubuntu/Debian
-sudo apt install doxygen graphviz
-
-# Windows
-# 从 https://www.doxygen.nl/download.html 下载安装
-```
-
-### 生成 API 文档
-
-```bash
-# 在项目根目录运行
-doxygen Doxyfile
-
-# 生成的文档位于 docs/api/html/index.html
-```
-
----
-
-## 用户指南
-
-参见 [user_guide.md](./user_guide.md)，包含：
-- 安装与编译
-- CLI 使用教程
-- Daemon 部署指南
-- 常见问题排查
-
----
-
-## 开发者指南
-
-参见 [developer_guide.md](./developer_guide.md)，包含：
-- 项目架构说明
-- 代码规范
-- 插件开发指南
-- 测试与调试
-
----
-
-## 架构决策记录 (ADR)
-
-重要的技术决策记录在 `decisions/` 目录下，格式参考：
+### 提示框
 
 ```markdown
-# ADR-001: 选择异步模型为 std::async
+::: tip 提示
+这是一个提示
+:::
 
-## 状态
-已接受
+::: warning 注意
+这是一个警告
+:::
 
-## 背景
-需要支持大规模并发下载任务...
-
-## 决策
-选择 std::async + std::future 作为异步基础...
-
-## 后果
-优点：标准库支持，无需第三方依赖
-缺点：相比协程性能略低
+::: danger 危险
+这是一个危险提示
+:::
 ```
 
----
+### 代码块
 
-**维护要求**：每次新增重要决策、修改接口、更新架构时，同步更新相关文档。
+\`\`\`cpp
+#include <iostream>
+int main() {
+    std::cout << "Hello, World!" << std::endl;
+}
+\`\`\`
+
+### 自定义容器
+
+\`\`\`md
+::: details 点击查看详情
+隐藏的内容
+:::
+\`\`\`
+
+## 部署
+
+### GitHub Pages
+
+```bash
+# 构建
+npm run docs:build
+
+# 推送到 gh-pages 分支
+cd src/.vuepress/dist
+git init
+git add .
+git commit -m "Deploy docs"
+git push -f git@github.com:username/falcon.git master:gh-pages
+```
+
+### Vercel/Netlify
+
+直接连接 GitHub 仓库，设置构建命令为：
+
+```bash
+cd docs && npm install && npm run docs:build
+```
+
+设置发布目录为 `docs/src/.vuepress/dist`。
+
+## 更多信息
+
+- [VuePress 官方文档](https://v2.vuepress.vuejs.org/)
+- [默认主题文档](https://v2.vuepress.vuejs.org/reference/default-theme/)
