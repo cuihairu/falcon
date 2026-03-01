@@ -166,6 +166,12 @@ std::string BrowserFormatter::format_tree(const std::vector<RemoteResource>& res
 std::string BrowserFormatter::format_table(const std::vector<RemoteResource>& resources) {
     std::ostringstream oss;
 
+    // 对于空列表，返回总数信息
+    if (resources.empty()) {
+        oss << "total 0\n";
+        return oss.str();
+    }
+
     // 使用类似ls的格式
     for (const auto& res : resources) {
         // 类型标识

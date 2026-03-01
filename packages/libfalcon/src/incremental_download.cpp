@@ -10,8 +10,13 @@
 #include <fstream>
 #include <sstream>
 #include <algorithm>
+#include <iomanip>
+#include <cstring>
+
+#ifdef FALCON_HAS_OPENSSL
 #include <openssl/sha.h>
 #include <openssl/evp.h>
+#endif
 
 namespace falcon {
 
@@ -27,6 +32,7 @@ IncrementalDownloader::~IncrementalDownloader() {
 
 std::string IncrementalDownloader::calculateHash(const std::string& data,
                                                  const std::string& algorithm) {
+#ifdef FALCON_HAS_OPENSSL
     EVP_MD_CTX* ctx = EVP_MD_CTX_new();
     const EVP_MD* md = EVP_get_digestbyname(algorithm.c_str());
 
@@ -63,6 +69,19 @@ std::string IncrementalDownloader::calculateHash(const std::string& data,
     }
 
     return ss.str();
+#else
+    // Fallback: simple hash implementation when OpenSSL is not available
+    // This is a simple XOR-based hash for placeholder purposes
+    FALCON_LOG_WARN("OpenSSL not available, using fallback hash implementation");
+    uint32_t hash = 0;
+    for (char c : data) {
+        hash = hash * 31 + static_cast<uint8_t>(c);
+    }
+
+    std::ostringstream ss;
+    ss << std::hex << std::setfill('0') << std::setw(8) << hash;
+    return ss.str();
+#endif
 }
 
 std::vector<ChunkInfo> IncrementalDownloader::calculateChunkHashes(
