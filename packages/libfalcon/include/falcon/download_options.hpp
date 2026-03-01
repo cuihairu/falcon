@@ -31,6 +31,7 @@ struct DownloadOptions {
 
     /// Enable resume if partial file exists
     bool resume_enabled = true;
+    bool resume_if_exists = true;  // Alias for resume_enabled
 
     /// User agent string for HTTP requests
     std::string user_agent = "Falcon/0.1.0";

@@ -21,6 +21,14 @@ namespace falcon {
 // 前向声明
 class DownloadEngineV2;
 
+#ifdef FAILED
+#undef FAILED
+#endif
+
+#ifdef COMPLETED
+#undef COMPLETED
+#endif
+
 /**
  * @brief 命令状态 - 对应 aria2 的命令生命周期
  */
@@ -81,14 +89,14 @@ public:
      */
     CommandId id() const noexcept { return command_id_; }
 
+    /**
+     * @brief 获取任务 ID（供测试访问）
+     */
+    TaskId get_task_id() const noexcept { return task_id_; }
+
 protected:
     explicit Command(TaskId task_id)
         : task_id_(task_id), command_id_(generate_command_id()) {}
-
-    /**
-     * @brief 获取任务 ID（供子类访问）
-     */
-    TaskId get_task_id() const noexcept { return task_id_; }
 
     /**
      * @brief 转换命令状态

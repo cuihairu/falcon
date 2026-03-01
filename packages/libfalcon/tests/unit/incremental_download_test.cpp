@@ -10,6 +10,7 @@
 #include <fstream>
 #include <cstdio>
 #include <random>
+#include <chrono>
 
 using namespace falcon;
 
@@ -17,15 +18,17 @@ class IncrementalDownloadTest : public ::testing::Test {
 protected:
     void SetUp() override {
         // 创建临时测试目录
-        testDir_ = "/tmp/falcon_incremental_test_XXXXXX";
-        char* tempDir = mkdtemp(const_cast<char*>(testDir_.data()));
-        ASSERT_NE(tempDir, nullptr);
-        testDir_ = tempDir;
+        testDir_ = "C:/tmp/falcon_test";
+#ifdef _WIN32
+        _mkdir(testDir_.c_str());
+#else
+        mkdir(testDir_.c_str(), 0755);
+#endif
     }
 
     void TearDown() override {
-        // 清理测试文件
-        std::string cmd = "rm -rf " + testDir_;
+        // 清理测试文件 - Windows rmdir /s /q equivalent
+        std::string cmd = "rd /s /q " + testDir_ + " 2>NUL";
         system(cmd.c_str());
     }
 
@@ -36,11 +39,11 @@ protected:
 
         std::random_device rd;
         std::mt19937 gen(rd());
-        std::uniform_int_distribution<uint8_t> dis(0, 255);
+        std::uniform_int_distribution<int> dis(0, 255);
 
         std::vector<uint8_t> data(size);
         for (auto& byte : data) {
-            byte = dis(gen);
+            byte = static_cast<uint8_t>(dis(gen));
         }
 
         file.write(reinterpret_cast<const char*>(data.data()), data.size());
@@ -53,10 +56,9 @@ protected:
 };
 
 // ============================================================================
-// calculateHash 测试
+// calculateHash 测试 (私有方法 - 暂时注释)
 // ============================================================================
 
-// 注释掉测试私有方法的测试用例
 /*
 TEST_F(IncrementalDownloadTest, CalculateHash_Sha256_Valid) {
     IncrementalDownloader downloader;
@@ -175,14 +177,11 @@ TEST_F(IncrementalDownloadTest, CalculateChunkHashes_EmptyFile) {
     std::vector<ChunkInfo> chunks = downloader.calculateChunkHashes(emptyFilePath, 1024, "sha256");
     EXPECT_TRUE(chunks.empty());
 }
-*/
 
 // ============================================================================
 // compareHashLists 测试
 // ============================================================================
 
-// compareHashLists 是私有方法，注释掉测试
-/*
 TEST_F(IncrementalDownloadTest, CompareHashLists_Identical) {
     IncrementalDownloader downloader;
 
@@ -221,13 +220,12 @@ TEST_F(IncrementalDownloadTest, CompareHashLists_Different) {
         {2048, 512, "hash3", false}
     };
 
-    // compareHashLists 是私有方法，无法直接测试
-    // std::vector<ChunkInfo> diff = downloader.compareHashLists(local, remote);
+    std::vector<ChunkInfo> diff = downloader.compareHashLists(local, remote);
 
-    // EXPECT_EQ(3, diff.size());
-    // EXPECT_FALSE(diff[0].changed);
-    // EXPECT_TRUE(diff[1].changed);
-    // EXPECT_FALSE(diff[2].changed);
+    EXPECT_EQ(3, diff.size());
+    EXPECT_FALSE(diff[0].changed);
+    EXPECT_TRUE(diff[1].changed);
+    EXPECT_FALSE(diff[2].changed);
 }
 
 TEST_F(IncrementalDownloadTest, CompareHashLists_RemoteLarger) {
@@ -244,13 +242,12 @@ TEST_F(IncrementalDownloadTest, CompareHashLists_RemoteLarger) {
         {2048, 512, "hash3", false}
     };
 
-    // compareHashLists 是私有方法，无法直接测试
-    // std::vector<ChunkInfo> diff = downloader.compareHashLists(local, remote);
+    std::vector<ChunkInfo> diff = downloader.compareHashLists(local, remote);
 
-    // EXPECT_EQ(3, diff.size());
-    // EXPECT_FALSE(diff[0].changed);
-    // EXPECT_FALSE(diff[1].changed);
-    // EXPECT_TRUE(diff[2].changed);  // 新分块标记为变化
+    EXPECT_EQ(3, diff.size());
+    EXPECT_FALSE(diff[0].changed);
+    EXPECT_FALSE(diff[1].changed);
+    EXPECT_TRUE(diff[2].changed);  // 新分块标记为变化
 }
 
 TEST_F(IncrementalDownloadTest, CompareHashLists_RemoteSmaller) {
@@ -267,12 +264,11 @@ TEST_F(IncrementalDownloadTest, CompareHashLists_RemoteSmaller) {
         {1024, 1024, "hash2", false}
     };
 
-    // compareHashLists 是私有方法，无法直接测试
-    // std::vector<ChunkInfo> diff = downloader.compareHashLists(local, remote);
+    std::vector<ChunkInfo> diff = downloader.compareHashLists(local, remote);
 
-    // EXPECT_EQ(2, diff.size());
-    // EXPECT_FALSE(diff[0].changed);
-    // EXPECT_FALSE(diff[1].changed);
+    EXPECT_EQ(2, diff.size());
+    EXPECT_FALSE(diff[0].changed);
+    EXPECT_FALSE(diff[1].changed);
 }
 */
 
@@ -381,9 +377,10 @@ TEST_F(IncrementalDownloadTest, Compare_Integration) {
 }
 
 // ============================================================================
-// mergeFile 测试
+// mergeFile 测试 (私有方法 - 暂时注释)
 // ============================================================================
 
+/*
 TEST_F(IncrementalDownloadTest, MergeFile_Valid) {
     IncrementalDownloader downloader;
 
@@ -401,11 +398,9 @@ TEST_F(IncrementalDownloadTest, MergeFile_Valid) {
         {1024, 1024, "hash2", true}
     };
 
-    // mergeFile 是私有方法，无法直接测试
-    // EXPECT_TRUE(downloader.mergeFile(filePath, changedChunks, chunkInfo));
+    EXPECT_TRUE(downloader.mergeFile(filePath, changedChunks, chunkInfo));
 
     // 验证文件已被修改
-    /*
     std::ifstream inFile(filePath, std::ios::binary);
     std::vector<uint8_t> fileData(2048);
     inFile.read(reinterpret_cast<char*>(fileData.data()), 2048);
@@ -414,7 +409,6 @@ TEST_F(IncrementalDownloadTest, MergeFile_Valid) {
     // 验证第一个分块被修改
     EXPECT_EQ(0xFF, fileData[0]);
     EXPECT_EQ(0xFF, fileData[1023]);
-    */
 }
 
 TEST_F(IncrementalDownloadTest, MergeFile_NonExistent) {
@@ -430,9 +424,9 @@ TEST_F(IncrementalDownloadTest, MergeFile_NonExistent) {
         {0, 1024, "hash1", true}
     };
 
-    // mergeFile 是私有方法，无法直接测试
-    // EXPECT_FALSE(downloader.mergeFile(nonExistentPath, changedChunks, chunkInfo));
+    EXPECT_FALSE(downloader.mergeFile(nonExistentPath, changedChunks, chunkInfo));
 }
+*/
 
 // ============================================================================
 // 性能测试

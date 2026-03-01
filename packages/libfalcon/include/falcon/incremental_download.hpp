@@ -128,6 +128,7 @@ public:
                    const std::string& expectedHash);
 
 private:
+
     /**
      * @brief 计算文件哈希
      */

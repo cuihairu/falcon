@@ -7,6 +7,19 @@
 
 #pragma once
 
+// Windows macro protection
+#ifdef _WIN32
+    #ifndef NOMINMAX
+    #define NOMINMAX
+    #endif
+    #ifdef min
+    #undef min
+    #endif
+    #ifdef max
+    #undef max
+    #endif
+#endif
+
 #include <falcon/types.hpp>
 #include <falcon/download_task.hpp>
 #include <falcon/event_listener.hpp>

@@ -128,6 +128,7 @@ public:
      * @brief 获取验证结果
      */
     const HashResult& result() const { return result_; }
+    const HashResult& get_result() const { return result_; }  // Alias for backward compatibility
 
 private:
     std::string file_path_;

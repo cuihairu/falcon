@@ -232,6 +232,13 @@ public:
     };
     Stats get_stats() const;
 
+    /**
+     * @brief 创建新连接（用于测试）
+     *
+     * @note 注意：此方法为测试暴露，生产代码应使用 acquire()
+     */
+    std::shared_ptr<PooledSocket> create_connection(const SocketKey& key);
+
 private:
     std::chrono::seconds timeout_;
     std::size_t max_idle_;
@@ -247,11 +254,6 @@ private:
      * @brief 查找可用连接
      */
     std::shared_ptr<PooledSocket> find_available(const SocketKey& key);
-
-    /**
-     * @brief 创建新连接
-     */
-    std::shared_ptr<PooledSocket> create_connection(const SocketKey& key);
 };
 
 //==============================================================================

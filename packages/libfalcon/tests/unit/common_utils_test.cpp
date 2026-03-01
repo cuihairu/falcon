@@ -10,6 +10,8 @@
 #include <falcon/download_options.hpp>
 #include <falcon/types.hpp>
 #include <falcon/exceptions.hpp>
+#include <falcon/event_listener.hpp>  // For TaskStatus
+#include <falcon/task_manager.hpp>     // For TaskPriority
 
 #include <string>
 #include <vector>
@@ -370,8 +372,12 @@ TEST(CommonUtilsTest, NumericCalculations) {
 
     EXPECT_EQ(estimated_seconds, 2);
 
-    // 测试除以零的情况
-    EXPECT_THROW(auto result = 1 / 0;, std::exception);
+    // 测试除以零的情况 - 使用变量避免编译时常量求值
+    int zero = 0;
+    int numerator = 1;
+    // 注意：整数除以零在 C++ 中是未定义行为，某些编译器会直接报错
+    // 跳过此测试或使用其他方式验证
+    // EXPECT_THROW(auto result = numerator / zero;, std::exception);
 }
 
 TEST(CommonUtilsTest, LargeNumericValues) {

@@ -307,4 +307,37 @@ public:
     static void register_browser(const std::string& protocol);
 };
 
+/**
+ * @brief 资源浏览器工具类
+ *
+ * 提供路径处理、验证等静态工具方法
+ */
+class ResourceBrowserUtils {
+public:
+    /**
+     * @brief 验证路径是否有效
+     */
+    static bool is_valid_path(const std::string& path);
+
+    /**
+     * @brief 规范化路径（解析 . 和 ..，合并重复的分隔符）
+     */
+    static std::string normalize_path(const std::string& path);
+
+    /**
+     * @brief 连接路径组件
+     */
+    static std::string join_path(const std::string& base, const std::string& name);
+
+    /**
+     * @brief 获取父目录路径
+     */
+    static std::string get_parent_path(const std::string& path);
+
+    /**
+     * @brief 获取文件名（不含路径）
+     */
+    static std::string get_filename(const std::string& path);
+};
+
 } // namespace falcon

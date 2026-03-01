@@ -20,6 +20,7 @@ add_library(falcon
     src/event_dispatcher.cpp
     src/segment_downloader.cpp
     src/resource_browser.cpp
+    src/incremental_download.cpp
     src/password_manager.cpp
     src/version.cpp
     # aria2 风格命令系统
@@ -31,6 +32,7 @@ add_library(falcon
     src/request_group.cpp
     src/download_engine_v2.cpp
     src/file_hash.cpp
+    src/resource_browser_utils.cpp
     # Resource search - TODO: Fix compilation issues
     # src/resource_search.cpp
     # Cloud storage - TODO: Fix compilation issues

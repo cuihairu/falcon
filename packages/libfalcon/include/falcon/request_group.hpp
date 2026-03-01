@@ -27,6 +27,14 @@ namespace falcon {
 // 前向声明
 class DownloadEngineV2;
 
+#ifdef FAILED
+#undef FAILED
+#endif
+
+#ifdef COMPLETED
+#undef COMPLETED
+#endif
+
 /**
  * @brief 请求组状态 - 对应 aria2 的 RequestGroup 状态
  */

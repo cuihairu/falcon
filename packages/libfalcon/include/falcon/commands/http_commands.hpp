@@ -206,6 +206,13 @@ public:
     }
 
     /**
+     * @brief 获取 HTTP 状态码
+     */
+    int status_code() const noexcept {
+        return status_code_;
+    }
+
+    /**
      * @brief 检查是否接受 Range 请求
      */
     bool accepts_range() const noexcept {
@@ -302,6 +309,27 @@ public:
         return download_complete_;
     }
 
+    /**
+     * @brief 获取分段 ID
+     */
+    SegmentId segment_id() const noexcept {
+        return segment_id_;
+    }
+
+    /**
+     * @brief 获取分段起始偏移
+     */
+    Bytes offset() const noexcept {
+        return offset_;
+    }
+
+    /**
+     * @brief 获取分段长度
+     */
+    Bytes length() const noexcept {
+        return length_;
+    }
+
 private:
     ExecutionResult receive_data(DownloadEngineV2* engine);
     bool write_to_segment(const char* data, std::size_t size, DownloadEngineV2* engine);
@@ -358,6 +386,13 @@ public:
      */
     bool should_retry() const noexcept {
         return retry_count_ <= max_retries_;
+    }
+
+    /**
+     * @brief 获取当前重试次数
+     */
+    int retry_count() const noexcept {
+        return retry_count_;
     }
 
 private:

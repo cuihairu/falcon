@@ -5,7 +5,6 @@
 
 #include <falcon/segment_downloader.hpp>
 #include <falcon/exceptions.hpp>
-#include <curl/curl.h>
 #include <algorithm>
 #include <iostream>
 #include <atomic>

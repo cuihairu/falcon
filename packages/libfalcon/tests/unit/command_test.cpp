@@ -5,6 +5,12 @@
  * @date 2025-12-24
  */
 
+#ifdef _WIN32
+    #ifndef NOMINMAX
+    #define NOMINMAX
+    #endif
+#endif
+
 #include <gtest/gtest.h>
 #include <falcon/commands/command.hpp>
 #include <falcon/commands/http_commands.hpp>

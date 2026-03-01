@@ -1,6 +1,11 @@
 #pragma once
 
+#include <optional>
+#include <ostream>
 #include <string>
+
+// Version string macro (must be outside namespace)
+#define FALCON_VERSION_STRING "0.1.0"
 
 namespace falcon {
 
@@ -20,7 +25,18 @@ struct Version {
 
     std::string to_string() const;
     std::string to_full_string() const;
+
+    [[nodiscard]] static std::optional<Version> parse(const std::string& version);
+
+    bool operator==(const Version& other) const noexcept;
+    bool operator!=(const Version& other) const noexcept;
+    bool operator<(const Version& other) const noexcept;
+    bool operator>(const Version& other) const noexcept;
+    bool operator<=(const Version& other) const noexcept;
+    bool operator>=(const Version& other) const noexcept;
 };
+
+std::ostream& operator<<(std::ostream& os, const Version& version);
 
 extern const Version FALCON_VERSION;
 
