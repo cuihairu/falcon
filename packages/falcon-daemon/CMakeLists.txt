@@ -39,6 +39,8 @@ endif()
 add_library(falcon_daemon_rpc STATIC
     src/rpc/json_rpc_server.cpp
     src/rpc/json_rpc_server.hpp
+    src/daemon/daemon.cpp
+    src/daemon/daemon.hpp
 )
 
 # Task storage library (requires SQLite3)

@@ -12,12 +12,21 @@ project(falcon-cli
 
 add_executable(falcon-cli
     src/main.cpp
+    src/config_loader.cpp
+    src/config_loader.hpp
 )
 
 target_link_libraries(falcon-cli
     PRIVATE
         Falcon::falcon
 )
+
+# Link nlohmann_json if available
+find_package(nlohmann_json QUIET)
+if(nlohmann_json_FOUND)
+    target_link_libraries(falcon-cli PRIVATE nlohmann_json::nlohmann_json)
+    target_compile_definitions(falcon-cli PRIVATE FALCON_USE_JSON)
+endif()
 
 target_compile_features(falcon-cli PRIVATE cxx_std_17)
 

@@ -26,6 +26,7 @@ endif()
 
 add_executable(falcon_cli_tests
     unit/arg_parser_test.cpp
+    unit/config_loader_test.cpp
 )
 
 target_link_libraries(falcon_cli_tests
@@ -40,6 +41,13 @@ target_include_directories(falcon_cli_tests
 )
 
 target_compile_features(falcon_cli_tests PRIVATE cxx_std_17)
+
+# Link nlohmann_json if available
+find_package(nlohmann_json QUIET)
+if(nlohmann_json_FOUND)
+    target_link_libraries(falcon_cli_tests PRIVATE nlohmann_json::nlohmann_json)
+    target_compile_definitions(falcon_cli_tests PRIVATE FALCON_USE_JSON)
+endif()
 
 # Register with CTest
 include(GoogleTest)

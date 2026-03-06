@@ -8,6 +8,8 @@
 #include <falcon/download_engine.hpp>
 #include <falcon/download_options.hpp>
 #include <falcon/event_listener.hpp>
+#include "config_loader.hpp"
+
 #include <iostream>
 #include <iomanip>
 #include <thread>
@@ -18,6 +20,7 @@
 #include <fstream>
 #include <cctype>
 #include <algorithm>
+#include <filesystem>
 
 // 全局变量用于信号处理
 std::atomic<bool> g_interrupted{false};
@@ -145,6 +148,7 @@ struct CliArgs {
     std::string input_file;
     std::string output_file;
     std::string output_dir;
+    std::string config_file;       // 配置文件路径
     int connections = 4;          // 并发连接数 (aria2 风格)
     int max_concurrent_downloads = 1;  // aria2: -j
     falcon::Bytes speed_limit = 0;  // 速度限制
@@ -175,6 +179,8 @@ struct CliArgs {
     bool quiet = false;
     bool show_help = false;
     bool show_version = false;
+    bool show_config_path = false; // 显示配置文件路径
+    bool create_default_config = false; // 创建默认配置文件
 };
 
 static falcon::Bytes parse_size_bytes(std::string size_str) {
@@ -410,6 +416,17 @@ CliArgs parse_args(int argc, char* argv[]) {
         } else if (arg == "--rpc-allow-origin-all") {
             // aria2: --rpc-allow-origin-all
             args.rpc_allow_origin_all = true;
+        } else if (arg == "--config" || arg == "-C") {
+            // 配置文件路径
+            if (i + 1 < argc) {
+                args.config_file = argv[++i];
+            }
+        } else if (arg == "--show-config-path") {
+            // 显示配置文件路径
+            args.show_config_path = true;
+        } else if (arg == "--create-default-config") {
+            // 创建默认配置文件
+            args.create_default_config = true;
         } else if (!arg.empty() && arg[0] != '-') {
             args.urls.push_back(arg);
         }
@@ -427,7 +444,10 @@ void show_help() {
     std::cout << "  -V, --version              显示版本信息\n";
     std::cout << "  -i, --input-file <文件>    从文件批量读取 URL（使用 - 表示 stdin）\n";
     std::cout << "  -o, --output <文件>        指定输出文件名\n";
-    std::cout << "  -d, --directory <目录>     指定输出目录\n\n";
+    std::cout << "  -d, --directory <目录>     指定输出目录\n";
+    std::cout << "  -C, --config <文件>        指定配置文件路径\n";
+    std::cout << "      --show-config-path     显示默认配置文件路径\n";
+    std::cout << "      --create-default-config 创建默认配置文件\n\n";
 
     std::cout << "下载队列选项 (aria2 风格):\n";
     std::cout << "  -j, --max-concurrent-downloads <N>  最大并发下载任务数 [默认: 1]\n\n";
@@ -506,6 +526,110 @@ int main(int argc, char* argv[]) {
         std::cout << "Falcon CLI v0.2.0\n";
         return 0;
     }
+
+    // 显示配置文件路径
+    if (args.show_config_path) {
+#ifdef FALCON_USE_JSON
+        std::cout << "Config search paths (in priority order):\n";
+        for (const auto& path : falcon::cli::ConfigLoader::get_config_search_paths()) {
+            std::cout << "  " << path;
+            if (std::filesystem::exists(path)) {
+                std::cout << " (exists)";
+            }
+            std::cout << "\n";
+        }
+        std::cout << "\nDefault config path: " << falcon::cli::ConfigLoader::get_default_config_path() << "\n";
+#else
+        std::cout << "Config file support not available (JSON library not linked)\n";
+#endif
+        return 0;
+    }
+
+    // 创建默认配置文件
+    if (args.create_default_config) {
+#ifdef FALCON_USE_JSON
+        std::string path = falcon::cli::ConfigLoader::get_default_config_path();
+        if (falcon::cli::ConfigLoader::create_default_config(path)) {
+            std::cout << "Default config created at: " << path << "\n";
+            return 0;
+        } else {
+            std::cerr << "Failed to create default config: " << falcon::cli::ConfigLoader::get_last_error() << "\n";
+            return 1;
+        }
+#else
+        std::cerr << "Config file support not available\n";
+        return 1;
+#endif
+    }
+
+#ifdef FALCON_USE_JSON
+    // 加载配置文件
+    auto file_config = falcon::cli::ConfigLoader::load_or_default(args.config_file);
+
+    // 合并配置（命令行优先）
+    if (file_config.max_connections != 4 && args.connections == 4) {
+        args.connections = file_config.max_connections;
+    }
+    if (file_config.timeout_seconds != 30 && args.timeout == 30) {
+        args.timeout = file_config.timeout_seconds;
+    }
+    if (file_config.max_retries != 3 && args.max_retries == 3) {
+        args.max_retries = file_config.max_retries;
+    }
+    if (!file_config.default_download_dir.empty() && args.output_dir.empty()) {
+        args.output_dir = file_config.default_download_dir;
+    }
+    if (file_config.speed_limit > 0 && args.speed_limit == 0) {
+        args.speed_limit = file_config.speed_limit;
+    }
+    if (file_config.user_agent != "Falcon/0.2.0" && args.user_agent == "Falcon/0.2.0") {
+        args.user_agent = file_config.user_agent;
+    }
+    if (!file_config.proxy.empty() && args.proxy.empty()) {
+        args.proxy = file_config.proxy;
+    }
+    if (!file_config.proxy_username.empty() && args.proxy_user.empty()) {
+        args.proxy_user = file_config.proxy_username;
+    }
+    if (!file_config.proxy_password.empty() && args.proxy_passwd.empty()) {
+        args.proxy_passwd = file_config.proxy_password;
+    }
+    if (!file_config.referer.empty() && args.referer.empty()) {
+        args.referer = file_config.referer;
+    }
+    if (!file_config.cookie_file.empty() && args.cookie_file.empty()) {
+        args.cookie_file = file_config.cookie_file;
+    }
+    if (!file_config.http_username.empty() && args.http_user.empty()) {
+        args.http_user = file_config.http_username;
+    }
+    if (!file_config.http_password.empty() && args.http_passwd.empty()) {
+        args.http_passwd = file_config.http_password;
+    }
+    if (!file_config.rpc_secret.empty() && args.rpc_secret.empty()) {
+        args.rpc_secret = file_config.rpc_secret;
+    }
+    if (file_config.rpc_listen_port != 6800 && args.rpc_listen_port == 6800) {
+        args.rpc_listen_port = file_config.rpc_listen_port;
+    }
+    // 布尔值
+    if (file_config.verbose) args.verbose = true;
+    if (file_config.quiet) args.quiet = true;
+    if (!file_config.resume_enabled && args.continue_download) {
+        args.continue_download = false;
+    }
+    if (!file_config.verify_ssl) args.verify_ssl = false;
+    // 合并 headers
+    for (const auto& [k, v] : file_config.headers) {
+        bool exists = false;
+        for (const auto& h : args.headers) {
+            if (h.first == k) { exists = true; break; }
+        }
+        if (!exists) {
+            args.headers.push_back({k, v});
+        }
+    }
+#endif
 
     // 收集 URL 列表（命令行 + 输入文件）
     std::vector<std::string> urls = args.urls;
