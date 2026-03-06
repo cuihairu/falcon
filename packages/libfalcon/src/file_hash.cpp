@@ -16,7 +16,7 @@
 #include <algorithm>
 
 // OpenSSL 3.0 使用 EVP API 替代弃用的低级函数
-#ifdef FALCON_HAS_OPENSSL
+#if defined(FALCON_USE_OPENSSL) || defined(FALCON_HAS_OPENSSL)
 #include <openssl/evp.h>
 #else
 // Fallback: use simple std::hash based implementation when OpenSSL is not available
@@ -63,7 +63,7 @@ std::string FileHasher::calculate(const std::string& file_path,
 
 std::string FileHasher::calculate(const char* data, std::size_t size,
                                    HashAlgorithm algorithm) {
-#ifdef FALCON_HAS_OPENSSL
+#if defined(FALCON_USE_OPENSSL) || defined(FALCON_HAS_OPENSSL)
     // 选择哈希算法
     const char* md_type = nullptr;
     switch (algorithm) {

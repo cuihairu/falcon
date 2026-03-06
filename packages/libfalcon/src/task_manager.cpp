@@ -33,6 +33,8 @@ bool read_int(std::istream& in, Int& out) {
 }
 
 TaskStatus sanitize_status_for_restore(TaskStatus status) {
+    // Change active statuses to Paused for safety
+    // This prevents auto-starting downloads when loading from state
     if (status == TaskStatus::Downloading || status == TaskStatus::Preparing) {
         return TaskStatus::Paused;
     }
@@ -414,6 +416,7 @@ public:
                  << static_cast<int>(task->status()) << " "
                  << task->downloaded_bytes() << " "
                  << task->total_bytes() << " "
+                 << task->speed() << " "
                  << std::quoted(task->url()) << " "
                  << std::quoted(task->output_path()) << " "
                  << std::quoted(task->error_message()) << " "
@@ -428,6 +431,8 @@ public:
                  << std::quoted(options.user_agent) << " "
                  << std::quoted(options.proxy) << " "
                  << std::quoted(options.proxy_type) << " "
+                 << std::quoted(options.proxy_username) << " "
+                 << std::quoted(options.proxy_password) << " "
                  << (options.verify_ssl ? 1 : 0) << " "
                  << std::quoted(options.referer) << " "
                  << std::quoted(options.cookie_file) << " "
@@ -460,28 +465,8 @@ public:
         }
 
         if (magic != kTaskManagerStateMagic) {
-            // Legacy format: "<id> <status>"
-            file.clear();
-            file.seekg(0);
-            std::string line;
-            while (std::getline(file, line)) {
-                if (line.empty()) continue;
-                std::istringstream in(line);
-                TaskId id = INVALID_TASK_ID;
-                int status_int = 0;
-                if (!(in >> id >> status_int)) {
-                    continue;
-                }
-                auto task = get_task(id);
-                if (!task) {
-                    continue;
-                }
-                if (status_int < 0 || status_int > 6) {
-                    continue;
-                }
-                task->set_status(static_cast<TaskStatus>(status_int));
-            }
-            return true;
+            // Invalid magic - reject the file
+            return false;
         }
 
         int version = 0;
@@ -511,18 +496,20 @@ public:
             std::istringstream in(line);
             std::string tag;
             if (!(in >> tag) || tag != "task") {
-                continue;
+                // Invalid line format - reject the file
+                return false;
             }
 
             TaskId id = INVALID_TASK_ID;
             int status_int = 0;
             Bytes downloaded_bytes = 0;
             Bytes total_bytes = 0;
+            BytesPerSecond speed = 0;
             std::string url;
             std::string output_path;
             std::string error_message;
 
-            if (!(in >> id >> status_int >> downloaded_bytes >> total_bytes)) {
+            if (!(in >> id >> status_int >> downloaded_bytes >> total_bytes >> speed)) {
                 continue;
             }
             if (!(in >> std::quoted(url) >> std::quoted(output_path) >> std::quoted(error_message))) {
@@ -549,7 +536,9 @@ public:
             options.resume_enabled = resume_enabled != 0;
 
             if (!(in >> std::quoted(options.user_agent) >> std::quoted(options.proxy) >>
-                  std::quoted(options.proxy_type))) {
+                  std::quoted(options.proxy_type) >>
+                  std::quoted(options.proxy_username) >>
+                  std::quoted(options.proxy_password))) {
                 continue;
             }
 
@@ -610,11 +599,12 @@ public:
             status = sanitize_status_for_restore(status);
 
             auto task = std::make_shared<DownloadTask>(id, url, options);
+            task->set_listener(this);  // Set listener first before any operations
             task->set_output_path(output_path);
             if (!error_message.empty()) {
                 task->set_error(error_message);
             }
-            task->update_progress(downloaded_bytes, total_bytes, 0);
+            task->update_progress(downloaded_bytes, total_bytes, speed);
             task->set_status(status);
 
             {
@@ -622,8 +612,7 @@ public:
                 if (tasks_.find(id) != tasks_.end()) {
                     continue;
                 }
-                task->set_listener(this);
-                tasks_.emplace(id, std::move(task));
+                tasks_[id] = task;  // Don't move, just assign
             }
         }
 

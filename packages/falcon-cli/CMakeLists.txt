@@ -40,3 +40,11 @@ include(GNUInstallDirs)
 install(TARGETS falcon-cli
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
+
+# ============================================================================
+# Tests
+# ============================================================================
+
+if(FALCON_BUILD_TESTS)
+    add_subdirectory(tests)
+endif()

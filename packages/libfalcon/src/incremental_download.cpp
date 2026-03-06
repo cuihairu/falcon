@@ -13,7 +13,7 @@
 #include <iomanip>
 #include <cstring>
 
-#ifdef FALCON_HAS_OPENSSL
+#if defined(FALCON_USE_OPENSSL) || defined(FALCON_HAS_OPENSSL)
 #include <openssl/sha.h>
 #include <openssl/evp.h>
 #endif
@@ -32,7 +32,7 @@ IncrementalDownloader::~IncrementalDownloader() {
 
 std::string IncrementalDownloader::calculateHash(const std::string& data,
                                                  const std::string& algorithm) {
-#ifdef FALCON_HAS_OPENSSL
+#if defined(FALCON_USE_OPENSSL) || defined(FALCON_HAS_OPENSSL)
     EVP_MD_CTX* ctx = EVP_MD_CTX_new();
     const EVP_MD* md = EVP_get_digestbyname(algorithm.c_str());
 
