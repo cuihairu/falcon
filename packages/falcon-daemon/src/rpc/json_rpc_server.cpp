@@ -1,5 +1,9 @@
 #include "json_rpc_server.hpp"
 
+#ifdef FALCON_HAS_SQLITE3
+#include "storage/task_storage.hpp"
+#endif
+
 #include <falcon/download_task.hpp>
 #include <falcon/logger.hpp>
 
@@ -15,21 +19,53 @@
 #include <string_view>
 #include <unordered_map>
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#pragma comment(lib, "ws2_32.lib")
+#else
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
 
 namespace falcon::daemon::rpc {
 namespace {
 
 using json = nlohmann::json;
 
+#ifdef _WIN32
+using socket_len_t = int;
+using recv_send_size_t = int;
+static int socket_close(int fd) { return ::closesocket(static_cast<SOCKET>(fd)); }
+static int socket_shutdown(int fd) { return ::shutdown(static_cast<SOCKET>(fd), SD_BOTH); }
+static void ensure_winsock_started() {
+    static std::once_flag once;
+    std::call_once(once, []() {
+        WSADATA data{};
+        WSAStartup(MAKEWORD(2, 2), &data);
+    });
+}
+#else
+using socket_len_t = socklen_t;
+using recv_send_size_t = ssize_t;
+static int socket_close(int fd) { return ::close(fd); }
+static int socket_shutdown(int fd) { return ::shutdown(fd, SHUT_RDWR); }
+static void ensure_winsock_started() {}
+#endif
+
 struct ScopedFd {
     int fd = -1;
     ~ScopedFd() {
         if (fd >= 0) {
-            ::close(fd);
+            socket_close(fd);
         }
     }
     ScopedFd(const ScopedFd&) = delete;
@@ -39,7 +75,7 @@ struct ScopedFd {
     ScopedFd(ScopedFd&& other) noexcept : fd(other.fd) { other.fd = -1; }
     ScopedFd& operator=(ScopedFd&& other) noexcept {
         if (this != &other) {
-            if (fd >= 0) ::close(fd);
+            if (fd >= 0) socket_close(fd);
             fd = other.fd;
             other.fd = -1;
         }
@@ -189,8 +225,10 @@ struct JsonRpcServer::HttpResponse {
     std::string body;
 };
 
-JsonRpcServer::JsonRpcServer(falcon::DownloadEngine* engine, JsonRpcServerConfig config)
-    : engine_(engine), config_(std::move(config)) {}
+JsonRpcServer::JsonRpcServer(falcon::DownloadEngine* engine,
+                               JsonRpcServerConfig config,
+                               TaskStorage* storage)
+    : engine_(engine), storage_(storage), config_(std::move(config)) {}
 
 JsonRpcServer::~JsonRpcServer() {
     stop();
@@ -206,6 +244,7 @@ bool JsonRpcServer::start() {
     }
 
     stop_requested_ = false;
+    ensure_winsock_started();
 
     listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
     if (listen_fd_ < 0) {
@@ -214,21 +253,27 @@ bool JsonRpcServer::start() {
     }
 
     int yes = 1;
-    ::setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+    ::setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR,
+#ifdef _WIN32
+                 reinterpret_cast<const char*>(&yes),
+#else
+                 &yes,
+#endif
+                 sizeof(yes));
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(config_.listen_port);
     if (::inet_pton(AF_INET, config_.bind_address.c_str(), &addr.sin_addr) != 1) {
         FALCON_LOG_ERROR("inet_pton() failed for bind_address=" << config_.bind_address);
-        ::close(listen_fd_);
+        socket_close(listen_fd_);
         listen_fd_ = -1;
         return false;
     }
 
     if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
         FALCON_LOG_ERROR("bind() failed: " << std::strerror(errno));
-        ::close(listen_fd_);
+        socket_close(listen_fd_);
         listen_fd_ = -1;
         return false;
     }
@@ -236,7 +281,7 @@ bool JsonRpcServer::start() {
     // If port was 0, OS picks an ephemeral port; query the actual port.
     if (config_.listen_port == 0) {
         sockaddr_in bound{};
-        socklen_t bound_len = sizeof(bound);
+        socket_len_t bound_len = sizeof(bound);
         if (::getsockname(listen_fd_, reinterpret_cast<sockaddr*>(&bound), &bound_len) == 0) {
             config_.listen_port = ntohs(bound.sin_port);
         }
@@ -244,7 +289,7 @@ bool JsonRpcServer::start() {
 
     if (::listen(listen_fd_, 128) < 0) {
         FALCON_LOG_ERROR("listen() failed: " << std::strerror(errno));
-        ::close(listen_fd_);
+        socket_close(listen_fd_);
         listen_fd_ = -1;
         return false;
     }
@@ -258,8 +303,8 @@ void JsonRpcServer::stop() {
     stop_requested_ = true;
 
     if (listen_fd_ >= 0) {
-        ::shutdown(listen_fd_, SHUT_RDWR);
-        ::close(listen_fd_);
+        socket_shutdown(listen_fd_);
+        socket_close(listen_fd_);
         listen_fd_ = -1;
     }
 
@@ -280,7 +325,7 @@ void JsonRpcServer::stop() {
 void JsonRpcServer::accept_loop() {
     while (!stop_requested_.load()) {
         sockaddr_in client_addr{};
-        socklen_t len = sizeof(client_addr);
+        socket_len_t len = sizeof(client_addr);
         int client_fd = ::accept(listen_fd_, reinterpret_cast<sockaddr*>(&client_addr), &len);
         if (client_fd < 0) {
             if (stop_requested_.load()) break;
@@ -298,7 +343,7 @@ static bool recv_into(int fd, std::string& buf, std::size_t want_at_least, std::
             return false;
         }
         char tmp[4096];
-        ssize_t n = ::recv(fd, tmp, sizeof(tmp), 0);
+        recv_send_size_t n = ::recv(fd, tmp, sizeof(tmp), 0);
         if (n <= 0) {
             return false;
         }
@@ -369,7 +414,7 @@ static std::optional<JsonRpcServer::HttpRequest> read_http_request(int fd) {
 static bool send_all(int fd, const std::string& data) {
     std::size_t off = 0;
     while (off < data.size()) {
-        ssize_t n = ::send(fd, data.data() + off, data.size() - off, 0);
+        recv_send_size_t n = ::send(fd, data.data() + off, static_cast<int>(data.size() - off), 0);
         if (n <= 0) {
             return false;
         }
@@ -628,6 +673,28 @@ JsonRpcServer::HttpResponse JsonRpcServer::handle_jsonrpc(const std::string& bod
                 if (!task) {
                     return json{{"error", json{{"code", 1}, {"message", "Unsupported URL"}}}};
                 }
+
+#ifdef FALCON_HAS_SQLITE3
+                // Persist task to database if storage is available
+                if (storage_) {
+                    TaskRecord record;
+                    record.id = task->id();
+                    record.url = task->url();
+                    record.output_path = task->output_path();
+                    record.status = task->status();
+                    record.progress = task->progress();
+                    record.total_bytes = task->total_bytes();
+                    record.downloaded_bytes = task->downloaded_bytes();
+                    record.speed = task->speed();
+                    record.error_message = task->error_message();
+                    record.options = options;
+                    record.created_at = std::chrono::system_clock::now();
+                    record.updated_at = std::chrono::system_clock::now();
+
+                    storage_->create_task(record);
+                }
+#endif
+
                 engine_->start_task(task->id());
                 return task_id_to_gid(task->id());
             }
@@ -650,18 +717,35 @@ JsonRpcServer::HttpResponse JsonRpcServer::handle_jsonrpc(const std::string& bod
                     if (!engine_->pause_task(*tid)) {
                         return json{{"error", json{{"code", 1}, {"message", "Pause failed"}}}};
                     }
+#ifdef FALCON_HAS_SQLITE3
+                    // Update storage
+                    if (storage_) storage_->update_status(*tid, TaskStatus::Paused);
+#endif
                     return gid;
                 }
                 if (m == "aria2.unpause") {
                     if (!engine_->resume_task(*tid)) {
                         return json{{"error", json{{"code", 1}, {"message", "Resume failed"}}}};
                     }
+#ifdef FALCON_HAS_SQLITE3
+                    // Update storage - task will be in Downloading state
+                    if (storage_) {
+                        auto current_task = engine_->get_task(*tid);
+                        if (current_task) {
+                            storage_->update_status(*tid, current_task->status());
+                        }
+                    }
+#endif
                     return gid;
                 }
                 if (m == "aria2.remove") {
                     if (!engine_->cancel_task(*tid)) {
                         return json{{"error", json{{"code", 1}, {"message", "Remove failed"}}}};
                     }
+#ifdef FALCON_HAS_SQLITE3
+                    // Update storage
+                    if (storage_) storage_->update_status(*tid, TaskStatus::Cancelled);
+#endif
                     return gid;
                 }
                 return task_to_status_json(*task);

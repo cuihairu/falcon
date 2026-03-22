@@ -11,6 +11,10 @@
 #include <thread>
 #include <vector>
 
+namespace falcon::daemon {
+    class TaskStorage;
+}
+
 namespace falcon::daemon::rpc {
 
 struct JsonRpcServerConfig {
@@ -25,7 +29,9 @@ public:
     struct HttpRequest;
     struct HttpResponse;
 
-    explicit JsonRpcServer(falcon::DownloadEngine* engine, JsonRpcServerConfig config);
+    explicit JsonRpcServer(falcon::DownloadEngine* engine,
+                          JsonRpcServerConfig config,
+                          TaskStorage* storage = nullptr);
     ~JsonRpcServer();
 
     JsonRpcServer(const JsonRpcServer&) = delete;
@@ -44,6 +50,7 @@ private:
     HttpResponse handle_jsonrpc(const std::string& body);
 
     falcon::DownloadEngine* engine_ = nullptr;
+    TaskStorage* storage_ = nullptr;
     JsonRpcServerConfig config_;
 
     std::atomic<bool> stop_requested_{false};

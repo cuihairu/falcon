@@ -43,6 +43,7 @@ enum class DaemonState {
     NotStarted,     ///< 未启动
     Starting,       ///< 启动中
     Running,        ///< 运行中
+    Paused,         ///< 暂停（Windows Service）
     Stopping,       ///< 停止中
     Stopped         ///< 已停止
 };
@@ -80,6 +81,12 @@ public:
      * @return false 失败
      */
     bool daemonize();
+
+    /**
+     * @brief 运行主循环，直到收到停止请求
+     */
+    void run(ServiceControlCallback stop_callback = nullptr,
+             ServiceControlCallback reload_callback = nullptr);
 
     /**
      * @brief 检查是否以守护进程模式运行
@@ -141,16 +148,42 @@ public:
     void set_reload_callback(ServiceControlCallback callback);
 
     /**
+     * @brief 触发重载回调
+     */
+    void reload();
+
+    /**
+     * @brief 兼容别名：请求停止
+     */
+    void stop();
+
+    /**
+     * @brief 是否仍在运行
+     */
+    bool is_running() const;
+
+    /**
      * @brief 获取最后的错误信息
      * @return 错误信息
      */
     std::string get_last_error() const;
 
+    /**
+     * @brief 获取全局实例（供信号处理器使用）
+     */
+    static DaemonManager* get_instance();
+
 #ifdef _WIN32
+    bool run_as_service();
+    bool install_service(const std::string& binary_path,
+                         const std::string& display_name = "",
+                         const std::string& description = "");
+    bool uninstall_service();
+
     /**
      * @brief Windows 服务入口点（内部使用）
      */
-    static void WINAPI service_main(DWORD argc, LPWSTR* argv);
+    static void WINAPI service_main(DWORD argc, LPSTR* argv);
 
     /**
      * @brief Windows 服务控制处理器（内部使用）
@@ -194,10 +227,15 @@ private:
     bool is_daemon_{false};
 
 #ifdef _WIN32
-    static DaemonManager* instance_;
     SERVICE_STATUS_HANDLE status_handle_{nullptr};
     SERVICE_STATUS service_status_{};
+
+    void report_service_status(DWORD current_state,
+                               DWORD win32_exit_code,
+                               DWORD wait_hint);
 #endif
+
+    static DaemonManager* instance_;
 };
 
 /**

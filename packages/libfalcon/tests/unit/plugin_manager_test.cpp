@@ -131,7 +131,7 @@ TEST(PluginManagerTest, RegisterMultiplePlugins) {
     falcon::PluginManager manager;
 
     manager.registerPlugin(std::make_unique<DummyProtocolHandler>(
-        "http", std::vector<std::string>{"http", "https"}, "http://"));
+        "http", std::vector<std::string>{"http", "https"}, "http"));
     manager.registerPlugin(std::make_unique<DummyProtocolHandler>(
         "ftp", std::vector<std::string>{"ftp"}, "ftp://"));
     manager.registerPlugin(std::make_unique<DummyProtocolHandler>(
@@ -220,7 +220,7 @@ TEST(PluginManagerTest, RouteUrlToCorrectPlugin) {
     falcon::PluginManager manager;
 
     manager.registerPlugin(std::make_unique<DummyProtocolHandler>(
-        "http", std::vector<std::string>{"http", "https"}, "http://"));
+        "http", std::vector<std::string>{"http", "https"}, "http"));
     manager.registerPlugin(std::make_unique<DummyProtocolHandler>(
         "ftp", std::vector<std::string>{"ftp"}, "ftp://"));
 

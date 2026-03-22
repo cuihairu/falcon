@@ -14,6 +14,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <vector>
 #include <string>
 #include <cstring>
@@ -51,15 +52,6 @@
     #define POLLNVAL 0x0004
     #endif
 
-    // WSAPOLLFD 结构体可能未定义，提供兼容定义
-    #if !defined(WSAPOLLFD) && !defined(_WSAPOLLFD_DEFINED)
-    typedef struct pollfd {
-        SOCKET fd;
-        SHORT  events;
-        SHORT  revents;
-    } WSAPOLLFD, *PWSAPOLLFD, *LPWSAPOLLFD;
-    #define _WSAPOLLFD_DEFINED
-    #endif
 #else
     #ifdef __linux__
         #include <sys/epoll.h>
@@ -327,6 +319,7 @@ public:
 private:
     int max_fds_;
     std::string error_msg_;
+    mutable std::mutex mutex_;
 
     // 事件回调映射表
     std::map<int, EventEntry> events_;

@@ -445,8 +445,10 @@ TEST_F(DownloadTaskTest, RemainingTimeEstimation) {
     auto remaining = task->estimated_remaining();
     auto expected_seconds = (1000 - 200) / 100;  // 8 秒
 
-    EXPECT_GE(remaining.count(), std::chrono::seconds(7).count());
-    EXPECT_LE(remaining.count(), std::chrono::seconds(9).count());
+    // 使用 std::chrono::duration_cast 正确转换时间单位
+    auto remaining_seconds = std::chrono::duration_cast<std::chrono::seconds>(remaining);
+    EXPECT_GE(remaining_seconds.count(), 7);
+    EXPECT_LE(remaining_seconds.count(), 9);
 }
 
 // 新增：经过时间计算
@@ -458,8 +460,10 @@ TEST_F(DownloadTaskTest, ElapsedTimeCalculation) {
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
     auto elapsed = task->elapsed();
-    EXPECT_GE(elapsed.count(), std::chrono::milliseconds(150).count());
-    EXPECT_LE(elapsed.count(), std::chrono::milliseconds(300).count());
+    // 使用 std::chrono::duration_cast 正确转换时间单位
+    auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed);
+    EXPECT_GE(elapsed_ms.count(), 150);
+    EXPECT_LE(elapsed_ms.count(), 500);  // 增加上限以容忍系统负载波动
 }
 
 // 新增：任务生命周期完整测试

@@ -81,14 +81,12 @@ bool create_directories(const std::string& path) {
 // DaemonManager 实现
 // ============================================================================
 
-#ifdef _WIN32
 DaemonManager* DaemonManager::instance_ = nullptr;
-#endif
 
 DaemonManager::DaemonManager(const DaemonConfig& config)
     : config_(config) {
-#ifdef _WIN32
     instance_ = this;
+#ifdef _WIN32
     std::memset(&service_status_, 0, sizeof(service_status_));
     service_status_.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
     service_status_.dwControlsAccepted = SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN;
@@ -99,11 +97,9 @@ DaemonManager::~DaemonManager() {
     if (is_daemon_) {
         remove_pid_file();
     }
-#ifdef _WIN32
     if (instance_ == this) {
         instance_ = nullptr;
     }
-#endif
 }
 
 bool DaemonManager::daemonize() {
@@ -200,6 +196,82 @@ void DaemonManager::run(ServiceControlCallback stop_callback,
 
     state_ = DaemonState::Stopped;
     FALCON_LOG_INFO("Daemon stopped");
+}
+
+bool DaemonManager::is_daemon() const {
+    return is_daemon_;
+}
+
+int DaemonManager::get_pid() const {
+#ifdef _WIN32
+    return static_cast<int>(GetCurrentProcessId());
+#else
+    return static_cast<int>(getpid());
+#endif
+}
+
+int DaemonManager::read_pid_file() const {
+    if (config_.pid_file.empty()) {
+        return -1;
+    }
+    std::ifstream pid_file(config_.pid_file);
+    if (!pid_file.is_open()) {
+        return -1;
+    }
+    int pid = -1;
+    pid_file >> pid;
+    return pid > 0 ? pid : -1;
+}
+
+bool DaemonManager::is_another_instance_running() const {
+    int pid = read_pid_file();
+    if (pid <= 0 || pid == get_pid()) {
+        return false;
+    }
+#ifdef _WIN32
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(pid));
+    if (!process) {
+        return false;
+    }
+    CloseHandle(process);
+    return true;
+#else
+    return kill(pid, 0) == 0;
+#endif
+}
+
+bool DaemonManager::stop_another_instance() {
+    int pid = read_pid_file();
+    if (pid <= 0 || pid == get_pid()) {
+        return false;
+    }
+#ifdef _WIN32
+    HANDLE process = OpenProcess(PROCESS_TERMINATE, FALSE, static_cast<DWORD>(pid));
+    if (!process) {
+        return false;
+    }
+    BOOL ok = TerminateProcess(process, 0);
+    CloseHandle(process);
+    return ok == TRUE;
+#else
+    return kill(pid, SIGTERM) == 0;
+#endif
+}
+
+void DaemonManager::request_stop() {
+    stop();
+}
+
+bool DaemonManager::should_stop() const {
+    return stop_requested_.load();
+}
+
+void DaemonManager::set_stop_callback(ServiceControlCallback callback) {
+    stop_callback_ = std::move(callback);
+}
+
+void DaemonManager::set_reload_callback(ServiceControlCallback callback) {
+    reload_callback_ = std::move(callback);
 }
 
 #ifdef _WIN32
@@ -418,6 +490,10 @@ std::string DaemonManager::get_last_error() const {
     return last_error_;
 }
 
+DaemonManager* DaemonManager::get_instance() {
+    return instance_;
+}
+
 // ============================================================================
 // 私有方法实现
 // ============================================================================
@@ -508,14 +584,14 @@ void DaemonManager::remove_pid_file() {
 #ifndef _WIN32
 // Unix 信号处理器
 static void unix_signal_handler(int signum) {
-    if (DaemonManager::instance_) {
+    if (auto* instance = DaemonManager::get_instance()) {
         switch (signum) {
             case SIGTERM:
             case SIGINT:
-                DaemonManager::instance_->stop();
+                instance->stop();
                 break;
             case SIGHUP:
-                DaemonManager::instance_->reload();
+                instance->reload();
                 break;
         }
     }
@@ -553,8 +629,8 @@ void DaemonManager::setup_signal_handlers() {
     // Windows 使用 SetConsoleCtrlHandler
     SetConsoleCtrlHandler([](DWORD ctrl_type) -> BOOL {
         if (ctrl_type == CTRL_C_EVENT || ctrl_type == CTRL_BREAK_EVENT) {
-            if (DaemonManager::instance_) {
-                DaemonManager::instance_->stop();
+            if (auto* instance = DaemonManager::get_instance()) {
+                instance->stop();
             }
             return TRUE;
         }

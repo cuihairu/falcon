@@ -37,6 +37,13 @@ PollEventPoll::PollEventPoll(int max_fds)
 bool PollEventPoll::add_event(int fd, int events,
                               EventCallback callback,
                               void* user_data) {
+    if (fd < 0) {
+        return set_error("无效文件描述符");
+    }
+    if (events == 0) {
+        return set_error("无效事件掩码");
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
     if (static_cast<int>(events_.size()) >= max_fds_) {
         return set_error("超过最大文件描述符数量");
     }
@@ -66,6 +73,7 @@ bool PollEventPoll::add_event(int fd, int events,
 }
 
 bool PollEventPoll::modify_event(int fd, int events) {
+    std::lock_guard<std::mutex> lock(mutex_);
     auto it = events_.find(fd);
     if (it == events_.end()) {
         return set_error("文件描述符未注册: fd=" + std::to_string(fd));
@@ -82,9 +90,10 @@ bool PollEventPoll::modify_event(int fd, int events) {
 }
 
 bool PollEventPoll::remove_event(int fd) {
+    std::lock_guard<std::mutex> lock(mutex_);
     auto it = events_.find(fd);
     if (it == events_.end()) {
-        return true;  // 已经不存在
+        return false;
     }
 
     events_.erase(fd);
@@ -97,6 +106,7 @@ bool PollEventPoll::remove_event(int fd) {
 }
 
 int PollEventPoll::poll(int timeout_ms) {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (poll_fds_.empty()) {
         return 0;  // 没有待监听的文件描述符
     }
@@ -167,6 +177,7 @@ int PollEventPoll::poll(int timeout_ms) {
 }
 
 void PollEventPoll::clear() {
+    std::lock_guard<std::mutex> lock(mutex_);
     events_.clear();
     poll_fds_.clear();
 }
@@ -182,7 +193,11 @@ void PollEventPoll::rebuild_poll_fds() {
 
     for (const auto& pair : events_) {
         const auto& entry = pair.second;
+#ifdef _WIN32
+        WSAPOLLFD pfd = {};
+#else
         struct pollfd pfd = {};
+#endif
         pfd.fd = entry.fd;
         pfd.events = to_poll_events(entry.events);
         pfd.revents = 0;

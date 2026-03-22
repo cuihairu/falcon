@@ -102,6 +102,12 @@ target_link_libraries(falcon-daemon
         falcon_daemon_rpc
 )
 
+# Link task storage if available
+if(TARGET falcon_daemon_storage)
+    target_link_libraries(falcon-daemon PRIVATE falcon_daemon_storage)
+    target_compile_definitions(falcon-daemon PRIVATE FALCON_HAS_SQLITE3)
+endif()
+
 # Optional: spdlog for logging
 find_package(spdlog QUIET)
 if(spdlog_FOUND)

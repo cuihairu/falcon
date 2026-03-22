@@ -3,13 +3,26 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#pragma comment(lib, "ws2_32.lib")
+#else
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
 
 #include <chrono>
 #include <cstring>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
@@ -18,10 +31,26 @@ namespace {
 
 using json = nlohmann::json;
 
+#ifdef _WIN32
+using recv_send_size_t = int;
+static int socket_close(int fd) { return ::closesocket(static_cast<SOCKET>(fd)); }
+static void ensure_winsock_started() {
+    static std::once_flag once;
+    std::call_once(once, []() {
+        WSADATA data{};
+        WSAStartup(MAKEWORD(2, 2), &data);
+    });
+}
+#else
+using recv_send_size_t = ssize_t;
+static int socket_close(int fd) { return ::close(fd); }
+static void ensure_winsock_started() {}
+#endif
+
 struct ScopedFd {
     int fd = -1;
     ~ScopedFd() {
-        if (fd >= 0) ::close(fd);
+        if (fd >= 0) socket_close(fd);
     }
     ScopedFd() = default;
     explicit ScopedFd(int f) : fd(f) {}
@@ -32,7 +61,7 @@ struct ScopedFd {
 static bool send_all(int fd, const std::string& data) {
     std::size_t off = 0;
     while (off < data.size()) {
-        ssize_t n = ::send(fd, data.data() + off, data.size() - off, 0);
+        recv_send_size_t n = ::send(fd, data.data() + off, static_cast<int>(data.size() - off), 0);
         if (n <= 0) return false;
         off += static_cast<std::size_t>(n);
     }
@@ -43,7 +72,7 @@ static std::optional<std::string> recv_all(int fd) {
     std::string buf;
     char tmp[4096];
     while (true) {
-        ssize_t n = ::recv(fd, tmp, sizeof(tmp), 0);
+        recv_send_size_t n = ::recv(fd, tmp, sizeof(tmp), 0);
         if (n == 0) break;
         if (n < 0) return std::nullopt;
         buf.append(tmp, tmp + n);
@@ -60,6 +89,7 @@ static std::optional<std::string> extract_body(const std::string& http) {
 }
 
 static ScopedFd connect_loopback(uint16_t port) {
+    ensure_winsock_started();
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
@@ -71,7 +101,7 @@ static ScopedFd connect_loopback(uint16_t port) {
         if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0) {
             return ScopedFd{fd};
         }
-        ::close(fd);
+        socket_close(fd);
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     return ScopedFd{};

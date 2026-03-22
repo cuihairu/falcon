@@ -6,9 +6,14 @@
 #include "rpc/json_rpc_server.hpp"
 #include "daemon/daemon.hpp"
 
+#ifdef FALCON_HAS_SQLITE3
+#include "storage/task_storage.hpp"
+#endif
+
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -38,7 +43,8 @@ void show_help() {
         << "  -d, --daemon                Run as background daemon\n"
         << "  --pid-file <path>           PID file path\n"
         << "  --working-dir <dir>         Working directory\n"
-        << "  --log-file <path>           Log file path (redirects stdout/stderr)\n\n"
+        << "  --log-file <path>           Log file path (redirects stdout/stderr)\n"
+        << "  --task-db <path>            Task database path (default: ~/.config/falcon/tasks.db)\n\n"
 #ifdef _WIN32
         << "Windows Service Options:\n"
         << "  --install-service           Install as Windows service\n"
@@ -56,6 +62,7 @@ void show_help() {
 int main(int argc, char* argv[]) {
     bool enable_rpc = false;
     bool run_as_daemon = false;
+    std::string task_db_path;
     falcon::daemon::rpc::JsonRpcServerConfig rpc_config;
     falcon::daemon::DaemonConfig daemon_config;
 
@@ -114,6 +121,10 @@ int main(int argc, char* argv[]) {
         }
         if (arg == "--log-file" && i + 1 < argc) {
             daemon_config.log_file = argv[++i];
+            continue;
+        }
+        if (arg == "--task-db" && i + 1 < argc) {
+            task_db_path = argv[++i];
             continue;
         }
 
@@ -186,6 +197,63 @@ int main(int argc, char* argv[]) {
         // Create download engine
         falcon::DownloadEngine engine;
 
+        // Initialize task storage if SQLite3 is available
+#ifdef FALCON_HAS_SQLITE3
+        std::unique_ptr<falcon::daemon::TaskStorage> task_storage;
+        falcon::daemon::TaskStorageConfig storage_config;
+        if (task_db_path.empty()) {
+            storage_config.db_path = falcon::daemon::get_default_config_dir() + "/tasks.db";
+        } else {
+            storage_config.db_path = task_db_path;
+        }
+        storage_config.auto_create_tables = true;
+        storage_config.enable_wal_mode = true;
+
+        // Ensure config directory exists
+        std::filesystem::path db_path(storage_config.db_path);
+        if (db_path.has_parent_path()) {
+            falcon::daemon::create_directories(db_path.parent_path().string());
+        }
+
+        task_storage = std::make_unique<falcon::daemon::TaskStorage>(storage_config);
+        if (task_storage->initialize()) {
+            FALCON_LOG_INFO("Task storage initialized: " << task_storage->get_db_path());
+
+            // Load saved tasks
+            auto saved_tasks = task_storage->get_active_tasks();
+            FALCON_LOG_INFO("Loading " << saved_tasks.size() << " saved tasks...");
+
+            for (const auto& record : saved_tasks) {
+                // Skip completed or failed tasks
+                if (record.status == falcon::TaskStatus::Completed ||
+                    record.status == falcon::TaskStatus::Failed ||
+                    record.status == falcon::TaskStatus::Cancelled) {
+                    continue;
+                }
+
+                // Re-create the task in the engine
+                auto task = engine.add_task(record.url, record.options);
+                if (task) {
+                    // Set the output path if specified
+                    if (!record.output_path.empty()) {
+                        // task->set_output_path(record.output_path);
+                    }
+                    // Only start tasks that were active (not paused)
+                    if (record.status == falcon::TaskStatus::Downloading ||
+                        record.status == falcon::TaskStatus::Preparing) {
+                        engine.start_task(task->id());
+                    }
+                    FALCON_LOG_INFO("Restored task: " << record.url);
+                }
+            }
+        } else {
+            FALCON_LOG_WARN("Failed to initialize task storage: " << task_storage->get_last_error());
+            task_storage.reset();
+        }
+#else
+        FALCON_LOG_INFO("Task persistence disabled (SQLite3 not available)");
+#endif
+
         // Setup stop callback
         daemon_manager.set_stop_callback([&engine]() {
             FALCON_LOG_INFO("Shutting down...");
@@ -201,7 +269,11 @@ int main(int argc, char* argv[]) {
         // Start RPC server if enabled
         std::unique_ptr<falcon::daemon::rpc::JsonRpcServer> rpc_server;
         if (enable_rpc) {
-            rpc_server = std::make_unique<falcon::daemon::rpc::JsonRpcServer>(&engine, rpc_config);
+#ifdef FALCON_HAS_SQLITE3
+            rpc_server = std::make_unique<falcon::daemon::rpc::JsonRpcServer>(&engine, rpc_config, task_storage.get());
+#else
+            rpc_server = std::make_unique<falcon::daemon::rpc::JsonRpcServer>(&engine, rpc_config, nullptr);
+#endif
             if (!rpc_server->start()) {
                 std::cerr << "Failed to start JSON-RPC server\n";
                 return 1;
