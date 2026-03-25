@@ -40,6 +40,6 @@ export const navbar = [
   },
   {
     text: "GitHub",
-    link: "https://github.com/yourusername/falcon",
+    link: "https://github.com/cuihairu/falcon",
   },
 ];

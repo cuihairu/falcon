@@ -46,11 +46,9 @@ cd falcon
 # 从源码编译
 cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
-
-# 或使用包管理器（即将推出）
-# npm install -g falcon-downloader
-# pip install falcon-downloader
 ```
+
+当前以源码构建为准。包管理器分发和预编译安装包应以正式 Release 说明为准，而不是这里的占位示例。
 
 ### 基本使用
 
@@ -64,30 +62,31 @@ falcon-cli https://example.com/large_file.iso -c 5
 # 限速下载（1MB/s）
 falcon-cli https://example.com/video.mp4 --limit 1M
 
-# 浏览 FTP 目录
-falcon-cli --list ftp://ftp.example.com/pub
+# 从文件批量下载
+falcon-cli -i urls.txt -j 3
 
-# 浏览 S3 存储桶
-falcon-cli --list s3://my-bucket --key-id YOUR_KEY --secret-key YOUR_SECRET
-
-# 搜索种子
-falcon-cli --search "Ubuntu 22.04" --min-seeds 10
+# 通过代理并附加请求头
+falcon-cli --proxy http://127.0.0.1:7890 \
+  -H "Authorization: Bearer TOKEN" \
+  https://example.com/file.bin
 ```
 
 ## 支持的协议 📡
 
 | 协议 | 状态 | 描述 |
 |------|------|------|
-| HTTP/HTTPS | ✅ | 标准 Web 协议，支持断点续传 |
-| FTP/FTPS | ✅ | 文件传输协议，支持被动模式 |
-| BitTorrent | ✅ | 点对点文件共享，支持磁力链接 |
-| 迅雷 | ✅ | 迅雷专用链接 |
-| 腾讯旋风 | ✅ | 腾讯旋风专用链接 |
-| 快车 | ✅ | 快车专用链接 |
-| 电驴 | ✅ | eDonkey2000 网络支持 |
-| HLS/DASH | ✅ | HTTP Live Streaming 和动态自适应流媒体 |
+| HTTP/HTTPS | 已启用 | 标准 Web 协议，支持断点续传 |
+| FTP/FTPS | 已启用 | 文件传输协议，支持被动模式 |
+| BitTorrent | 可选插件 | 仓库内已实现，默认构建关闭 |
+| 迅雷 | 可选插件 | 仓库内已实现，默认构建关闭 |
+| 腾讯旋风 | 可选插件 | 仓库内已实现，默认构建关闭 |
+| 快车 | 可选插件 | 仓库内已实现，默认构建关闭 |
+| 电驴 | 可选插件 | 仓库内已实现，默认构建关闭 |
+| HLS/DASH | 可选插件 | 仓库内已实现，默认构建关闭 |
 
 ## 云存储支持 ☁️
+
+以下能力来自仓库中的相关模块，但 CLI 示例是否可直接使用应以当前命令行实现为准。
 
 ### 亚马逊 S3
 ```bash
@@ -301,16 +300,16 @@ cmake -B build -S . \
 - [x] 安全配置管理
 
 ### 进行中 🚧
-- [ ] BitTorrent 插件 (libtorrent)
-- [ ] Web 管理界面
-- [ ] Windows GUI 应用
+- [ ] 完善可选协议插件的默认构建与文档一致性
+- [ ] 完善桌面端能力
+- [ ] 补齐发布制品与安装分发
 - [ ] 更多私有协议
 
 ### 计划中 📅
 - [ ] macOS 原生应用
 - [ ] Linux 原生应用
 - [ ] 移动端支持
-- [] 分布式下载节点
+- [ ] 分布式下载节点
 
 ---
 

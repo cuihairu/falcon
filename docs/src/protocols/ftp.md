@@ -1,254 +1,86 @@
 # FTP/FTPS 协议
 
-Falcon 支持完整的 FTP 和 FTPS（FTP over SSL/TLS）协议。
+Falcon 支持 FTP 和 FTPS，并默认内置 FTP 处理器。
 
 ## 特性
 
-- ✅ **主动模式**：PORT 方式
-- ✅ **被动模式**：PASV 方式（默认）
-- ✅ **FTPS**：显式 TLS (FTPES) 和隐式 TLS
-- ✅ **认证**：用户名/密码登录
-- ✅ **匿名登录**：支持匿名访问
-- ✅ **断点续传**：支持续传中断的下载
-- ✅ **目录列表**：浏览远程目录
+- ✅ FTP 下载
+- ✅ FTPS 链接
+- ✅ 用户名 / 密码认证
+- ✅ 匿名访问
+- ✅ 断点续传
+- ✅ 代理透传
 
 ## 命令行使用
 
 ### 基本下载
 
 ```bash
-# 匿名 FTP 下载
 falcon-cli ftp://ftp.example.com/file.zip
-
-# 带用户名和密码
 falcon-cli ftp://user:password@ftp.example.com/file.zip
-
-# 指定端口
 falcon-cli ftp://ftp.example.com:2121/file.zip
 ```
 
-### FTPS（FTP over SSL/TLS）
+### FTPS
 
 ```bash
-# 显式 TLS（FTPES）
 falcon-cli ftpes://ftp.example.com/file.zip
-
-# 隐式 TLS
 falcon-cli ftps://ftp.example.com/file.zip
-
-# 带认证的 FTPS
 falcon-cli ftpes://user:password@ftp.example.com/file.zip
 ```
 
-### 主动/被动模式
+### 断点续传与代理
 
 ```bash
-# 使用被动模式（默认）
-falcon-cli ftp://ftp.example.com/file.zip --passive
-
-# 使用主动模式
-falcon-cli ftp://ftp.example.com/file.zip --active
-```
-
-### 断点续传
-
-```bash
-falcon-cli ftp://ftp.example.com/large.zip --continue
-```
-
-### 使用代理
-
-```bash
-# HTTP 代理
-falcon-cli ftp://ftp.example.com/file.zip --proxy http://proxy:8080
-
-# SOCKS 代理
+falcon-cli ftp://ftp.example.com/large.zip --continue true
 falcon-cli ftp://ftp.example.com/file.zip --proxy socks5://proxy:1080
 ```
 
-## C++ API 使用
+## C++ API
 
-### 基本下载
-
-```cpp
-#include <falcon/falcon.hpp>
-
-int main() {
-    falcon::DownloadEngine engine;
-    engine.loadPlugin("ftp");
-
-    falcon::FtpOptions ftp_options;
-    ftp_options.username = "user";
-    ftp_options.password = "password";
-    ftp_options.passive_mode = true;
-
-    falcon::DownloadOptions options;
-    options.ftp_options = ftp_options;
-
-    auto task = engine.startDownload(
-        "ftp://ftp.example.com/file.zip",
-        options
-    );
-
-    task->wait();
-    return 0;
-}
-```
-
-### FTPS 下载
+当前公共 API 不暴露独立的 `FtpOptions` 结构体，常用方式仍是 URL 加 `DownloadOptions`。
 
 ```cpp
 #include <falcon/falcon.hpp>
 
 int main() {
     falcon::DownloadEngine engine;
-    engine.loadPlugin("ftp");
-
-    falcon::FtpOptions ftp_options;
-    ftp_options.username = "user";
-    ftp_options.password = "password";
-    ftp_options.ssl_mode = falcon::FtpSslMode::EXPLICIT;  // 或 IMPLICIT
-    ftp_options.verify_ssl = true;
 
     falcon::DownloadOptions options;
-    options.ftp_options = ftp_options;
+    options.output_directory = "./downloads";
+    options.output_filename = "file.zip";
+    options.resume_enabled = true;
+    options.timeout_seconds = 30;
 
-    auto task = engine.startDownload(
-        "ftpes://ftp.example.com/file.zip",
+    auto task = engine.add_task(
+        "ftp://user:password@ftp.example.com/file.zip",
         options
     );
 
+    if (!task) {
+        return 1;
+    }
+
+    engine.start_task(task->id());
     task->wait();
     return 0;
 }
 ```
-
-### 主动模式
-
-```cpp
-#include <falcon/falcon.hpp>
-
-int main() {
-    falcon::DownloadEngine engine;
-    engine.loadPlugin("ftp");
-
-    falcon::FtpOptions ftp_options;
-    ftp_options.username = "user";
-    ftp_options.password = "password";
-    ftp_options.passive_mode = false;  // 主动模式
-
-    falcon::DownloadOptions options;
-    options.ftp_options = ftp_options;
-
-    auto task = engine.startDownload(
-        "ftp://ftp.example.com/file.zip",
-        options
-    );
-
-    task->wait();
-    return 0;
-}
-```
-
-## FTP 选项
-
-### 连接选项
-
-| 选项 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `username` | string | "anonymous" | 用户名 |
-| `password` | string | "anonymous@" | 密码 |
-| `passive_mode` | bool | true | 使用被动模式 |
-| `ssl_mode` | enum | NONE | SSL 模式：NONE、EXPLICIT、IMPLICIT |
-| `verify_ssl` | bool | true | 验证 SSL 证书 |
-
-### 传输选项
-
-| 选项 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `transfer_mode` | enum | BINARY | 传输模式：BINARY、ASCII |
-| `resume` | bool | true | 启用断点续传 |
-| `connect_timeout` | chrono::seconds | 30 | 连接超时 |
-| `timeout` | chrono::seconds | 60 | 操作超时 |
 
 ## URL 格式
 
-### 标准 FTP URL
-
-```
+```text
 ftp://[user[:password]@]host[:port]/path
+ftpes://[user[:password]@]host[:port]/path
+ftps://[user[:password]@]host[:port]/path
 ```
 
-### FTPS URL
+## 说明
 
-```
-ftpes://[user[:password]@]host[:port]/path   # 显式 TLS
-ftps://[user[:password]@]host[:port]/path    # 隐式 TLS
-```
+- 用户名和密码通常直接从 URL 中给出。
+- 连接、重试、输出目录、限速等通用行为由 `DownloadOptions` 负责。
+- 更细的 FTP 专属行为如果未来进入公共头文件，再单独补充到这里。
 
-### 示例
-
-```bash
-# 匿名登录
-ftp://ftp.example.com/file.zip
-
-# 用户名密码
-ftp://user:pass@ftp.example.com/file.zip
-
-# 指定端口
-ftp://ftp.example.com:2121/file.zip
-
-# FTPS
-ftpes://user:pass@ftp.example.com/file.zip
-```
-
-## 主动模式 vs 被动模式
-
-### 被动模式（PASV）- 推荐
-
-- 客户端连接服务器的数据端口
-- 更适合防火墙后的客户端
-- 是大多数客户端的默认模式
-
-### 主动模式（PORT）
-
-- 服务器连接客户端的数据端口
-- 可能被防火墙阻止
-- 适用于服务器在内网的场景
-
-::: tip 选择建议
-大多数情况下使用被动模式。只有在服务器位于防火墙后时才考虑主动模式。
-:::
-
-## 常见问题
-
-### Q: 连接超时
-
-A: 检查防火墙设置，确保 FTP 端口（21）和数据端口未被阻止。尝试切换主动/被动模式。
-
-### Q: 530 Login incorrect
-
-A: 检查用户名和密码是否正确。匿名登录使用：
-- 用户名：`anonymous`
-- 密码：任意（通常使用邮箱）
-
-### Q: 目录列表错误
-
-A: 某些服务器可能需要特定的列表格式。Falcon 会自动尝试多种格式。
-
-### Q: FTPS 连接失败
-
-A: 检查服务器的 SSL/TLS 配置：
-- 显式 TLS：使用 `ftpes://`
-- 隐式 TLS：使用 `ftps://`（端口 990）
-
-## 安全建议
-
-1. **使用 FTPS**：明文 FTP 传输的密码可被窃听
-2. **验证证书**：生产环境应启用 SSL 验证
-3. **使用强密码**：FTP 密码应足够复杂
-4. **限制访问**：使用防火墙限制 FTP 访问
-
-::: warning 安全警告
-标准 FTP 协议以明文传输用户名和密码，不安全。请尽可能使用 FTPS 或 SFTP。
+::: warning 安全提示
+明文 FTP 会直接传输用户名和密码。能使用 FTPS 时，优先使用 FTPS。
 :::

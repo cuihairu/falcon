@@ -1,5 +1,8 @@
 # Falcon 私有协议支持
 
+> [!NOTE]
+> 本文档偏设计与背景说明；当前可用说明请优先查看 `docs/src/protocols/private.md`。
+
 本文档介绍了 Falcon 下载器对各种私有下载协议的支持。
 
 ## 支持的协议列表

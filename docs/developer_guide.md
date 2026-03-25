@@ -1,5 +1,9 @@
 # Falcon 开发者指南
 
+> [!WARNING]
+> 本文档属于旧版开发者指南归档。
+> 当前维护中的开发者文档请以 `docs/src/developer/` 下页面为准。
+
 ## 开发环境搭建
 
 ### 前置要求
@@ -11,7 +15,7 @@
 ### 获取源码
 
 ```bash
-git clone https://github.com/yourusername/falcon.git
+git clone https://github.com/cuihairu/falcon.git
 cd falcon
 ```
 
@@ -76,7 +80,7 @@ falcon/
 │   └── falcon-daemon/      # 守护进程
 ├── apps/                   # 应用层
 │   ├── desktop/            # 桌面应用
-│   └── web/                # Web 界面
+│   └── browser_extension/  # 浏览器扩展
 ├── docs/                   # 文档
 └── examples/               # 示例代码
 ```
@@ -593,10 +597,10 @@ A: 检查：
 
 ## 社区资源
 
-- **GitHub**: https://github.com/yourusername/falcon
-- **Issues**: https://github.com/yourusername/falcon/issues
-- **Discussions**: https://github.com/yourusername/falcon/discussions
-- **Wiki**: https://github.com/yourusername/falcon/wiki
+- **GitHub**: https://github.com/cuihairu/falcon
+- **Issues**: https://github.com/cuihairu/falcon/issues
+- **Discussions**: https://github.com/cuihairu/falcon/discussions
+- **Wiki**: https://github.com/cuihairu/falcon/wiki
 
 ## 许可证
 

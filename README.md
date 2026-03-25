@@ -60,11 +60,9 @@ cd falcon
 # Build from source
 cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
-
-# Or use package manager (coming soon)
-# npm install -g falcon-downloader
-# pip install falcon-downloader
 ```
+
+The current documented path is source build. Package manager distribution and prebuilt installers should be treated as future release work unless a tagged release says otherwise.
 
 ### Basic Usage
 
@@ -78,26 +76,16 @@ falcon-cli -x 5 https://example.com/large_file.iso
 # Download with speed limit (1MB/s)
 falcon-cli --max-download-limit=1M https://example.com/video.mp4
 
-# Resume interrupted download
-falcon-cli -c https://example.com/partial.zip
+# Resume behavior is enabled by default; explicit aria2-style switch is also supported
+falcon-cli --continue true https://example.com/partial.zip
 
-# Multi-mirror download (automatic failover)
-falcon-cli https://mirror1.com/file.zip \
-  https://mirror2.com/file.zip \
-  https://mirror3.com/file.zip
+# Batch input with concurrent tasks
+falcon-cli -i urls.txt -j 3
 
-# Verify file hash after download
-falcon-cli --checksum=sha256=dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f \
-  https://example.com/file.zip
-
-# Browse FTP directory
-falcon-cli --list ftp://ftp.example.com/pub
-
-# Browse S3 bucket
-falcon-cli --list s3://my-bucket --key-id YOUR_KEY --secret-key YOUR_SECRET
-
-# Search for torrents
-falcon-cli --search "Ubuntu 22.04" --min-seeds 10
+# Custom headers and proxy
+falcon-cli --proxy http://127.0.0.1:7890 \
+  -H "Authorization: Bearer TOKEN" \
+  https://example.com/file.bin
 ```
 
 ### aria2-Compatible Parameters
@@ -111,10 +99,10 @@ falcon-cli -x 16 -s 16 --min-split-size=1M https://example.com/file.zip
 # -s: Max connections per server
 
 # Retry settings
-falcon-cli --max-tries=5 --retry-wait=10 https://example.com/file.zip
+falcon-cli -r 5 --retry-wait 10 https://example.com/file.zip
 
 # Timeout settings
-falcon-cli --timeout=30 --connect-timeout=10 https://example.com/file.zip
+falcon-cli --timeout 30 https://example.com/file.zip
 
 # HTTP authentication
 falcon-cli --http-user=user --http-passwd=pass https://example.com/file.zip
@@ -123,8 +111,8 @@ falcon-cli --http-user=user --http-passwd=pass https://example.com/file.zip
 falcon-cli --header="Authorization: Bearer TOKEN" https://example.com/api/file
 
 # Proxy support
-falcon-cli --proxy=http://proxy.example.com:8080 \
-  --proxy-user=user --proxy-password=pass https://example.com/file.zip
+falcon-cli --proxy http://proxy.example.com:8080 \
+  --proxy-user user --proxy-passwd pass https://example.com/file.zip
 
 # User agent
 falcon-cli --user-agent="Falcon/1.0" https://example.com/file.zip
@@ -133,22 +121,21 @@ falcon-cli --user-agent="Falcon/1.0" https://example.com/file.zip
 falcon-cli -d /tmp/downloads -o custom_name.zip https://example.com/file.zip
 
 # Speed limits
-falcon-cli --max-download-limit=5M \
-  --max-overall-download-limit=10M https://example.com/file.zip
+falcon-cli --max-download-limit 5M https://example.com/file.zip
 ```
 
 ## Supported Protocols 📡
 
 | Protocol | Status | Description |
 |----------|--------|-------------|
-| HTTP/HTTPS | ✅ | Standard web protocols with resume support |
-| FTP/FTPS | ✅ | File Transfer Protocol with passive mode |
-| BitTorrent | ✅ | Peer-to-peer file sharing with magnet links |
-| Thunder | ✅ | Xunlei (Thunder) links |
-| QQDL | ✅ | Tencent QQ Download links |
-| FlashGet | ✅ | FlashGet links |
-| ED2K | ✅ | eDonkey2000 network support |
-| HLS/DASH | ✅ | HTTP Live Streaming and Dynamic Adaptive Streaming |
+| HTTP/HTTPS | Enabled | Standard web protocols with resume support |
+| FTP/FTPS | Enabled | File Transfer Protocol with passive mode |
+| BitTorrent | Optional plugin | Implemented in repo but disabled by default in top-level CMake |
+| Thunder | Optional plugin | Implemented in repo but disabled by default in top-level CMake |
+| QQDL | Optional plugin | Implemented in repo but disabled by default in top-level CMake |
+| FlashGet | Optional plugin | Implemented in repo but disabled by default in top-level CMake |
+| ED2K | Optional plugin | Implemented in repo but disabled by default in top-level CMake |
+| HLS/DASH | Optional plugin | Implemented in repo but disabled by default in top-level CMake |
 
 ## Cloud Storage Support ☁️
 

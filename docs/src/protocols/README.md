@@ -119,11 +119,7 @@ cmake -B build \
 
 ## 检查支持的协议
 
-运行以下命令查看当前编译支持哪些协议：
-
-```bash
-falcon-cli --list-protocols
-```
+当前版本更可靠的方式是查看构建时传入的 `FALCON_ENABLE_*` 选项，以及生成日志中对应插件是否被启用。
 
 ## 协议对比
 

@@ -1,44 +1,41 @@
 # Falcon 下载器
 
-**Falcon（猎鹰下载器）** 是一个现代化、跨平台的 C++ 下载解决方案，采用 Monorepo 架构，致力于提供高性能、可扩展的多协议下载能力。
+**Falcon（猎鹰下载器）** 是一个现代化、跨平台的 C++ 下载解决方案，采用 Monorepo 架构，目标是提供高性能、可扩展的多协议下载能力。
 
 ## 为什么选择 Falcon？
 
-- **高性能**：基于 C++17/20 异步架构，充分利用现代硬件性能
-- **多协议**：支持 HTTP、FTP、BitTorrent、ED2K、迅雷、HLS 等多种协议
-- **易用性**：提供直观的 CLI 工具和 C++ API
-- **可扩展**：插件化架构，轻松添加新协议支持
-- **跨平台**：Windows、Linux、macOS 全平台支持
+- **高性能**：基于 C++17 事件驱动架构，强调并发下载和断点续传
+- **多协议**：当前默认启用 HTTP/HTTPS、FTP，并保留多种可选协议插件实现
+- **易用性**：提供 CLI 工具和 C++ API
+- **可扩展**：插件化架构，便于新增协议或能力
+- **跨平台**：面向 Windows、Linux、macOS
 
 ## 核心特性
 
 ### 1. 多协议下载
 
-Falcon 支持广泛的下载协议，满足各种下载需求：
+Falcon 当前聚焦于可组合的协议能力：
 
 - **基础协议**：HTTP/HTTPS、FTP/FTPS
-- **P2P 协议**：BitTorrent（Magnet 链接、.torrent 文件）
-- **私有协议**：迅雷、QQ旋风、快车
-- **流媒体协议**：HLS (.m3u8)、DASH (.mpd)
-- **电驴协议**：ED2K
+- **P2P / 扩展协议**：BitTorrent、ED2K
+- **私有协议插件**：迅雷、QQ 旋风、快车
+- **流媒体协议插件**：HLS、DASH
 
 ### 2. 高性能下载
 
-- **多线程分块下载**：将文件分成多个块同时下载
-- **智能断点续传**：自动检测服务器支持，中断后可继续下载
-- **速度控制**：支持全局和单任务速度限制
-- **连接复用**：减少建立连接的开销
+- **多线程分块下载**：将文件切分为多个块并行下载
+- **断点续传**：在支持范围请求的场景中恢复中断任务
+- **速度控制**：支持单任务限速
+- **连接复用**：减少重复建连带来的额外开销
 
-### 3. 灵活的部署方式
+### 3. 多入口部署
 
-- **CLI 工具**：命令行界面，适合脚本和自动化
-- **Daemon 服务**：后台守护进程，支持远程管理
-- **核心库**：可集成到其他项目中
-- **图形界面**：桌面应用（开发中）
+- **CLI 工具**：适合脚本和自动化任务
+- **Daemon 服务**：适合后台任务和远程管理
+- **核心库**：可嵌入其他 C++ 项目
+- **桌面端 / 浏览器扩展**：仓库中已包含相关代码
 
 ## 项目架构
-
-Falcon 采用 Monorepo 架构，所有模块统一管理：
 
 ```
 falcon/
@@ -49,7 +46,7 @@ falcon/
 │   └── falcon-daemon/       # 后台守护进程
 ├── apps/
 │   ├── desktop/             # 桌面应用
-│   └── web/                 # Web 管理界面
+│   └── browser_extension/   # 浏览器扩展
 └── docs/                    # 项目文档
 ```
 
@@ -58,15 +55,10 @@ falcon/
 ### 安装
 
 ```bash
-# macOS
-brew install falcon
-
-# Linux (从源码编译)
-git clone https://github.com/yourusername/falcon.git
+git clone https://github.com/cuihairu/falcon.git
 cd falcon
 cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
-sudo cmake --install build
 ```
 
 ### 基本使用
@@ -81,11 +73,8 @@ falcon-cli https://example.com/large.zip -c 5
 # 下载迅雷链接
 falcon-cli "thunder://QUFodHRwOi8vZXhhbXBsZS5jb20vZmlsZS56aXAuWg=="
 
-# 下载磁力链接
-falcon-cli "magnet:?xt=urn:btih:HASH&dn=Example"
-
-# 下载 HLS 流
-falcon-cli "https://example.com/playlist.m3u8" -o video.mp4
+# 从文件批量读取 URL
+falcon-cli -i urls.txt -j 3
 ```
 
 ### C++ API 使用
@@ -95,17 +84,19 @@ falcon-cli "https://example.com/playlist.m3u8" -o video.mp4
 
 int main() {
     falcon::DownloadEngine engine;
-    engine.loadAllPlugins();
 
     falcon::DownloadOptions options;
     options.max_connections = 5;
 
-    auto task = engine.startDownload(
+    auto task = engine.add_task(
         "https://example.com/file.zip",
         options
     );
 
-    task->wait();
+    if (task) {
+        engine.start_task(task->id());
+        task->wait();
+    }
     return 0;
 }
 ```
@@ -113,17 +104,17 @@ int main() {
 ## 文档导航
 
 - [入门指南](getting-started.md) - 快速了解 Falcon
-- [安装说明](installation.md) - 详细的安装步骤
+- [安装说明](installation.md) - 详细的构建步骤
 - [使用指南](usage.md) - 命令行和 API 使用
-- [协议支持](../protocols/README.md) - 所有支持的协议说明
+- [协议支持](../protocols/README.md) - 所有支持协议的概览
 - [开发者指南](../developer/README.md) - 贡献代码和插件开发
 - [常见问题](../faq.md) - 常见问题解答
 
 ## 社区
 
-- **GitHub**: [https://github.com/yourusername/falcon](https://github.com/yourusername/falcon)
-- **Issues**: [https://github.com/yourusername/falcon/issues](https://github.com/yourusername/falcon/issues)
-- **Discussions**: [https://github.com/yourusername/falcon/discussions](https://github.com/yourusername/falcon/discussions)
+- **GitHub**: [https://github.com/cuihairu/falcon](https://github.com/cuihairu/falcon)
+- **Issues**: [https://github.com/cuihairu/falcon/issues](https://github.com/cuihairu/falcon/issues)
+- **Discussions**: [https://github.com/cuihairu/falcon/discussions](https://github.com/cuihairu/falcon/discussions)
 
 ## 许可证
 
@@ -132,5 +123,5 @@ Apache License 2.0
 ---
 
 ::: tip 获取帮助
-如果遇到问题，请查看 [常见问题](../faq.md) 或在 [GitHub Issues](https://github.com/yourusername/falcon/issues) 中提问。
+如果遇到问题，请先查看 [常见问题](../faq.md)，或在 [GitHub Issues](https://github.com/cuihairu/falcon/issues) 中提问。
 :::

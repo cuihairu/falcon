@@ -23,7 +23,7 @@
 ### 获取源码
 
 ```bash
-git clone https://github.com/yourusername/falcon.git
+git clone https://github.com/cuihairu/falcon.git
 cd falcon
 ```
 
@@ -376,9 +376,9 @@ FALCON_LOG_ERROR("错误信息");
 
 ## 获取帮助
 
-- **GitHub Issues**: [https://github.com/yourusername/falcon/issues](https://github.com/yourusername/falcon/issues)
-- **Discussions**: [https://github.com/yourusername/falcon/discussions](https://github.com/yourusername/falcon/discussions)
-- **Wiki**: [https://github.com/yourusername/falcon/wiki](https://github.com/yourusername/falcon/wiki)
+- **GitHub Issues**: [https://github.com/cuihairu/falcon/issues](https://github.com/cuihairu/falcon/issues)
+- **Discussions**: [https://github.com/cuihairu/falcon/discussions](https://github.com/cuihairu/falcon/discussions)
+- **Wiki**: [https://github.com/cuihairu/falcon/wiki](https://github.com/cuihairu/falcon/wiki)
 
 ::: tip 欢迎贡献
 感谢你对 Falcon 的关注！我们欢迎任何形式的贡献。

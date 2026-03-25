@@ -1,6 +1,12 @@
 # Falcon 文档
 
-本目录使用 **VuePress 2** 构建项目文档。
+本目录使用 **VuePress 2** 构建项目文档，源码位于 `docs/src`。
+
+> [!WARNING]
+> `docs/src/` 是当前维护中的主文档来源。
+> 根目录下的 `docs/*.md` 多数属于历史设计稿、迁移记录或归档材料，不应再被视为当前 API、CLI 或构建方式的权威说明。
+
+归档文档索引见 `docs/ARCHIVE.md`。
 
 ## 快速开始
 
@@ -25,7 +31,7 @@ npm run docs:dev
 npm run docs:build
 ```
 
-构建后的文件位于 `src/.vuepress/dist/`。
+构建后的文件位于 `docs/dist/`。
 
 ## 文档结构
 
@@ -33,6 +39,7 @@ npm run docs:build
 docs/
 ├── package.json              # npm 配置
 ├── README.md                 # 本文件
+├── ARCHIVE.md                # 根目录历史文档索引
 ├── src/                      # VuePress 源文件
 │   ├── README.md             # 首页
 │   ├── .vuepress/            # VuePress 配置
@@ -117,11 +124,11 @@ int main() {
 npm run docs:build
 
 # 推送到 gh-pages 分支
-cd src/.vuepress/dist
+cd dist
 git init
 git add .
 git commit -m "Deploy docs"
-git push -f git@github.com:username/falcon.git master:gh-pages
+git push -f git@github.com:cuihairu/falcon.git master:gh-pages
 ```
 
 ### Vercel/Netlify
@@ -132,7 +139,7 @@ git push -f git@github.com:username/falcon.git master:gh-pages
 cd docs && npm install && npm run docs:build
 ```
 
-设置发布目录为 `docs/src/.vuepress/dist`。
+设置发布目录为 `docs/dist`。
 
 ## 更多信息
 

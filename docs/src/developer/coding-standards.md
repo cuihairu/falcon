@@ -105,8 +105,8 @@ auto status = TaskStatus::Running;
 ```cpp
 // 类型别名使用 PascalCase
 using TaskId = uint64_t;
-using DownloadCallback = std::function<void(const ProgressEvent&)>;
-using PluginMap = std::unordered_map<std::string, std::unique_ptr<IPlugin>>;
+using DownloadCallback = std::function<void(const ProgressInfo&)>;
+using PluginMap = std::unordered_map<std::string, std::unique_ptr<IProtocolHandler>>;
 ```
 
 ## 代码组织
@@ -132,7 +132,7 @@ using PluginMap = std::unordered_map<std::string, std::unique_ptr<IPlugin>>;
 
 // 6. 包含项目内部头文件
 #include <falcon/types.hpp>
-#include <falcon/plugin_interface.hpp>
+#include <falcon/protocol_handler.hpp>
 
 // 7. 命名空间声明
 namespace falcon {
@@ -223,9 +223,11 @@ void helper_function() {
  * @example
  * @code
  * DownloadEngine engine;
- * engine.loadAllPlugins();
- * auto task = engine.startDownload("https://example.com/file.zip");
- * task->wait();
+ * auto task = engine.add_task("https://example.com/file.zip");
+ * if (task) {
+ *     engine.start_task(task->id());
+ *     task->wait();
+ * }
  * @endcode
  */
 class DownloadEngine {
@@ -236,29 +238,25 @@ class DownloadEngine {
 
 ```cpp
 /**
- * @brief 开始下载任务
+ * @brief 添加下载任务
  *
- * 根据指定的 URL 和选项创建并启动下载任务。
+ * 根据指定的 URL 和选项创建下载任务。
  * 如果 URL 不被任何插件支持，将返回 nullptr。
  *
  * @param url 下载 URL，支持 http/https/ftp/magnet 等
  * @param options 下载选项，包括连接数、保存路径等
- * @param listener 事件监听器，用于接收进度和状态通知
  * @return std::shared_ptr<DownloadTask> 任务对象，失败返回 nullptr
  *
  * @throws InvalidURLException 当 URL 格式错误时
- * @throws PluginNotFoundException 当没有支持的插件时
+ * @throws UnsupportedProtocolException 当没有支持的协议处理器时
  *
- * @note 调用此函数后需要调用 task->wait() 等待下载完成
+ * @note 添加任务后需要再调用 start_task(task->id()) 启动任务
  *
  * @see DownloadTask
  * @see DownloadOptions
  */
-std::shared_ptr<DownloadTask> startDownload(
-    const std::string& url,
-    const DownloadOptions& options = {},
-    IEventListener* listener = nullptr
-);
+DownloadTask::Ptr add_task(const std::string& url,
+                           const DownloadOptions& options = {});
 ```
 
 ### 成员变量注释
@@ -269,11 +267,11 @@ private:
     /// 任务管理器，负责所有任务的生命周期管理
     std::unique_ptr<TaskManager> task_manager_;
 
-    /// 插件管理器，负责协议插件的加载和注册
+    /// 插件管理器，负责协议处理器的加载和注册
     std::unique_ptr<PluginManager> plugin_manager_;
 
-    /// 事件循环，处理异步事件
-    EventLoop event_loop_;
+    /// 事件分发器，处理回调分发
+    EventDispatcher event_dispatcher_;
 
     /// 当前运行的任务数量
     std::atomic<int> active_tasks_;

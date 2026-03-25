@@ -5,6 +5,8 @@ node_modules/
 src/.vuepress/dist/
 src/.vuepress/cache/
 src/.vuepress/temp/
+src/.vuepress/.temp/
+dist/
 
 # 日志
 *.log

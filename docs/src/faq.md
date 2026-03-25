@@ -6,21 +6,14 @@
 
 ### Q: 如何安装 Falcon？
 
-A: 有多种安装方式：
+A: 当前建议直接从源码构建：
 
 ```bash
-# macOS
-brew install falcon
-
-# Ubuntu/Debian
-sudo apt install falcon-downloader
-
 # 从源码编译
-git clone https://github.com/yourusername/falcon.git
+git clone https://github.com/cuihairu/falcon.git
 cd falcon
 cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-sudo cmake --install build
 ```
 
 详见 [安装说明](./guide/installation.md)。
@@ -40,11 +33,7 @@ sudo apt install libspdlog-dev nlohmann-json3-dev \
 
 ### Q: 如何查看支持的协议？
 
-A: 运行以下命令：
-
-```bash
-falcon-cli --list-protocols
-```
+A: 目前建议直接查看 [协议支持](./protocols/README.md) 文档，或在构建时确认对应 `FALCON_ENABLE_*` CMake 选项是否开启。
 
 ## 使用问题
 
@@ -253,9 +242,9 @@ A: 请查看 [功能对比](./developer/README.md)。
 
 A:
 - 查看 [文档](./)
-- 在 [GitHub Issues](https://github.com/yourusername/falcon/issues) 提问
-- 加入 [Discussions](https://github.com/yourusername/falcon/discussions)
+- 在 [GitHub Issues](https://github.com/cuihairu/falcon/issues) 提问
+- 加入 [Discussions](https://github.com/cuihairu/falcon/discussions)
 
 ::: tip 仍有问题？
-请在 [GitHub Issues](https://github.com/yourusername/falcon/issues) 中提问，我们很乐意帮助！
+请在 [GitHub Issues](https://github.com/cuihairu/falcon/issues) 中提问，我们很乐意帮助！
 :::

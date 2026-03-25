@@ -1,290 +1,272 @@
 # 核心 API
 
-本文档介绍 Falcon 的核心 API。
+本文档基于当前公共头文件说明 Falcon 的核心 C++ 接口。
 
 ## DownloadEngine
 
-下载引擎是 Falcon 的核心类，负责管理所有下载任务。
+`DownloadEngine` 负责任务生命周期、并发控制、事件监听和协议处理器注册。
 
-### 类定义
+### 主要接口
 
 ```cpp
-namespace falcon {
-
 class DownloadEngine {
 public:
     DownloadEngine();
+    explicit DownloadEngine(const EngineConfig& config);
     ~DownloadEngine();
 
-    // 插件管理
-    void loadPlugin(const std::string& name);
-    void loadAllPlugins();
-    void unloadPlugin(const std::string& name);
-    bool isPluginLoaded(const std::string& name) const;
-
-    // 下载管理
-    std::shared_ptr<DownloadTask> startDownload(
+    DownloadTask::Ptr add_task(
         const std::string& url,
-        const DownloadOptions& options = {},
-        IEventListener* listener = nullptr
-    );
+        const DownloadOptions& options = {});
 
-    std::shared_ptr<DownloadTask> getTask(TaskId id) const;
-    std::vector<std::shared_ptr<DownloadTask>> getAllTasks() const;
+    std::vector<DownloadTask::Ptr> add_tasks(
+        const std::vector<std::string>& urls,
+        const DownloadOptions& options = {});
 
-    // 任务控制
-    void pauseTask(TaskId id);
-    void resumeTask(TaskId id);
-    void cancelTask(TaskId id);
+    DownloadTask::Ptr get_task(TaskId id) const;
+    std::vector<DownloadTask::Ptr> get_all_tasks() const;
+    std::vector<DownloadTask::Ptr> get_tasks_by_status(TaskStatus status) const;
+    std::vector<DownloadTask::Ptr> get_active_tasks() const;
 
-    void pauseAll();
-    void resumeAll();
-    void cancelAll();
+    bool remove_task(TaskId id);
+    std::size_t remove_finished_tasks();
 
-    // 查询
-    bool supportsUrl(const std::string& url) const;
-    size_t getTaskCount() const;
-    size_t getActiveTaskCount() const;
+    bool start_task(TaskId id);
+    bool pause_task(TaskId id);
+    bool resume_task(TaskId id);
+    bool cancel_task(TaskId id);
 
-    // 引擎控制
-    void run();
-    void stop();
-    bool isRunning() const;
+    void pause_all();
+    void resume_all();
+    void cancel_all();
+    void wait_all();
+
+    void register_handler(std::unique_ptr<IProtocolHandler> handler);
+    void register_handler_factory(ProtocolHandlerFactory factory);
+    std::vector<std::string> get_supported_protocols() const;
+    bool is_url_supported(const std::string& url) const;
+
+    void add_listener(IEventListener* listener);
+    void remove_listener(IEventListener* listener);
+
+    const EngineConfig& config() const noexcept;
+    void set_global_speed_limit(BytesPerSecond bytes_per_second);
+    void set_max_concurrent_tasks(std::size_t max_tasks);
+
+    BytesPerSecond get_total_speed() const;
+    std::size_t get_active_task_count() const;
+    std::size_t get_total_task_count() const;
 };
-
-}
 ```
 
-### 使用示例
+### 基本示例
 
 ```cpp
 #include <falcon/falcon.hpp>
 
 int main() {
-    // 创建引擎
     falcon::DownloadEngine engine;
 
-    // 加载插件
-    engine.loadPlugin("http");
-    engine.loadPlugin("bittorrent");
+    falcon::DownloadOptions options;
+    options.output_directory = "./downloads";
+    options.max_connections = 4;
 
-    // 下载文件
-    auto task = engine.startDownload("https://example.com/file.zip");
+    auto task = engine.add_task("https://example.com/file.zip", options);
+    if (!task) {
+        return 1;
+    }
+
+    engine.start_task(task->id());
     task->wait();
-
     return 0;
 }
 ```
 
-## DownloadOptions
-
-下载选项类，用于配置下载行为。
-
-### 类定义
+### 多任务示例
 
 ```cpp
-namespace falcon {
+falcon::DownloadEngine engine;
+falcon::DownloadOptions options;
+options.max_connections = 3;
 
-struct DownloadOptions {
-    // 输出选项
-    std::string output_file;
-    std::string output_directory = ".";
+auto tasks = engine.add_tasks({
+    "https://example.com/file1.zip",
+    "https://example.com/file2.zip",
+    "https://example.com/file3.zip",
+}, options);
 
-    // 连接选项
-    int max_connections = 1;
-    int connect_timeout = 30;
-    int read_timeout = 60;
-
-    // 传输选项
-    int64_t speed_limit = 0;      // 0 = 无限制
-    bool resume = true;            // 断点续传
-    bool overwrite = false;        // 覆盖已存在文件
-
-    // 重试选项
-    int max_retries = 3;
-    int retry_delay = 5;           // 秒
-
-    // 代理选项
-    ProxyInfo proxy;
-
-    // 协议特定选项
-    std::optional<HttpOptions> http_options;
-    std::optional<FtpOptions> ftp_options;
-    std::optional<BittorrentOptions> bt_options;
-    std::optional<HlsOptions> hls_options;
-};
-
+for (const auto& task : tasks) {
+    engine.start_task(task->id());
 }
+
+engine.wait_all();
 ```
 
-### 使用示例
+## DownloadOptions
+
+`DownloadOptions` 描述单个下载任务的行为。
+
+### 当前字段
+
+```cpp
+struct DownloadOptions {
+    std::size_t max_connections = 4;
+    std::size_t timeout_seconds = 30;
+    std::size_t max_retries = 3;
+    std::size_t retry_delay_seconds = 1;
+
+    std::string output_directory = ".";
+    std::string output_filename;
+
+    std::size_t speed_limit = 0;
+    bool resume_enabled = true;
+
+    std::string user_agent = "Falcon/0.1.0";
+    std::map<std::string, std::string> headers;
+
+    std::string proxy;
+    std::string proxy_username;
+    std::string proxy_password;
+    std::string proxy_type;
+
+    bool verify_ssl = true;
+    std::string referer;
+    std::string cookie_file;
+    std::string cookie_jar;
+    std::string http_username;
+    std::string http_password;
+
+    std::size_t min_segment_size = 1024 * 1024;
+    bool adaptive_segment_sizing = true;
+    std::size_t progress_interval_ms = 500;
+    bool create_directory = true;
+    bool overwrite_existing = false;
+};
+```
+
+### 示例
 
 ```cpp
 falcon::DownloadOptions options;
-
-// 基本选项
-options.output_file = "my-file.zip";
 options.output_directory = "./downloads";
-options.max_connections = 5;
+options.output_filename = "archive.zip";
+options.max_connections = 8;
+options.speed_limit = 1024 * 1024;
+options.proxy = "http://127.0.0.1:7890";
+options.headers["Authorization"] = "Bearer TOKEN";
+```
 
-// 速度限制
-options.speed_limit = 1024 * 1024;  // 1MB/s
+## EngineConfig
 
-// 代理设置
-options.proxy = falcon::ProxyInfo{
-    .type = falcon::ProxyType::HTTP,
-    .host = "proxy.example.com",
-    .port = 8080
+`EngineConfig` 描述引擎级全局行为。
+
+```cpp
+struct EngineConfig {
+    std::size_t max_concurrent_tasks = 5;
+    std::size_t global_speed_limit = 0;
+    bool enable_disk_cache = true;
+    std::size_t disk_cache_size = 4 * 1024 * 1024;
+    int log_level = 3;
+    std::string temp_extension = ".falcon.tmp";
+    bool auto_start = true;
 };
+```
 
-// 开始下载
-auto task = engine.startDownload(url, options);
+示例：
+
+```cpp
+falcon::EngineConfig config;
+config.max_concurrent_tasks = 3;
+config.global_speed_limit = 10 * 1024 * 1024;
+
+falcon::DownloadEngine engine(config);
 ```
 
 ## DownloadTask
 
-下载任务类，表示一个正在进行的下载。
+`DownloadTask` 表示单个下载任务。
 
-### 类定义
+### 主要接口
 
 ```cpp
-namespace falcon {
-
 class DownloadTask {
 public:
-    // 状态查询
-    TaskId getId() const;
-    TaskStatus getStatus() const;
-    std::string getUrl() const;
-    std::string getOutputPath() const;
+    TaskId id() const noexcept;
+    const std::string& url() const noexcept;
+    TaskStatus status() const noexcept;
+    float progress() const noexcept;
+    Bytes total_bytes() const noexcept;
+    Bytes downloaded_bytes() const noexcept;
+    BytesPerSecond speed() const noexcept;
+    const std::string& output_path() const noexcept;
+    const DownloadOptions& options() const noexcept;
+    const FileInfo& file_info() const noexcept;
+    const std::string& error_message() const noexcept;
 
-    // 进度信息
-    int64_t getDownloadedBytes() const;
-    int64_t getTotalBytes() const;
-    double getProgress() const;        // 0.0 - 1.0
-    double getDownloadSpeed() const;
-    double getUploadSpeed() const;
-
-    // 错误信息
-    std::string getErrorMessage() const;
-
-    // 等待
+    bool pause();
+    bool resume();
+    bool cancel();
     void wait();
-    bool waitFor(std::chrono::milliseconds timeout);
-
-    // 控制
-    void pause();
-    void resume();
-    void cancel();
+    bool wait_for(Duration timeout);
 };
-
-}
 ```
 
-### 使用示例
+### 示例
 
 ```cpp
-auto task = engine.startDownload(url);
+auto task = engine.add_task("https://example.com/file.zip");
+engine.start_task(task->id());
 
-// 等待完成
 task->wait();
 
-// 检查状态
-if (task->getStatus() == falcon::TaskStatus::Completed) {
-    std::cout << "下载完成!" << std::endl;
-    std::cout << "文件大小: " << task->getTotalBytes() << " bytes" << std::endl;
-}
-
-// 超时等待
-if (task->waitFor(std::chrono::seconds(60))) {
-    std::cout << "在 60 秒内完成" << std::endl;
-} else {
-    std::cout << "超时，取消下载" << std::endl;
-    task->cancel();
+if (task->status() == falcon::TaskStatus::Completed) {
+    std::cout << task->output_path() << std::endl;
 }
 ```
 
 ## TaskStatus
 
-任务状态枚举。
-
-### 定义
+当前任务状态枚举定义在 `event_listener.hpp`：
 
 ```cpp
-namespace falcon {
-
 enum class TaskStatus {
-    Pending,    // 等待开始
-    Running,    // 正在下载
-    Paused,     // 已暂停
-    Completed,  // 已完成
-    Failed,     // 失败
-    Cancelled   // 已取消
+    Pending,
+    Preparing,
+    Downloading,
+    Paused,
+    Completed,
+    Failed,
+    Cancelled
 };
-
-}
 ```
 
-### 使用示例
+## 基础类型
+
+常用基础类型定义在 `types.hpp`：
 
 ```cpp
-switch (task->getStatus()) {
-    case falcon::TaskStatus::Running:
-        std::cout << "下载中: " << task->getProgress() * 100 << "%" << std::endl;
-        break;
-    case falcon::TaskStatus::Completed:
-        std::cout << "下载完成!" << std::endl;
-        break;
-    case falcon::TaskStatus::Failed:
-        std::cout << "下载失败: " << task->getErrorMessage() << std::endl;
-        break;
-    default:
-        break;
-}
-```
+using TaskId = std::uint64_t;
+using Bytes = std::uint64_t;
+using BytesPerSecond = std::uint64_t;
+using TimePoint = std::chrono::steady_clock::time_point;
+using Duration = std::chrono::steady_clock::duration;
 
-## ProxyInfo
-
-代理信息类。
-
-### 定义
-
-```cpp
-namespace falcon {
-
-enum class ProxyType {
-    HTTP,
-    HTTPS,
-    SOCKS4,
-    SOCKS5
+struct FileInfo {
+    std::string url;
+    std::string filename;
+    std::string content_type;
+    Bytes total_size = 0;
+    bool supports_resume = false;
+    TimePoint last_modified{};
 };
 
-struct ProxyInfo {
-    ProxyType type = ProxyType::HTTP;
-    std::string host;
-    int port = 8080;
-    std::string username;
-    std::string password;
+struct ProgressInfo {
+    TaskId task_id = INVALID_TASK_ID;
+    Bytes downloaded_bytes = 0;
+    Bytes total_bytes = 0;
+    Speed speed = 0;
+    float progress = 0.0f;
+    Duration elapsed{};
+    Duration estimated_remaining{};
 };
-
-}
 ```
-
-### 使用示例
-
-```cpp
-falcon::ProxyInfo proxy;
-proxy.type = falcon::ProxyType::SOCKS5;
-proxy.host = "127.0.0.1";
-proxy.port = 1080;
-proxy.username = "user";
-proxy.password = "pass";
-
-falcon::DownloadOptions options;
-options.proxy = proxy;
-```
-
-::: tip 更多 API
-- [插件 API](./plugins.md)
-- [事件 API](./events.md)
-:::

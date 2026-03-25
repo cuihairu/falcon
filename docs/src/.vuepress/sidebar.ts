@@ -1,4 +1,13 @@
 export const sidebar = {
+  "/": [
+    {
+      text: "更多",
+      children: [
+        "/faq.md",
+      ],
+    },
+  ],
+
   "/guide/": [
     {
       text: "入门指南",
@@ -7,13 +16,6 @@ export const sidebar = {
         "/guide/getting-started.md",
         "/guide/installation.md",
         "/guide/usage.md",
-      ],
-    },
-    {
-      text: "配置",
-      children: [
-        "/guide/configuration.md",
-        "/guide/daemon.md",
       ],
     },
   ],

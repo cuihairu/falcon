@@ -1,72 +1,71 @@
 # API 参考
 
-Falcon 提供 C++ API 和 CLI 工具两种使用方式。
+Falcon 当前主要提供 C++ API，CLI 则基于同一套核心库能力构建。
 
-## C++ API
-
-### 核心头文件
+## 头文件入口
 
 ```cpp
-#include <falcon/falcon.hpp>           // 主头文件
-#include <falcon/download_engine.hpp>  // 下载引擎
-#include <falcon/types.hpp>            // 类型定义
-#include <falcon/events.hpp>           // 事件系统
+#include <falcon/falcon.hpp>
 ```
 
-### 快速开始
+`falcon.hpp` 会聚合以下公共接口：
+
+- `download_engine.hpp`
+- `download_options.hpp`
+- `download_task.hpp`
+- `event_listener.hpp`
+- `protocol_handler.hpp`
+- `types.hpp`
+- `version.hpp`
+
+## 快速开始
 
 ```cpp
 #include <falcon/falcon.hpp>
 
 int main() {
-    // 创建下载引擎
     falcon::DownloadEngine engine;
 
-    // 加载所有插件
-    engine.loadAllPlugins();
-
-    // 配置选项
     falcon::DownloadOptions options;
     options.max_connections = 5;
     options.output_directory = "./downloads";
 
-    // 开始下载
-    auto task = engine.startDownload(
+    auto task = engine.add_task(
         "https://example.com/file.zip",
         options
     );
 
-    // 等待完成
-    task->wait();
+    if (task) {
+        engine.start_task(task->id());
+        task->wait();
+    }
 
     return 0;
 }
 ```
 
-## CLI 工具
+说明：
 
-### 基本语法
+- `DownloadEngine` 构造时会加载当前构建中可用的内置协议处理器。
+- 任务通过 `add_task()` 或 `add_tasks()` 加入，再通过 `start_task()` 启动。
+- 事件回调通过 `add_listener()` / `remove_listener()` 管理。
 
-```bash
-falcon-cli [OPTIONS] URL
-```
+## CLI 对应关系
 
-### 选项
+CLI 常见参数与 `DownloadOptions` 大致对应如下：
 
-| 选项 | 说明 |
+| CLI 参数 | C++ 字段 |
 |------|------|
-| `-o, --output <file>` | 指定输出文件名 |
-| `-d, --directory <dir>` | 指定保存目录 |
-| `-c, --connections <n>` | 连接数（多线程下载） |
-| `-l, --limit <speed>` | 速度限制（如 1M） |
-| `--continue` | 断点续传 |
-| `--proxy <url>` | 代理服务器 |
-| `-v, --verbose` | 详细输出 |
-| `-h, --help` | 显示帮助 |
-| `-V, --version` | 显示版本 |
+| `-o`, `--output` | `output_filename` |
+| `-d`, `--directory` | `output_directory` |
+| `-c`, `--connections` | `max_connections` |
+| `--limit` | `speed_limit` |
+| `--proxy` | `proxy` |
+| `--retry-wait` | `retry_delay_seconds` |
+| `--no-verify-ssl` | `verify_ssl = false` |
 
 ::: tip 详细 API
-请查看以下文档：
+请继续查看：
 - [核心 API](./core.md)
 - [插件 API](./plugins.md)
 - [事件 API](./events.md)

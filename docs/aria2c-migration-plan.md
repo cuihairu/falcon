@@ -1,5 +1,8 @@
 # aria2c 核心功能迁移计划
 
+> [!NOTE]
+> 本文档为迁移计划与历史记录，不保证与当前 CLI 实现完全一致。
+
 > 基于对 [aria2/aria2](https://github.com/aria2/aria2) 源码的深度分析，制定 Falcon 下载器的核心功能实现路线图。
 
 ## 文档版本

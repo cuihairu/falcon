@@ -3,7 +3,6 @@ import { navbar } from "./navbar.js";
 import { sidebar } from "./sidebar.js";
 
 export default defaultTheme({
-  logo: "/logo.png",
 
   // 导航栏
   navbar,

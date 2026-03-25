@@ -1,5 +1,8 @@
 # Falcon 下载器 vs aria2 功能对比报告（更新）
 
+> [!NOTE]
+> 本文档为阶段性分析报告，不是当前用户文档入口。
+
 **生成日期**: 2025-12-27
 **Falcon 版本**: 0.1.0
 **aria2 参考版本**: 1.37.0
@@ -490,8 +493,8 @@ Apache License 2.0
 
 ## 📞 联系方式
 
-- 项目主页: https://github.com/yourusername/falcon
-- 问题反馈: https://github.com/yourusername/falcon/issues
+- 项目主页: https://github.com/cuihairu/falcon
+- 问题反馈: https://github.com/cuihairu/falcon/issues
 - 邮件: falcon@example.com
 
 ---

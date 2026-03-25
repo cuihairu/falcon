@@ -129,7 +129,7 @@ git push origin main
 
 ### 7. 创建 GitHub Release
 
-1. 访问 [GitHub Releases](https://github.com/yourusername/falcon/releases)
+1. 访问 [GitHub Releases](https://github.com/cuihairu/falcon/releases)
 2. 点击 "Draft a new release"
 3. 选择标签 `v1.1.0`
 4. 填写发布标题：`Falcon 1.1.0`

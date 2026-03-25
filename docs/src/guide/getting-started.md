@@ -1,45 +1,24 @@
 # 快速开始
 
-本指南将帮助你快速上手 Falcon 下载器。
+本指南基于当前仓库实际状态，帮助你从源码构建并运行 Falcon CLI。
 
 ## 前置要求
 
 - **操作系统**：Windows 10+、macOS 10.14+、Linux（主流发行版）
 - **编译器**：
-  - GCC 7+ (Linux)
-  - Clang 5+ (macOS)
-  - MSVC 2017+ (Windows)
+  - GCC 7+（Linux）
+  - Clang 5+（macOS）
+  - MSVC 2017+（Windows）
 - **CMake**：3.15 或更高版本
 
 ## 安装
 
-### 方式一：使用包管理器（推荐）
-
-#### macOS
-
-```bash
-brew install falcon
-```
-
-#### Ubuntu/Debian
-
-```bash
-sudo apt update
-sudo apt install falcon-downloader
-```
-
-#### Arch Linux
-
-```bash
-yay -S falcon-downloader
-```
-
-### 方式二：从源码编译
+### 从源码编译（当前推荐）
 
 #### 1. 获取源码
 
 ```bash
-git clone https://github.com/yourusername/falcon.git
+git clone https://github.com/cuihairu/falcon.git
 cd falcon
 ```
 
@@ -48,12 +27,9 @@ cd falcon
 **使用 vcpkg（推荐）**：
 
 ```bash
-# 安装 vcpkg
 git clone https://github.com/Microsoft/vcpkg.git
 cd vcpkg
 ./bootstrap-vcpkg.sh
-
-# 安装依赖
 ./vcpkg install spdlog nlohmann-json curl openssl gtest
 ```
 
@@ -67,7 +43,7 @@ brew install spdlog nlohmann-json curl openssl googletest
 sudo apt install libspdlog-dev nlohmann-json3-dev libcurl4-openssl-dev libssl-dev libgtest-dev
 ```
 
-#### 3. 编译安装
+#### 3. 编译
 
 ```bash
 cmake -B build -S . \
@@ -75,12 +51,9 @@ cmake -B build -S . \
   -DCMAKE_TOOLCHAIN_FILE=[vcpkg-root]/scripts/buildsystems/vcpkg.cmake
 
 cmake --build build --config Release
-sudo cmake --install build
 ```
 
-### 方式三：使用预编译版本
-
-从 [GitHub Releases](https://github.com/yourusername/falcon/releases) 下载对应平台的预编译版本。
+当前文档仅保证源码构建路径准确。若后续提供预编译版本或系统包，请以仓库发布页和 CI 产物说明为准。
 
 ## 验证安装
 
@@ -91,7 +64,7 @@ falcon-cli --version
 你应该看到类似以下输出：
 
 ```
-Falcon CLI v1.0.0
+Falcon CLI v0.2.0
 ```
 
 ## 第一个下载
@@ -111,7 +84,7 @@ falcon-cli https://example.com/file.zip -d ~/Downloads
 # 多线程下载
 falcon-cli https://example.com/large.zip -c 5
 
-# 查看下载进度
+# 查看下载进度和详细日志
 falcon-cli https://example.com/file.zip --verbose
 ```
 
@@ -147,44 +120,20 @@ falcon-cli "ed2k://file|example.zip|1048576|A1B2C3D4E5F6789012345678901234AB|/"
 falcon-cli "https://example.com/playlist.m3u8" -o video.mp4
 ```
 
-## 配置文件
+## 当前可直接使用的 CLI 选项
 
-Falcon 支持配置文件来自定义默认行为。
+仓库中的 CLI 参数以 `packages/falcon-cli/src/main.cpp` 为准，下面列的是已经在代码里实现的常用项。
 
-### 配置文件位置
-
-- **Linux/macOS**: `~/.config/falcon/config.json`
-- **Windows**: `%APPDATA%\falcon\config.json`
-
-### 示例配置
-
-```json
-{
-  "default_download_dir": "~/Downloads",
-  "max_concurrent_tasks": 5,
-  "timeout_seconds": 30,
-  "max_retries": 3,
-  "speed_limit": "0",
-  "user_agent": "Falcon/1.0",
-  "verify_ssl": true,
-  "auto_resume": true,
-  "log_level": "info"
-}
-```
-
-### 配置选项说明
-
-| 选项 | 说明 | 默认值 |
-|------|------|--------|
-| `default_download_dir` | 默认下载目录 | `~/Downloads` |
-| `max_concurrent_tasks` | 最大并发任务数 | `5` |
-| `timeout_seconds` | 请求超时时间（秒） | `30` |
-| `max_retries` | 最大重试次数 | `3` |
-| `speed_limit` | 速度限制（字节/秒，0为无限制） | `0` |
-| `user_agent` | HTTP User-Agent | `Falcon/1.0` |
-| `verify_ssl` | 验证 SSL 证书 | `true` |
-| `auto_resume` | 自动断点续传 | `true` |
-| `log_level` | 日志级别 | `info` |
+| 选项 | 说明 | 示例 |
+|------|------|------|
+| `-o`, `--output` | 指定输出文件名 | `-o file.zip` |
+| `-d`, `--directory` | 指定输出目录 | `-d ~/Downloads` |
+| `-c`, `--connections` | 设置并发连接数 | `-c 5` |
+| `-j`, `--max-concurrent-downloads` | 设置最大并发任务数 | `-j 3` |
+| `--limit` | 单任务限速 | `--limit 1M` |
+| `--retry-wait` | 设置重试等待秒数 | `--retry-wait 5` |
+| `--proxy` | 指定代理地址 | `--proxy http://127.0.0.1:7890` |
+| `-H`, `--header` | 添加 HTTP 头 | `-H "Authorization: Bearer token"` |
 
 ## 批量下载
 
@@ -200,12 +149,12 @@ thunder://QUFodHRwOi8vZXhhbXBsZS5jb20vZmlsZTMuemlwWg==
 然后批量下载：
 
 ```bash
-falcon-cli -i urls.txt
+falcon-cli -i urls.txt -j 3
 ```
 
 ## 下一步
 
-- [安装说明](installation.md) - 详细的安装和配置说明
+- [安装说明](installation.md) - 详细的构建和依赖说明
 - [使用指南](usage.md) - 深入了解命令行选项和 C++ API
 - [协议支持](../protocols/README.md) - 了解所有支持的下载协议
 
@@ -215,11 +164,8 @@ falcon-cli -i urls.txt
 # 查看帮助信息
 falcon-cli --help
 
-# 查看支持的协议
-falcon-cli --list-protocols
-
-# 查看配置文件位置
-falcon-cli --config-path
+# 查看版本
+falcon-cli --version
 ```
 
 ::: tip 提示

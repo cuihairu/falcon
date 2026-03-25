@@ -23,7 +23,9 @@ falcon-cli [OPTIONS] URL
 | `--output` | `-o` | 指定输出文件名 | `-o file.zip` |
 | `--directory` | `-d` | 指定保存目录 | `-d ~/Downloads` |
 | `--connections` | `-c` | 连接数（多线程下载） | `-c 5` |
-| `--limit` | `-l` | 速度限制（字节/秒） | `-l 1M` |
+| `--max-connections` | `-x` | `--connections` 的 aria2 风格别名 | `-x 5` |
+| `--max-concurrent-downloads` | `-j` | 最大并发下载任务数 | `-j 3` |
+| `--limit` |  | 速度限制（字节/秒） | `--limit 1M` |
 | `--continue` | | 断点续传 | `--continue` |
 | `--proxy` | | 代理服务器 | `--proxy http://proxy:8080` |
 | `--verbose` | `-v` | 详细输出 | `-v` |
@@ -195,7 +197,7 @@ falcon-cli -i urls.txt
 
 ```bash
 # 最多 3 个并发下载
-falcon-cli -i urls.txt --max-concurrent 3
+falcon-cli -i urls.txt -j 3
 ```
 
 ### 进度显示
@@ -228,25 +230,23 @@ int main() {
     // 创建下载引擎
     falcon::DownloadEngine engine;
 
-    // 加载所有插件
-    engine.loadAllPlugins();
-
     // 配置下载选项
     falcon::DownloadOptions options;
     options.max_connections = 5;
     options.output_directory = "./downloads";
     options.speed_limit = 1024 * 1024;  // 1MB/s
 
-    // 开始下载
-    auto task = engine.startDownload(
-        "https://example.com/file.zip",
-        options
-    );
+    auto task = engine.add_task("https://example.com/file.zip", options);
+    if (!task) {
+        return 1;
+    }
+
+    engine.start_task(task->id());
 
     // 等待下载完成
     task->wait();
 
-    if (task->getStatus() == falcon::TaskStatus::Completed) {
+    if (task->status() == falcon::TaskStatus::Completed) {
         std::cout << "下载完成!" << std::endl;
     }
 
@@ -261,34 +261,35 @@ int main() {
 
 class MyEventListener : public falcon::IEventListener {
 public:
-    void onProgress(const falcon::ProgressEvent& event) override {
-        double percent = (double)event.downloaded_bytes / event.total_bytes * 100;
+    void on_progress(const falcon::ProgressInfo& info) override {
+        double percent = info.progress * 100.0;
         std::cout << "\r进度: " << percent << "%";
     }
 
-    void onComplete(const falcon::CompleteEvent& event) override {
-        std::cout << "\n下载完成!" << std::endl;
+    void on_completed(falcon::TaskId, const std::string& output_path) override {
+        std::cout << "\n下载完成: " << output_path << std::endl;
     }
 
-    void onError(const falcon::ErrorEvent& event) override {
-        std::cerr << "\n下载失败: " << event.error_message << std::endl;
+    void on_error(falcon::TaskId, const std::string& error_message) override {
+        std::cerr << "\n下载失败: " << error_message << std::endl;
     }
 };
 
 int main() {
     falcon::DownloadEngine engine;
-    engine.loadAllPlugins();
 
     MyEventListener listener;
     falcon::DownloadOptions options;
+    engine.add_listener(&listener);
 
-    auto task = engine.startDownload(
-        "https://example.com/file.zip",
-        options,
-        &listener
-    );
+    auto task = engine.add_task("https://example.com/file.zip", options);
+    if (!task) {
+        return 1;
+    }
 
+    engine.start_task(task->id());
     task->wait();
+    engine.remove_listener(&listener);
     return 0;
 }
 ```
@@ -301,7 +302,6 @@ int main() {
 
 int main() {
     falcon::DownloadEngine engine;
-    engine.loadAllPlugins();
 
     falcon::DownloadOptions options;
     options.max_connections = 3;
@@ -312,17 +312,14 @@ int main() {
         "https://example.com/file3.zip",
     };
 
-    std::vector<std::shared_ptr<falcon::DownloadTask>> tasks;
+    auto tasks = engine.add_tasks(urls, options);
 
-    for (const auto& url : urls) {
-        auto task = engine.startDownload(url, options);
-        tasks.push_back(task);
+    for (const auto& task : tasks) {
+        engine.start_task(task->id());
     }
 
     // 等待所有下载完成
-    for (auto& task : tasks) {
-        task->wait();
-    }
+    engine.wait_all();
 
     return 0;
 }
@@ -335,17 +332,18 @@ int main() {
 
 int main() {
     falcon::DownloadEngine engine;
-    engine.loadAllPlugins();
 
     falcon::DownloadOptions options;
-    options.resume = true;  // 启用断点续传
-    options.output_file = "./downloads/file.zip";
+    options.resume_enabled = true;
+    options.output_filename = "file.zip";
+    options.output_directory = "./downloads";
 
-    auto task = engine.startDownload(
-        "https://example.com/file.zip",
-        options
-    );
+    auto task = engine.add_task("https://example.com/file.zip", options);
+    if (!task) {
+        return 1;
+    }
 
+    engine.start_task(task->id());
     task->wait();
     return 0;
 }
@@ -363,36 +361,28 @@ options.speed_limit = 1024 * 1024;  // 1MB/s
 ### 自定义 HTTP 头部
 
 ```cpp
-falcon::HttpOptions http_options;
-http_options.headers = {
-    {"User-Agent", "MyApp/2.0"},
+falcon::DownloadOptions options;
+options.user_agent = "MyApp/2.0";
+options.headers = {
     {"Authorization", "Bearer TOKEN"},
     {"Accept", "application/json"}
 };
-
-falcon::DownloadOptions options;
-options.http_options = http_options;
 ```
 
 ### 代理设置
 
 ```cpp
 falcon::DownloadOptions options;
-options.proxy = falcon::ProxyInfo{
-    .type = falcon::ProxyType::HTTP,
-    .host = "proxy.example.com",
-    .port = 8080,
-    .username = "user",
-    .password = "pass"
-};
+options.proxy = "http://proxy.example.com:8080";
+options.proxy_username = "user";
+options.proxy_password = "pass";
 ```
 
 ### 超时设置
 
 ```cpp
 falcon::DownloadOptions options;
-options.connect_timeout = std::chrono::seconds(30);
-options.read_timeout = std::chrono::seconds(60);
+options.timeout_seconds = 30;
 ```
 
 ### 重试策略
@@ -400,7 +390,7 @@ options.read_timeout = std::chrono::seconds(60);
 ```cpp
 falcon::DownloadOptions options;
 options.max_retries = 5;
-options.retry_delay = std::chrono::seconds(10);
+options.retry_delay_seconds = 10;
 ```
 
 ## 编译示例程序
@@ -416,5 +406,5 @@ g++ -std=c++17 \
 ```
 
 ::: tip 提示
-更多示例代码请查看 [GitHub 仓库](https://github.com/yourusername/falcon/tree/main/examples) 中的 examples 目录。
+更多示例代码请查看 [GitHub 仓库](https://github.com/cuihairu/falcon/tree/main/examples) 中的 examples 目录。
 :::

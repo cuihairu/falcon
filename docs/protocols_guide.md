@@ -1,5 +1,9 @@
 # Falcon 下载器 - 协议支持指南
 
+> [!WARNING]
+> 本文档属于旧版协议说明归档。
+> 当前维护中的协议文档请以 `docs/src/protocols/` 下页面为准。
+
 本文档详细介绍了 Falcon 下载器支持的所有下载协议及其使用方法。
 
 ## 目录
@@ -212,9 +216,6 @@ int main() {
     // 创建下载引擎
     falcon::DownloadEngine engine;
 
-    // 加载所有插件
-    engine.loadAllPlugins();
-
     // 配置下载选项
     falcon::DownloadOptions options;
     options.max_connections = 5;
@@ -287,40 +288,7 @@ cmake -B build \
 
 ### 运行时配置
 
-配置文件 `~/.config/falcon/config.json`：
-
-```json
-{
-  "default_download_dir": "~/Downloads",
-  "max_concurrent_tasks": 5,
-  "timeout_seconds": 30,
-  "max_retries": 3,
-  "speed_limit": "0",
-  "user_agent": "Falcon/0.1",
-  "verify_ssl": true,
-  "auto_resume": true,
-  "log_level": "info",
-  "proxy": "",
-  "protocols": {
-    "http": {
-      "timeout_seconds": 30,
-      "max_retries": 3,
-      "user_agent": "Falcon/0.1"
-    },
-    "bittorrent": {
-      "port": 6881,
-      "enable_dht": true,
-      "enable_lsd": true,
-      "max_upload_rate": 0
-    },
-    "ed2k": {
-      "server_port": 4662,
-      "connect_to_servers": true,
-      "max_connections": 500
-    }
-  }
-}
-```
+当前更稳定的运行时入口是 CLI 参数和 CMake 构建选项。配置文件格式仍在演进中，不建议把某个固定 JSON 路径当成稳定接口。
 
 ## 故障排除
 
@@ -328,7 +296,7 @@ cmake -B build \
 
 1. **协议不被支持**
    - 确保编译时启用了相应的协议
-   - 运行 `falcon-cli --list-protocols` 查看支持的协议
+   - 检查 `CMakeLists.txt` 中对应的 `FALCON_ENABLE_*` 选项
 
 2. **下载失败**
    - 检查网络连接

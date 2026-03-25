@@ -1,5 +1,9 @@
 # Falcon API 使用指南
 
+> [!WARNING]
+> 本文档属于旧版 API 设计/迁移材料。
+> 当前维护中的 API 文档请以 `docs/src/api/` 下页面为准。
+
 ## 快速开始
 
 ### 基础下载
@@ -139,7 +143,7 @@ options.overwrite = false;                // 不覆盖已存在文件
 
 ```cpp
 // User-Agent
-options.user_agent = "Falcon/1.0 (https://github.com/falcon-downloader)";
+options.user_agent = "Falcon/1.0 (https://github.com/cuihairu/falcon)";
 
 // 自定义 HTTP 头
 options.headers = {
