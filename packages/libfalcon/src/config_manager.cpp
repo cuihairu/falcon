@@ -15,6 +15,7 @@
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <ctime>
+#include <mutex>
 
 using json = nlohmann::json;
 
@@ -23,6 +24,19 @@ namespace falcon {
 namespace {
 constexpr char kExportMagic[] = "FALCONCFG1";
 constexpr size_t kExportMagicLen = sizeof(kExportMagic) - 1;
+
+bool is_reasonable_master_password(const std::string& password) {
+    if (password.length() < 8) {
+        return false;
+    }
+
+    const bool has_alpha = std::any_of(password.begin(), password.end(),
+        [](unsigned char c) { return std::isalpha(c) != 0; });
+    const bool has_digit = std::any_of(password.begin(), password.end(),
+        [](unsigned char c) { return std::isdigit(c) != 0; });
+
+    return has_alpha && has_digit;
+}
 
 bool read_file_binary(const std::string& path, std::string& out) {
     std::ifstream in(path, std::ios::binary);
@@ -181,6 +195,12 @@ public:
     }
 
     bool initialize(const std::string& db_path, const std::string& master_password) {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+
+        if (!is_reasonable_master_password(master_password)) {
+            return false;
+        }
+
         // 打开数据库
         int rc = sqlite3_open(db_path.c_str(), &db_);
         if (rc != SQLITE_OK) {
@@ -230,15 +250,24 @@ public:
             return set_master_password_internal(master_password_);
         }
 
+        authenticated_ = false;
+
         return true;
     }
 
     bool set_master_password(const std::string& password) {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+
+        if (!is_reasonable_master_password(password)) {
+            return false;
+        }
         master_password_ = password;
         return set_master_password_internal(password);
     }
 
     bool set_master_password_internal(const std::string& password) {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+
         // 生成随机盐
         unsigned char salt[16];
         RAND_bytes(salt, 16);
@@ -261,10 +290,13 @@ public:
         int result = sqlite3_step(stmt);
         sqlite3_finalize(stmt);
 
-        return result == SQLITE_DONE;
+        authenticated_ = (result == SQLITE_DONE);
+        return authenticated_;
     }
 
     bool verify_master_password(const std::string& password) {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+
         if (!db_) return false;
         // 从数据库获取存储的哈希和盐
         sqlite3_stmt* stmt = nullptr;
@@ -290,12 +322,20 @@ public:
         // 计算提供的密码的哈希
         std::string computed_hash = pbkdf2_sha256(password, salt_str, 100000);
 
-        return computed_hash == stored_hash_str;
+        authenticated_ = (computed_hash == stored_hash_str);
+        if (authenticated_) {
+            master_password_ = password;
+        }
+        return authenticated_;
     }
 
     bool save_cloud_config(const CloudStorageConfig& config) {
-        // 验证主密码
-        if (!verify_master_password(master_password_)) {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+
+        if (!authenticated_ && !verify_master_password(master_password_)) {
+            return false;
+        }
+        if (config.name.empty() || config.provider.empty()) {
             return false;
         }
 
@@ -343,7 +383,9 @@ public:
     }
 
     bool get_cloud_config(const std::string& name, CloudStorageConfig& config) {
-        if (!verify_master_password(master_password_)) {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+
+        if (!authenticated_ && !verify_master_password(master_password_)) {
             return false;
         }
 
@@ -406,7 +448,9 @@ public:
     }
 
     bool delete_cloud_config(const std::string& name) {
-        if (!verify_master_password(master_password_)) {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+
+        if (!authenticated_ && !verify_master_password(master_password_)) {
             return false;
         }
 
@@ -427,7 +471,9 @@ public:
     }
 
     std::vector<std::string> list_cloud_configs() {
-        if (!verify_master_password(master_password_)) {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+
+        if (!authenticated_ && !verify_master_password(master_password_)) {
             return {};
         }
 
@@ -450,7 +496,9 @@ public:
     }
 
     std::vector<CloudStorageConfig> search_configs(const std::string& provider) {
-        if (!verify_master_password(master_password_)) {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+
+        if (!authenticated_ && !verify_master_password(master_password_)) {
             return {};
         }
 
@@ -526,7 +574,12 @@ public:
     }
 
     bool update_cloud_config(const std::string& name, const CloudStorageConfig& config) {
-        if (!verify_master_password(master_password_)) {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+
+        if (!authenticated_ && !verify_master_password(master_password_)) {
+            return false;
+        }
+        if (config.provider.empty()) {
             return false;
         }
 
@@ -591,12 +644,14 @@ public:
     }
 
     bool export_configs(const std::string& export_path, const std::string& export_password) {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+
         if (export_password.empty()) {
             return false;
         }
 
         // 需要主密码解密数据库内容
-        if (!verify_master_password(master_password_)) {
+        if (!authenticated_ && !verify_master_password(master_password_)) {
             return false;
         }
 
@@ -637,10 +692,12 @@ public:
     }
 
     bool import_configs(const std::string& import_path, const std::string& import_password) {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+
         if (import_password.empty()) {
             return false;
         }
-        if (!verify_master_password(master_password_)) {
+        if (!authenticated_ && !verify_master_password(master_password_)) {
             return false;
         }
 
@@ -721,6 +778,8 @@ public:
 
     sqlite3* db_;
     std::string master_password_;
+    bool authenticated_ = false;
+    std::recursive_mutex mutex_;
 };
 
 // ConfigManager 公共接口实现

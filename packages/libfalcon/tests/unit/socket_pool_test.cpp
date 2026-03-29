@@ -469,7 +469,7 @@ TEST_F(SocketPoolCreateConnectionTest, CreateConnectionToLocalhost) {
 
 TEST_F(SocketPoolCreateConnectionTest, CreateConnectionToInvalidHost) {
     SocketKey key;
-    key.host = "this-hostname-definitely-does-not-exist-12345.invalid";
+    key.host = "invalid host name";
     key.port = 80;
 
     auto socket = pool_.create_connection(key);
@@ -616,9 +616,9 @@ TEST(SocketPoolErrorHandling, MultipleFailedConnections) {
     SocketPool pool(std::chrono::seconds(30), 16);
 
     std::vector<std::string> invalid_hosts = {
-        "invalid1.example.com",
-        "invalid2.example.com",
-        "invalid3.example.com"
+        "invalid host 1",
+        "invalid host 2",
+        "invalid host 3"
     };
 
     for (const auto& host : invalid_hosts) {
@@ -1011,4 +1011,3 @@ TEST(SocketKeyAdvanced, LessThanSorting) {
 //==============================================================================
 // 主函数
 //==============================================================================
-

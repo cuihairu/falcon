@@ -33,12 +33,17 @@ struct Segment {
 
     /// Get segment size in bytes
     [[nodiscard]] Bytes size() const noexcept {
+        if (end < start) {
+            return 0;
+        }
         return end - start + 1;
     }
 
     /// Get remaining bytes
     [[nodiscard]] Bytes remaining() const noexcept {
-        return size() - downloaded.load();
+        Bytes seg_size = size();
+        Bytes downloaded_bytes = downloaded.load();
+        return downloaded_bytes >= seg_size ? 0 : seg_size - downloaded_bytes;
     }
 
     /// Get progress ratio (0.0 ~ 1.0)

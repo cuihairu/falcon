@@ -3,7 +3,7 @@
 #include <falcon/plugin_manager.hpp>
 #include <falcon/protocol_handler.hpp>
 #include <falcon/download_options.hpp>
-#include <falcon/file_info.hpp>
+#include <falcon/types.hpp>
 
 #include <gtest/gtest.h>
 

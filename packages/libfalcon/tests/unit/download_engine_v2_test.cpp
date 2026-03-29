@@ -10,6 +10,7 @@
 #include <falcon/commands/command.hpp>
 #include <thread>
 #include <chrono>
+#include <unistd.h>
 
 using namespace falcon;
 
@@ -24,6 +25,35 @@ public:
     }
 
     const char* name() const override { return "MockQueueCommand"; }
+};
+
+class ScopedPipe {
+public:
+    ScopedPipe() {
+        if (::pipe(fds_) != 0) {
+            fds_[0] = -1;
+            fds_[1] = -1;
+        }
+    }
+
+    ~ScopedPipe() {
+        if (fds_[0] >= 0) {
+            ::close(fds_[0]);
+        }
+        if (fds_[1] >= 0) {
+            ::close(fds_[1]);
+        }
+    }
+
+    ScopedPipe(const ScopedPipe&) = delete;
+    ScopedPipe& operator=(const ScopedPipe&) = delete;
+
+    int read_fd() const { return fds_[0]; }
+    int write_fd() const { return fds_[1]; }
+    bool valid() const { return fds_[0] >= 0 && fds_[1] >= 0; }
+
+private:
+    int fds_[2] = {-1, -1};
 };
 }  // namespace
 
@@ -285,8 +315,11 @@ TEST_F(DownloadEngineV2Test, AddMultipleCommands) {
 // ============================================================================
 
 TEST_F(DownloadEngineV2Test, RegisterSocketEvent_Valid) {
+    ScopedPipe pipe;
+    ASSERT_TRUE(pipe.valid());
+
     CommandId cmd_id = 1;
-    int fd = 10;  // 模拟文件描述符
+    int fd = pipe.read_fd();
     int events = 1;  // 读事件
 
     bool registered = engine_->register_socket_event(fd, events, cmd_id);
@@ -295,9 +328,12 @@ TEST_F(DownloadEngineV2Test, RegisterSocketEvent_Valid) {
 }
 
 TEST_F(DownloadEngineV2Test, RegisterSocketEvent_DuplicateFd) {
+    ScopedPipe pipe;
+    ASSERT_TRUE(pipe.valid());
+
     CommandId cmd_id1 = 1;
     CommandId cmd_id2 = 2;
-    int fd = 10;
+    int fd = pipe.read_fd();
     int events = 1;
 
     engine_->register_socket_event(fd, events, cmd_id1);
@@ -308,8 +344,11 @@ TEST_F(DownloadEngineV2Test, RegisterSocketEvent_DuplicateFd) {
 }
 
 TEST_F(DownloadEngineV2Test, UnregisterSocketEvent_Valid) {
+    ScopedPipe pipe;
+    ASSERT_TRUE(pipe.valid());
+
     CommandId cmd_id = 1;
-    int fd = 10;
+    int fd = pipe.read_fd();
     int events = 1;
 
     engine_->register_socket_event(fd, events, cmd_id);
@@ -465,9 +504,9 @@ TEST_F(DownloadEngineV2Test, AddDownload_EmptyURLList) {
     DownloadOptions options;
     std::vector<std::string> urls;
 
-    // 应该返回有效 ID（即使 URL 列表为空）
+    // 空 URL 列表不应触发崩溃
     TaskId id = engine_->add_download(urls, options);
-    EXPECT_GT(id, 0);
+    EXPECT_EQ(id, INVALID_TASK_ID);
 }
 
 TEST_F(DownloadEngineV2Test, MaxConcurrentTasks_Limit) {

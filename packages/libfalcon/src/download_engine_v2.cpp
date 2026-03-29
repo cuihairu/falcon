@@ -45,6 +45,11 @@ TaskId DownloadEngineV2::add_download(const std::string& url,
 
 TaskId DownloadEngineV2::add_download(const std::vector<std::string>& urls,
                                         const DownloadOptions& options) {
+    if (urls.empty()) {
+        FALCON_LOG_WARN("尝试添加空下载 URL 列表");
+        return INVALID_TASK_ID;
+    }
+
     // 生成新的任务 ID
     static std::atomic<TaskId> id_counter{1};
     TaskId id = id_counter.fetch_add(1, std::memory_order_relaxed);

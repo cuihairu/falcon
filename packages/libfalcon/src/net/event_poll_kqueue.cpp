@@ -50,6 +50,7 @@ KqueueEventPoll::~KqueueEventPoll() {
 bool KqueueEventPoll::add_event(int fd, int events,
                                 EventCallback callback,
                                 void* user_data) {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (kqueue_fd_ < 0) {
         return set_error("kqueue 实例未创建");
     }
@@ -92,6 +93,7 @@ bool KqueueEventPoll::add_event(int fd, int events,
 }
 
 bool KqueueEventPoll::modify_event(int fd, int events) {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (kqueue_fd_ < 0) {
         return set_error("kqueue 实例未创建");
     }
@@ -149,6 +151,7 @@ bool KqueueEventPoll::modify_event(int fd, int events) {
 }
 
 bool KqueueEventPoll::remove_event(int fd) {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (kqueue_fd_ < 0) {
         return set_error("kqueue 实例未创建");
     }
@@ -190,6 +193,7 @@ bool KqueueEventPoll::remove_event(int fd) {
 }
 
 int KqueueEventPoll::poll(int timeout_ms) {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (kqueue_fd_ < 0) {
         set_error("kqueue 实例未创建");
         return -1;
@@ -256,15 +260,25 @@ int KqueueEventPoll::poll(int timeout_ms) {
 }
 
 void KqueueEventPoll::clear() {
-    // 移除所有文件描述符（避免在遍历 map 时修改它）
-    std::vector<int> fds;
-    fds.reserve(events_.size());
-    for (const auto& pair : events_) {
-        fds.push_back(pair.first);
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (const auto& [fd, entry] : events_) {
+        struct kevent kevents[2];
+        int nevents = 0;
+
+        if (entry.events & static_cast<int>(IOEvent::READ)) {
+            EV_SET(&kevents[nevents], fd, EVFILT_READ, EV_DELETE, 0, 0, nullptr);
+            ++nevents;
+        }
+        if (entry.events & static_cast<int>(IOEvent::WRITE)) {
+            EV_SET(&kevents[nevents], fd, EVFILT_WRITE, EV_DELETE, 0, 0, nullptr);
+            ++nevents;
+        }
+
+        if (nevents > 0) {
+            kevent(kqueue_fd_, kevents, nevents, nullptr, 0, nullptr);
+        }
     }
-    for (int fd : fds) {
-        remove_event(fd);
-    }
+    events_.clear();
 }
 
 bool KqueueEventPoll::set_error(const std::string& msg) {

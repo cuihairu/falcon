@@ -7,6 +7,7 @@
 #include <chrono>
 #include <filesystem>
 #include <string>
+#include <thread>
 
 namespace {
 
@@ -212,10 +213,7 @@ TEST(ConfigManagerTest, ExportImportWrongPassword) {
     auto cfg = make_config("test1", "s3", "AKIA_TEST", "SECRET_TEST");
     ASSERT_TRUE(cm.save_cloud_config(cfg));
 
-    // 用错误密码导出
-    EXPECT_FALSE(cm.export_configs(export_path, "WrongPassword!"));
-
-    // 正确导出
+    // 导出密码是新密码，不存在“错误旧密码”概念
     ASSERT_TRUE(cm.export_configs(export_path, "ExportPass!"));
 
     // 用错误密码导入
@@ -428,4 +426,3 @@ TEST(ConfigManagerTest, ConfigTimestamps) {
 }
 
 #endif
-

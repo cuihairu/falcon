@@ -27,10 +27,12 @@ endif()
 add_executable(falcon_cli_tests
     unit/arg_parser_test.cpp
     unit/config_loader_test.cpp
+    ../src/config_loader.cpp
 )
 
 target_link_libraries(falcon_cli_tests
     PRIVATE
+        Falcon::falcon
         GTest::gtest
         GTest::gtest_main
 )
@@ -38,6 +40,7 @@ target_link_libraries(falcon_cli_tests
 target_include_directories(falcon_cli_tests
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/../src
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../libfalcon/include
 )
 
 target_compile_features(falcon_cli_tests PRIVATE cxx_std_17)

@@ -327,17 +327,24 @@ public:
     /**
      * @brief 获取活动组数量
      */
-    std::size_t active_count() const { return request_groups_.size(); }
+    std::size_t active_count() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return request_groups_.size();
+    }
 
     /**
      * @brief 获取等待组数量
      */
-    std::size_t waiting_count() const { return reserved_groups_.size(); }
+    std::size_t waiting_count() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return reserved_groups_.size();
+    }
 
     /**
      * @brief 检查是否所有组已完成
      */
     bool all_completed() const {
+        std::lock_guard<std::mutex> lock(mutex_);
         for (const auto& group : all_groups_) {
             if (!group) continue;
             auto st = group->status();
@@ -354,6 +361,7 @@ public:
      * @brief 设置最大并发数
      */
     void set_max_concurrent(std::size_t max_concurrent) {
+        std::lock_guard<std::mutex> lock(mutex_);
         max_concurrent_ = max_concurrent;
     }
 
@@ -361,6 +369,7 @@ public:
      * @brief 获取最大并发数
      */
     std::size_t max_concurrent() const {
+        std::lock_guard<std::mutex> lock(mutex_);
         return max_concurrent_;
     }
 
@@ -378,6 +387,7 @@ public:
 
 private:
     std::size_t max_concurrent_;
+    mutable std::mutex mutex_;
 
     // 活动组（正在下载）- 存储原始指针指向 all_groups_
     std::vector<RequestGroup*> request_groups_;

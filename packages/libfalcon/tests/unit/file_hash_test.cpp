@@ -12,6 +12,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace falcon;
@@ -494,12 +495,16 @@ TEST(FileHashBoundary, UnicodeContent) {
 
 TEST(FileHashMultiple, VerifyMultipleAlgorithms) {
     std::string path = make_unique_temp_path("test_multi.txt");
-    create_test_file(path, "Test content");
+    const std::string content = "Test content";
+    create_test_file(path, content);
 
     std::vector<std::pair<std::string, HashAlgorithm>> hashes;
-    hashes.push_back({get_md5_hash("Test content"), HashAlgorithm::MD5});
-    hashes.push_back({get_sha1_hash("Test content"), HashAlgorithm::SHA1});
-    hashes.push_back({get_sha256_hash("Test content"), HashAlgorithm::SHA256});
+    hashes.push_back({FileHasher::calculate(content.data(), content.size(), HashAlgorithm::MD5),
+                      HashAlgorithm::MD5});
+    hashes.push_back({FileHasher::calculate(content.data(), content.size(), HashAlgorithm::SHA1),
+                      HashAlgorithm::SHA1});
+    hashes.push_back({FileHasher::calculate(content.data(), content.size(), HashAlgorithm::SHA256),
+                      HashAlgorithm::SHA256});
 
     auto results = FileHasher::verify_multiple(path, hashes);
 
@@ -513,11 +518,13 @@ TEST(FileHashMultiple, VerifyMultipleAlgorithms) {
 
 TEST(FileHashMultiple, VerifyMultipleWithFailure) {
     std::string path = make_unique_temp_path("test_multi_fail.txt");
-    create_test_file(path, "Test content");
+    const std::string content = "Test content";
+    create_test_file(path, content);
 
     std::vector<std::pair<std::string, HashAlgorithm>> hashes;
     hashes.push_back({"wrong_md5_hash", HashAlgorithm::MD5});
-    hashes.push_back({get_sha1_hash("Test content"), HashAlgorithm::SHA1});
+    hashes.push_back({FileHasher::calculate(content.data(), content.size(), HashAlgorithm::SHA1),
+                      HashAlgorithm::SHA1});
     hashes.push_back({"wrong_sha256_hash", HashAlgorithm::SHA256});
 
     auto results = FileHasher::verify_multiple(path, hashes);
@@ -659,9 +666,11 @@ TEST(FileHashConcurrency, ConcurrentHashCalculation) {
 
 TEST(FileHashConcurrency, ConcurrentVerification) {
     std::string path = make_unique_temp_path("test_verify_concurrent.txt");
-    create_test_file(path, "Test data");
+    const std::string content = "Test data";
+    create_test_file(path, content);
 
-    std::string expected_hash = get_md5_hash("Test data");
+    std::string expected_hash = FileHasher::calculate(
+        content.data(), content.size(), HashAlgorithm::MD5);
 
     constexpr int num_threads = 10;
     std::vector<std::thread> threads;

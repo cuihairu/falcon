@@ -210,6 +210,7 @@ void RequestGroupMan::add_request_group(std::unique_ptr<RequestGroup> group) {
         return;
     }
 
+    std::lock_guard<std::mutex> lock(mutex_);
     TaskId id = group->id();
 
     // 检查是否已存在
@@ -234,6 +235,7 @@ void RequestGroupMan::add_request_group(std::unique_ptr<RequestGroup> group) {
 }
 
 void RequestGroupMan::fill_request_group_from_reserver(DownloadEngineV2* engine) {
+    std::lock_guard<std::mutex> lock(mutex_);
     // 当有空闲槽位时，从等待队列激活任务（跳过 PAUSED）
     while (request_groups_.size() < max_concurrent_) {
         if (reserved_groups_.empty()) {
@@ -284,6 +286,7 @@ void RequestGroupMan::fill_request_group_from_reserver(DownloadEngineV2* engine)
 }
 
 bool RequestGroupMan::pause_group(TaskId id) {
+    std::lock_guard<std::mutex> lock(mutex_);
     auto it = group_map_.find(id);
     if (it == group_map_.end()) {
         FALCON_LOG_WARN("任务不存在: id=" << id);
@@ -306,6 +309,7 @@ bool RequestGroupMan::pause_group(TaskId id) {
 }
 
 bool RequestGroupMan::resume_group(TaskId id) {
+    std::lock_guard<std::mutex> lock(mutex_);
     auto it = group_map_.find(id);
     if (it == group_map_.end()) {
         FALCON_LOG_WARN("任务不存在: id=" << id);
@@ -330,6 +334,7 @@ bool RequestGroupMan::resume_group(TaskId id) {
 }
 
 bool RequestGroupMan::remove_group(TaskId id) {
+    std::lock_guard<std::mutex> lock(mutex_);
     auto it = group_map_.find(id);
     if (it == group_map_.end()) {
         FALCON_LOG_WARN("任务不存在: id=" << id);
@@ -357,11 +362,13 @@ bool RequestGroupMan::remove_group(TaskId id) {
 }
 
 RequestGroup* RequestGroupMan::find_group(TaskId id) {
+    std::lock_guard<std::mutex> lock(mutex_);
     auto it = group_map_.find(id);
     return it != group_map_.end() ? it->second : nullptr;
 }
 
 void RequestGroupMan::cleanup_finished_active() {
+    std::lock_guard<std::mutex> lock(mutex_);
     request_groups_.erase(
         std::remove_if(request_groups_.begin(), request_groups_.end(),
                        [](RequestGroup* g) {

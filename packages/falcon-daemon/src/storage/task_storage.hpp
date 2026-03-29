@@ -9,6 +9,7 @@
 
 #include <falcon/types.hpp>
 #include <falcon/download_options.hpp>
+#include <falcon/event_listener.hpp>
 
 #include <string>
 #include <vector>

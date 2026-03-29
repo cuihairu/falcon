@@ -7,6 +7,7 @@
 
 #include <gtest/gtest.h>
 #include <falcon/incremental_download.hpp>
+#include <filesystem>
 #include <fstream>
 #include <cstdio>
 #include <random>
@@ -17,19 +18,16 @@ using namespace falcon;
 class IncrementalDownloadTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        // 创建临时测试目录
-        testDir_ = "C:/tmp/falcon_test";
-#ifdef _WIN32
-        _mkdir(testDir_.c_str());
-#else
-        mkdir(testDir_.c_str(), 0755);
-#endif
+        auto base = std::filesystem::temp_directory_path();
+        auto unique = std::to_string(static_cast<unsigned long long>(
+            std::chrono::steady_clock::now().time_since_epoch().count()));
+        testDir_ = (base / ("falcon_test_" + unique)).string();
+        std::filesystem::create_directories(testDir_);
     }
 
     void TearDown() override {
-        // 清理测试文件 - Windows rmdir /s /q equivalent
-        std::string cmd = "rd /s /q " + testDir_ + " 2>NUL";
-        system(cmd.c_str());
+        std::error_code ec;
+        std::filesystem::remove_all(testDir_, ec);
     }
 
     // 创建测试文件
@@ -46,7 +44,8 @@ protected:
             byte = static_cast<uint8_t>(dis(gen));
         }
 
-        file.write(reinterpret_cast<const char*>(data.data()), data.size());
+        file.write(reinterpret_cast<const char*>(data.data()),
+                   static_cast<std::streamsize>(data.size()));
         file.close();
 
         return path;

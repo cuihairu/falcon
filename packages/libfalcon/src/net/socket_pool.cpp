@@ -18,6 +18,7 @@
 #else
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/select.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -26,6 +27,7 @@
 #endif
 
 #include <cstring>
+#include <cctype>
 
 namespace falcon::net {
 
@@ -34,6 +36,16 @@ namespace falcon::net {
 //==============================================================================
 
 std::shared_ptr<PooledSocket> SocketPool::create_connection(const SocketKey& key) {
+    if (key.host.empty() || key.port == 0) {
+        FALCON_LOG_ERROR("连接参数无效: " << key.to_string());
+        return nullptr;
+    }
+    if (std::any_of(key.host.begin(), key.host.end(),
+                    [](unsigned char ch) { return std::isspace(ch) != 0; })) {
+        FALCON_LOG_ERROR("主机名包含空白字符: " << key.host);
+        return nullptr;
+    }
+
     // 1. DNS 解析
     struct addrinfo hints, *result = nullptr, *rp;
     std::memset(&hints, 0, sizeof(hints));
@@ -80,13 +92,43 @@ std::shared_ptr<PooledSocket> SocketPool::create_connection(const SocketKey& key
             break; // 连接成功
         }
 
-        // 对于非阻塞 socket，连接进行中返回 EINPROGRESS
+        // 对于非阻塞 socket，等待连接建立完成
 #ifdef _WIN32
         if (WSAGetLastError() == WSAEWOULDBLOCK) {
 #else
         if (errno == EINPROGRESS) {
 #endif
-            break; // 连接进行中
+            fd_set write_fds;
+            FD_ZERO(&write_fds);
+            FD_SET(socket_fd, &write_fds);
+
+            timeval timeout{};
+            timeout.tv_sec = std::min<std::chrono::seconds>(timeout_, std::chrono::seconds(1)).count();
+            timeout.tv_usec = 0;
+
+            int ready = select(socket_fd + 1, nullptr, &write_fds, nullptr, &timeout);
+            if (ready > 0 && FD_ISSET(socket_fd, &write_fds)) {
+                int socket_error = 0;
+                socklen_t error_len = sizeof(socket_error);
+#ifdef _WIN32
+                if (getsockopt(socket_fd, SOL_SOCKET, SO_ERROR,
+                               reinterpret_cast<char*>(&socket_error), &error_len) == 0 &&
+                    socket_error == 0) {
+#else
+                if (getsockopt(socket_fd, SOL_SOCKET, SO_ERROR, &socket_error, &error_len) == 0 &&
+                    socket_error == 0) {
+#endif
+                    break;
+                }
+            }
+
+#ifdef _WIN32
+            closesocket(socket_fd);
+#else
+            ::close(socket_fd);
+#endif
+            socket_fd = -1;
+            continue;
         }
 
         // 连接失败，关闭 socket 并尝试下一个地址

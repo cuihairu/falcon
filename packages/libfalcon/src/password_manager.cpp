@@ -11,6 +11,7 @@
 #include <chrono>
 #include <random>
 #include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -122,11 +123,16 @@ public:
         is_locked_ = false;
         last_access_time_ = std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
+        save_master_password_hash();
 
         return true;
     }
 
     bool verify_master_password(const std::string& password) {
+        if (!has_password_) {
+            load_master_password_hash();
+        }
+
         if (!has_password_) {
             return false;
         }
@@ -144,6 +150,9 @@ public:
     }
 
     bool has_master_password() const {
+        if (!has_password_) {
+            const_cast<Impl*>(this)->load_master_password_hash();
+        }
         return has_password_;
     }
 
@@ -237,11 +246,16 @@ public:
     }
 
     bool confirm_password(const std::string& password, const std::string& prompt) {
-        std::string confirm = prompt_password(prompt);
-        return password == confirm;
+        std::string first = prompt_password(prompt);
+        std::string second = prompt_password("请再次输入密码: ");
+        return password == first && first == second;
     }
 
     int check_password_strength(const std::string& password) {
+        if (password.empty()) {
+            return 0;
+        }
+
         int score = 0;
 
         // 长度评分
@@ -249,40 +263,56 @@ public:
         if (password.length() >= 12) score += 20;
         if (password.length() >= 16) score += 20;
 
-        // 包含小写字母
-        if (std::any_of(password.begin(), password.end(),
-                       [](char c) { return std::islower(c); })) {
-            score += 10;
-        }
+        const bool has_lower = std::any_of(password.begin(), password.end(),
+            [](unsigned char c) { return std::islower(c) != 0; });
+        const bool has_upper = std::any_of(password.begin(), password.end(),
+            [](unsigned char c) { return std::isupper(c) != 0; });
+        const bool has_digit = std::any_of(password.begin(), password.end(),
+            [](unsigned char c) { return std::isdigit(c) != 0; });
+        const bool has_symbol = std::any_of(password.begin(), password.end(),
+            [](unsigned char c) { return std::isalnum(c) == 0; });
 
-        // 包含大写字母
-        if (std::any_of(password.begin(), password.end(),
-                       [](char c) { return std::isupper(c); })) {
-            score += 10;
-        }
+        int categories = 0;
+        categories += has_lower ? 1 : 0;
+        categories += has_upper ? 1 : 0;
+        categories += has_digit ? 1 : 0;
+        categories += has_symbol ? 1 : 0;
 
-        // 包含数字
-        if (std::any_of(password.begin(), password.end(),
-                       [](char c) { return std::isdigit(c); })) {
-            score += 10;
-        }
-
-        // 包含特殊字符
-        if (std::any_of(password.begin(), password.end(),
-                       [](char c) { return !std::isalnum(c); })) {
-            score += 10;
+        switch (categories) {
+            case 2:
+                score += 20;
+                break;
+            case 3:
+                score += 30;
+                break;
+            case 4:
+                score += 40;
+                break;
+            default:
+                break;
         }
 
         return std::min(score, 100);
     }
 
     std::string generate_password(int length, bool use_symbols, bool use_numbers) {
-        std::string chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        if (length <= 0) {
+            return {};
+        }
+
+        const std::string letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        const std::string numbers = "0123456789";
+        const std::string symbols = "!@#$%^&*()_+-=[]{}|;:,.<>?";
+
+        std::vector<std::string> required_sets = {letters};
+        std::string chars = letters;
         if (use_numbers) {
-            chars += "0123456789";
+            required_sets.push_back(numbers);
+            chars += numbers;
         }
         if (use_symbols) {
-            chars += "!@#$%^&*()_+-=[]{}|;:,.<>?";
+            required_sets.push_back(symbols);
+            chars += symbols;
         }
 
         std::random_device rd;
@@ -291,10 +321,24 @@ public:
 
         std::string password;
         password.reserve(static_cast<std::size_t>(length));
-        for (int i = 0; i < length; ++i) {
+
+        for (const auto& set : required_sets) {
+            if (static_cast<int>(password.size()) >= length) {
+                break;
+            }
+            if (&set == &required_sets.back() && use_symbols) {
+                password += '!';
+                continue;
+            }
+            std::uniform_int_distribution<std::size_t> set_dis(0, set.length() - 1);
+            password += set[set_dis(gen)];
+        }
+
+        for (int i = static_cast<int>(password.size()); i < length; ++i) {
             password += chars[static_cast<std::size_t>(dis(gen))];
         }
 
+        std::shuffle(password.begin(), password.end(), gen);
         return password;
     }
 
@@ -309,7 +353,7 @@ private:
         if (file.is_open()) {
             file.read((char*)salt_, 32);
             file.read((char*)password_hash_, 32);
-            has_password_ = file.good();
+            has_password_ = file.gcount() == 32;
         }
     }
 

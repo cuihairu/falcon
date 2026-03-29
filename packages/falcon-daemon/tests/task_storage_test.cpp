@@ -16,6 +16,14 @@
 
 namespace {
 
+using falcon::INVALID_TASK_ID;
+using falcon::TaskId;
+using falcon::TaskStatus;
+using falcon::daemon::TaskQueryOptions;
+using falcon::daemon::TaskRecord;
+using falcon::daemon::TaskStorage;
+using falcon::daemon::TaskStorageConfig;
+
 class TaskStorageTest : public ::testing::Test {
 protected:
     void SetUp() override {

@@ -112,9 +112,11 @@ endif()
 
 # Link OpenSSL for file hash verification
 find_package(OpenSSL QUIET)
-if(OPENSSL_FOUND)
+if(OPENSSL_FOUND AND TARGET OpenSSL::Crypto AND TARGET OpenSSL::SSL)
     target_link_libraries(falcon PUBLIC OpenSSL::Crypto OpenSSL::SSL)
     target_compile_definitions(falcon PRIVATE FALCON_USE_OPENSSL)
+elseif(OPENSSL_FOUND)
+    message(WARNING "OpenSSL found without imported CMake targets; OpenSSL-dependent features will remain disabled")
 endif()
 
 # Optional: SQLite3 for config manager
@@ -271,7 +273,7 @@ if(FALCON_ENABLE_RESOURCE_BROWSER)
         target_compile_definitions(falcon PRIVATE FALCON_ENABLE_RESOURCE_BROWSER)
 
         find_package(OpenSSL QUIET)
-        if(OpenSSL_FOUND)
+        if(OpenSSL_FOUND AND TARGET OpenSSL::Crypto)
             target_sources(falcon PRIVATE
                 plugins/oss/oss_browser.cpp
                 plugins/cos/cos_browser.cpp
@@ -287,7 +289,7 @@ endif()
 
 # Config manager (SQLite3 + OpenSSL + nlohmann_json)
 if(FALCON_ENABLE_CONFIG_MANAGER)
-    if(NOT SQLite3_FOUND OR NOT OPENSSL_FOUND OR NOT nlohmann_json_FOUND)
+    if(NOT SQLite3_FOUND OR NOT OPENSSL_FOUND OR NOT TARGET OpenSSL::Crypto OR NOT TARGET OpenSSL::SSL OR NOT nlohmann_json_FOUND)
         message(WARNING "Config manager requires SQLite3, OpenSSL, and nlohmann_json; disabling FALCON_ENABLE_CONFIG_MANAGER")
         set(FALCON_ENABLE_CONFIG_MANAGER OFF CACHE BOOL "Enable encrypted config manager (SQLite3)" FORCE)
     else()

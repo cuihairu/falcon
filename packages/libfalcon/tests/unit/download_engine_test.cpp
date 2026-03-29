@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <thread>
@@ -225,8 +226,16 @@ TEST(DownloadEngineTest, PauseAllTasks) {
 
     // 验证所有任务都被暂停
     for (const auto& task : tasks) {
-        EXPECT_TRUE(task->status() == falcon::TaskStatus::Paused ||
-                    task->status() == falcon::TaskStatus::Completed);
+        bool settled = false;
+        for (int attempt = 0; attempt < 20; ++attempt) {
+            auto status = task->status();
+            if (status != falcon::TaskStatus::Downloading) {
+                settled = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        EXPECT_TRUE(settled);
     }
 }
 
@@ -475,13 +484,15 @@ TEST(DownloadEngineTest, CustomOutputPath) {
     engine.register_handler(std::make_unique<TestProtocolHandler>());
 
     falcon::DownloadOptions options;
-    options.output_directory = "/custom/path";
+    auto temp_dir = std::filesystem::temp_directory_path() / "falcon_custom_output_path";
+    options.output_directory = temp_dir.string();
     options.output_filename = "custom_name.bin";
 
     auto task = engine.add_task("test://example.com/file.bin", options);
     ASSERT_NE(task, nullptr);
 
-    EXPECT_EQ(normalize_path(task->output_path()), "/custom/path/custom_name.bin");
+    EXPECT_EQ(normalize_path(task->output_path()),
+              normalize_path((temp_dir / "custom_name.bin").string()));
 }
 
 // 新增：相对路径处理

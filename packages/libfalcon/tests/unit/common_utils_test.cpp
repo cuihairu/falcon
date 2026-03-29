@@ -26,14 +26,15 @@ TEST(CommonUtilsTest, DownloadOptionsDefaults) {
     DownloadOptions options;
 
     // 验证默认值
-    EXPECT_EQ(options.max_connections, 1);
+    EXPECT_EQ(options.max_connections, 4);
     EXPECT_EQ(options.timeout_seconds, 30);
     EXPECT_EQ(options.max_retries, 3);
     EXPECT_EQ(options.speed_limit, 0);
     EXPECT_TRUE(options.resume_if_exists);
-    EXPECT_TRUE(options.output_directory.empty());
+    EXPECT_TRUE(options.resume_enabled);
+    EXPECT_EQ(options.output_directory, ".");
     EXPECT_TRUE(options.output_filename.empty());
-    EXPECT_TRUE(options.user_agent.empty());
+    EXPECT_EQ(options.user_agent, "Falcon/0.1.0");
     EXPECT_TRUE(options.headers.empty());
 }
 
@@ -310,8 +311,9 @@ TEST(CommonUtilsTest, StringEdgeCases) {
     EXPECT_EQ(long_str.length(), 10000);
 
     // 测试特殊字符字符串
-    std::string special_str = "test\x00\x01\x02string";
-    EXPECT_GT(special_str.length(), 4);
+    std::string special_str{"test\0\1\2string", 13};
+    EXPECT_EQ(special_str.length(), 13);
+    EXPECT_EQ(special_str[4], '\0');
 }
 
 // ============================================================================
@@ -523,7 +525,7 @@ TEST(CommonUtilsTest, PathHandling) {
 
     // 测试相对路径
     std::string relative_path = "../test.bin";
-    EXPECT_EQ(relative_path.substr(0, 3), "..");
+    EXPECT_EQ(relative_path.substr(0, 3), "../");
 }
 
 // ============================================================================

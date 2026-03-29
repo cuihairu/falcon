@@ -239,13 +239,17 @@ public:
     int poll(int timeout_ms = -1) override;
 
     const char* get_error() const override { return error_msg_.c_str(); }
-    std::size_t size() const override { return events_.size(); }
+    std::size_t size() const override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return events_.size();
+    }
     void clear() override;
 
 private:
     int epoll_fd_;
     int max_events_;
     std::string error_msg_;
+    mutable std::mutex mutex_;
 
     // 事件回调映射表
     std::map<int, EventEntry> events_;
@@ -274,13 +278,17 @@ public:
     int poll(int timeout_ms = -1) override;
 
     const char* get_error() const override { return error_msg_.c_str(); }
-    std::size_t size() const override { return events_.size(); }
+    std::size_t size() const override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return events_.size();
+    }
     void clear() override;
 
 private:
     int kqueue_fd_;
     int max_events_;
     std::string error_msg_;
+    mutable std::mutex mutex_;
 
     // 事件回调映射表
     std::map<int, EventEntry> events_;
