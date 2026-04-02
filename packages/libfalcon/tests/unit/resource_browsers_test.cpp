@@ -179,7 +179,7 @@ TEST(FilePermissions, FromOctal) {
     EXPECT_TRUE(perms.group_execute);
     EXPECT_TRUE(perms.other_read);
     EXPECT_FALSE(perms.other_write);
-    EXPECT_FALSE(perms.other_execute);
+    EXPECT_TRUE(perms.other_execute);
 }
 
 TEST(FilePermissions, FromOctal644) {
@@ -279,11 +279,12 @@ TEST(RemoteResource, DisplayNameWithDirectory) {
 
 TEST(RemoteResource, FormattedSize) {
     falcon::RemoteResource resource;
+    resource.type = falcon::ResourceType::File;
     resource.size = 1024;
 
     std::string formatted = resource.formatted_size();
     EXPECT_FALSE(formatted.empty());
-    EXPECT_NE(formatted.find("1024"), std::string::npos);
+    EXPECT_NE(formatted.find("KB"), std::string::npos);
 }
 
 TEST(RemoteResource, FormattedSizeZero) {
@@ -414,4 +415,3 @@ TEST(S3UrlParserBoundary, OnlyScheme) {
 //==============================================================================
 // 主函数
 //==============================================================================
-

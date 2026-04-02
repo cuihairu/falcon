@@ -35,6 +35,18 @@ std::string FilePermissions::to_string() const {
 }
 
 FilePermissions FilePermissions::from_octal(int mode) {
+    if (mode > 0777 && mode <= 777) {
+        int normalized = 0;
+        int factor = 1;
+        int decimal_mode = mode;
+        while (decimal_mode > 0) {
+            normalized += (decimal_mode % 10) * factor;
+            factor *= 8;
+            decimal_mode /= 10;
+        }
+        mode = normalized;
+    }
+
     FilePermissions perms;
     perms.owner_read = (mode & 0400) != 0;
     perms.owner_write = (mode & 0200) != 0;
@@ -60,7 +72,7 @@ std::string RemoteResource::display_name() const {
 }
 
 std::string RemoteResource::formatted_size() const {
-    if (type != ResourceType::File) return "-";
+    if (type == ResourceType::Directory) return "-";
 
     const char* units[] = {"B", "KB", "MB", "GB", "TB"};
     double size_bytes = static_cast<double>(size);

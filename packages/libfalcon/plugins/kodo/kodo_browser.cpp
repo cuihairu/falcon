@@ -43,11 +43,14 @@ KodoUrl KodoUrlParser::parse(const std::string& url) {
     } else if (starts_with_protocol(url, PROTOCOL_QINIU)) {
         protocol = PROTOCOL_QINIU;
     } else {
-        return kodo_url;
+        throw std::invalid_argument("Invalid Kodo URL: missing kodo:// or qiniu:// protocol");
     }
 
     // 使用协议常量自动计算偏移量，无需魔法数字！
     size_t bucket_start = protocol.size();
+    if (url.size() == bucket_start) {
+        throw std::invalid_argument("Invalid Kodo URL: missing bucket");
+    }
     size_t bucket_end = url.find('/', bucket_start);
 
     if (bucket_end == std::string::npos) {

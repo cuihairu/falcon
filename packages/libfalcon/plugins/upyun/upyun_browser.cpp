@@ -35,19 +35,20 @@ namespace falcon {
 UpyunUrl UpyunUrlParser::parse(const std::string& url) {
     using namespace cloud;
 
+    if (!starts_with_protocol(url, PROTOCOL_UPYUN)) {
+        throw std::invalid_argument("Invalid Upyun URL: missing upyun:// protocol");
+    }
+
     UpyunUrl upyun_url;
+    // 使用协议常量自动计算偏移量，无需魔法数字！
+    size_t bucket_start = PROTOCOL_UPYUN.size();  // 自动 = 8
+    size_t bucket_end = url.find('/', bucket_start);
 
-    if (starts_with_protocol(url, PROTOCOL_UPYUN)) {
-        // 使用协议常量自动计算偏移量，无需魔法数字！
-        size_t bucket_start = PROTOCOL_UPYUN.size();  // 自动 = 8
-        size_t bucket_end = url.find('/', bucket_start);
-
-        if (bucket_end == std::string::npos) {
-            upyun_url.bucket = url.substr(bucket_start);
-        } else {
-            upyun_url.bucket = url.substr(bucket_start, bucket_end - bucket_start);
-            upyun_url.key = url.substr(bucket_end + 1);
-        }
+    if (bucket_end == std::string::npos) {
+        upyun_url.bucket = url.substr(bucket_start);
+    } else {
+        upyun_url.bucket = url.substr(bucket_start, bucket_end - bucket_start);
+        upyun_url.key = url.substr(bucket_end + 1);
     }
 
     return upyun_url;

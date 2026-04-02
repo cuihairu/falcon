@@ -43,6 +43,17 @@ struct FilePermissions {
     bool other_write : 1;
     bool other_execute : 1;
 
+    FilePermissions()
+        : owner_read(false),
+          owner_write(false),
+          owner_execute(false),
+          group_read(false),
+          group_write(false),
+          group_execute(false),
+          other_read(false),
+          other_write(false),
+          other_execute(false) {}
+
     // 转换为权限字符串（如 rwxr-xr-x）
     std::string to_string() const;
 
@@ -56,7 +67,7 @@ struct FilePermissions {
 struct RemoteResource {
     std::string name;              // 资源名称
     std::string path;              // 完整路径
-    ResourceType type;             // 资源类型
+    ResourceType type = ResourceType::Unknown; // 资源类型
     uint64_t size = 0;             // 文件大小（字节）
     FilePermissions permissions;    // 权限信息
     std::string owner;             // 所有者

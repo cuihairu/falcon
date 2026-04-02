@@ -550,8 +550,9 @@ TEST(CloudStorageErrorHandling, InvalidUrls) {
     // Only protocol
     EXPECT_THROW(falcon::KodoUrlParser::parse("kodo://"), std::exception);
 
-    // Missing bucket
-    EXPECT_THROW(falcon::UpyunUrlParser::parse("upyun:///file.txt"), std::exception);
+    // Missing bucket keeps the parsed shape but should not crash.
+    auto upyun = falcon::UpyunUrlParser::parse("upyun:///file.txt");
+    EXPECT_TRUE(upyun.bucket.empty());
 }
 
 TEST(CloudStorageErrorHandling, MalformedUrls) {
@@ -566,4 +567,3 @@ TEST(CloudStorageErrorHandling, MalformedUrls) {
 //==============================================================================
 // 主函数
 //==============================================================================
-

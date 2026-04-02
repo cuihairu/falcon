@@ -106,14 +106,24 @@ bool PollEventPoll::remove_event(int fd) {
 }
 
 int PollEventPoll::poll(int timeout_ms) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (poll_fds_.empty()) {
-        return 0;  // 没有待监听的文件描述符
+    std::vector<
+#ifdef _WIN32
+        WSAPOLLFD
+#else
+        struct pollfd
+#endif
+    > poll_fds_snapshot;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (poll_fds_.empty()) {
+            return 0;  // 没有待监听的文件描述符
+        }
+        poll_fds_snapshot = poll_fds_;
     }
 
 #ifdef _WIN32
     // Windows 下使用 WSAPoll（通过 poll 宏定义）
-    int nfds = ::poll(poll_fds_.data(), static_cast<ULONG>(poll_fds_.size()), timeout_ms);
+    int nfds = ::poll(poll_fds_snapshot.data(), static_cast<ULONG>(poll_fds_snapshot.size()), timeout_ms);
     if (nfds == SOCKET_ERROR) {
         int err = WSAGetLastError();
         if (err == WSAEINTR) {
@@ -123,11 +133,11 @@ int PollEventPoll::poll(int timeout_ms) {
         return -1;
     }
 #else
-    if (poll_fds_.size() > std::numeric_limits<nfds_t>::max()) {
+    if (poll_fds_snapshot.size() > std::numeric_limits<nfds_t>::max()) {
         set_error("poll() 失败: 文件描述符数量超出 nfds_t 范围");
         return -1;
     }
-    int nfds = ::poll(poll_fds_.data(), static_cast<nfds_t>(poll_fds_.size()), timeout_ms);
+    int nfds = ::poll(poll_fds_snapshot.data(), static_cast<nfds_t>(poll_fds_snapshot.size()), timeout_ms);
     if (nfds < 0) {
         if (errno == EINTR) {
             return 0;  // 被信号中断
@@ -141,8 +151,14 @@ int PollEventPoll::poll(int timeout_ms) {
         return 0;  // 超时
     }
 
-    // 处理就绪事件
-    for (const auto& pfd : poll_fds_) {
+    std::vector<EventEntry> ready_callbacks;
+    std::vector<PollResult> ready_results;
+    ready_callbacks.reserve(static_cast<std::size_t>(nfds));
+    ready_results.reserve(static_cast<std::size_t>(nfds));
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+    for (const auto& pfd : poll_fds_snapshot) {
         if (pfd.revents == 0) {
             continue;  // 无事件
         }
@@ -166,10 +182,19 @@ int PollEventPoll::poll(int timeout_ms) {
             events |= static_cast<int>(IOEvent::ERR);
         }
 
-        // 调用回调函数
         const auto& entry = it->second;
         if (entry.callback) {
-            entry.callback(fd, events, entry.user_data);
+                ready_callbacks.push_back(entry);
+                ready_results.emplace_back(fd, events, entry.user_data);
+            }
+        }
+    }
+
+    for (std::size_t i = 0; i < ready_callbacks.size(); ++i) {
+        const auto& entry = ready_callbacks[i];
+        const auto& result = ready_results[i];
+        if (entry.callback) {
+            entry.callback(result.fd, result.events, result.user_data);
         }
     }
 

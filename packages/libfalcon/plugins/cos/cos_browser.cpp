@@ -12,6 +12,7 @@
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <algorithm>
+#include <cctype>
 #include <ctime>
 #include <iomanip>
 #include <cstring>
@@ -29,40 +30,70 @@ using json = nlohmann::json;
 
 namespace falcon {
 
+namespace {
+
+size_t find_region_marker(const std::string& host) {
+    constexpr const char* prefixes[] = {"-ap-", "-na-", "-eu-", "-sa-", "-af-"};
+    size_t best = std::string::npos;
+    for (const char* prefix : prefixes) {
+        const size_t pos = host.rfind(prefix);
+        if (pos != std::string::npos && (best == std::string::npos || pos > best)) {
+            best = pos;
+        }
+    }
+    return best;
+}
+
+} // namespace
+
 // COSUrlParser 实现
 COSUrl COSUrlParser::parse(const std::string& url) {
     using namespace cloud;
 
+    if (url.empty()) {
+        throw std::invalid_argument("Invalid COS URL: empty URL");
+    }
+    if (!starts_with_protocol(url, PROTOCOL_COS)) {
+        throw std::invalid_argument("Invalid COS URL: missing cos:// protocol");
+    }
+
     COSUrl cos_url;
+    const size_t host_start = PROTOCOL_COS.size();
+    const size_t path_start = url.find('/', host_start);
+    const std::string host = path_start == std::string::npos
+        ? url.substr(host_start)
+        : url.substr(host_start, path_start - host_start);
 
-    if (starts_with_protocol(url, PROTOCOL_COS)) {
-        // 使用协议常量自动计算偏移量，无需魔法数字！
-        size_t bucket_start = PROTOCOL_COS.size();  // 自动 = 6
-        size_t bucket_end = url.find('/', bucket_start);
+    if (host.empty()) {
+        throw std::invalid_argument("Invalid COS URL: missing host");
+    }
+    if (!host.empty() && host.back() == '-') {
+        throw std::invalid_argument("Invalid COS URL: missing region");
+    }
 
-        if (bucket_end == std::string::npos) {
-            cos_url.bucket = url.substr(bucket_start);
-        } else {
-            std::string bucket_part = url.substr(bucket_start, bucket_end - bucket_start);
+    const size_t region_marker = find_region_marker(host);
+    if (region_marker != std::string::npos) {
+        cos_url.bucket = host.substr(0, region_marker);
+        cos_url.region = host.substr(region_marker + 1);
+    } else {
+        cos_url.bucket = host;
+    }
 
-            // 检查是否包含region
-            size_t dash_pos = bucket_part.find('-');
-            if (dash_pos != std::string::npos && dash_pos != 0) {
-                // 可能是bucket-region格式
-                std::string possible_region = bucket_part.substr(dash_pos + 1);
-                if (possible_region.find("ap-") == 0 ||
-                    possible_region.find("na-") == 0 ||
-                    possible_region.find("eu-") == 0) {
-                    cos_url.bucket = bucket_part.substr(0, dash_pos);
-                    cos_url.region = possible_region;
-                } else {
-                    cos_url.bucket = bucket_part;
-                }
-            } else {
-                cos_url.bucket = bucket_part;
-            }
+    if (path_start != std::string::npos) {
+        cos_url.key = url.substr(path_start + 1);
+    }
 
-            cos_url.key = url.substr(bucket_end + 1);
+    if (!cos_url.region.empty() && cos_url.bucket.find('-') == std::string::npos &&
+        !cos_url.bucket.empty() &&
+        std::all_of(cos_url.bucket.begin(), cos_url.bucket.end(), ::isdigit) &&
+        !cos_url.key.empty()) {
+        const size_t slash_pos = cos_url.key.find('/');
+        const std::string bucket_suffix = slash_pos == std::string::npos
+            ? cos_url.key
+            : cos_url.key.substr(0, slash_pos);
+        if (!bucket_suffix.empty()) {
+            cos_url.bucket += "-" + bucket_suffix;
+            cos_url.key = slash_pos == std::string::npos ? std::string() : cos_url.key.substr(slash_pos + 1);
         }
     }
 

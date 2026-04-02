@@ -48,6 +48,7 @@ EPollEventPoll::~EPollEventPoll() {
 bool EPollEventPoll::add_event(int fd, int events,
                                EventCallback callback,
                                void* user_data) {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (epoll_fd_ < 0) {
         return set_error("epoll 实例未创建");
     }
@@ -84,6 +85,7 @@ bool EPollEventPoll::add_event(int fd, int events,
 }
 
 bool EPollEventPoll::modify_event(int fd, int events) {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (epoll_fd_ < 0) {
         return set_error("epoll 实例未创建");
     }
@@ -118,6 +120,7 @@ bool EPollEventPoll::modify_event(int fd, int events) {
 }
 
 bool EPollEventPoll::remove_event(int fd) {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (epoll_fd_ < 0) {
         return set_error("epoll 实例未创建");
     }
@@ -133,9 +136,12 @@ bool EPollEventPoll::remove_event(int fd) {
 }
 
 int EPollEventPoll::poll(int timeout_ms) {
-    if (epoll_fd_ < 0) {
-        set_error("epoll 实例未创建");
-        return -1;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (epoll_fd_ < 0) {
+            set_error("epoll 实例未创建");
+            return -1;
+        }
     }
 
     // 分配事件数组
@@ -151,7 +157,13 @@ int EPollEventPoll::poll(int timeout_ms) {
         return -1;
     }
 
-    // 处理就绪事件
+    std::vector<EventEntry> ready_callbacks;
+    std::vector<PollResult> ready_results;
+    ready_callbacks.reserve(static_cast<std::size_t>(nfds));
+    ready_results.reserve(static_cast<std::size_t>(nfds));
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
     for (int i = 0; i < nfds; ++i) {
         const auto& ev = epoll_events[static_cast<std::size_t>(i)];
         int fd = ev.data.fd;
@@ -174,10 +186,19 @@ int EPollEventPoll::poll(int timeout_ms) {
             events |= static_cast<int>(IOEvent::ERR);
         }
 
-        // 调用回调函数
         const auto& entry = it->second;
         if (entry.callback) {
-            entry.callback(fd, events, entry.user_data);
+                ready_callbacks.push_back(entry);
+                ready_results.emplace_back(fd, events, entry.user_data);
+            }
+        }
+    }
+
+    for (std::size_t i = 0; i < ready_callbacks.size(); ++i) {
+        const auto& entry = ready_callbacks[i];
+        const auto& result = ready_results[i];
+        if (entry.callback) {
+            entry.callback(result.fd, result.events, result.user_data);
         }
     }
 
@@ -185,6 +206,7 @@ int EPollEventPoll::poll(int timeout_ms) {
 }
 
 void EPollEventPoll::clear() {
+    std::lock_guard<std::mutex> lock(mutex_);
     // 移除所有文件描述符
     for (const auto& pair : events_) {
         epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, pair.first, nullptr);

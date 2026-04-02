@@ -32,39 +32,41 @@ namespace falcon {
 OSSUrl OSSUrlParser::parse(const std::string& url) {
     using namespace cloud;
 
+    if (!starts_with_protocol(url, PROTOCOL_OSS)) {
+        throw std::invalid_argument("Invalid OSS URL: missing oss:// protocol");
+    }
+
     OSSUrl oss_url;
+    const size_t host_start = PROTOCOL_OSS.size();
+    const size_t path_start = url.find('/', host_start);
+    const std::string host = path_start == std::string::npos
+        ? url.substr(host_start)
+        : url.substr(host_start, path_start - host_start);
 
-    if (starts_with_protocol(url, PROTOCOL_OSS)) {
-        // 使用协议常量自动计算偏移量，无需魔法数字！
-        size_t bucket_start = PROTOCOL_OSS.size();  // 自动 = 6
-        size_t bucket_end = url.find('/', bucket_start);
+    if (host.empty()) {
+        throw std::invalid_argument("Invalid OSS URL: missing host");
+    }
+    if (host.find('@') != std::string::npos) {
+        throw std::invalid_argument("Invalid OSS URL: unsupported host format");
+    }
 
-        if (bucket_end == std::string::npos) {
-            oss_url.bucket = url.substr(bucket_start);
-        } else {
-            std::string bucket_part = url.substr(bucket_start, bucket_end - bucket_start);
+    const size_t dot_pos = host.find('.');
+    if (dot_pos != std::string::npos) {
+        oss_url.bucket = host.substr(0, dot_pos);
+        oss_url.endpoint = host.substr(dot_pos + 1);
+    } else {
+        oss_url.bucket = host;
+    }
 
-            // 检查是否包含endpoint
-            size_t dot_pos = bucket_part.find('.');
-            if (dot_pos != std::string::npos) {
-                oss_url.bucket = bucket_part.substr(0, dot_pos);
-                oss_url.endpoint = bucket_part.substr(dot_pos + 1);
-
-                // 从endpoint提取region
-                if (oss_url.endpoint.find("oss-") == 0) {
-                    size_t region_end = oss_url.endpoint.find(".aliyuncs.com");
-                    if (region_end != std::string::npos) {
-                        oss_url.region = oss_url.endpoint.substr(4, region_end - 4);
-                    }
-                }
-            } else {
-                oss_url.bucket = bucket_part;
-                // 使用默认endpoint格式
-                oss_url.endpoint = "oss-" + oss_url.region + ".aliyuncs.com";
-            }
-
-            oss_url.key = url.substr(bucket_end + 1);
+    if (!oss_url.endpoint.empty() && oss_url.endpoint.rfind("oss-", 0) == 0) {
+        const size_t region_end = oss_url.endpoint.find(".aliyuncs.com");
+        if (region_end != std::string::npos && region_end > 4) {
+            oss_url.region = oss_url.endpoint.substr(4, region_end - 4);
         }
+    }
+
+    if (path_start != std::string::npos) {
+        oss_url.key = url.substr(path_start + 1);
     }
 
     return oss_url;
