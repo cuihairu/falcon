@@ -19,7 +19,10 @@
 #include <QHBoxLayout>
 #include <QWidget>
 #include <QApplication>
+#include <QDir>
+#include <QInputDialog>
 #include <QMessageBox>
+#include <QSettings>
 
 namespace falcon::desktop {
 
@@ -32,12 +35,15 @@ MainWindow::MainWindow(QWidget* parent)
     , side_bar_(nullptr)
     , content_stack_(nullptr)
     , download_page_(nullptr)
+    , settings_page_(nullptr)
     , clipboard_monitor_(nullptr)
     , ipc_server_(nullptr)
     , download_engine_(nullptr)
 {
     setup_ui();
     setup_clipboard_monitor();
+    load_settings();
+    apply_settings_to_runtime();
     setup_ipc_server();
     ensure_download_engine();
 }
@@ -102,6 +108,11 @@ void MainWindow::show_add_download_dialog(UrlInfo url_info, const IncomingDownlo
     }
 
     AddDownloadDialog dialog(url_info, this);
+    if (settings_page_) {
+        dialog.set_default_save_path(settings_page_->get_default_download_dir());
+        dialog.set_default_connections(settings_page_->get_default_connections());
+    }
+
     if (request_context) {
         dialog.set_request_referrer(request_context->referrer);
         dialog.set_request_user_agent(request_context->user_agent);
@@ -148,6 +159,32 @@ void MainWindow::show_add_download_dialog(UrlInfo url_info, const IncomingDownlo
     );
 }
 
+bool MainWindow::add_download_task(const QString& url, bool start_immediately)
+{
+    ensure_download_engine();
+
+    falcon::DownloadOptions options;
+    if (settings_page_) {
+        options.max_connections = static_cast<std::size_t>(settings_page_->get_default_connections());
+        options.output_directory = settings_page_->get_default_download_dir().toStdString();
+    }
+
+    auto task = download_engine_->add_task(url.toStdString(), options);
+    if (!task) {
+        return false;
+    }
+
+    if (start_immediately) {
+        (void)download_engine_->start_task(task->id());
+    }
+
+    if (download_page_) {
+        download_page_->add_engine_task(task);
+    }
+
+    return true;
+}
+
 void MainWindow::create_side_bar()
 {
     side_bar_ = new SideBar(this);
@@ -181,6 +218,12 @@ void MainWindow::create_pages()
     // 下载页面
     download_page_ = new DownloadPage(this);
     content_stack_->addWidget(download_page_);
+    connect(download_page_, &DownloadPage::new_task_requested,
+            this, &MainWindow::on_new_task_requested);
+    connect(download_page_, &DownloadPage::remove_task_requested,
+            this, &MainWindow::on_remove_task_requested);
+    connect(download_page_, &DownloadPage::remove_finished_tasks_requested,
+            this, &MainWindow::on_remove_finished_tasks_requested);
 
     // 云盘页面
     auto* cloud_page = new CloudPage(this);
@@ -189,16 +232,24 @@ void MainWindow::create_pages()
     // 发现页面
     auto* discovery_page = new DiscoveryPage(this);
     content_stack_->addWidget(discovery_page);
+    connect(discovery_page, &DiscoveryPage::configured_download_requested,
+            this, &MainWindow::on_configured_download_requested);
+    connect(discovery_page, &DiscoveryPage::direct_download_requested,
+            this, &MainWindow::on_direct_download_requested);
 
     // 设置页面
-    auto* settings_page = new SettingsPage(this);
-    content_stack_->addWidget(settings_page);
+    settings_page_ = new SettingsPage(this);
+    content_stack_->addWidget(settings_page_);
 
     // 连接设置页面信号
-    connect(settings_page, &SettingsPage::clipboard_monitoring_toggled, this, [this](bool enabled) {
+    connect(settings_page_, &SettingsPage::clipboard_monitoring_toggled, this, [this](bool enabled) {
         if (clipboard_monitor_) {
             clipboard_monitor_->set_enabled(enabled);
         }
+    });
+    connect(settings_page_, &SettingsPage::settings_changed, this, [this]() {
+        save_settings();
+        apply_settings_to_runtime();
     });
 }
 
@@ -212,6 +263,71 @@ void MainWindow::setup_clipboard_monitor()
 
     // 默认不启动，由设置页面控制
     // clipboard_monitor_->start();
+}
+
+void MainWindow::load_settings()
+{
+    if (!settings_page_) {
+        return;
+    }
+
+    QSettings settings;
+    settings.beginGroup("desktop");
+
+    settings_page_->set_clipboard_monitoring_enabled(
+        settings.value("clipboard_monitoring_enabled", false).toBool());
+    settings_page_->set_clipboard_detection_delay(
+        settings.value("clipboard_detection_delay_ms", 1000).toInt());
+    settings_page_->set_default_download_dir(
+        settings.value("default_download_dir", QDir::homePath() + "/Downloads").toString());
+    settings_page_->set_max_concurrent_downloads(
+        settings.value("max_concurrent_downloads", 3).toInt());
+    settings_page_->set_default_connections(
+        settings.value("default_connections", 4).toInt());
+    settings_page_->set_notifications_enabled(
+        settings.value("notifications_enabled", true).toBool());
+    settings_page_->set_sound_notifications_enabled(
+        settings.value("sound_notifications_enabled", false).toBool());
+
+    settings.endGroup();
+}
+
+void MainWindow::save_settings() const
+{
+    if (!settings_page_) {
+        return;
+    }
+
+    QSettings settings;
+    settings.beginGroup("desktop");
+    settings.setValue("clipboard_monitoring_enabled", settings_page_->is_clipboard_monitoring_enabled());
+    settings.setValue("clipboard_detection_delay_ms", settings_page_->get_clipboard_detection_delay());
+    settings.setValue("default_download_dir", settings_page_->get_default_download_dir());
+    settings.setValue("max_concurrent_downloads", settings_page_->get_max_concurrent_downloads());
+    settings.setValue("default_connections", settings_page_->get_default_connections());
+    settings.setValue("connection_timeout_seconds", settings_page_->get_connection_timeout());
+    settings.setValue("retry_count", settings_page_->get_retry_count());
+    settings.setValue("notifications_enabled", settings_page_->is_notifications_enabled());
+    settings.setValue("sound_notifications_enabled", settings_page_->is_sound_notifications_enabled());
+    settings.endGroup();
+    settings.sync();
+}
+
+void MainWindow::apply_settings_to_runtime()
+{
+    if (!settings_page_) {
+        return;
+    }
+
+    if (clipboard_monitor_) {
+        clipboard_monitor_->set_detection_delay(settings_page_->get_clipboard_detection_delay());
+        clipboard_monitor_->set_enabled(settings_page_->is_clipboard_monitoring_enabled());
+    }
+
+    if (download_engine_) {
+        download_engine_->set_max_concurrent_tasks(
+            static_cast<std::size_t>(settings_page_->get_max_concurrent_downloads()));
+    }
 }
 
 void MainWindow::setup_ipc_server()
@@ -235,6 +351,52 @@ void MainWindow::on_download_requested(const IncomingDownloadRequest& request)
     }
 
     show_add_download_dialog(url_info, &request);
+}
+
+void MainWindow::on_new_task_requested()
+{
+    const QString url = QInputDialog::getText(
+        this,
+        tr("New Download Task"),
+        tr("Enter download URL (HTTP/HTTPS/Magnet):"),
+        QLineEdit::Normal
+    ).trimmed();
+
+    if (url.isEmpty()) {
+        return;
+    }
+
+    open_url(url);
+}
+
+void MainWindow::on_configured_download_requested(const QString& url)
+{
+    open_url(url);
+}
+
+void MainWindow::on_direct_download_requested(const QString& url, bool start_immediately)
+{
+    if (!add_download_task(url, start_immediately)) {
+        QMessageBox::warning(this, tr("Download"), tr("URL is not supported.\n%1").arg(url));
+    }
+}
+
+void MainWindow::on_remove_task_requested(falcon::TaskId id)
+{
+    if (!download_engine_) {
+        return;
+    }
+
+    (void)download_engine_->remove_task(id);
+}
+
+void MainWindow::on_remove_finished_tasks_requested()
+{
+    if (!download_engine_) {
+        return;
+    }
+
+    (void)download_engine_->remove_finished_tasks();
 }
 
 } // namespace falcon::desktop

@@ -33,6 +33,8 @@ public:
     explicit AddDownloadDialog(const UrlInfo& url_info, QWidget* parent = nullptr);
     ~AddDownloadDialog() override = default;
 
+    void set_default_save_path(const QString& path);
+    void set_default_connections(int count);
     void set_request_referrer(const QString& referrer);
     void set_request_user_agent(const QString& user_agent);
     void set_request_cookies(const QString& cookies);

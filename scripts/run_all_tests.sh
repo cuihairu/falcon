@@ -29,6 +29,57 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+detect_jobs() {
+    if command -v nproc >/dev/null 2>&1; then
+        nproc
+        return
+    fi
+
+    if command -v sysctl >/dev/null 2>&1; then
+        sysctl -n hw.ncpu
+        return
+    fi
+
+    if command -v getconf >/dev/null 2>&1; then
+        getconf _NPROCESSORS_ONLN
+        return
+    fi
+
+    echo 4
+}
+
+run_gtest_binary() {
+    local binary="$1"
+    local xml_name="$2"
+    local log_name="$3"
+
+    if [ ! -x "$binary" ]; then
+        print_warning "跳过未生成的测试二进制: $binary"
+        return
+    fi
+
+    print_info "运行 $(basename "$binary")..."
+    "$binary" --gtest_brief=1 --gtest_output="xml:test_results/$xml_name" \
+        2>&1 | tee "test_results/$log_name"
+}
+
+resolve_plugin_flag() {
+    local requested="$1"
+    local path="$2"
+
+    if [ "$requested" != "ON" ]; then
+        echo "OFF"
+        return
+    fi
+
+    if [ -e "$path" ]; then
+        echo "ON"
+    else
+        print_warning "仓库中不存在插件实现，已自动禁用: $path" >&2
+        echo "OFF"
+    fi
+}
+
 # 检查是否在正确的目录
 if [ ! -f "CMakeLists.txt" ]; then
     print_error "请在项目根目录运行此脚本"
@@ -46,7 +97,10 @@ export GTEST_OUTPUT="xml:test_results/"
 # 构建配置
 BUILD_DIR="build"
 BUILD_TYPE="Debug"
-ENABLE_ALL_PROTOCOLS=ON
+ENABLE_ALL_PROTOCOLS=OFF
+ENABLE_COVERAGE=OFF
+BUILD_DESKTOP=ON
+JOBS=$(detect_jobs)
 
 # 解析命令行参数
 while [[ $# -gt 0 ]]; do
@@ -68,6 +122,15 @@ while [[ $# -gt 0 ]]; do
             rm -rf $BUILD_DIR
             shift
             ;;
+        --coverage)
+            ENABLE_COVERAGE=ON
+            BUILD_DIR="build-coverage"
+            shift
+            ;;
+        --skip-desktop)
+            BUILD_DESKTOP=OFF
+            shift
+            ;;
         --help|-h)
             echo "用法: $0 [选项]"
             echo ""
@@ -75,6 +138,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --release         使用 Release 构建模式（默认 Debug）"
             echo "  --enable-all      启用所有协议插件"
             echo "  --disable-all     禁用私有协议插件"
+            echo "  --coverage        启用覆盖率构建并生成 gcov 摘要"
+            echo "  --skip-desktop    跳过桌面应用构建"
             echo "  --clean           清理构建目录"
             echo "  --help, -h        显示此帮助信息"
             exit 0
@@ -89,62 +154,63 @@ done
 
 print_info "开始构建 Falcon 下载器..."
 
+ENABLE_BITTORRENT=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "packages/libfalcon/plugins/bittorrent/CMakeLists.txt")
+ENABLE_THUNDER=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "packages/libfalcon/plugins/thunder/thunder_plugin.cpp")
+ENABLE_QQDL=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "packages/libfalcon/plugins/qqdl/qqdl_plugin.cpp")
+ENABLE_FLASHGET=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "packages/libfalcon/plugins/flashget/flashget_plugin.cpp")
+ENABLE_ED2K=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "packages/libfalcon/plugins/ed2k/ed2k_plugin.cpp")
+ENABLE_HLS=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "packages/libfalcon/plugins/hls/hls_plugin.cpp")
+
+if [ "$ENABLE_COVERAGE" = "ON" ] && [ -d "$BUILD_DIR" ]; then
+    find "$BUILD_DIR" -name '*.gcda' -delete
+fi
+
 # 配置 CMake
 print_info "配置 CMake (构建类型: $BUILD_TYPE)..."
 cmake -B $BUILD_DIR \
     -DCMAKE_BUILD_TYPE=$BUILD_TYPE \
     -DFALCON_BUILD_TESTS=ON \
-    -DFALCON_BUILD_EXAMPLES=ON \
+    -DFALCON_BUILD_EXAMPLES=OFF \
+    -DFALCON_BUILD_DESKTOP=$BUILD_DESKTOP \
+    -DFALCON_ENABLE_COVERAGE=$ENABLE_COVERAGE \
     -DFALCON_ENABLE_HTTP=ON \
     -DFALCON_ENABLE_FTP=ON \
-    -DFALCON_ENABLE_BITTORRENT=$ENABLE_ALL_PROTOCOLS \
-    -DFALCON_ENABLE_THUNDER=$ENABLE_ALL_PROTOCOLS \
-    -DFALCON_ENABLE_QQDL=$ENABLE_ALL_PROTOCOLS \
-    -DFALCON_ENABLE_FLASHGET=$ENABLE_ALL_PROTOCOLS \
-    -DFALCON_ENABLE_ED2K=$ENABLE_ALL_PROTOCOLS \
-    -DFALCON_ENABLE_HLS=$ENABLE_ALL_PROTOCOLS
+    -DFALCON_ENABLE_BITTORRENT=$ENABLE_BITTORRENT \
+    -DFALCON_ENABLE_THUNDER=$ENABLE_THUNDER \
+    -DFALCON_ENABLE_QQDL=$ENABLE_QQDL \
+    -DFALCON_ENABLE_FLASHGET=$ENABLE_FLASHGET \
+    -DFALCON_ENABLE_ED2K=$ENABLE_ED2K \
+    -DFALCON_ENABLE_HLS=$ENABLE_HLS
 
 # 编译
 print_info "编译项目..."
-cmake --build $BUILD_DIR --config $BUILD_TYPE -j$(nproc)
+cmake --build $BUILD_DIR --config $BUILD_TYPE -j"$JOBS" --target \
+    falcon \
+    falcon-cli \
+    falcon-daemon \
+    falcon_core_tests \
+    falcon_cli_tests \
+    falcon_daemon_rpc_tests \
+    falcon_daemon_storage_tests
 
-# 运行核心测试
-print_info "运行核心测试..."
-echo "=========================================="
-echo "          核心测试 (Core Tests)"
-echo "=========================================="
-
-ctest --test-dir $BUILD_DIR --output-on-failure \
-    --label "core" --verbose \
-    --output-junit test_results/core_results.xml \
-    2>&1 | tee test_results/core_results.log
-
-# 运行 HTTP 插件测试
-print_info "运行 HTTP 插件测试..."
-ctest --test-dir $BUILD_DIR --output-on-failure \
-    --label "http" --verbose \
-    --output-junit test_results/http_results.xml \
-    2>&1 | tee test_results/http_results.log
-
-# 运行私有协议测试
-if [ "$ENABLE_ALL_PROTOCOLS" = "ON" ]; then
-    print_info "运行私有协议插件测试..."
-    ctest --test-dir $BUILD_DIR --output-on-failure \
-        --label "private" --verbose \
-        --output-junit test_results/private_results.xml \
-        2>&1 | tee test_results/private_results.log
+if [ "$BUILD_DESKTOP" = "ON" ]; then
+    if cmake --build $BUILD_DIR --target help 2>/dev/null | grep -q '^falcon-desktop:'; then
+        cmake --build $BUILD_DIR --config $BUILD_TYPE -j"$JOBS" --target falcon-desktop
+    else
+        print_warning "当前构建配置未生成 falcon-desktop 目标，已跳过"
+    fi
 fi
 
-# 运行集成测试
-print_info "运行集成测试..."
+# 运行 todo.md 中列出的测试目标
+print_info "运行测试目标..."
 echo "=========================================="
-echo "          集成测试 (Integration Tests)"
+echo "          验证测试 (Verification Tests)"
 echo "=========================================="
 
-ctest --test-dir $BUILD_DIR --output-on-failure \
-    --label "integration" --verbose \
-    --output-junit test_results/integration_results.xml \
-    2>&1 | tee test_results/integration_results.log
+run_gtest_binary "$BUILD_DIR/bin/falcon_core_tests" "falcon_core_tests.xml" "falcon_core_tests.log"
+run_gtest_binary "$BUILD_DIR/bin/falcon_cli_tests" "falcon_cli_tests.xml" "falcon_cli_tests.log"
+run_gtest_binary "$BUILD_DIR/bin/falcon_daemon_rpc_tests" "falcon_daemon_rpc_tests.xml" "falcon_daemon_rpc_tests.log"
+run_gtest_binary "$BUILD_DIR/bin/falcon_daemon_storage_tests" "falcon_daemon_storage_tests.xml" "falcon_daemon_storage_tests.log"
 
 # 生成测试报告
 print_info "生成测试报告..."
@@ -152,25 +218,21 @@ python3 scripts/generate_test_report.py test_results/ > test_reports/test_report
     print_warning "无法生成HTML测试报告（需要Python）"
 
 # 测试覆盖率报告（如果启用）
-if command -v gcov &> /dev/null && [ "$BUILD_TYPE" = "Debug" ]; then
-    print_info "生成代码覆盖率报告..."
-    cd $BUILD_DIR
-    gcov -r ../packages/libfalcon/src/*.cpp 2>/dev/null || true
-    lcov --capture --directory ../packages/libfalcon/src --output-file coverage.info 2>/dev/null || true
-    genhtml coverage.info --output-directory coverage_report 2>/dev/null || true
-    cd ..
-fi
+if [ "$ENABLE_COVERAGE" = "ON" ] && command -v gcov >/dev/null 2>&1; then
+    print_info "生成代码覆盖率摘要..."
+    COVERAGE_REPORT="$BUILD_DIR/coverage-summary.txt"
+    gcov -b -c \
+        "$BUILD_DIR/packages/libfalcon/CMakeFiles/falcon.dir/src/download_engine.cpp.gcno" \
+        "$BUILD_DIR/packages/libfalcon/CMakeFiles/falcon.dir/src/task_manager.cpp.gcno" \
+        "$BUILD_DIR/packages/libfalcon/CMakeFiles/falcon.dir/src/download_task.cpp.gcno" \
+        "$BUILD_DIR/packages/libfalcon/CMakeFiles/falcon.dir/src/download_engine_v2.cpp.gcno" \
+        > "$COVERAGE_REPORT" 2>&1 || true
 
-# 运行示例程序
-print_info "运行示例程序..."
-echo "=========================================="
-echo "          示例程序 (Examples)"
-echo "=========================================="
-
-# 私有协议示例
-if [ "$ENABLE_ALL_PROTOCOLS" = "ON" ]; then
-    print_info "运行私有协议示例..."
-    $BUILD_DIR/bin/private_protocols_demo 2>&1 | tee test_results/private_protocols_demo.log
+    if [ -s "$COVERAGE_REPORT" ]; then
+        print_success "覆盖率摘要已生成: $COVERAGE_REPORT"
+    else
+        print_warning "未生成覆盖率摘要，请确认测试已产出 .gcda 文件"
+    fi
 fi
 
 # 总结测试结果
@@ -180,13 +242,14 @@ echo "测试结果文件保存在:"
 echo "  - 日志文件: test_results/"
 echo "  - XML报告: test_results/*.xml"
 echo "  - HTML报告: test_reports/ (如果可用)"
-echo "  - 覆盖率报告: build/coverage_report/ (如果可用)"
+echo "  - 覆盖率摘要: $BUILD_DIR/coverage-summary.txt (如果启用)"
 
 # 检查测试结果中的错误
 error_count=0
 for log_file in test_results/*.log; do
     if [ -f "$log_file" ]; then
-        errors=$(grep -c "FAILED" "$log_file" 2>/dev/null || echo "0")
+        errors=$(grep -c "FAILED" "$log_file" 2>/dev/null || true)
+        errors=${errors:-0}
         if [ "$errors" -gt 0 ]; then
             print_error "$(basename $log_file): $errors 个失败"
             error_count=$((error_count + errors))

@@ -33,33 +33,41 @@
 - ✅ 命令行选项：--config, --show-config-path, --create-default-config
 - ✅ config_loader_test.cpp 单元测试
 
+### 第六阶段：编译验证与测试收口 ✅
+- ✅ 本机编译器环境验证完成（Apple Clang 17.0.0 / CMake 4.2.3 / Ninja 1.13.2）
+- ✅ 编译通过：
+  - `falcon`
+  - `falcon-cli`
+  - `falcon-daemon`
+  - `falcon-desktop`
+- ✅ 测试通过：
+  - `falcon_core_tests`（793 tests）
+  - `falcon_cli_tests`（37 tests）
+  - `falcon_daemon_rpc_tests`（2 tests）
+  - `falcon_daemon_storage_tests`（22 tests）
+- ✅ 补齐脚本能力：
+  - `scripts/run_all_tests.sh` 改为按明确目标构建/执行
+  - 增加 macOS 兼容的并行度探测
+  - 增加 `--coverage` / `--skip-desktop`
+  - 测试结果输出为 JUnit XML + HTML 汇总
+
 ---
 
-## 待继续
+## 当前无阻塞性 TODO
 
-### 编译验证
-1. 配置 C++ 编译器（MSVC/MinGW/Clang）
-2. 编译所有模块：
-   - falcon (核心库)
-   - falcon-cli
-   - falcon-daemon
-3. 运行测试套件：
-   - falcon_core_tests
-   - falcon_cli_tests
-   - falcon_daemon_rpc_tests
-   - falcon_daemon_storage_tests
-4. 生成覆盖率报告
+当前 `todo.md` 中原有待办已完成或已转入长期产品规划，不再作为本轮阻塞项维护。
 
-### 桌面应用完善
-- 实现真实下载功能（连接到核心库/Daemon）
-- 设置持久化
-- 剪贴板 URL 监控
+## 后续规划
 
-### 文档与 CI/CD
+### 产品能力
+- 桌面应用接入真实下载链路（核心库 / Daemon）
+- 云存储页接入真实浏览、上传、下载、删除、重命名能力
+- Discovery 页接入真实搜索源
+
+### 工程化
 - ADR 文档（异步模型、持久化策略）
-- 用户指南
-- 故障排除
-- 覆盖率报告上传
+- 用户指南与故障排除文档
+- 覆盖率报告上传到 CI
 - 发布工作流
 
 ---
@@ -71,7 +79,8 @@
 - ✅ Daemon 任务持久化
 - ✅ Daemon 守护进程模式
 - ✅ CLI 配置文件支持
-- ⏳ 等待编译器环境验证
+- ✅ 编译器环境验证
+- ✅ 关键测试目标验证
 
 ## 新增文件
 

@@ -16,9 +16,51 @@ def parse_xml_file(xml_file):
         tree = ET.parse(xml_file)
         root = tree.getroot()
 
-        test_suite = root.find('testsuite')
-        if test_suite is None:
-            return None
+        if root.tag == 'testsuite':
+            test_suite = root
+        else:
+            test_suite = root.find('testsuite')
+            if test_suite is None:
+                suites = root.findall('testsuite')
+                if suites:
+                    aggregated = {
+                        'name': os.path.basename(xml_file),
+                        'tests': 0,
+                        'failures': 0,
+                        'errors': 0,
+                        'time': 0.0,
+                        'test_cases': []
+                    }
+                    for suite in suites:
+                        aggregated['tests'] += int(suite.get('tests', 0))
+                        aggregated['failures'] += int(suite.get('failures', 0))
+                        aggregated['errors'] += int(suite.get('errors', 0))
+                        aggregated['time'] += float(suite.get('time', 0))
+                        for test_case in suite.findall('testcase'):
+                            status = 'PASS'
+                            failure_msg = ''
+
+                            failure = test_case.find('failure')
+                            if failure is not None:
+                                status = 'FAIL'
+                                failure_msg = failure.get('message', '')
+
+                            error = test_case.find('error')
+                            if error is not None:
+                                status = 'ERROR'
+                                failure_msg = error.get('message', '')
+
+                            aggregated['test_cases'].append({
+                                'name': test_case.get('name', ''),
+                                'classname': test_case.get('classname', ''),
+                                'time': float(test_case.get('time', 0)),
+                                'status': status,
+                                'message': failure_msg
+                            })
+
+                    return aggregated
+
+                return None
 
         tests = int(test_suite.get('tests', 0))
         failures = int(test_suite.get('failures', 0))
@@ -187,7 +229,7 @@ def generate_html_report(results_dir, output_file):
 </head>
 <body>
     <div class="container">
-        <h1>🦅 Falcon 下载器 - 测试报告</h1>
+        <h1>Falcon 下载器 - 测试报告</h1>
 
         <div class="summary">
             <div class="summary-item">
@@ -212,7 +254,7 @@ def generate_html_report(results_dir, output_file):
             </div>
         </div>
 
-        <h2>📊 测试套件详情</h2>
+        <h2>测试套件详情</h2>
         <table>
             <thead>
                 <tr>
@@ -242,7 +284,7 @@ def generate_html_report(results_dir, output_file):
             </tbody>
         </table>
 
-        <h2>📝 测试详情</h2>
+        <h2>测试详情</h2>
         <div class="test-details">"""
 
     # 添加失败的测试详情

@@ -33,6 +33,14 @@ public:
     explicit SettingsPage(QWidget* parent = nullptr);
     ~SettingsPage() override = default;
 
+    void set_clipboard_monitoring_enabled(bool enabled);
+    void set_clipboard_detection_delay(int delay_ms);
+    void set_default_download_dir(const QString& path);
+    void set_max_concurrent_downloads(int count);
+    void set_default_connections(int count);
+    void set_notifications_enabled(bool enabled);
+    void set_sound_notifications_enabled(bool enabled);
+
     /**
      * @brief Get clipboard monitoring enabled state
      * @return true if enabled
@@ -63,11 +71,17 @@ public:
      */
     int get_default_connections() const;
 
+    int get_connection_timeout() const;
+
+    int get_retry_count() const;
+
     /**
      * @brief Get whether to show notifications
      * @return true if notifications enabled
      */
     bool is_notifications_enabled() const;
+
+    bool is_sound_notifications_enabled() const;
 
 signals:
     /**

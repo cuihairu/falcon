@@ -14,6 +14,7 @@
 #include <QProgressBar>
 #include <QLabel>
 #include <QTimer>
+#include <QDateTime>
 
 #include <falcon/download_task.hpp>
 
@@ -48,6 +49,11 @@ public:
 
     void add_engine_task(const falcon::DownloadTask::Ptr& task);
 
+signals:
+    void new_task_requested();
+    void remove_task_requested(falcon::TaskId id);
+    void remove_finished_tasks_requested();
+
 private:
     void setup_ui();
     void create_tab_widget();
@@ -57,14 +63,38 @@ private:
     void create_history_tab();
     QWidget* create_toolbar();
 
-    // 添加新任务
-    void add_new_task();
+    void pause_selected_task();
+    void resume_selected_task();
+    void cancel_selected_task();
+    void delete_selected_task();
+    void clear_finished_tasks();
+    void update_action_buttons();
+    falcon::DownloadTask::Ptr selected_task() const;
+    falcon::TaskId selected_archived_task_id(QTableWidget* table) const;
+    void remove_downloading_row(falcon::TaskId id);
+    void append_trash_entry(falcon::TaskId id, const QString& reason);
+    void upsert_completed_row(falcon::TaskId id);
+    void upsert_history_row(falcon::TaskId id);
+    void remove_completed_row(falcon::TaskId id);
+    void remove_tracked_task(falcon::TaskId id);
+    void sync_task_tables(const falcon::DownloadTask::Ptr& task);
 
-    // 更新任务状态
-    void update_task_status();
     void refresh_engine_tasks();
     static QString format_bytes(uint64_t bytes);
     static QString format_speed(uint64_t bytes_per_second);
+    static QString format_timestamp(const QDateTime& timestamp);
+
+    struct TaskRecord {
+        falcon::DownloadTask::Ptr task;
+        QString filename;
+        QString save_path;
+        QString size_text;
+        QString status_text;
+        QString error_text;
+        QDateTime added_at;
+        QDateTime finished_at;
+        bool in_trash = false;
+    };
 
     // 控件
     QTabWidget* tab_widget_;
@@ -91,7 +121,10 @@ private:
 
     QTimer* refresh_timer_;
     QHash<qulonglong, int> row_by_task_id_;
-    QList<falcon::DownloadTask::Ptr> engine_tasks_;
+    QHash<qulonglong, int> completed_row_by_task_id_;
+    QHash<qulonglong, int> history_row_by_task_id_;
+    QHash<qulonglong, int> trash_row_by_task_id_;
+    QHash<qulonglong, TaskRecord> task_records_;
 };
 
 } // namespace falcon::desktop

@@ -44,6 +44,20 @@ AddDownloadDialog::AddDownloadDialog(const UrlInfo& url_info, QWidget* parent)
     resize(600, 450);
 }
 
+void AddDownloadDialog::set_default_save_path(const QString& path)
+{
+    if (save_path_edit_ && !path.trimmed().isEmpty()) {
+        save_path_edit_->setText(path.trimmed());
+    }
+}
+
+void AddDownloadDialog::set_default_connections(int count)
+{
+    if (connections_spin_) {
+        connections_spin_->setValue(count);
+    }
+}
+
 //==============================================================================
 // Getters
 //==============================================================================

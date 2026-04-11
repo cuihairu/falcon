@@ -17,6 +17,7 @@ namespace falcon::desktop {
 
 class SideBar;
 class DownloadPage;
+class SettingsPage;
 class ClipboardMonitor;
 class HttpIpcServer;
 struct UrlInfo;
@@ -45,6 +46,11 @@ private slots:
     void on_url_detected(const UrlInfo& url_info);
 
     void on_download_requested(const IncomingDownloadRequest& request);
+    void on_new_task_requested();
+    void on_configured_download_requested(const QString& url);
+    void on_direct_download_requested(const QString& url, bool start_immediately);
+    void on_remove_task_requested(falcon::TaskId id);
+    void on_remove_finished_tasks_requested();
 
 private:
     void setup_ui();
@@ -55,6 +61,10 @@ private:
     void setup_ipc_server();
     void ensure_download_engine();
     void show_add_download_dialog(UrlInfo url_info, const IncomingDownloadRequest* request_context);
+    bool add_download_task(const QString& url, bool start_immediately);
+    void load_settings();
+    void save_settings() const;
+    void apply_settings_to_runtime();
 
     // 侧边导航栏
     SideBar* side_bar_;
@@ -64,6 +74,7 @@ private:
 
     // 页面实例
     DownloadPage* download_page_;
+    SettingsPage* settings_page_;
 
     // 剪切板监听
     ClipboardMonitor* clipboard_monitor_;

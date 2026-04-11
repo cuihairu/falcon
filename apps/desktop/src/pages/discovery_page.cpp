@@ -359,9 +359,7 @@ void DiscoveryPage::display_results(const QList<SearchResultItem>& results)
         // 连接按钮信号（使用行号标识）
         connect(download_btn, &QPushButton::clicked, this, [this, row]() {
             if (row < current_results_.size()) {
-                // TODO: 添加到下载任务
-                QMessageBox::information(this, tr("Download"),
-                    tr("Download: %1\nURL: %2").arg(current_results_[row].title, current_results_[row].url));
+                request_configured_download_for_row(row);
             }
         });
 
@@ -394,8 +392,10 @@ void DiscoveryPage::download_selected()
         return;
     }
 
-    // TODO: 批量添加到下载任务
-    QMessageBox::information(this, tr("Download"), tr("Added %1 task(s) to queue.").arg(selected_rows.size()));
+    const int added = add_selected_items(true);
+    if (added > 0) {
+        QMessageBox::information(this, tr("Download"), tr("Added %1 task(s) to downloads.").arg(added));
+    }
 }
 
 void DiscoveryPage::copy_link()
@@ -502,9 +502,38 @@ void DiscoveryPage::add_to_download_queue()
         return;
     }
 
-    // TODO: 添加到下载队列（不立即开始）
-    QMessageBox::information(this, tr("Queue"),
-        tr("Added %1 task(s) to queue.").arg(selected_rows.size()));
+    const int added = add_selected_items(false);
+    if (added > 0) {
+        QMessageBox::information(this, tr("Queue"),
+            tr("Added %1 task(s) to queue.").arg(added));
+    }
+}
+
+void DiscoveryPage::request_configured_download_for_row(int row)
+{
+    if (row < 0 || row >= current_results_.size()) {
+        return;
+    }
+
+    emit configured_download_requested(current_results_[row].url);
+}
+
+int DiscoveryPage::add_selected_items(bool start_immediately)
+{
+    const auto selected_rows = results_table_->selectionModel()->selectedRows();
+    int added = 0;
+
+    for (const auto& index : selected_rows) {
+        const int row = index.row();
+        if (row < 0 || row >= current_results_.size()) {
+            continue;
+        }
+
+        emit direct_download_requested(current_results_[row].url, start_immediately);
+        ++added;
+    }
+
+    return added;
 }
 
 QString DiscoveryPage::format_number(int num) const

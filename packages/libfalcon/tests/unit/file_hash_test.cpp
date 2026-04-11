@@ -15,6 +15,12 @@
 #include <thread>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
+
 using namespace falcon;
 
 //==============================================================================
@@ -41,8 +47,13 @@ void remove_test_file(const std::string& path) {
 static std::string make_unique_temp_path(const std::string& filename) {
     auto dir = std::filesystem::temp_directory_path();
     auto now = std::chrono::steady_clock::now().time_since_epoch().count();
+#ifdef _WIN32
+    const auto pid = static_cast<unsigned long long>(::GetCurrentProcessId());
+#else
+    const auto pid = static_cast<unsigned long long>(::getpid());
+#endif
     std::ostringstream oss;
-    oss << "falcon_" << now << "_" << filename;
+    oss << "falcon_" << pid << "_" << now << "_" << filename;
     return (dir / oss.str()).string();
 }
 
@@ -674,12 +685,12 @@ TEST(FileHashConcurrency, ConcurrentVerification) {
 
     constexpr int num_threads = 10;
     std::vector<std::thread> threads;
-    std::vector<bool> results(num_threads);
+    std::vector<unsigned char> results(num_threads, 0);
 
     for (int i = 0; i < num_threads; ++i) {
         threads.emplace_back([&, i]() {
             auto hash_result = FileHasher::verify(path, expected_hash, HashAlgorithm::MD5);
-            results[i] = hash_result.valid;
+            results[i] = hash_result.valid ? 1U : 0U;
         });
     }
 
@@ -688,8 +699,8 @@ TEST(FileHashConcurrency, ConcurrentVerification) {
     }
 
     // 所有验证都应该成功
-    for (bool result : results) {
-        EXPECT_TRUE(result);
+    for (unsigned char result : results) {
+        EXPECT_EQ(result, 1U);
     }
 
     remove_test_file(path);

@@ -43,6 +43,41 @@ SettingsPage::SettingsPage(QWidget* parent)
 // Getters
 //==============================================================================
 
+void SettingsPage::set_clipboard_monitoring_enabled(bool enabled)
+{
+    clipboard_monitoring_checkbox_->setChecked(enabled);
+}
+
+void SettingsPage::set_clipboard_detection_delay(int delay_ms)
+{
+    clipboard_delay_spin_->setValue(delay_ms);
+}
+
+void SettingsPage::set_default_download_dir(const QString& path)
+{
+    download_dir_edit_->setText(path);
+}
+
+void SettingsPage::set_max_concurrent_downloads(int count)
+{
+    max_downloads_spin_->setValue(count);
+}
+
+void SettingsPage::set_default_connections(int count)
+{
+    default_connections_spin_->setValue(count);
+}
+
+void SettingsPage::set_notifications_enabled(bool enabled)
+{
+    notifications_checkbox_->setChecked(enabled);
+}
+
+void SettingsPage::set_sound_notifications_enabled(bool enabled)
+{
+    sound_notification_checkbox_->setChecked(enabled);
+}
+
 bool SettingsPage::is_clipboard_monitoring_enabled() const
 {
     return clipboard_monitoring_checkbox_->isChecked();
@@ -68,9 +103,24 @@ int SettingsPage::get_default_connections() const
     return default_connections_spin_->value();
 }
 
+int SettingsPage::get_connection_timeout() const
+{
+    return connection_timeout_spin_->value();
+}
+
+int SettingsPage::get_retry_count() const
+{
+    return retry_count_spin_->value();
+}
+
 bool SettingsPage::is_notifications_enabled() const
 {
     return notifications_checkbox_->isChecked();
+}
+
+bool SettingsPage::is_sound_notifications_enabled() const
+{
+    return sound_notification_checkbox_->isChecked();
 }
 
 //==============================================================================

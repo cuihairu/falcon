@@ -48,6 +48,10 @@ public:
     explicit DiscoveryPage(QWidget* parent = nullptr);
     ~DiscoveryPage() override;
 
+signals:
+    void configured_download_requested(const QString& url);
+    void direct_download_requested(const QString& url, bool start_immediately);
+
 private slots:
     // 执行搜索
     void perform_search();
@@ -91,6 +95,8 @@ private:
 
     // 解析并显示搜索结果
     void display_results(const QList<SearchResultItem>& results);
+    void request_configured_download_for_row(int row);
+    int add_selected_items(bool start_immediately);
 
     // 格式化数字显示
     QString format_number(int num) const;
