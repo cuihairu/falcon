@@ -145,10 +145,7 @@ void SegmentDownloader::calculate_adaptive_segments(Bytes file_size) {
     // - Gradually increase segment size
     // - Last segment may be larger
 
-    std::size_t num_segments = config_.num_connections;
-    if (num_segments == 0) {
-        num_segments = calculate_optimal_segments(file_size, config_);
-    }
+    std::size_t num_segments = calculate_optimal_segments(file_size, config_);
 
     if (num_segments <= 1) {
         segments_.push_back(std::make_shared<Segment>(0, 0, file_size - 1));
@@ -442,17 +439,15 @@ void SegmentDownloader::download_segment(
         }
 
         const std::string segment_path = get_segment_path(segment->index);
-        const Bytes existing_downloaded = std::min(segment->downloaded.load(), segment->size());
-        const bool resume_to_temp = existing_downloaded > 0;
-        const std::string download_path =
-            resume_to_temp ? segment_path + ".resume" : segment_path;
+        const Bytes segment_size = segment->size();
+        const Bytes existing_downloaded = std::min(segment->downloaded.load(), segment_size);
+        if (existing_downloaded >= segment_size) {
+            complete_segment(segment);
+            break;
+        }
+        const std::string& download_path = segment_path;
 
         try {
-            if (resume_to_temp) {
-                std::error_code ec;
-                std::filesystem::remove(download_path, ec);
-            }
-
             // Call the download function
             bool success = download_func(
                 url_,
@@ -463,37 +458,18 @@ void SegmentDownloader::download_segment(
             );
 
             if (success && !cancelled_.load()) {
-                Bytes downloaded = segment->size();
+                Bytes downloaded = segment_size;
                 if (config_.validate_pieces) {
                     std::ifstream file(download_path, std::ios::binary | std::ios::ate);
                     if (!file.is_open()) {
                         throw FileIOException("Failed to open segment file: " + download_path);
                     }
                     Bytes downloaded_this_attempt = static_cast<Bytes>(file.tellg());
-                    downloaded = std::min(segment->size(), existing_downloaded + downloaded_this_attempt);
-                    if (downloaded < segment->size()) {
+                    downloaded = std::min(segment_size, existing_downloaded + downloaded_this_attempt);
+                    if (downloaded < segment_size) {
                         throw FileIOException("Segment incomplete after download: seg" +
                                               std::to_string(segment->index));
                     }
-                }
-
-                if (resume_to_temp) {
-                    std::ifstream resumed_input(download_path, std::ios::binary);
-                    if (!resumed_input.is_open()) {
-                        throw FileIOException("Failed to open segment resume file: " + download_path);
-                    }
-
-                    std::ofstream segment_output(segment_path, std::ios::binary | std::ios::app);
-                    if (!segment_output.is_open()) {
-                        throw FileIOException("Failed to reopen segment file: " + segment_path);
-                    }
-
-                    segment_output << resumed_input.rdbuf();
-                    segment_output.close();
-                    resumed_input.close();
-
-                    std::error_code ec;
-                    std::filesystem::remove(download_path, ec);
                 }
 
                 segment->downloaded.store(downloaded);
@@ -511,12 +487,15 @@ void SegmentDownloader::download_segment(
 
         // Update downloaded bytes from partial segment file (best-effort)
         {
-            std::ifstream file(resume_to_temp ? segment_path : download_path,
-                               std::ios::binary | std::ios::ate);
+            std::ifstream file(segment_path, std::ios::binary | std::ios::ate);
             if (file.is_open()) {
                 Bytes downloaded = static_cast<Bytes>(file.tellg());
-                downloaded = std::min(downloaded, segment->size());
+                downloaded = std::min(downloaded, segment_size);
                 segment->downloaded.store(downloaded);
+                if (downloaded >= segment_size) {
+                    complete_segment(segment);
+                    break;
+                }
             }
         }
 

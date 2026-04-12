@@ -50,6 +50,7 @@ public:
     Impl(const TaskManagerConfig& config, EventDispatcher* event_dispatcher)
         : config_(config)
         , event_dispatcher_(event_dispatcher)
+        , max_concurrent_tasks_(std::max<size_t>(1, config.max_concurrent_tasks))
         , running_(false)
         , state_pool_(1)
         , download_pool_(0) {}
@@ -75,6 +76,21 @@ public:
     void stop() {
         if (!running_) return;
 
+        // Stop active downloads before tearing down scheduler threads so the
+        // background download pool can drain promptly during shutdown.
+        std::vector<DownloadTask::Ptr> to_cancel;
+        {
+            std::lock_guard<std::mutex> lock(tasks_mutex_);
+            for (auto& [id, task] : tasks_) {
+                if (task->is_active()) {
+                    to_cancel.push_back(task);
+                }
+            }
+        }
+        for (auto& task : to_cancel) {
+            task->cancel();
+        }
+
         running_ = false;
 
         // 通知工作线程退出
@@ -90,22 +106,9 @@ public:
             cleanup_thread_.join();
         }
 
-        // 停止所有任务
-        std::vector<DownloadTask::Ptr> to_cancel;
-        {
-            std::lock_guard<std::mutex> lock(tasks_mutex_);
-            for (auto& [id, task] : tasks_) {
-                if (task->is_active()) {
-                    to_cancel.push_back(task);
-                }
-            }
-        }
-        for (auto& task : to_cancel) {
-            task->cancel();
-        }
-
         // Flush pending state saves to avoid dangling async work
         state_pool_.wait();
+        download_pool_.wait();
     }
 
     TaskId add_task(DownloadTask::Ptr task, TaskPriority /*priority*/) {
@@ -235,7 +238,9 @@ public:
 
     bool start_task(TaskId id) {
         auto task = get_task(id);
-        if (!task) return false;
+        if (!task || task->is_active() || task->is_finished()) {
+            return false;
+        }
 
         return resume_task(id);
     }
@@ -349,11 +354,11 @@ public:
     }
 
     size_t get_max_concurrent_tasks() const {
-        return config_.max_concurrent_tasks;
+        return max_concurrent_tasks_.load(std::memory_order_relaxed);
     }
 
     void set_max_concurrent_tasks(size_t max_tasks) {
-        config_.max_concurrent_tasks = std::max<size_t>(1, max_tasks);
+        max_concurrent_tasks_.store(std::max<size_t>(1, max_tasks), std::memory_order_relaxed);
         cv_.notify_one();
     }
 
@@ -707,10 +712,11 @@ private:
             {
                 std::unique_lock<std::mutex> lock(queue_mutex_);
 
-                cv_.wait(lock, [this] {
+                cv_.wait_for(lock, std::chrono::milliseconds(100), [this] {
                     return !running_ ||
                            (!task_queue_.empty() &&
-                            active_count_.load() < config_.max_concurrent_tasks);
+                            active_count_.load() <
+                                max_concurrent_tasks_.load(std::memory_order_relaxed));
                 });
 
                 if (!running_) break;
@@ -722,7 +728,7 @@ private:
 
             // 获取任务对象
             task = get_task(item.task_id);
-            if (!task || task->is_finished()) {
+            if (!task || task->is_finished() || task->is_active()) {
                 continue;
             }
 
@@ -790,6 +796,7 @@ private:
 
     TaskManagerConfig config_;
     EventDispatcher* event_dispatcher_;
+    std::atomic<size_t> max_concurrent_tasks_{1};
     std::atomic<size_t> active_count_{0};
 
     // 任务存储

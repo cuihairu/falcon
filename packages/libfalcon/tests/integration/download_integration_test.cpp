@@ -15,6 +15,7 @@
 #include <climits>
 #include <cstdint>
 #include <cstring>
+#include <chrono>
 #include <sstream>
 #include <unordered_map>
 #include <vector>
@@ -36,6 +37,30 @@ bool env_truthy(const char* name) {
     const char* value = std::getenv(name);
     if (!value) return false;
     return std::string(value) == "1" || std::string(value) == "true" || std::string(value) == "TRUE";
+}
+
+std::filesystem::path make_unique_test_dir(const char* prefix) {
+    const auto* test_info = ::testing::UnitTest::GetInstance()->current_test_info();
+    const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+#ifdef _WIN32
+    const auto pid = static_cast<unsigned long long>(::GetCurrentProcessId());
+#else
+    const auto pid = static_cast<unsigned long long>(::getpid());
+#endif
+
+    std::string name = prefix;
+    if (test_info) {
+        name += "_";
+        name += test_info->test_suite_name();
+        name += "_";
+        name += test_info->name();
+    }
+    name += "_";
+    name += std::to_string(pid);
+    name += "_";
+    name += std::to_string(static_cast<unsigned long long>(stamp));
+
+    return std::filesystem::temp_directory_path() / name;
 }
 
 class LocalHttpServer {
@@ -376,7 +401,7 @@ class DownloadIntegrationTest : public ::testing::Test {
 protected:
     void SetUp() override {
         // Create test directory
-        test_dir_ = std::filesystem::temp_directory_path() / "falcon_test";
+        test_dir_ = make_unique_test_dir("falcon_test");
         std::filesystem::create_directories(test_dir_);
     }
 

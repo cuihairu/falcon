@@ -4,6 +4,7 @@
 #include <falcon/task_manager.hpp>
 #include <falcon/download_task.hpp>
 #include <falcon/event_dispatcher.hpp>
+#include <falcon/protocol_handler.hpp>
 
 #include <gtest/gtest.h>
 
@@ -12,6 +13,88 @@
 #include <chrono>
 
 using namespace falcon;
+
+namespace {
+
+class BlockingProtocolHandler final : public IProtocolHandler {
+public:
+    std::string protocol_name() const override { return "blocking"; }
+
+    std::vector<std::string> supported_schemes() const override {
+        return {"https"};
+    }
+
+    bool can_handle(const std::string& url) const override {
+        return url.rfind("https://", 0) == 0;
+    }
+
+    FileInfo get_file_info(const std::string& url, const DownloadOptions& /*options*/) override {
+        FileInfo info;
+        info.url = url;
+        info.filename = "test.bin";
+        info.total_size = 1;
+        info.supports_resume = false;
+        return info;
+    }
+
+    void download(DownloadTask::Ptr task, IEventListener* /*listener*/) override {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            ++current_active_;
+            max_active_ = std::max(max_active_, current_active_);
+        }
+        cv_.notify_all();
+
+        std::unique_lock<std::mutex> lock(mutex_);
+        cv_.wait(lock, [this] { return release_; });
+        --current_active_;
+        lock.unlock();
+        cv_.notify_all();
+
+        task->set_status(TaskStatus::Completed);
+    }
+
+    void pause(DownloadTask::Ptr task) override {
+        task->set_status(TaskStatus::Paused);
+    }
+
+    void resume(DownloadTask::Ptr task, IEventListener* listener) override {
+        download(std::move(task), listener);
+    }
+
+    void cancel(DownloadTask::Ptr task) override {
+        task->set_status(TaskStatus::Cancelled);
+    }
+
+    bool wait_for_active_count(std::size_t expected, std::chrono::milliseconds timeout) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        return cv_.wait_for(lock, timeout, [this, expected] {
+            return current_active_ >= expected;
+        });
+    }
+
+    void release_all() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            release_ = true;
+        }
+        cv_.notify_all();
+    }
+
+    std::size_t max_active() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return max_active_;
+    }
+
+private:
+    mutable std::mutex mutex_;
+    std::condition_variable cv_;
+    std::size_t current_active_ = 0;
+    std::size_t max_active_ = 0;
+    bool release_ = false;
+};
+
+} // namespace
 
 class TaskManagerTest : public ::testing::Test {
 protected:
@@ -218,6 +301,39 @@ TEST_F(TaskManagerTest, SetMaxConcurrentTasks) {
     // Change to 10
     manager_->set_max_concurrent_tasks(10);
     EXPECT_EQ(manager_->get_max_concurrent_tasks(), 10);
+}
+
+TEST_F(TaskManagerTest, IncreasingConcurrencyWhileRunningStartsQueuedTasks) {
+    manager_->set_max_concurrent_tasks(1);
+
+    auto handler = std::make_shared<BlockingProtocolHandler>();
+
+    auto task1 = std::make_shared<DownloadTask>(1, "https://example.com/file1.zip",
+                                                default_options_);
+    auto task2 = std::make_shared<DownloadTask>(2, "https://example.com/file2.zip",
+                                                default_options_);
+    task1->set_handler(handler);
+    task2->set_handler(handler);
+
+    ASSERT_NE(manager_->add_task(task1, TaskPriority::Normal), INVALID_TASK_ID);
+    ASSERT_NE(manager_->add_task(task2, TaskPriority::Normal), INVALID_TASK_ID);
+    ASSERT_TRUE(manager_->start_task(task1->id()));
+    ASSERT_TRUE(manager_->start_task(task2->id()));
+
+    ASSERT_TRUE(handler->wait_for_active_count(1, std::chrono::seconds(2)));
+    EXPECT_EQ(handler->max_active(), 1U);
+
+    manager_->set_max_concurrent_tasks(2);
+
+    EXPECT_TRUE(handler->wait_for_active_count(2, std::chrono::seconds(2)));
+    EXPECT_GE(handler->max_active(), 2U);
+
+    handler->release_all();
+
+    EXPECT_TRUE(task1->wait_for(std::chrono::seconds(2)));
+    EXPECT_TRUE(task2->wait_for(std::chrono::seconds(2)));
+    EXPECT_EQ(task1->status(), TaskStatus::Completed);
+    EXPECT_EQ(task2->status(), TaskStatus::Completed);
 }
 
 // 新增：任务优先级测试

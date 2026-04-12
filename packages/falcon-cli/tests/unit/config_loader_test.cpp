@@ -12,21 +12,53 @@
 #include "config_loader.hpp"
 #include <fstream>
 #include <filesystem>
+#include <chrono>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace {
+
+std::filesystem::path make_unique_test_dir(const char* prefix) {
+    const auto* test_info = ::testing::UnitTest::GetInstance()->current_test_info();
+    const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+#ifdef _WIN32
+    const auto pid = static_cast<unsigned long long>(::GetCurrentProcessId());
+#else
+    const auto pid = static_cast<unsigned long long>(::getpid());
+#endif
+
+    std::string name = prefix;
+    if (test_info) {
+        name += "_";
+        name += test_info->test_suite_name();
+        name += "_";
+        name += test_info->name();
+    }
+    name += "_";
+    name += std::to_string(pid);
+    name += "_";
+    name += std::to_string(static_cast<unsigned long long>(stamp));
+
+    return std::filesystem::temp_directory_path() / name;
+}
 
 class ConfigLoaderTest : public ::testing::Test {
 protected:
     void SetUp() override {
         // Create a temporary directory for test files
-        test_dir_ = std::filesystem::temp_directory_path() / "falcon_cli_test";
+        test_dir_ = make_unique_test_dir("falcon_cli_test");
         std::filesystem::create_directories(test_dir_);
     }
 
     void TearDown() override {
         // Clean up test directory
-        if (std::filesystem::exists(test_dir_)) {
-            std::filesystem::remove_all(test_dir_);
+        std::error_code ec;
+        if (std::filesystem::exists(test_dir_, ec)) {
+            std::filesystem::remove_all(test_dir_, ec);
         }
     }
 

@@ -439,7 +439,8 @@ public:
         task->set_file_info(info);
 
         // Check if segmented download is beneficial
-        bool use_segments = info.supports_resume &&
+        bool use_segments = options.resume_enabled &&
+                            info.supports_resume &&
                             info.total_size > static_cast<Bytes>(options.min_segment_size) &&
                             options.max_connections > 1;
 
@@ -589,10 +590,12 @@ public:
         SegmentConfig seg_config;
         seg_config.num_connections = options.max_connections;
         seg_config.min_segment_size = options.min_segment_size;
+        seg_config.min_file_size = options.min_segment_size;
         seg_config.timeout_seconds = options.timeout_seconds;
         seg_config.max_retries = options.max_retries;
         seg_config.retry_delay_ms = options.retry_delay_seconds * 1000;
         seg_config.adaptive_sizing = options.adaptive_segment_sizing;
+        seg_config.validate_pieces = false;
 
         // Create segment downloader
         auto downloader = std::make_shared<SegmentDownloader>(
