@@ -11,7 +11,7 @@
 #include <vector>
 
 // ---------------------------------------------------------------------------
-// 1. CloudPlatform enum values
+// 1. CloudPlatform enum values (header-only, always available)
 // ---------------------------------------------------------------------------
 
 TEST(DrivesIsolationTest, CloudPlatformEnumValues) {
@@ -22,7 +22,7 @@ TEST(DrivesIsolationTest, CloudPlatformEnumValues) {
 }
 
 // ---------------------------------------------------------------------------
-// 2. CloudFileInfo defaults
+// 2. CloudFileInfo defaults (header-only, always available)
 // ---------------------------------------------------------------------------
 
 TEST(DrivesIsolationTest, CloudFileInfoDefaults) {
@@ -39,7 +39,7 @@ TEST(DrivesIsolationTest, CloudFileInfoDefaults) {
 }
 
 // ---------------------------------------------------------------------------
-// 3. CloudExtractionResult defaults
+// 3. CloudExtractionResult defaults (header-only, always available)
 // ---------------------------------------------------------------------------
 
 TEST(DrivesIsolationTest, CloudExtractionResultDefaults) {
@@ -52,7 +52,7 @@ TEST(DrivesIsolationTest, CloudExtractionResultDefaults) {
 }
 
 // ---------------------------------------------------------------------------
-// 4. CloudDownloadOptions defaults
+// 4. CloudDownloadOptions defaults (header-only, always available)
 // ---------------------------------------------------------------------------
 
 TEST(DrivesIsolationTest, CloudDownloadOptionsDefaults) {
@@ -65,8 +65,10 @@ TEST(DrivesIsolationTest, CloudDownloadOptionsDefaults) {
 }
 
 // ---------------------------------------------------------------------------
-// 5. CloudLinkDetector static methods
+// 5-7. CloudLinkDetector / CloudStorageManager (require cloud_storage_plugin.cpp)
 // ---------------------------------------------------------------------------
+
+#ifdef FALCON_ENABLE_CLOUD_STORAGE
 
 TEST(DrivesIsolationTest, DetectPlatformUnknownUrl) {
     auto platform = falcon::CloudLinkDetector::detect_platform("http://example.com");
@@ -84,21 +86,11 @@ TEST(DrivesIsolationTest, NormalizeUrl) {
     EXPECT_FALSE(normalized.empty());
 }
 
-// ---------------------------------------------------------------------------
-// 6. CloudStorageManager standalone operation
-// ---------------------------------------------------------------------------
-
 TEST(DrivesIsolationTest, CloudStorageManagerCreateDestroy) {
     falcon::CloudStorageManager manager;
-    // May have builtin plugins (e.g. LanzouCloud)
     auto platforms = manager.get_supported_platforms();
-    // Just verify the API works without crash
     EXPECT_TRUE(platforms.empty() || !platforms.empty());
 }
-
-// ---------------------------------------------------------------------------
-// 7. Custom ICloudStoragePlugin works
-// ---------------------------------------------------------------------------
 
 namespace {
 class MockCloudPlugin final : public falcon::ICloudStoragePlugin {
@@ -145,7 +137,6 @@ TEST(DrivesIsolationTest, RegisterCustomCloudPlugin) {
     manager.register_plugin(std::make_unique<MockCloudPlugin>());
 
     auto platforms = manager.get_supported_platforms();
-    // May include builtin plugins; verify mock-cloud is present
     bool found = false;
     for (const auto& p : platforms) {
         if (p == "mock-cloud") found = true;
@@ -200,3 +191,5 @@ TEST(DrivesIsolationTest, BatchExtractMultiple) {
     EXPECT_TRUE(results[0].success);
     EXPECT_TRUE(results[1].success);
 }
+
+#endif // FALCON_ENABLE_CLOUD_STORAGE
