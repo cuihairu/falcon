@@ -52,7 +52,7 @@ if(SQLite3_FOUND)
 
     target_link_libraries(falcon_daemon_storage
         PUBLIC
-            Falcon::falcon
+            Falcon::core
             nlohmann_json::nlohmann_json
     )
 
@@ -76,7 +76,8 @@ endif()
 
 target_link_libraries(falcon_daemon_rpc
     PUBLIC
-        Falcon::falcon
+        Falcon::core
+        Falcon::protocols
         nlohmann_json::nlohmann_json
         # gRPC::grpc++  # 待添加
 )

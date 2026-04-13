@@ -18,7 +18,8 @@ add_executable(falcon-cli
 
 target_link_libraries(falcon-cli
     PRIVATE
-        Falcon::falcon
+        Falcon::core
+        Falcon::protocols
 )
 
 # Link nlohmann_json if available

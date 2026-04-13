@@ -113,8 +113,22 @@ endif()
 # 子项目
 # ============================================================================
 
-# 核心库（必选）
-add_subdirectory(packages/libfalcon)
+# 核心库（拆分为四个独立包）
+add_subdirectory(packages/libfalcon-core)
+add_subdirectory(packages/libfalcon-protocols)
+add_subdirectory(packages/libfalcon-storage)
+add_subdirectory(packages/libfalcon-drives)
+
+# 兼容性聚合 target
+add_library(falcon INTERFACE)
+add_library(Falcon::falcon ALIAS falcon)
+target_link_libraries(falcon
+    INTERFACE
+        falcon_core
+        falcon_protocols
+        falcon_storage
+        falcon_drives
+)
 
 # CLI 工具（可选）
 if(FALCON_BUILD_CLI)
@@ -143,6 +157,37 @@ endif()
 include(GNUInstallDirs)
 
 # 导出目标配置
+# Collect internal plugin targets for export
+set(FALCON_PLUGIN_EXPORT_TARGETS)
+if(TARGET falcon_plugin_ftp)
+    list(APPEND FALCON_PLUGIN_EXPORT_TARGETS falcon_plugin_ftp)
+    install(TARGETS falcon_plugin_ftp EXPORT FalconTargets
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    )
+endif()
+if(TARGET falcon_plugin_bittorrent)
+    list(APPEND FALCON_PLUGIN_EXPORT_TARGETS falcon_plugin_bittorrent)
+    install(TARGETS falcon_plugin_bittorrent EXPORT FalconTargets
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    )
+endif()
+if(TARGET falcon_plugin_sftp)
+    list(APPEND FALCON_PLUGIN_EXPORT_TARGETS falcon_plugin_sftp)
+    install(TARGETS falcon_plugin_sftp EXPORT FalconTargets
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    )
+endif()
+if(TARGET falcon_plugin_metalink)
+    list(APPEND FALCON_PLUGIN_EXPORT_TARGETS falcon_plugin_metalink)
+    install(TARGETS falcon_plugin_metalink EXPORT FalconTargets
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    )
+endif()
+
 install(EXPORT FalconTargets
     FILE FalconTargets.cmake
     NAMESPACE Falcon::
