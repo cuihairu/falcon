@@ -10,7 +10,9 @@ project(libfalcon-drives
 # Drives library
 # ============================================================================
 
-add_library(falcon_drives)
+add_library(falcon_drives
+    src/dummy.cpp
+)
 
 add_library(Falcon::drives ALIAS falcon_drives)
 
