@@ -341,12 +341,12 @@ bool DownloadEngineV2::register_socket_event(int fd, int events, CommandId comma
     // 已存在则修改事件，否则新增事件
     if (socket_command_map_.find(fd) != socket_command_map_.end()) {
         if (!event_poll_->modify_event(fd, events)) {
-            FALCON_LOG_ERROR("修改 Socket 事件失败: fd=" << fd);
+            FALCON_LOG_ERROR("修改 Socket 事件失败: fd=", fd);
             return false;
         }
     } else {
         if (!event_poll_->add_event(fd, events, callback)) {
-            FALCON_LOG_ERROR("注册 Socket 事件失败: fd=" << fd);
+            FALCON_LOG_ERROR("注册 Socket 事件失败: fd=", fd);
             return false;
         }
     }

@@ -191,8 +191,12 @@ void log_errorf(const std::string& format, Args&&... args) {
 
 #define FALCON_DETAIL_ARG_N(                                                          \
     _1, _2, _3, _4, _5, _6, _7, _8, _9, _10, N, ...) N
+
+// MSVC treats __VA_ARGS__ as a single token in macro expansion.
+// An extra expansion level forces proper argument splitting.
+#define FALCON_DETAIL_EXPAND(x) x
 #define FALCON_DETAIL_NARG(...)                                                       \
-    FALCON_DETAIL_ARG_N(__VA_ARGS__, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0)
+    FALCON_DETAIL_EXPAND(FALCON_DETAIL_ARG_N(__VA_ARGS__, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0))
 
 #define FALCON_DETAIL_LOG_INFO_1(msg) FALCON_LOG_INFO_STREAM(msg)
 #define FALCON_DETAIL_LOG_INFO_2(...) FALCON_LOG_INFO_FMT(__VA_ARGS__)

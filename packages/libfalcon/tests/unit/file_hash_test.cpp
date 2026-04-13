@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 #include <falcon/file_hash.hpp>
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
