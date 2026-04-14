@@ -9,6 +9,7 @@ on:
 jobs:
   build:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
 
     strategy:
       fail-fast: false
@@ -46,17 +47,20 @@ jobs:
 
       - name: Install dependencies (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
+        timeout-minutes: 5
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build libcurl4-openssl-dev
 
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos-latest'
+        timeout-minutes: 5
         run: |
           brew install cmake ninja curl
 
       - name: Setup vcpkg (Windows)
         if: matrix.os == 'windows-latest'
+        timeout-minutes: 10
         run: |
           git clone https://github.com/Microsoft/vcpkg.git
           .\vcpkg\bootstrap-vcpkg.bat
@@ -64,11 +68,13 @@ jobs:
       - name: Set reusable strings
         id: strings
         shell: bash
+        timeout-minutes: 1
         run: |
           echo "build-output-dir=${{ github.workspace }}/build" >> "$GITHUB_OUTPUT"
 
       - name: Configure CMake (Unix)
         if: matrix.os != 'windows-latest'
+        timeout-minutes: 5
         run: >
           cmake -B ${{ steps.strings.outputs.build-output-dir }}
           -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
@@ -88,6 +94,7 @@ jobs:
 
       - name: Configure CMake (Windows)
         if: matrix.os == 'windows-latest'
+        timeout-minutes: 5
         run: >
           cmake -B ${{ steps.strings.outputs.build-output-dir }}
           -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
@@ -107,6 +114,7 @@ jobs:
           -S ${{ github.workspace }}
 
       - name: Build
+        timeout-minutes: 15
         run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ matrix.build_type }} --parallel
 
       - name: Test
@@ -117,15 +125,18 @@ jobs:
   coverage:
     name: Coverage (Ubuntu)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
       - name: Install dependencies (Ubuntu)
+        timeout-minutes: 5
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build libcurl4-openssl-dev libssl-dev gcovr nlohmann-json3-dev
 
       - name: Configure CMake
+        timeout-minutes: 5
         run: >
           cmake -B ${{ github.workspace }}/build-coverage
           -DCMAKE_CXX_COMPILER=g++
@@ -145,7 +156,8 @@ jobs:
           -S ${{ github.workspace }}
 
       - name: Build
-        run: cmake --build ${{ github.workspace }}/build-coverage --config Debug
+        timeout-minutes: 15
+        run: cmake --build ${{ github.workspace }}/build-coverage --config Debug --parallel
 
       - name: Test
         timeout-minutes: 10
@@ -154,6 +166,7 @@ jobs:
         continue-on-error: true
 
       - name: Generate coverage (gcovr)
+        timeout-minutes: 5
         working-directory: ${{ github.workspace }}/build-coverage
         run: |
           gcovr -r ${{ github.workspace }} \
@@ -164,6 +177,7 @@ jobs:
             --xml-pretty -o coverage.xml
 
       - name: Upload to Codecov
+        timeout-minutes: 3
         uses: codecov/codecov-action@v4
         with:
           files: ${{ github.workspace }}/build-coverage/coverage.xml
@@ -174,6 +188,7 @@ jobs:
   desktop-build:
     name: Desktop Application (Qt6)
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
 
     strategy:
       fail-fast: false
@@ -198,23 +213,27 @@ jobs:
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
+        timeout-minutes: 10
         with:
           version: ${{ matrix.qt-version }}
           cache: true
 
       - name: Install dependencies (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
+        timeout-minutes: 5
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential libgl1-mesa-dev libcurl4-openssl-dev
 
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos-latest'
+        timeout-minutes: 5
         run: |
           brew install cmake ninja curl
 
       - name: Install dependencies (Windows)
         if: matrix.os == 'windows-latest'
+        timeout-minutes: 15
         run: |
           choco install cmake ninja curl
           # 安装 vcpkg 并使用项目中的 vcpkg.json 安装依赖
@@ -224,6 +243,7 @@ jobs:
 
       - name: Configure CMake (Unix)
         if: runner.os != 'Windows'
+        timeout-minutes: 5
         run: >
           cmake -B ${{ github.workspace }}/build-desktop
           -G "${{ matrix.cmake-generator }}"
@@ -240,6 +260,7 @@ jobs:
 
       - name: Configure CMake (Windows)
         if: runner.os == 'Windows'
+        timeout-minutes: 5
         run: >
           cmake -B ${{ github.workspace }}/build-desktop
           -G "${{ matrix.cmake-generator }}"
@@ -255,11 +276,13 @@ jobs:
           -S ${{ github.workspace }}
 
       - name: Build
+        timeout-minutes: 15
         run: cmake --build ${{ github.workspace }}/build-desktop --config Release --parallel
 
       - name: Upload artifacts (Unix)
         if: runner.os != 'Windows'
         uses: actions/upload-artifact@v4
+        timeout-minutes: 3
         with:
           name: falcon-desktop-${{ matrix.os }}
           path: ${{ github.workspace }}/build-desktop/bin/falcon-desktop*
@@ -268,6 +291,7 @@ jobs:
       - name: Upload artifacts (Windows)
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
+        timeout-minutes: 3
         with:
           name: falcon-desktop-${{ matrix.os }}
           path: ${{ github.workspace }}/build-desktop/bin/Release/falcon-desktop.exe
