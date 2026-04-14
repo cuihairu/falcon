@@ -40,7 +40,7 @@ target_link_libraries(falcon_cli_tests
 target_include_directories(falcon_cli_tests
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/../src
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../libfalcon/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../libfalcon-core/include
 )
 
 target_compile_features(falcon_cli_tests PRIVATE cxx_std_17)

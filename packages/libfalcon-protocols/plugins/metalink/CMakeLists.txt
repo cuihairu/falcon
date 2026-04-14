@@ -12,7 +12,7 @@ add_library(falcon_plugin_metalink
 
 target_include_directories(falcon_plugin_metalink
     PRIVATE
-        ${CMAKE_SOURCE_DIR}/packages/libfalcon/include
+        ${CMAKE_SOURCE_DIR}/packages/libfalcon-core/include
 )
 
 target_link_libraries(falcon_plugin_metalink

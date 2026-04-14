@@ -108,3 +108,11 @@ install(DIRECTORY include/falcon
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     FILES_MATCHING PATTERN "*.hpp"
 )
+
+# ============================================================================
+# Tests
+# ============================================================================
+
+if(FALCON_BUILD_TESTS)
+    add_subdirectory(tests)
+endif()

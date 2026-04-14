@@ -47,6 +47,12 @@ option(FALCON_ENABLE_FLASHGET "Enable FlashGet protocol plugin" OFF)
 option(FALCON_ENABLE_ED2K "Enable ED2K protocol plugin" OFF)
 option(FALCON_ENABLE_HLS "Enable HLS/DASH protocol plugin" OFF)
 
+# Storage/Drives 功能开关
+option(FALCON_ENABLE_RESOURCE_BROWSER "Enable resource browser functionality" ON)
+option(FALCON_ENABLE_CLOUD_STORAGE "Enable cloud storage plugins" ON)
+option(FALCON_ENABLE_RESOURCE_SEARCH "Enable resource search functionality" ON)
+option(FALCON_ENABLE_CONFIG_MANAGER "Enable encrypted config manager (SQLite3)" ON)
+
 # 依赖管理
 option(FALCON_USE_SYSTEM_LIBS "Use system libraries instead of vcpkg" OFF)
 option(FALCON_USE_STATIC_LIBS "Link dependencies statically" OFF)

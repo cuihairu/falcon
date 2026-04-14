@@ -350,23 +350,29 @@ feature 候选：
 
 ## 当前优先级
 
-### P0
+### P0 ✅ 已完成 (2026-04-14)
 
-- 明确四个库的职责边界
-- 从 `core` 移出 `resource_browser` 和 `cloud_storage_plugin`
-- 拆分四个 CMake target
+- ✅ 明确四个库的职责边界
+- ✅ 从 `core` 移出 `resource_browser` 和 `cloud_storage_plugin`
+- ✅ 拆分四个 CMake target（独立 target + alias）
+- ✅ core CMakeLists 清理：移除非 core option，提升至顶层 CMakeLists
+- ✅ core 头文件收口：不再暴露 S3/OSS/COS/CloudStorage/ResourceBrowser 等概念
+- ✅ config_manager 已归属 drives，core 无残留引用
 
-### P1
+### P1 ✅ 已完成 (2026-04-14)
 
-- 建立新的 package 目录
-- 迁移 `http`、`ftp` 到 `libfalcon-protocols`
-- 迁移 `s3`、`oss`、`cos`、`kodo`、`upyun` 到 `libfalcon-storage`
+- ✅ 删除旧 `packages/libfalcon/` 单体目录
+- ✅ 修复所有 CMake 中硬编码的旧 `packages/libfalcon/include` 路径
+- ✅ 迁移测试文件到对应包（protocols/storage/drives 各自独立 tests/CMakeLists.txt）
+- ✅ `http`、`ftp` 等协议已在 `libfalcon-protocols` 中
+- ✅ `s3`、`oss`、`cos`、`kodo`、`upyun` 已在 `libfalcon-storage` 中
 
 ### P2
 
-- 拆分 `config_manager`
-- 废弃 `falcon::plugins`
+- 废弃 `falcon::plugins`，迁移到 `falcon::protocols::*`
+- 拆分 `config_manager` 通用/专用部分
 - 完善安装导出和 `vcpkg` 拆包
+- 更新根 CLAUDE.md 反映新目录结构
 
 ---
 

@@ -63,7 +63,7 @@ endif()
 # 包含目录
 target_include_directories(falcon-desktop PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/packages/libfalcon/include
+    ${CMAKE_SOURCE_DIR}/packages/libfalcon-core/include
 )
 
 # 链接库

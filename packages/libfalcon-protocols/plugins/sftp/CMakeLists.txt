@@ -39,7 +39,7 @@ add_library(falcon_plugin_sftp
 
 target_include_directories(falcon_plugin_sftp
     PRIVATE
-        ${CMAKE_SOURCE_DIR}/packages/libfalcon/include
+        ${CMAKE_SOURCE_DIR}/packages/libfalcon-core/include
         ${LIBSSH_INCLUDE_DIRS}
 )
 

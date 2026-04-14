@@ -7,24 +7,13 @@ project(libfalcon-core
 )
 
 # ============================================================================
-# Optional features
-# ============================================================================
-
-option(FALCON_ENABLE_CLOUD_STORAGE "Enable cloud storage plugins" ON)
-option(FALCON_ENABLE_RESOURCE_SEARCH "Enable resource search functionality" ON)
-option(FALCON_ENABLE_RESOURCE_BROWSER "Enable resource browser functionality" ON)
-option(FALCON_ENABLE_CONFIG_MANAGER "Enable encrypted config manager (SQLite3)" ON)
-
-# ============================================================================
 # Dependencies
 # ============================================================================
 
 find_package(Threads REQUIRED)
 find_package(spdlog QUIET)
 find_package(nlohmann_json QUIET)
-find_package(CURL QUIET)
 find_package(OpenSSL QUIET)
-find_package(SQLite3 QUIET)
 
 # ============================================================================
 # Core library

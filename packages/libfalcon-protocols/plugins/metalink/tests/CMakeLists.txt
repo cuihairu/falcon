@@ -14,7 +14,7 @@ target_link_libraries(metalink_plugin_test
 
 target_include_directories(metalink_plugin_test
     PRIVATE
-        ${CMAKE_SOURCE_DIR}/packages/libfalcon/include
+        ${CMAKE_SOURCE_DIR}/packages/libfalcon-core/include
 )
 
 include(GoogleTest)

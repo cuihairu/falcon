@@ -2,6 +2,14 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-04-14 - 四库拆分重构（P0+P1）
+- 将单体 `libfalcon` 拆分为四个独立包：`libfalcon-core`、`libfalcon-protocols`、`libfalcon-storage`、`libfalcon-drives`
+- 建立独立 CMake target 和 alias（`Falcon::core/protocols/storage/drives`）
+- Core 头文件收口：不再暴露 S3/OSS/COS/CloudStorage/ResourceBrowser 等概念
+- 测试文件按库归属迁移到对应包
+- 删除旧 `packages/libfalcon/` 单体目录
+- 跨包 option 提升到顶层 CMakeLists.txt
+
 ### 2025-12-21 - 添加私有协议支持
 - 实现迅雷 thunder:// 协议支持
 - 实现 QQ 旋风 qqlink:// 协议支持
@@ -30,11 +38,13 @@
 **Falcon（猎鹰下载器）** 是一个现代化、跨平台的 C++ 下载解决方案，采用 Monorepo 架构，致力于提供高性能、可扩展的多协议下载能力。
 
 ### 核心目标
-- 打造一个轻量级、高性能的下载引擎核心库（libfalcon）
+- 打造一个轻量级、高性能的下载引擎核心库（libfalcon-core）
+- 标准下载协议作为独立库（libfalcon-protocols）
+- 对象存储与资源浏览作为独立库（libfalcon-storage）
+- 网盘与云存储作为独立库（libfalcon-drives）
 - 提供直观易用的 CLI 工具（falcon-cli）
 - 支持后台守护进程模式（falcon-daemon）
 - 预留 GUI 桌面应用与 Web 管理界面扩展能力
-- 支持主流及小众下载协议的插件化扩展
 - 保持跨平台兼容性（Windows/Linux/macOS）
 - 异步架构，支持大规模并发下载
 
@@ -68,44 +78,43 @@
                            │
 ┌──────────────────────────▼──────────────────────────────┐
 │          工具层 (packages/)                              │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  │
-│  │ falcon-cli   │  │falcon-daemon │  │ (future)     │  │
-│  │  命令行工具   │  │  后台守护进程 │  │  Python/JS   │  │
-│  │              │  │  RPC 接口服务 │  │   绑定库     │  │
-│  └──────┬───────┘  └──────┬───────┘  └──────────────┘  │
+│  ┌──────────────┐  ┌──────────────┐                     │
+│  │ falcon-cli   │  │falcon-daemon │                     │
+│  │  命令行工具   │  │  后台守护进程 │                     │
+│  └──────┬───────┘  └──────┬───────┘                     │
 │         │                 │                             │
 │         └─────────┬───────┘                             │
 │                   │                                     │
 │  ┌────────────────▼────────────────┐                   │
-│  │       libfalcon                 │                   │
-│  │   核心下载引擎库                 │                   │
-│  │  ┌──────────────────────────┐   │                   │
-│  │  │  任务管理器              │   │                   │
-│  │  │  (TaskManager)           │   │                   │
-│  │  └──────────────────────────┘   │                   │
-│  │  ┌──────────────────────────┐   │                   │
-│  │  │  下载引擎                │   │                   │
-│  │  │  (DownloadEngine)        │   │                   │
-│  │  └──────────────────────────┘   │                   │
-│  │  ┌──────────────────────────┐   │                   │
-│  │  │  协议插件管理器          │   │                   │
-│  │  │  (PluginManager)         │   │                   │
-│  │  └──────────────────────────┘   │                   │
-│  └─────────────────┬────────────────┘                   │
-└────────────────────┼────────────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────────────┐
-│        协议插件层 (packages/libfalcon/plugins/)         │
-│  ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐         │
-│  │ HTTP │ │ FTP  │ │  BT  │ │ ED2K │ │ HLS  │   ...   │
-│  └──────┘ └──────┘ └──────┘ └──────┘ └──────┘         │
-└─────────────────────────────────────────────────────────┘
+│  │       核心库 (libfalcon-core)    │                   │
+│  │   下载引擎 / 任务管理 / 事件系统  │                   │
+│  │   插件注册接口 / 通用基础设施     │                   │
+│  └───┬──────────┬──────────┬───────┘                   │
+│      │          │          │                            │
+│  ┌───▼───┐ ┌───▼───┐ ┌───▼───┐                        │
+│  │proto- │ │storage│ │drives │                         │
+│  │cols   │ │       │ │       │                         │
+│  │HTTP   │ │S3/OSS │ │网盘   │                         │
+│  │FTP/BT │ │COS等  │ │云存储 │                         │
+│  │ED2K等 │ │资源浏览│ │搜索等 │                         │
+│  └───────┘ └───────┘ └───────┘                         │
+└────────────────────────────────────────────────────────┘
                      │
 ┌────────────────────▼────────────────────────────────────┐
 │       基础设施层 (third_party/ & 系统库)                 │
 │  libcurl, libtorrent, spdlog, CLI11, nlohmann/json...   │
 └─────────────────────────────────────────────────────────┘
 ```
+
+### 依赖方向
+
+```
+falcon_protocols  →  falcon_core
+falcon_storage    →  falcon_core
+falcon_drives     →  falcon_core
+```
+
+禁止反向依赖：`core` 不依赖 `protocols/storage/drives`。
 
 ---
 
@@ -114,48 +123,48 @@
 ```mermaid
 graph TD
     A["(根) falcon"] --> B["packages/"];
-    B --> C["libfalcon"];
-    B --> D["falcon-cli"];
-    B --> E["falcon-daemon"];
+    B --> C["libfalcon-core"];
+    B --> D["libfalcon-protocols"];
+    B --> E["libfalcon-storage"];
+    B --> F["libfalcon-drives"];
+    B --> G["falcon-cli"];
+    B --> H["falcon-daemon"];
 
-    A --> F["apps/"];
-    F --> G["desktop"];
-    F --> H["web"];
+    A --> I["apps/"];
+    I --> J["desktop"];
+    I --> K["web"];
 
-    A --> I["cmake/"];
-    A --> J["third_party/"];
-    A --> K["docs/"];
-    A --> L["examples/"];
+    A --> L["cmake/"];
+    A --> M["third_party/"];
+    A --> N["docs/"];
+    A --> O["examples/"];
 
-    click C "./packages/libfalcon/CLAUDE.md" "查看核心库文档"
-    click D "./packages/falcon-cli/CLAUDE.md" "查看 CLI 文档"
-    click E "./packages/falcon-daemon/CLAUDE.md" "查看 Daemon 文档"
-    click G "./apps/desktop/CLAUDE.md" "查看桌面应用文档"
-    click H "./apps/web/CLAUDE.md" "查看 Web 应用文档"
+    D -->|depends on| C
+    E -->|depends on| C
+    F -->|depends on| C
+
+    click C "./packages/libfalcon-core/CLAUDE.md" "查看核心库文档"
+    click D "./packages/libfalcon-protocols/CLAUDE.md" "查看协议库文档"
+    click E "./packages/libfalcon-storage/CLAUDE.md" "查看存储库文档"
+    click F "./packages/libfalcon-drives/CLAUDE.md" "查看网盘库文档"
+    click G "./packages/falcon-cli/CLAUDE.md" "查看 CLI 文档"
+    click H "./packages/falcon-daemon/CLAUDE.md" "查看 Daemon 文档"
 ```
 
 ---
 
 ## 模块索引
 
-| 模块路径 | 职责 | 语言/框架 | 状态 |
-|---------|------|-----------|------|
-| `packages/libfalcon` | 核心下载引擎库 | C++17/20 | 待开发 |
-| `packages/libfalcon/plugins/http` | HTTP/HTTPS 协议实现 | C++17/20 + libcurl | 待开发 |
-| `packages/libfalcon/plugins/ftp` | FTP 协议实现 | C++17/20 + libcurl | 待开发 |
-| `packages/libfalcon/plugins/bittorrent` | BitTorrent/Magnet 实现 | C++17/20 + libtorrent | 待开发 |
-| `packages/libfalcon/plugins/thunder` | 迅雷 thunder:// 协议 | C++17/20 + OpenSSL | 已实现 |
-| `packages/libfalcon/plugins/qqdl` | QQ旋风 qqlink:// 协议 | C++17/20 + OpenSSL | 已实现 |
-| `packages/libfalcon/plugins/flashget` | 快车 flashget:// 协议 | C++17/20 + OpenSSL | 已实现 |
-| `packages/libfalcon/plugins/ed2k` | ED2K 电驴协议 | C++17/20 | 已实现 |
-| `packages/libfalcon/plugins/hls` | HLS/DASH 流媒体协议 | C++17/20 | 已实现 |
-| `packages/falcon-cli` | 命令行下载工具 | C++17/20 + CLI11 | 待开发 |
-| `packages/falcon-daemon` | 后台守护进程 + RPC 服务 | C++17/20 + gRPC/REST | 待开发 |
-| `apps/desktop` | GUI 桌面应用（预留） | Qt/Tauri/Electron | 规划中 |
-| `apps/web` | Web 管理界面（预留） | React/Vue + Vite | 规划中 |
-| `cmake/` | CMake 辅助模块 | CMake | 待开发 |
-| `docs/` | 用户文档与 API 文档 | Markdown/Doxygen | 待开发 |
-| `examples/` | 使用示例代码 | C++ | 待开发 |
+| 模块路径 | 职责 | CMake Target | 状态 |
+|---------|------|-------------|------|
+| `packages/libfalcon-core` | 下载引擎/任务管理/事件系统 | `Falcon::core` | 开发中 |
+| `packages/libfalcon-protocols` | HTTP/FTP/BT/ED2K/HLS 等协议 | `Falcon::protocols` | 开发中 |
+| `packages/libfalcon-storage` | S3/OSS/COS/Kodo/Upyun 对象存储 | `Falcon::storage` | 开发中 |
+| `packages/libfalcon-drives` | 网盘/云存储/搜索/配置管理 | `Falcon::drives` | 开发中 |
+| `packages/falcon-cli` | 命令行下载工具 | `falcon-cli` | 开发中 |
+| `packages/falcon-daemon` | 后台守护进程 + RPC 服务 | `falcon-daemon` | 开发中 |
+| `apps/desktop` | GUI 桌面应用（Qt6） | `falcon-desktop` | 规划中 |
+| `apps/web` | Web 管理界面（预留） | — | 规划中 |
 
 ---
 
@@ -223,11 +232,14 @@ ctest --test-dir build --output-on-failure
 
 ```bash
 # 仅编译核心库
-cmake -B build -S . -DFALCON_BUILD_CLI=OFF -DFALCON_BUILD_DAEMON=OFF
-cmake --build build --target falcon
+cmake -B build -S . -DFALCON_BUILD_CLI=OFF -DFALCON_BUILD_DAEMON=OFF -DFALCON_BUILD_DESKTOP=OFF -DFALCON_BUILD_EXAMPLES=OFF
+cmake --build build --target falcon_core
+
+# 仅编译协议库（自动包含 core）
+cmake --build build --target falcon_protocols
 
 # 仅编译 CLI
-cmake -B build -S . -DFALCON_BUILD_DAEMON=OFF
+cmake -B build -S . -DFALCON_BUILD_DAEMON=OFF -DFALCON_BUILD_DESKTOP=OFF
 cmake --build build --target falcon-cli
 ```
 
@@ -278,8 +290,10 @@ cmake --build build --target falcon-cli
 
 ### 代码组织
 - **头文件**：
-  - 公共 API 放在 `packages/libfalcon/include/falcon/`
-  - 内部实现头文件放在 `packages/libfalcon/src/internal/`
+  - Core 公共 API 放在 `packages/libfalcon-core/include/falcon/`
+  - Protocols 公共 API 放在 `packages/libfalcon-protocols/include/falcon/`
+  - Storage 公共 API 放在 `packages/libfalcon-storage/include/falcon/`
+  - Drives 公共 API 放在 `packages/libfalcon-drives/include/falcon/`
   - 使用 `#pragma once` 或传统的 include guard
 
 - **源文件**：
@@ -310,7 +324,7 @@ DownloadTask* start_download(const std::string& url,
 ### 异常处理
 - 使用异常处理错误（非性能关键路径）
 - 自定义异常类继承自 `std::exception`
-- 关键异常定义在 `packages/libfalcon/include/falcon/exceptions.hpp`
+- 关键异常定义在 `packages/libfalcon-core/include/falcon/exceptions.hpp`
 
 ### 资源管理
 - 使用 **RAII** 原则
@@ -356,10 +370,10 @@ DownloadTask* start_download(const std::string& url,
 
 ### 插件开发指引
 新增协议插件时，请遵循以下步骤：
-1. 在 `packages/libfalcon/plugins/<protocol_name>/` 创建目录
-2. 实现 `IProtocolHandler` 接口（定义在 `packages/libfalcon/include/falcon/plugin_interface.hpp`）
+1. 在 `packages/libfalcon-protocols/plugins/<protocol_name>/` 创建目录
+2. 实现 `IProtocolHandler` 接口（定义在 `packages/libfalcon-core/include/falcon/protocol_handler.hpp`）
 3. 在插件目录下创建 `CLAUDE.md` 记录协议特性、依赖库、测试方法
-4. 在 `packages/libfalcon/CMakeLists.txt` 中添加编译选项（可选编译该插件）
+4. 在 `packages/libfalcon-protocols/CMakeLists.txt` 中添加编译选项（可选编译该插件）
 
 ---
 
@@ -371,54 +385,68 @@ falcon/                              # 项目根目录
 ├── LICENSE                          # Apache 2.0 许可证
 ├── README.md                        # 项目介绍（面向用户）
 ├── CLAUDE.md                        # 本文件（面向 AI 与开发者）
+├── todo.md                          # 重构任务跟踪
 ├── .gitignore                       # Git 忽略规则
 ├── .clang-format                    # 代码格式化配置
 ├── .github/
 │   └── workflows/                   # CI/CD 配置
-│       ├── build.yml                # 多平台构建
-│       └── test.yml                 # 测试与覆盖率
 │
-├── packages/                        # C++ 核心包（库与工具）
-│   ├── libfalcon/                   # 核心下载引擎库
-│   │   ├── CMakeLists.txt
-│   │   ├── CLAUDE.md                # 核心库架构文档
-│   │   ├── include/
-│   │   │   └── falcon/              # 公共 API 头文件
-│   │   │       ├── download_engine.hpp
-│   │   │       ├── task_manager.hpp
-│   │   │       ├── plugin_interface.hpp
-│   │   │       └── exceptions.hpp
+├── packages/                        # C++ 包（4个独立库 + 2个工具）
+│   ├── libfalcon-core/              # 核心下载引擎库
+│   │   ├── CMakeLists.txt           # Target: falcon_core / Falcon::core
+│   │   ├── CLAUDE.md
+│   │   ├── include/falcon/          # 公共 API 头文件
+│   │   │   ├── download_engine.hpp
+│   │   │   ├── task_manager.hpp
+│   │   │   ├── protocol_handler.hpp
+│   │   │   ├── event_dispatcher.hpp
+│   │   │   ├── exceptions.hpp
+│   │   │   └── version.hpp
 │   │   ├── src/                     # 核心库实现
-│   │   │   ├── download_engine.cpp
-│   │   │   ├── task_manager.cpp
-│   │   │   └── internal/            # 内部实现头文件
-│   │   ├── plugins/                 # 协议插件
-│   │   │   ├── http/
-│   │   │   │   ├── CLAUDE.md
-│   │   │   │   ├── http_plugin.hpp
-│   │   │   │   └── http_plugin.cpp
-│   │   │   ├── ftp/
-│   │   │   └── bittorrent/
 │   │   └── tests/                   # 核心库测试
-│   │       ├── unit/
-│   │       ├── integration/
-│   │       └── benchmark/
+│   │
+│   ├── libfalcon-protocols/         # 协议实现库
+│   │   ├── CMakeLists.txt           # Target: falcon_protocols / Falcon::protocols
+│   │   ├── include/falcon/
+│   │   ├── src/                     # DownloadEngineV2, SegmentDownloader 等
+│   │   ├── plugins/                 # 协议插件
+│   │   │   ├── http/                # HTTP/HTTPS (libcurl)
+│   │   │   ├── ftp/                 # FTP
+│   │   │   ├── bittorrent/          # BitTorrent/Magnet (libtorrent)
+│   │   │   ├── thunder/             # 迅雷协议
+│   │   │   ├── ed2k/                # ED2K 电驴
+│   │   │   ├── hls/                 # HLS/DASH 流媒体
+│   │   │   └── ...                  # 其他协议
+│   │   └── tests/
+│   │
+│   ├── libfalcon-storage/           # 对象存储库
+│   │   ├── CMakeLists.txt           # Target: falcon_storage / Falcon::storage
+│   │   ├── include/falcon/
+│   │   ├── src/                     # ResourceBrowser 等
+│   │   ├── plugins/                 # 存储插件
+│   │   │   ├── s3/                  # Amazon S3
+│   │   │   ├── oss/                 # 阿里云 OSS
+│   │   │   ├── cos/                 # 腾讯云 COS
+│   │   │   ├── kodo/                # 七牛云
+│   │   │   └── upyun/               # 又拍云
+│   │   └── tests/
+│   │
+│   ├── libfalcon-drives/            # 网盘与云存储库
+│   │   ├── CMakeLists.txt           # Target: falcon_drives / Falcon::drives
+│   │   ├── include/falcon/
+│   │   ├── src/                     # CloudStoragePlugin, ConfigManager 等
+│   │   └── tests/
 │   │
 │   ├── falcon-cli/                  # CLI 命令行工具
 │   │   ├── CMakeLists.txt
 │   │   ├── CLAUDE.md
 │   │   ├── src/
-│   │   │   └── main.cpp
 │   │   └── tests/
 │   │
 │   └── falcon-daemon/               # 后台守护进程
 │       ├── CMakeLists.txt
 │       ├── CLAUDE.md
 │       ├── src/
-│       │   ├── main.cpp
-│       │   └── rpc_server.cpp
-│       ├── proto/                   # gRPC 协议定义（如使用 gRPC）
-│       │   └── falcon_service.proto
 │       └── tests/
 │
 ├── apps/                            # 应用层（GUI/Web）

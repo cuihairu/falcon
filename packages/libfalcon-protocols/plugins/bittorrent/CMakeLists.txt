@@ -39,7 +39,7 @@ add_library(falcon_plugin_bittorrent
 
 target_include_directories(falcon_plugin_bittorrent
     PRIVATE
-        ${CMAKE_SOURCE_DIR}/packages/libfalcon/include
+        ${CMAKE_SOURCE_DIR}/packages/libfalcon-core/include
         ${LIBTORRENT_INCLUDE_DIRS}
 )
 
