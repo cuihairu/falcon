@@ -13,8 +13,9 @@ project(falcon-cli
 add_executable(falcon-cli
     src/main.cpp
     src/config_loader.cpp
-    src/config_loader.hpp
 )
+
+target_include_directories(falcon-cli PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 target_link_libraries(falcon-cli
     PRIVATE

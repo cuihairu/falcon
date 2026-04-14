@@ -9,6 +9,7 @@
 #include <falcon/download_options.hpp>
 #include <falcon/event_listener.hpp>
 #include "config_loader.hpp"
+#include "terminal.hpp"
 
 #include <iostream>
 #include <iomanip>
@@ -21,10 +22,43 @@
 #include <cctype>
 #include <algorithm>
 #include <filesystem>
+#include <map>
+#include <mutex>
+
+#ifdef _WIN32
+#include <conio.h>
+#else
+#include <termios.h>
+#include <unistd.h>
+#include <fcntl.h>
+#endif
 
 // 全局变量用于信号处理
 std::atomic<bool> g_interrupted{false};
 falcon::DownloadEngine* g_engine = nullptr;
+
+// Non-blocking key check
+inline bool kbhit_check() {
+#ifdef _WIN32
+    return _kbhit() != 0;
+#else
+    struct timeval tv = {0, 0};
+    fd_set fds;
+    FD_ZERO(&fds);
+    FD_SET(STDIN_FILENO, &fds);
+    return select(STDIN_FILENO + 1, &fds, nullptr, nullptr, &tv) > 0;
+#endif
+}
+
+inline int getch_nb() {
+#ifdef _WIN32
+    return _getch();
+#else
+    char c = 0;
+    if (read(STDIN_FILENO, &c, 1) != 1) return -1;
+    return static_cast<int>(c);
+#endif
+}
 
 // 信号处理函数
 void signal_handler(int signal) {
@@ -33,17 +67,25 @@ void signal_handler(int signal) {
         if (g_engine) {
             g_engine->cancel_all();
         }
-        std::cout << "\n\n中断信号接收，正在取消下载...\n";
+        std::cout << "\n\n" << term::yellow("Interrupt received, cancelling...") << "\n";
     }
 }
 
 /**
- * @brief CLI 事件监听器
+ * @brief CLI 事件监听器（支持多任务彩色进度显示）
  */
 class CliEventListener : public falcon::IEventListener {
 public:
     explicit CliEventListener(bool verbose = false, bool show_progress = true)
         : verbose_(verbose), show_progress_(show_progress), last_progress_(0.0) {}
+
+    void set_task_names(const std::map<falcon::TaskId, std::string>& names) {
+        task_names_ = names;
+        task_progress_.clear();
+        for (const auto& [id, _] : names) {
+            task_progress_[id] = 0.0f;
+        }
+    }
 
     std::string format_size(falcon::Bytes bytes) const {
         const char* units[] = {"B", "KB", "MB", "GB", "TB"};
@@ -65,79 +107,155 @@ public:
                            falcon::TaskStatus new_status) override {
         if (!verbose_) return;
 
-        std::cout << "\n[任务 " << task_id << "] "
+        using term::fg;
+        using term::Color;
+        std::string color;
+        if (new_status == falcon::TaskStatus::Failed) color = fg(Color::Red);
+        else if (new_status == falcon::TaskStatus::Completed) color = fg(Color::Green);
+        else color = fg(Color::Cyan);
+
+        std::cout << "\n" << color << "[Task " << task_id << "] "
                   << falcon::to_string(old_status)
-                  << " -> " << falcon::to_string(new_status) << "\n";
+                  << " -> " << falcon::to_string(new_status)
+                  << term::reset() << "\n";
     }
 
     void on_progress(const falcon::ProgressInfo& info) override {
         if (!show_progress_) return;
-        // 避免过于频繁的更新
-        if (info.progress - last_progress_ < 0.01 && info.progress < 1.0) return;
-        last_progress_ = info.progress;
 
-        // 显示进度条
-        display_progress(info);
+        std::lock_guard<std::mutex> lock(mutex_);
+        task_progress_[info.task_id] = info.progress;
+
+        // 单任务模式：覆盖当前行
+        if (task_names_.size() <= 1) {
+            if (info.progress - last_progress_ < 0.005 && info.progress < 1.0) return;
+            last_progress_ = info.progress;
+            display_single_progress(info);
+            return;
+        }
+
+        // 多任务模式：更新所有行
+        // 节流更新频率
+        auto now = std::chrono::steady_clock::now();
+        if (now - last_update_ < std::chrono::milliseconds(200)) return;
+        last_update_ = now;
+
+        display_multi_progress(info);
     }
 
     void on_error(falcon::TaskId task_id, const std::string& error_message) override {
-        std::cout << "\n错误 [任务 " << task_id << "]: " << error_message << "\n";
+        std::cout << "\n" << term::red("Error [Task " + std::to_string(task_id) + "]: ")
+                  << error_message << "\n";
     }
 
     void on_completed(falcon::TaskId task_id, const std::string& output_path) override {
-        std::cout << "\n✓ 下载完成 [任务 " << task_id << "]: " << output_path << "\n";
+        std::cout << "\n" << term::green("OK [Task " + std::to_string(task_id) + "]: ")
+                  << output_path << "\n";
     }
 
     void on_file_info(falcon::TaskId task_id, const falcon::FileInfo& info) override {
         if (!verbose_) return;
 
-        std::cout << "\n文件信息 [任务 " << task_id << "]:\n"
-                  << "  大小: " << format_size(info.total_size) << "\n"
-                  << "  类型: " << info.content_type << "\n";
+        std::cout << "\n" << term::cyan("FileInfo [Task " + std::to_string(task_id) + "]:")
+                  << "\n  Size: " << format_size(info.total_size)
+                  << "\n  Type: " << info.content_type << "\n";
     }
 
 private:
-    void display_progress(const falcon::ProgressInfo& info) {
-        // 清除当前行
+    void display_single_progress(const falcon::ProgressInfo& info) {
         std::cout << "\r";
 
-        // 进度条（30个字符宽度）
+        // 进度条（30字符宽度）
         const int bar_width = 30;
         int filled = static_cast<int>(info.progress * bar_width);
 
         std::cout << "[";
         for (int i = 0; i < bar_width; ++i) {
             if (i < filled) {
-                std::cout << "=";
+                std::cout << term::fg(term::Color::Green) << "=" << term::reset();
             } else if (i == filled) {
-                std::cout << ">";
+                std::cout << term::fg(term::Color::Green) << ">" << term::reset();
             } else {
                 std::cout << " ";
             }
         }
         std::cout << "] ";
 
-        // 百分比
-        std::cout << std::fixed << std::setprecision(1) << (info.progress * 100) << "% ";
+        // 百分比（彩色）
+        std::cout << term::bold()
+                  << std::fixed << std::setprecision(1) << (info.progress * 100) << "%"
+                  << term::reset() << " ";
 
-        // 大小信息
+        // 大小
         std::cout << "(" << format_size(info.downloaded_bytes);
         if (info.total_bytes > 0) {
-            std::cout << " / " << format_size(info.total_bytes);
+            std::cout << "/" << format_size(info.total_bytes);
         }
         std::cout << ") ";
 
         // 速度
         if (info.speed > 0) {
-            std::cout << " @ " << format_size(info.speed) << "/s";
+            std::cout << term::fg(term::Color::Cyan)
+                      << format_size(info.speed) << "/s"
+                      << term::reset();
         }
 
+        // ETA
+        if (info.speed > 0 && info.total_bytes > info.downloaded_bytes) {
+            auto remaining = (info.total_bytes - info.downloaded_bytes) / info.speed;
+            int secs = static_cast<int>(remaining);
+            int mins = secs / 60;
+            secs = secs % 60;
+            std::cout << " ETA " << mins << ":" << std::setfill('0') << std::setw(2) << secs;
+        }
+
+        std::cout.flush();
+    }
+
+    void display_multi_progress(const falcon::ProgressInfo& /*info*/) {
+        // 移动光标到第一行进度
+        int lines = static_cast<int>(task_names_.size());
+        std::cout << term::move_up(lines);
+
+        int i = 0;
+        for (const auto& [id, name] : task_names_) {
+            std::cout << term::clear_line();
+
+            float prog = 0.0f;
+            auto it = task_progress_.find(id);
+            if (it != task_progress_.end()) prog = it->second;
+
+            // 截断文件名显示
+            std::string display_name = name;
+            if (display_name.size() > 30) {
+                display_name = "..." + display_name.substr(display_name.size() - 27);
+            }
+
+            // 迷你进度条（15字符）
+            const int bar_w = 15;
+            int filled = static_cast<int>(prog * bar_w);
+            std::cout << "[";
+            for (int j = 0; j < bar_w; ++j) {
+                if (j < filled) std::cout << "=";
+                else if (j == filled) std::cout << ">";
+                else std::cout << " ";
+            }
+
+            int pct = static_cast<int>(prog * 100);
+            std::cout << "] " << term::bold() << std::setw(3) << pct << "%" << term::reset()
+                      << " " << display_name << "\n";
+            ++i;
+        }
         std::cout.flush();
     }
 
     bool verbose_;
     bool show_progress_;
     float last_progress_;
+    std::mutex mutex_;
+    std::map<falcon::TaskId, std::string> task_names_;
+    std::map<falcon::TaskId, float> task_progress_;
+    std::chrono::steady_clock::time_point last_update_ = std::chrono::steady_clock::now();
 };
 
 /**
@@ -181,6 +299,7 @@ struct CliArgs {
     bool show_version = false;
     bool show_config_path = false; // 显示配置文件路径
     bool create_default_config = false; // 创建默认配置文件
+    bool no_color = false; // 禁用彩色输出
 };
 
 static falcon::Bytes parse_size_bytes(std::string size_str) {
@@ -427,6 +546,8 @@ CliArgs parse_args(int argc, char* argv[]) {
         } else if (arg == "--create-default-config") {
             // 创建默认配置文件
             args.create_default_config = true;
+        } else if (arg == "--no-color") {
+            args.no_color = true;
         } else if (!arg.empty() && arg[0] != '-') {
             args.urls.push_back(arg);
         }
@@ -436,18 +557,24 @@ CliArgs parse_args(int argc, char* argv[]) {
 }
 
 void show_help() {
-    std::cout << "Falcon 命令行下载工具 v0.2.0 - aria2 风格多线程下载\n\n";
-    std::cout << "用法:\n";
-    std::cout << "  falcon-cli [选项] <URL...>\n\n";
-    std::cout << "选项:\n";
-    std::cout << "  -h, --help                 显示帮助信息\n";
-    std::cout << "  -V, --version              显示版本信息\n";
-    std::cout << "  -i, --input-file <文件>    从文件批量读取 URL（使用 - 表示 stdin）\n";
-    std::cout << "  -o, --output <文件>        指定输出文件名\n";
-    std::cout << "  -d, --directory <目录>     指定输出目录\n";
-    std::cout << "  -C, --config <文件>        指定配置文件路径\n";
-    std::cout << "      --show-config-path     显示默认配置文件路径\n";
-    std::cout << "      --create-default-config 创建默认配置文件\n\n";
+    using term::bold;
+    using term::fg;
+    using term::Color;
+    auto R = term::reset();
+
+    std::cout << bold() << "Falcon CLI v0.2.0" << R << " - aria2-style multi-thread downloader\n\n";
+    std::cout << fg(Color::Cyan) << "Usage:" << R << "\n";
+    std::cout << "  falcon-cli [OPTIONS] <URL...>\n\n";
+    std::cout << fg(Color::Cyan) << "Options:" << R << "\n";
+    std::cout << "  -h, --help                 Show help\n";
+    std::cout << "  -V, --version              Show version\n";
+    std::cout << "  -i, --input-file <FILE>    Read URLs from file (- for stdin)\n";
+    std::cout << "  -o, --output <FILE>        Output filename\n";
+    std::cout << "  -d, --directory <DIR>      Output directory\n";
+    std::cout << "  -C, --config <FILE>        Config file path\n";
+    std::cout << "      --show-config-path     Show default config path\n";
+    std::cout << "      --create-default-config Create default config\n";
+    std::cout << "      --no-color             Disable colored output\n\n";
 
     std::cout << "下载队列选项 (aria2 风格):\n";
     std::cout << "  -j, --max-concurrent-downloads <N>  最大并发下载任务数 [默认: 1]\n\n";
@@ -509,12 +636,20 @@ void show_help() {
 }
 
 int main(int argc, char* argv[]) {
+    // Initialize terminal ANSI support
+    term::enable_ansi();
+
     // 设置信号处理
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
 
     // 解析命令行参数
     auto args = parse_args(argc, argv);
+
+    // Handle color settings
+    if (args.no_color || !term::is_terminal()) {
+        term::color_enabled() = false;
+    }
 
     // 显示帮助或版本信息
     if (args.show_help) {
@@ -523,7 +658,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (args.show_version) {
-        std::cout << "Falcon CLI v0.2.0\n";
+        std::cout << term::bold() << "Falcon CLI" << term::reset() << " v0.2.0\n";
         return 0;
     }
 
@@ -637,19 +772,19 @@ int main(int argc, char* argv[]) {
         auto file_urls = read_urls_from_file(args.input_file);
         urls.insert(urls.end(), file_urls.begin(), file_urls.end());
         if (file_urls.empty() && urls.empty()) {
-            std::cerr << "错误：无法从输入文件读取 URL: " << args.input_file << "\n";
+            std::cerr << term::red("Error: ") << "cannot read URLs from: " << args.input_file << "\n";
             return 1;
         }
     }
 
     if (urls.empty()) {
-        std::cerr << "错误：缺少 URL 参数\n";
-        std::cerr << "使用 --help 查看帮助信息\n";
+        std::cerr << term::red("Error: ") << "missing URL argument\n"
+                  << "Use --help for usage information\n";
         return 1;
     }
 
     if (!args.output_file.empty() && urls.size() > 1) {
-        std::cerr << "错误：批量下载时不支持使用 -o/--output（会导致输出文件冲突）\n";
+        std::cerr << term::red("Error: ") << "-o/--output not supported for batch downloads\n";
         return 1;
     }
 
@@ -695,8 +830,24 @@ int main(int argc, char* argv[]) {
         }
 
         // 创建事件监听器
-        bool show_progress = (urls.size() == 1);
+        bool show_progress = !args.quiet;
         CliEventListener listener(args.verbose, show_progress);
+
+        // Build task name map for multi-task display
+        if (tasks.size() > 1 && show_progress) {
+            std::map<falcon::TaskId, std::string> task_names;
+            for (const auto& task : tasks) {
+                task_names[task->id()] = task->url();
+            }
+            listener.set_task_names(task_names);
+
+            // Reserve screen lines for multi-task progress
+            std::cout << "\n"; // blank line before progress
+            for (size_t i = 0; i < tasks.size(); ++i) {
+                std::cout << "  Waiting...\n";
+            }
+        }
+
         if (!args.quiet) {
             engine.add_listener(&listener);
         }
@@ -704,16 +855,18 @@ int main(int argc, char* argv[]) {
         // 添加下载任务
         auto tasks = engine.add_tasks(urls, options);
         if (tasks.empty()) {
-            std::cerr << "错误：无法添加下载任务（可能是不支持的 URL 或协议插件未启用）\n";
+            std::cerr << term::red("Error: ") << "cannot add download tasks (unsupported URL or plugin disabled)\n";
             return 1;
         }
 
         if (!args.quiet) {
             if (tasks.size() == 1) {
-                std::cout << "开始下载: " << tasks.front()->url() << "\n";
+                std::cout << term::bold() << "Downloading:" << term::reset()
+                          << " " << tasks.front()->url() << "\n";
             } else {
-                std::cout << "开始下载 " << tasks.size() << " 个任务（最大并发: "
-                          << args.max_concurrent_downloads << "）\n";
+                std::cout << term::bold() << "Downloading " << tasks.size() << " tasks"
+                          << term::reset() << " (max concurrent: "
+                          << args.max_concurrent_downloads << ")\n";
             }
         }
 
@@ -725,32 +878,98 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // 等待全部完成
-        engine.wait_all();
+        // Interactive wait loop with keyboard control
+        if (term::is_terminal() && !args.quiet) {
+            // Set stdin to non-blocking raw mode (Unix)
+#ifndef _WIN32
+            struct termios old_tio, new_tio;
+            tcgetattr(STDIN_FILENO, &old_tio);
+            new_tio = old_tio;
+            new_tio.c_lflag &= ~(ICANON | ECHO);
+            tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
+#endif
+            std::cout << term::fg(term::Color::Yellow) << "\n  [p] Pause  [r] Resume  [q] Quit\n"
+                      << term::reset();
+
+            while (!g_interrupted) {
+                // Check if all tasks finished
+                bool all_done = true;
+                for (const auto& task : tasks) {
+                    auto s = task->status();
+                    if (s != falcon::TaskStatus::Completed &&
+                        s != falcon::TaskStatus::Failed &&
+                        s != falcon::TaskStatus::Cancelled) {
+                        all_done = false;
+                        break;
+                    }
+                }
+                if (all_done) break;
+
+                // Check keyboard input
+                if (kbhit_check()) {
+                    int ch = getch_nb();
+                    if (ch == 'q' || ch == 'Q' || ch == 27) { // q or Esc
+                        g_interrupted = true;
+                        if (g_engine) g_engine->cancel_all();
+                        break;
+                    } else if (ch == 'p' || ch == 'P') {
+                        for (const auto& task : tasks) {
+                            if (task->status() == falcon::TaskStatus::Downloading) {
+                                engine.pause_task(task->id());
+                            }
+                        }
+                        std::cout << "\n" << term::yellow("Paused all active tasks") << "\n";
+                    } else if (ch == 'r' || ch == 'R') {
+                        for (const auto& task : tasks) {
+                            if (task->status() == falcon::TaskStatus::Paused) {
+                                engine.resume_task(task->id());
+                            }
+                        }
+                        std::cout << "\n" << term::green("Resumed all paused tasks") << "\n";
+                    }
+                }
+
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+
+#ifndef _WIN32
+            tcsetattr(STDIN_FILENO, TCSANOW, &old_tio);
+#endif
+        } else {
+            engine.wait_all();
+        }
 
         if (g_interrupted) {
-            std::cerr << "\n下载已取消\n";
+            std::cerr << "\n" << term::yellow("Download cancelled") << "\n";
             return 1;
         }
 
-        // 汇总结果
-        bool all_ok = true;
+        // Summary
+        int ok = 0, failed = 0, cancelled = 0;
         for (const auto& task : tasks) {
-            if (task->status() == falcon::TaskStatus::Failed) {
-                all_ok = false;
-                std::cerr << "\n下载失败: " << task->url() << "\n  " << task->error_message() << "\n";
-            } else if (task->status() == falcon::TaskStatus::Cancelled) {
-                all_ok = false;
-                std::cerr << "\n下载已取消: " << task->url() << "\n";
+            auto s = task->status();
+            if (s == falcon::TaskStatus::Completed) ok++;
+            else if (s == falcon::TaskStatus::Failed) {
+                failed++;
+                std::cerr << term::red("FAIL") << " " << task->url()
+                          << "\n  " << task->error_message() << "\n";
+            } else if (s == falcon::TaskStatus::Cancelled) {
+                cancelled++;
+                std::cerr << term::yellow("SKIP") << " " << task->url() << "\n";
             }
         }
 
-        return all_ok ? 0 : 1;
+        if (tasks.size() > 1 || failed > 0 || cancelled > 0) {
+            std::cout << "\n"
+                      << term::green(std::to_string(ok) + " OK");
+            if (failed > 0)
+                std::cout << "  " << term::red(std::to_string(failed) + " FAILED");
+            if (cancelled > 0)
+                std::cout << "  " << term::yellow(std::to_string(cancelled) + " CANCELLED");
+            std::cout << "\n";
+        }
 
-    } catch (const std::exception& e) {
-        std::cerr << "错误：" << e.what() << "\n";
-        return 1;
-    }
+        return (failed + cancelled == 0) ? 0 : 1;
 
     return 0;
 }
