@@ -14,7 +14,7 @@
 #include <map>
 
 namespace falcon {
-namespace plugins {
+namespace protocols {
 
 /**
  * @class HLSPlugin
@@ -195,5 +195,5 @@ private:
     std::string getStreamType(const std::string& url);
 };
 
-} // namespace plugins
+} // namespace protocols
 } // namespace falcon

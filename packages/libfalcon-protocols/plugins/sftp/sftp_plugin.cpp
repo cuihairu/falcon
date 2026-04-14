@@ -16,7 +16,7 @@
 #include <thread>
 
 namespace falcon {
-namespace plugins {
+namespace protocols {
 
 // ============================================================================
 // SFTPPlugin 实现
@@ -445,5 +445,5 @@ std::string SFTPPlugin::SFTPDownloadTask::getErrorMessage() const {
     return errorMessage_;
 }
 
-} // namespace plugins
+} // namespace protocols
 } // namespace falcon

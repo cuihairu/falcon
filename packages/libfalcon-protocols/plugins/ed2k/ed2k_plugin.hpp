@@ -14,7 +14,7 @@
 #include <array>
 
 namespace falcon {
-namespace plugins {
+namespace protocols {
 
 /**
  * @class ED2KPlugin
@@ -140,5 +140,5 @@ private:
     std::string hashToString(const std::array<uint8_t, 16>& hash);
 };
 
-} // namespace plugins
+} // namespace protocols
 } // namespace falcon

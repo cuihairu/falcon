@@ -25,7 +25,7 @@
 #endif
 
 namespace falcon {
-namespace plugins {
+namespace protocols {
 
 /**
  * @class BitTorrentPlugin
@@ -183,5 +183,5 @@ private:
     std::string generateNodeId();
 };
 
-} // namespace plugins
+} // namespace protocols
 } // namespace falcon

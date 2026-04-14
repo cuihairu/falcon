@@ -13,7 +13,7 @@
 #include <memory>
 
 namespace falcon {
-namespace plugins {
+namespace protocols {
 
 /**
  * @class QQDLPlugin
@@ -85,5 +85,5 @@ private:
   std::string base64_decode(const std::string& encoded);
 };
 
-} // namespace plugins
+} // namespace protocols
 } // namespace falcon

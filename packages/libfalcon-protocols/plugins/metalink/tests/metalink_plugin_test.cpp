@@ -7,7 +7,7 @@
 #include <falcon/plugins/metalink/metalink_plugin.hpp>
 #include <fstream>
 
-using namespace falcon::plugins;
+using namespace falcon::protocols;
 
 class MetalinkPluginTest : public ::testing::Test {
 protected:

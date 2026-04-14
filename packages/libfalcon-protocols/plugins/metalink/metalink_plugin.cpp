@@ -28,7 +28,7 @@ std::string trim(const std::string& str) {
 } // anonymous namespace
 
 namespace falcon {
-namespace plugins {
+namespace protocols {
 
 // ============================================================================
 // MetalinkPlugin 实现
@@ -469,5 +469,5 @@ std::string MetalinkPlugin::MetalinkDownloadTask::getErrorMessage() const {
     return errorMessage_;
 }
 
-} // namespace plugins
+} // namespace protocols
 } // namespace falcon

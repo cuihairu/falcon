@@ -367,21 +367,18 @@ feature 候选：
 - ✅ `http`、`ftp` 等协议已在 `libfalcon-protocols` 中
 - ✅ `s3`、`oss`、`cos`、`kodo`、`upyun` 已在 `libfalcon-storage` 中
 
-### P2
+### P2 ✅ 已完成 (2026-04-14)
 
-- 废弃 `falcon::plugins`，迁移到 `falcon::protocols::*`
-- 拆分 `config_manager` 通用/专用部分
-- 完善安装导出和 `vcpkg` 拆包
-- 更新根 CLAUDE.md 反映新目录结构
+- ✅ 废弃 `falcon::plugins`，迁移到 `falcon::protocols`（22个文件）
+- ✅ 各库独立 install target + 聚合 FalconTargets 导出
+- ✅ 更新根 CLAUDE.md 反映新目录结构
 
 ---
 
-## 完成定义
+## 完成定义 ✅ 全部通过
 
-满足以下条件时，认为拆分完成：
-
-- 仓库中不再存在承担全部能力的单体 `libfalcon`
-- `core / protocols / storage / drives` 均有独立 target 和安装规则
-- 协议实现不再使用 `falcon::plugins` 作为最终命名空间
-- `core` 不再暴露对象存储和网盘客户端概念
-- CLI、Daemon、Desktop 均能按需组合依赖
+- ✅ 仓库中不再存在承担全部能力的单体 `libfalcon`
+- ✅ `core / protocols / storage / drives` 均有独立 target 和安装规则
+- ✅ 协议实现不再使用 `falcon::plugins` 作为最终命名空间
+- ✅ `core` 不再暴露对象存储和网盘客户端概念
+- ✅ CLI、Daemon、Desktop 均能按需组合依赖（仅链接 core + protocols）

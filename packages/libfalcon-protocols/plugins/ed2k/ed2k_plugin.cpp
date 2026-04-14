@@ -16,7 +16,7 @@
 #include <cstring>
 
 namespace falcon {
-namespace plugins {
+namespace protocols {
 
 ED2KPlugin::ED2KPlugin() {
     FALCON_LOG_INFO("ED2K plugin initialized");
@@ -291,5 +291,5 @@ std::string ED2KPlugin::hashToString(const std::array<uint8_t, 16>& hash) {
     return oss.str();
 }
 
-} // namespace plugins
+} // namespace protocols
 } // namespace falcon

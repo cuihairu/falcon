@@ -15,7 +15,7 @@
 #include <iomanip>
 
 namespace falcon {
-namespace plugins {
+namespace protocols {
 
 ThunderPlugin::ThunderPlugin() {
     FALCON_LOG_INFO("Thunder plugin initialized");
@@ -185,5 +185,5 @@ std::string ThunderPlugin::base64_decode(const std::string& encoded) {
     return decoded;
 }
 
-} // namespace plugins
+} // namespace protocols
 } // namespace falcon

@@ -21,7 +21,7 @@
 #include <algorithm>
 
 using namespace falcon;
-using namespace falcon::plugins;
+using namespace falcon::protocols;
 
 namespace {
 

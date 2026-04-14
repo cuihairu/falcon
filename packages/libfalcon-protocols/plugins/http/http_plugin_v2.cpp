@@ -16,7 +16,7 @@
 #include <iomanip>
 
 namespace falcon {
-namespace plugins {
+namespace protocols {
 
 // ============================================================================
 // HttpPlugin 实现
@@ -463,5 +463,5 @@ std::string HttpPlugin::getFinalUrl(const std::string& url) {
     return result;
 }
 
-} // namespace plugins
+} // namespace protocols
 } // namespace falcon

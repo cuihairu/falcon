@@ -22,7 +22,7 @@
 #endif
 
 namespace falcon {
-namespace plugins {
+namespace protocols {
 
 // Helper to extract scheme from URL
 static std::string get_scheme(const std::string& url) {
@@ -719,5 +719,5 @@ std::unique_ptr<IProtocolHandler> create_http_handler() {
     return std::make_unique<HttpHandler>();
 }
 
-}  // namespace plugins
+}  // namespace protocols
 }  // namespace falcon

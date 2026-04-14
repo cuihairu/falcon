@@ -18,7 +18,7 @@
 #include <openssl/sha.h>
 
 namespace falcon {
-namespace plugins {
+namespace protocols {
 
 // ============================================================================
 // BitTorrentPlugin 实现
@@ -498,5 +498,5 @@ std::string BitTorrentPlugin::generateNodeId() {
     return nodeId;
 }
 
-} // namespace plugins
+} // namespace protocols
 } // namespace falcon

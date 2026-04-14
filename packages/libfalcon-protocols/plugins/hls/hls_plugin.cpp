@@ -18,7 +18,7 @@
 #include <nlohmann/json.hpp>
 
 namespace falcon {
-namespace plugins {
+namespace protocols {
 
 HLSPlugin::HLSPlugin() {
     FALCON_LOG_INFO("HLS/DASH plugin initialized");
@@ -360,5 +360,5 @@ std::string HLSPlugin::resolveUrl(const std::string& url, const std::string& bas
     }
 }
 
-} // namespace plugins
+} // namespace protocols
 } // namespace falcon

@@ -14,7 +14,7 @@
 #include <curl/curl.h>
 
 namespace falcon {
-namespace plugins {
+namespace protocols {
 
 /**
  * @class HttpPlugin
@@ -155,5 +155,5 @@ private:
     std::string getFinalUrl(const std::string& url);
 };
 
-} // namespace plugins
+} // namespace protocols
 } // namespace falcon

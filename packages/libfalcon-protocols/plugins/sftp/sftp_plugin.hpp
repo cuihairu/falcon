@@ -19,7 +19,7 @@
 #endif
 
 namespace falcon {
-namespace plugins {
+namespace protocols {
 
 /**
  * @class SFTPPlugin
@@ -149,5 +149,5 @@ private:
     bool parseSFTPUrl(const std::string& url, ConnectionInfo& info, std::string& path);
 };
 
-} // namespace plugins
+} // namespace protocols
 } // namespace falcon

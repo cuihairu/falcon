@@ -13,7 +13,7 @@
 #include <vector>
 
 using namespace falcon;
-using namespace falcon::plugins;
+using namespace falcon::protocols;
 
 class ThunderPluginTest : public ::testing::Test {
 protected:

@@ -10,7 +10,7 @@
 #include <falcon/exceptions.hpp>
 
 using namespace falcon;
-using namespace falcon::plugins;
+using namespace falcon::protocols;
 
 class HLSPluginTest : public ::testing::Test {
 protected:

@@ -7,7 +7,7 @@
 #include <falcon/plugins/sftp/sftp_plugin.hpp>
 #include <fstream>
 
-using namespace falcon::plugins;
+using namespace falcon::protocols;
 
 class SFTPPluginTest : public ::testing::Test {
 protected:

@@ -15,7 +15,7 @@
 #include <iomanip>
 
 namespace falcon {
-namespace plugins {
+namespace protocols {
 
 QQDLPlugin::QQDLPlugin() {
     FALCON_LOG_INFO("QQDL plugin initialized");
@@ -195,5 +195,5 @@ std::string QQDLPlugin::base64_decode(const std::string& encoded) {
     return decoded;
 }
 
-} // namespace plugins
+} // namespace protocols
 } // namespace falcon

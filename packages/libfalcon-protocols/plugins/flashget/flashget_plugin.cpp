@@ -15,7 +15,7 @@
 #include <iomanip>
 
 namespace falcon {
-namespace plugins {
+namespace protocols {
 
 FlashGetPlugin::FlashGetPlugin() {
     FALCON_LOG_INFO("FlashGet plugin initialized");
@@ -204,5 +204,5 @@ std::string FlashGetPlugin::base64_decode(const std::string& encoded) {
     return decoded;
 }
 
-} // namespace plugins
+} // namespace protocols
 } // namespace falcon

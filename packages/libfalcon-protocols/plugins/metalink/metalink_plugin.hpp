@@ -15,7 +15,7 @@
 #include <map>
 
 namespace falcon {
-namespace plugins {
+namespace protocols {
 
 /**
  * @struct MetalinkResource
@@ -174,5 +174,5 @@ private:
     };
 };
 
-} // namespace plugins
+} // namespace protocols
 } // namespace falcon

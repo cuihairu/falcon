@@ -5,7 +5,7 @@
 #include <memory>
 
 namespace falcon {
-namespace plugins {
+namespace protocols {
 
 /// HTTP/HTTPS protocol handler using libcurl
 class HttpHandler : public IProtocolHandler {
@@ -50,5 +50,5 @@ private:
 /// Factory function to create HTTP handler
 std::unique_ptr<IProtocolHandler> create_http_handler();
 
-}  // namespace plugins
+}  // namespace protocols
 }  // namespace falcon

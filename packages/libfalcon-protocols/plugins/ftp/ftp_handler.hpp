@@ -5,7 +5,7 @@
 #include <memory>
 
 namespace falcon {
-namespace plugins {
+namespace protocols {
 
 /// FTP/FTPS protocol handler using libcurl
 class FtpHandler : public IProtocolHandler {
@@ -43,6 +43,6 @@ public:
 /// Factory function to create FTP handler
 std::unique_ptr<IProtocolHandler> create_ftp_handler();
 
-}  // namespace plugins
+}  // namespace protocols
 }  // namespace falcon
 

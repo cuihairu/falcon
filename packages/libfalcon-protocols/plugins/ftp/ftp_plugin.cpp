@@ -19,7 +19,7 @@
 #include <string>
 #include <thread>
 
-namespace falcon::plugins {
+namespace falcon::protocols {
 namespace {
 
 struct ProgressData {
@@ -253,4 +253,4 @@ std::unique_ptr<IProtocolHandler> create_ftp_handler() {
     return std::make_unique<FtpHandler>();
 }
 
-} // namespace falcon::plugins
+} // namespace falcon::protocols

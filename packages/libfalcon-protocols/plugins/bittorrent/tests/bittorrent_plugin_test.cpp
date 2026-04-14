@@ -8,7 +8,7 @@
 #include <fstream>
 #include <sstream>
 
-using namespace falcon::plugins;
+using namespace falcon::protocols;
 
 class BitTorrentPluginTest : public ::testing::Test {
 protected:
