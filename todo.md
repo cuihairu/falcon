@@ -373,6 +373,22 @@ feature 候选：
 - ✅ 各库独立 install target + 聚合 FalconTargets 导出
 - ✅ 更新根 CLAUDE.md 反映新目录结构
 
+### Phase 3 ✅ 已完成 (2026-04-15)
+
+- ✅ 公共头文件路径重组：24 个头文件迁移到 namespace 对齐路径
+- ✅ drives: 3 headers → `falcon/drives/`
+- ✅ storage: 11 headers → `falcon/storage/`
+- ✅ protocols: 10 headers → `falcon/protocols/`（含 commands/、http/、net/ 子目录）
+- ✅ 保留向后兼容 shim 头文件（24 个），代码中已无旧路径引用
+- ✅ 更新 45+ 源文件/测试文件的 include 路径
+
+### Phase 4 ✅ 已完成 (2026-04-15)
+
+- ✅ 接口收口：core 无残留文件，`falcon::plugins` 命名空间清理完成
+- ✅ 文档更新：3 个文档文件的旧接口引用已修正
+- ✅ shim 警告清理：移除 24 个 shim 头文件的 #warning 编译警告
+- ✅ 安装导出完善：各库 install/export 配置已完善，Config.cmake.in 齐全
+
 ---
 
 ## 完成定义 ✅ 全部通过

@@ -263,7 +263,7 @@ ctest --test-dir build --output-on-failure
 ```cpp
 // plugins/myprotocol/myprotocol_plugin.hpp
 #pragma once
-#include <falcon/plugin_interface.hpp>
+#include <falcon/protocol_handler.hpp>
 
 class MyProtocolPlugin : public IProtocolHandler {
 public:

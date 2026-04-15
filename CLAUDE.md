@@ -10,6 +10,21 @@
 - 删除旧 `packages/libfalcon/` 单体目录
 - 跨包 option 提升到顶层 CMakeLists.txt
 
+### 2026-04-15 - 公共头文件路径重组（Phase 3）
+- 24 个公共头文件迁移到 namespace 对齐路径
+  - `libfalcon-drives`: 3 headers → `falcon/drives/`
+  - `libfalcon-storage`: 11 headers → `falcon/storage/`
+  - `libfalcon-protocols`: 10 headers → `falcon/protocols/`（含子目录）
+- 保留向后兼容 shim 头文件（纯转发，无警告）
+- 更新 45+ 源文件/测试文件的 include 路径
+- CI 全平台验证通过
+
+### 2026-04-15 - 接口收尾与文档清理（Phase 4）
+- 文档更新：修正 `plugin_interface.hpp` 旧引用为 `protocol_handler.hpp`
+- shim 警告清理：移除 24 个 shim 头文件的 `#warning` 编译警告
+- `falcon::plugins` 命名空间清理完成（代码中无残留）
+- 验证安装导出配置完善（Config.cmake.in、FalconTargets 导出）
+
 ### 2025-12-21 - 添加私有协议支持
 - 实现迅雷 thunder:// 协议支持
 - 实现 QQ 旋风 qqlink:// 协议支持

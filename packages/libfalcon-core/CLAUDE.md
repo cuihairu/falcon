@@ -37,7 +37,7 @@
 |--------|------|
 | `download_engine.hpp` | 下载引擎主类 `DownloadEngine` |
 | `task_manager.hpp` | 任务管理器 `TaskManager` |
-| `plugin_interface.hpp` | 插件接口 `IProtocolHandler` |
+| `protocol_handler.hpp` | 插件接口 `IProtocolHandler` |
 | `download_task.hpp` | 任务对象 `DownloadTask` |
 | `download_options.hpp` | 配置选项 `DownloadOptions` |
 | `exceptions.hpp` | 异常类定义 |
