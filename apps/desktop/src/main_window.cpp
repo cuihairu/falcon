@@ -6,6 +6,8 @@
  */
 
 #include "main_window.hpp"
+#include "widgets/top_bar.hpp"
+#include "widgets/status_bar.hpp"
 #include "navigation/sidebar.hpp"
 #include "pages/download_page.hpp"
 #include "pages/cloud_page.hpp"
@@ -33,6 +35,7 @@ constexpr quint16 kIpcPort = 51337;
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
     , side_bar_(nullptr)
+    , status_bar_(nullptr)
     , content_stack_(nullptr)
     , download_page_(nullptr)
     , settings_page_(nullptr)
@@ -60,25 +63,57 @@ MainWindow::~MainWindow()
 
 void MainWindow::setup_ui()
 {
-    setWindowTitle(tr("Falcon Downloader"));
+    // 启用自定义标题栏
+    setWindowFlags(Qt::WindowType::FramelessWindowHint);
+    setAttribute(Qt::WA_TranslucentBackground);
+
     resize(1200, 800);
 
     // 创建中心部件
     auto* central_widget = new QWidget(this);
     setCentralWidget(central_widget);
 
-    // 主布局
-    auto* main_layout = new QHBoxLayout(central_widget);
+    // 主布局（垂直：顶部栏 + 内容区域 + 状态栏）
+    auto* main_layout = new QVBoxLayout(central_widget);
     main_layout->setContentsMargins(0, 0, 0, 0);
     main_layout->setSpacing(0);
 
+    // 创建顶部工具栏
+    create_top_bar();
+    main_layout->addWidget(top_bar_);
+
+    // 创建水平布局容器（侧边栏 + 内容区域）
+    auto* content_layout = new QHBoxLayout();
+    content_layout->setContentsMargins(0, 0, 0, 0);
+    content_layout->setSpacing(0);
+    main_layout->addLayout(content_layout, 1); // 内容区域占据剩余空间
+
     // 创建侧边栏
     create_side_bar();
-    main_layout->addWidget(side_bar_);
+    content_layout->addWidget(side_bar_);
 
     // 创建内容区域
     create_content_area();
-    main_layout->addWidget(content_stack_, 1); // 内容区域占据剩余空间
+    content_layout->addWidget(content_stack_, 1); // 内容区域占据剩余空间
+
+    // 创建底部状态栏
+    status_bar_ = new StatusBar(this);
+    main_layout->addWidget(status_bar_);
+}
+
+void MainWindow::create_top_bar()
+{
+    top_bar_ = new TopBar(this);
+
+    connect(top_bar_, &TopBar::minimizeClicked, this, &MainWindow::on_minimize_requested);
+    connect(top_bar_, &TopBar::maximizeClicked, this, &MainWindow::on_maximize_requested);
+    connect(top_bar_, &TopBar::closeClicked, this, &MainWindow::on_close_requested);
+    connect(top_bar_, &TopBar::refreshClicked, this, [this]() {
+        // 刷新当前页面
+        if (auto* page = qobject_cast<DownloadPage*>(content_stack_->currentWidget())) {
+            // 触发刷新
+        }
+    });
 }
 
 void MainWindow::open_url(const QString& url)
@@ -192,6 +227,30 @@ void MainWindow::create_side_bar()
     // 连接侧边栏信号到页面切换
     connect(side_bar_, &SideBar::downloadClicked, this, [this]() {
         content_stack_->setCurrentIndex(PAGE_DOWNLOAD);
+        if (download_page_) {
+            download_page_->set_view_mode(DownloadViewMode::Downloading);
+        }
+    });
+
+    connect(side_bar_, &SideBar::downloadingTabClicked, this, [this]() {
+        content_stack_->setCurrentIndex(PAGE_DOWNLOAD);
+        if (download_page_) {
+            download_page_->set_view_mode(DownloadViewMode::Downloading);
+        }
+    });
+
+    connect(side_bar_, &SideBar::completedTabClicked, this, [this]() {
+        content_stack_->setCurrentIndex(PAGE_DOWNLOAD);
+        if (download_page_) {
+            download_page_->set_view_mode(DownloadViewMode::Completed);
+        }
+    });
+
+    connect(side_bar_, &SideBar::cloudAddTabClicked, this, [this]() {
+        content_stack_->setCurrentIndex(PAGE_DOWNLOAD);
+        if (download_page_) {
+            download_page_->set_view_mode(DownloadViewMode::CloudAdd);
+        }
     });
 
     connect(side_bar_, &SideBar::cloudClicked, this, [this]() {
@@ -397,6 +456,25 @@ void MainWindow::on_remove_finished_tasks_requested()
     }
 
     (void)download_engine_->remove_finished_tasks();
+}
+
+void MainWindow::on_minimize_requested()
+{
+    showMinimized();
+}
+
+void MainWindow::on_maximize_requested()
+{
+    if (isMaximized()) {
+        showNormal();
+    } else {
+        showMaximized();
+    }
+}
+
+void MainWindow::on_close_requested()
+{
+    close();
 }
 
 } // namespace falcon::desktop

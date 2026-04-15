@@ -1,43 +1,40 @@
 /**
  * @file download_page.hpp
- * @brief 下载管理页面
+ * @brief 下载管理页面（迅雷风格）
  * @author Falcon Team
- * @date 2025-12-27
+ * @date 2026-04-15
  */
 
 #pragma once
 
 #include <QWidget>
-#include <QTabWidget>
 #include <QTableWidget>
 #include <QPushButton>
-#include <QProgressBar>
 #include <QLabel>
 #include <QTimer>
-#include <QDateTime>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
 
 #include <falcon/download_task.hpp>
 
 namespace falcon::desktop {
 
 /**
- * @brief 下载任务表格项
+ * @brief 当前视图模式
  */
-struct DownloadTaskItem {
-    QString filename;
-    QString url;
-    qint64 total_size;
-    qint64 downloaded_size;
-    double speed;          // bytes/s
-    QString status;        // 下载中、暂停、完成、失败
-    QString save_path;
-    int progress;          // 0-100
+enum class DownloadViewMode {
+    Downloading,   // 下载中
+    Completed,     // 已完成
+    CloudAdd       // 云添加
 };
 
 /**
- * @brief 下载管理页面
+ * @brief 下载管理页面（迅雷风格）
  *
- * 包含：正在下载、已完成、回收站、下载记录四个标签页
+ * 布局：
+ * - 顶部：状态标题 + 操作按钮 + 新建按钮
+ * - 中间：任务列表表格
+ * - 底部：推广区域（预留）
  */
 class DownloadPage : public QWidget
 {
@@ -48,41 +45,35 @@ public:
     ~DownloadPage() override;
 
     void add_engine_task(const falcon::DownloadTask::Ptr& task);
+    void set_view_mode(DownloadViewMode mode);
 
 signals:
     void new_task_requested();
     void remove_task_requested(falcon::TaskId id);
     void remove_finished_tasks_requested();
 
+private slots:
+    void on_new_task_clicked();
+    void on_refresh_clicked();
+    void on_view_toggle_clicked();
+    void on_more_options_clicked();
+    void on_pause_selected();
+    void on_resume_selected();
+    void on_delete_selected();
+
 private:
     void setup_ui();
-    void create_tab_widget();
-    void create_downloading_tab();
-    void create_completed_tab();
-    void create_trash_tab();
-    void create_history_tab();
-    QWidget* create_toolbar();
-
-    void pause_selected_task();
-    void resume_selected_task();
-    void cancel_selected_task();
-    void delete_selected_task();
-    void clear_finished_tasks();
+    void create_header_bar();
+    void create_task_table();
+    void update_header_for_mode();
     void update_action_buttons();
     falcon::DownloadTask::Ptr selected_task() const;
-    falcon::TaskId selected_archived_task_id(QTableWidget* table) const;
-    void remove_downloading_row(falcon::TaskId id);
-    void append_trash_entry(falcon::TaskId id, const QString& reason);
-    void upsert_completed_row(falcon::TaskId id);
-    void upsert_history_row(falcon::TaskId id);
-    void remove_completed_row(falcon::TaskId id);
-    void remove_tracked_task(falcon::TaskId id);
-    void sync_task_tables(const falcon::DownloadTask::Ptr& task);
 
     void refresh_engine_tasks();
+    void sync_task_tables(const falcon::DownloadTask::Ptr& task);
+
     static QString format_bytes(uint64_t bytes);
     static QString format_speed(uint64_t bytes_per_second);
-    static QString format_timestamp(const QDateTime& timestamp);
 
     struct TaskRecord {
         falcon::DownloadTask::Ptr task;
@@ -91,39 +82,32 @@ private:
         QString size_text;
         QString status_text;
         QString error_text;
-        QDateTime added_at;
-        QDateTime finished_at;
         bool in_trash = false;
     };
 
-    // 控件
-    QTabWidget* tab_widget_;
+    // 当前视图模式
+    DownloadViewMode view_mode_;
 
-    // 正在下载表格
-    QTableWidget* downloading_table_;
-
-    // 已完成表格
-    QTableWidget* completed_table_;
-
-    // 回收站表格
-    QTableWidget* trash_table_;
-
-    // 下载记录表格
-    QTableWidget* history_table_;
-
-    // 工具栏按钮
+    // 头部区域
+    QHBoxLayout* header_layout_;
+    QLabel* status_label_;
     QPushButton* new_task_button_;
-    QPushButton* pause_button_;
-    QPushButton* resume_button_;
-    QPushButton* cancel_button_;
-    QPushButton* delete_button_;
-    QPushButton* clean_button_;
+    QPushButton* refresh_button_;
+    QPushButton* view_toggle_button_;
+    QPushButton* more_button_;
 
+    // 任务表格
+    QTableWidget* task_table_;
+
+    // 操作按钮
+    QPushButton* pause_button_;
+    QPushButton* delete_button_;
+
+    // 刷新定时器
     QTimer* refresh_timer_;
+
+    // 任务数据
     QHash<qulonglong, int> row_by_task_id_;
-    QHash<qulonglong, int> completed_row_by_task_id_;
-    QHash<qulonglong, int> history_row_by_task_id_;
-    QHash<qulonglong, int> trash_row_by_task_id_;
     QHash<qulonglong, TaskRecord> task_records_;
 };
 

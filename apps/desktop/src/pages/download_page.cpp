@@ -1,38 +1,34 @@
 /**
  * @file download_page.cpp
- * @brief Download Management Page Implementation
+ * @brief Download Page Implementation (Xunlei-style)
  * @author Falcon Team
- * @date 2025-12-28
+ * @date 2026-04-15
  */
 
 #include "download_page.hpp"
 
-#include <QDateTime>
-#include <QHBoxLayout>
 #include <QHeaderView>
 #include <QProgressBar>
 #include <QStyle>
-#include <QVBoxLayout>
-
-#include <algorithm>
-
-#include <falcon/event_listener.hpp>
 
 namespace falcon::desktop {
 
+namespace {
+constexpr int kRowHeight = 56;
+} // namespace
+
 DownloadPage::DownloadPage(QWidget* parent)
     : QWidget(parent)
-    , tab_widget_(nullptr)
-    , downloading_table_(nullptr)
-    , completed_table_(nullptr)
-    , trash_table_(nullptr)
-    , history_table_(nullptr)
+    , view_mode_(DownloadViewMode::Downloading)
+    , header_layout_(nullptr)
+    , status_label_(nullptr)
     , new_task_button_(nullptr)
+    , refresh_button_(nullptr)
+    , view_toggle_button_(nullptr)
+    , more_button_(nullptr)
+    , task_table_(nullptr)
     , pause_button_(nullptr)
-    , resume_button_(nullptr)
-    , cancel_button_(nullptr)
     , delete_button_(nullptr)
-    , clean_button_(nullptr)
     , refresh_timer_(nullptr)
 {
     setup_ui();
@@ -48,401 +44,151 @@ DownloadPage::~DownloadPage() = default;
 void DownloadPage::setup_ui()
 {
     auto* main_layout = new QVBoxLayout(this);
-    main_layout->setContentsMargins(32, 32, 32, 32);
-    main_layout->setSpacing(24);
+    main_layout->setContentsMargins(16, 12, 16, 16);
+    main_layout->setSpacing(0);
 
-    auto* header_layout = new QHBoxLayout();
-    header_layout->setSpacing(16);
+    create_header_bar();
+    main_layout->addLayout(header_layout_);
 
-    auto* title_label = new QLabel(tr("Downloads"), this);
-    auto title_font = title_label->font();
-    title_font.setPointSize(20);
+    main_layout->addSpacing(8);
+
+    create_task_table();
+    main_layout->addWidget(task_table_);
+
+    // 底部推广区域（预留）
+    main_layout->addStretch();
+}
+
+void DownloadPage::create_header_bar()
+{
+    header_layout_ = new QHBoxLayout();
+    header_layout_->setSpacing(12);
+
+    // 状态标题
+    status_label_ = new QLabel(tr("已暂停"), this);
+    status_label_->setObjectName("headerLabel");
+    auto title_font = status_label_->font();
+    title_font.setPointSize(14);
     title_font.setBold(true);
-    title_label->setFont(title_font);
-    header_layout->addWidget(title_label);
-    header_layout->addStretch();
-    main_layout->addLayout(header_layout);
+    status_label_->setFont(title_font);
+    header_layout_->addWidget(status_label_);
 
-    main_layout->addWidget(create_toolbar());
-    create_tab_widget();
-    main_layout->addWidget(tab_widget_);
+    header_layout_->addStretch();
+
+    // 新建按钮
+    new_task_button_ = new QPushButton(tr("+ 新建"), this);
+    new_task_button_->setObjectName("primaryButton");
+    connect(new_task_button_, &QPushButton::clicked, this, &DownloadPage::on_new_task_clicked);
+    header_layout_->addWidget(new_task_button_);
+
+    // 刷新按钮
+    refresh_button_ = new QPushButton(tr("🔄"), this);
+    refresh_button_->setObjectName("toolButton");
+    refresh_button_->setFixedSize(32, 32);
+    refresh_button_->setToolTip(tr("刷新"));
+    connect(refresh_button_, &QPushButton::clicked, this, &DownloadPage::on_refresh_clicked);
+    header_layout_->addWidget(refresh_button_);
+
+    // 视图切换按钮
+    view_toggle_button_ = new QPushButton(tr("▦"), this);
+    view_toggle_button_->setObjectName("toolButton");
+    view_toggle_button_->setFixedSize(32, 32);
+    view_toggle_button_->setToolTip(tr("切换视图"));
+    connect(view_toggle_button_, &QPushButton::clicked, this, &DownloadPage::on_view_toggle_clicked);
+    header_layout_->addWidget(view_toggle_button_);
+
+    // 更多选项按钮
+    more_button_ = new QPushButton(tr("⋯"), this);
+    more_button_->setObjectName("toolButton");
+    more_button_->setFixedSize(32, 32);
+    more_button_->setToolTip(tr("更多选项"));
+    connect(more_button_, &QPushButton::clicked, this, &DownloadPage::on_more_options_clicked);
+    header_layout_->addWidget(more_button_);
 }
 
-QWidget* DownloadPage::create_toolbar()
+void DownloadPage::create_task_table()
 {
-    auto* toolbar = new QWidget(this);
-    auto* layout = new QHBoxLayout(toolbar);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(8);
-
-    new_task_button_ = new QPushButton(tr("New Task"), toolbar);
-    new_task_button_->setIcon(style()->standardIcon(QStyle::SP_FileDialogNewFolder));
-    new_task_button_->setCursor(Qt::PointingHandCursor);
-    new_task_button_->setMinimumHeight(36);
-    connect(new_task_button_, &QPushButton::clicked, this, &DownloadPage::new_task_requested);
-    layout->addWidget(new_task_button_);
-
-    auto* spacer = new QWidget(toolbar);
-    spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    layout->addWidget(spacer);
-
-    auto* actions_container = new QWidget(toolbar);
-    auto* actions_layout = new QHBoxLayout(actions_container);
-    actions_layout->setContentsMargins(0, 0, 0, 0);
-    actions_layout->setSpacing(4);
-
-    auto create_action_btn = [this, actions_layout](QPushButton*& btn, QStyle::StandardPixmap icon,
-                                                     const QString& tooltip) {
-        btn = new QPushButton(this);
-        btn->setEnabled(false);
-        btn->setIcon(style()->standardIcon(icon));
-        btn->setFlat(true);
-        btn->setToolTip(tooltip);
-        btn->setCursor(Qt::PointingHandCursor);
-        btn->setFixedSize(32, 32);
-        actions_layout->addWidget(btn);
-    };
-
-    create_action_btn(pause_button_, QStyle::SP_MediaPause, tr("Pause"));
-    create_action_btn(resume_button_, QStyle::SP_MediaPlay, tr("Resume"));
-    create_action_btn(cancel_button_, QStyle::SP_BrowserStop, tr("Cancel"));
-
-    auto* line = new QFrame(actions_container);
-    line->setFrameShape(QFrame::VLine);
-    line->setFrameShadow(QFrame::Sunken);
-    line->setFixedHeight(20);
-    actions_layout->addWidget(line);
-
-    create_action_btn(delete_button_, QStyle::SP_TrashIcon, tr("Delete"));
-
-    clean_button_ = new QPushButton(this);
-    clean_button_->setIcon(style()->standardIcon(QStyle::SP_DialogResetButton));
-    clean_button_->setFlat(true);
-    clean_button_->setToolTip(tr("Clear Completed"));
-    clean_button_->setCursor(Qt::PointingHandCursor);
-    clean_button_->setFixedSize(32, 32);
-    actions_layout->addWidget(clean_button_);
-
-    connect(pause_button_, &QPushButton::clicked, this, &DownloadPage::pause_selected_task);
-    connect(resume_button_, &QPushButton::clicked, this, &DownloadPage::resume_selected_task);
-    connect(cancel_button_, &QPushButton::clicked, this, &DownloadPage::cancel_selected_task);
-    connect(delete_button_, &QPushButton::clicked, this, &DownloadPage::delete_selected_task);
-    connect(clean_button_, &QPushButton::clicked, this, &DownloadPage::clear_finished_tasks);
-
-    layout->addWidget(actions_container);
-    return toolbar;
-}
-
-void DownloadPage::create_tab_widget()
-{
-    tab_widget_ = new QTabWidget(this);
-    tab_widget_->setTabPosition(QTabWidget::North);
-#ifdef Q_OS_MAC
-    tab_widget_->setDocumentMode(true);
-#else
-    tab_widget_->setDocumentMode(false);
-#endif
-
-    create_downloading_tab();
-    create_completed_tab();
-    create_trash_tab();
-    create_history_tab();
-
-    connect(tab_widget_, &QTabWidget::currentChanged, this, [this]() {
-        update_action_buttons();
-    });
-}
-
-void DownloadPage::create_downloading_tab()
-{
-    downloading_table_ = new QTableWidget(this);
-    downloading_table_->setColumnCount(7);
-    downloading_table_->setHorizontalHeaderLabels({
-        tr("File Name"),
-        tr("Size"),
-        tr("Progress"),
-        tr("Speed"),
-        tr("Status"),
-        tr("Save Path"),
-        tr("Actions")
+    task_table_ = new QTableWidget(this);
+    task_table_->setColumnCount(6);
+    task_table_->setHorizontalHeaderLabels({
+        tr("文件名"),
+        tr("进度"),
+        tr("大小"),
+        tr("速度"),
+        tr("状态"),
+        tr("操作")
     });
 
-    downloading_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
-    downloading_table_->setSelectionMode(QAbstractItemView::SingleSelection);
-    downloading_table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    downloading_table_->setShowGrid(false);
-    downloading_table_->setAlternatingRowColors(false);
-    downloading_table_->verticalHeader()->setVisible(false);
-    downloading_table_->horizontalHeader()->setStretchLastSection(true);
-    downloading_table_->horizontalHeader()->setHighlightSections(false);
+    task_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    task_table_->setSelectionMode(QAbstractItemView::SingleSelection);
+    task_table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    task_table_->setShowGrid(false);
+    task_table_->setAlternatingRowColors(true);
+    task_table_->verticalHeader()->setVisible(false);
+    task_table_->horizontalHeader()->setStretchLastSection(false);
+    task_table_->horizontalHeader()->setHighlightSections(false);
 
-    downloading_table_->setColumnWidth(0, 300);
-    downloading_table_->setColumnWidth(1, 100);
-    downloading_table_->setColumnWidth(2, 200);
-    downloading_table_->setColumnWidth(3, 100);
-    downloading_table_->setColumnWidth(4, 100);
-    downloading_table_->setColumnWidth(5, 250);
+    // 设置列宽
+    task_table_->setColumnWidth(0, 350);  // 文件名
+    task_table_->setColumnWidth(1, 180);  // 进度
+    task_table_->setColumnWidth(2, 100);  // 大小
+    task_table_->setColumnWidth(3, 100);  // 速度
+    task_table_->setColumnWidth(4, 80);   // 状态
+    task_table_->setColumnWidth(5, 80);   // 操作
 
-    connect(downloading_table_->selectionModel(), &QItemSelectionModel::selectionChanged,
+    task_table_->setObjectName("taskTable");
+
+    connect(task_table_->selectionModel(), &QItemSelectionModel::selectionChanged,
             this, [this]() { update_action_buttons(); });
-
-    tab_widget_->addTab(downloading_table_, tr("Downloading"));
 }
 
-void DownloadPage::create_completed_tab()
+void DownloadPage::set_view_mode(DownloadViewMode mode)
 {
-    completed_table_ = new QTableWidget(this);
-    completed_table_->setColumnCount(6);
-    completed_table_->setHorizontalHeaderLabels({
-        tr("File Name"),
-        tr("Size"),
-        tr("Completed At"),
-        tr("Save Path"),
-        tr("Type"),
-        tr("Actions")
-    });
+    view_mode_ = mode;
+    update_header_for_mode();
 
-    completed_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
-    completed_table_->setSelectionMode(QAbstractItemView::SingleSelection);
-    completed_table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    completed_table_->setShowGrid(false);
-    completed_table_->verticalHeader()->setVisible(false);
-    completed_table_->horizontalHeader()->setStretchLastSection(true);
-    connect(completed_table_->selectionModel(), &QItemSelectionModel::selectionChanged,
-            this, [this]() { update_action_buttons(); });
+    // 清空并重新加载任务
+    task_table_->setRowCount(0);
+    row_by_task_id_.clear();
 
-    tab_widget_->addTab(completed_table_, tr("Completed"));
+    // 根据模式重新填充任务
+    for (auto it = task_records_.begin(); it != task_records_.end(); ++it) {
+        sync_task_tables(it.value().task);
+    }
 }
 
-void DownloadPage::create_trash_tab()
+void DownloadPage::update_header_for_mode()
 {
-    trash_table_ = new QTableWidget(this);
-    trash_table_->setColumnCount(5);
-    trash_table_->setHorizontalHeaderLabels({
-        tr("File Name"),
-        tr("Size"),
-        tr("Deleted At"),
-        tr("Reason"),
-        tr("Actions")
-    });
-
-    trash_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
-    trash_table_->setSelectionMode(QAbstractItemView::SingleSelection);
-    trash_table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    trash_table_->setShowGrid(false);
-    trash_table_->verticalHeader()->setVisible(false);
-    trash_table_->horizontalHeader()->setStretchLastSection(true);
-    connect(trash_table_->selectionModel(), &QItemSelectionModel::selectionChanged,
-            this, [this]() { update_action_buttons(); });
-
-    tab_widget_->addTab(trash_table_, tr("Trash"));
-}
-
-void DownloadPage::create_history_tab()
-{
-    history_table_ = new QTableWidget(this);
-    history_table_->setColumnCount(6);
-    history_table_->setHorizontalHeaderLabels({
-        tr("File Name"),
-        tr("Size"),
-        tr("Started At"),
-        tr("Finished At"),
-        tr("Status"),
-        tr("Actions")
-    });
-
-    history_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
-    history_table_->setSelectionMode(QAbstractItemView::SingleSelection);
-    history_table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    history_table_->setShowGrid(false);
-    history_table_->verticalHeader()->setVisible(false);
-    history_table_->horizontalHeader()->setStretchLastSection(true);
-    connect(history_table_->selectionModel(), &QItemSelectionModel::selectionChanged,
-            this, [this]() { update_action_buttons(); });
-
-    tab_widget_->addTab(history_table_, tr("History"));
-}
-
-void DownloadPage::pause_selected_task()
-{
-    const auto task = selected_task();
-    if (!task) {
-        return;
+    switch (view_mode_) {
+        case DownloadViewMode::Downloading:
+            status_label_->setText(tr("下载中"));
+            break;
+        case DownloadViewMode::Completed:
+            status_label_->setText(tr("已完成"));
+            break;
+        case DownloadViewMode::CloudAdd:
+            status_label_->setText(tr("云添加"));
+            break;
     }
-
-    (void)task->pause();
-    update_action_buttons();
-}
-
-void DownloadPage::resume_selected_task()
-{
-    const auto task = selected_task();
-    if (!task) {
-        return;
-    }
-
-    (void)task->resume();
-    update_action_buttons();
-}
-
-void DownloadPage::cancel_selected_task()
-{
-    const auto task = selected_task();
-    if (!task) {
-        return;
-    }
-
-    (void)task->cancel();
-    update_action_buttons();
-}
-
-void DownloadPage::delete_selected_task()
-{
-    if (!tab_widget_) {
-        return;
-    }
-
-    QTableWidget* current_table = qobject_cast<QTableWidget*>(tab_widget_->currentWidget());
-    if (!current_table) {
-        return;
-    }
-
-    const falcon::TaskId id = selected_archived_task_id(current_table);
-    if (id == falcon::INVALID_TASK_ID) {
-        return;
-    }
-
-    if (current_table == trash_table_) {
-        const qulonglong key = static_cast<qulonglong>(id);
-        auto row_it = trash_row_by_task_id_.find(key);
-        if (row_it == trash_row_by_task_id_.end()) {
-            return;
-        }
-
-        const int removed_row = row_it.value();
-        trash_table_->removeRow(removed_row);
-        trash_row_by_task_id_.erase(row_it);
-        for (auto it = trash_row_by_task_id_.begin(); it != trash_row_by_task_id_.end(); ++it) {
-            if (it.value() > removed_row) {
-                it.value() -= 1;
-            }
-        }
-    } else {
-        append_trash_entry(id, tr("Removed from downloads"));
-        emit remove_task_requested(id);
-        remove_completed_row(id);
-        remove_downloading_row(id);
-        remove_tracked_task(id);
-    }
-
-    update_action_buttons();
-}
-
-void DownloadPage::clear_finished_tasks()
-{
-    QList<falcon::TaskId> finished_ids;
-    for (auto it = task_records_.cbegin(); it != task_records_.cend(); ++it) {
-        const auto& record = it.value();
-        if (!record.task) {
-            continue;
-        }
-
-        const auto status = record.task->status();
-        if (status == falcon::TaskStatus::Completed ||
-            status == falcon::TaskStatus::Failed ||
-            status == falcon::TaskStatus::Cancelled) {
-            finished_ids.append(record.task->id());
-        }
-    }
-
-    for (falcon::TaskId id : finished_ids) {
-        append_trash_entry(id, tr("Cleared finished task"));
-        remove_completed_row(id);
-        remove_downloading_row(id);
-        remove_tracked_task(id);
-    }
-
-    if (!finished_ids.isEmpty()) {
-        emit remove_finished_tasks_requested();
-    }
-
-    update_action_buttons();
 }
 
 void DownloadPage::update_action_buttons()
 {
-    pause_button_->setEnabled(false);
-    resume_button_->setEnabled(false);
-    cancel_button_->setEnabled(false);
-    delete_button_->setEnabled(false);
-
-    bool has_finished = false;
-    for (auto it = task_records_.cbegin(); it != task_records_.cend(); ++it) {
-        const auto& record = it.value();
-        if (!record.task) {
-            continue;
-        }
-
-        const auto status = record.task->status();
-        if (status == falcon::TaskStatus::Completed ||
-            status == falcon::TaskStatus::Failed ||
-            status == falcon::TaskStatus::Cancelled) {
-            has_finished = true;
-            break;
-        }
-    }
-    clean_button_->setEnabled(has_finished);
-
-    if (!tab_widget_) {
-        return;
-    }
-
-    QTableWidget* current_table = qobject_cast<QTableWidget*>(tab_widget_->currentWidget());
-    if (current_table == downloading_table_) {
-        const auto task = selected_task();
-        if (!task) {
-            return;
-        }
-
-        switch (task->status()) {
-            case falcon::TaskStatus::Downloading:
-            case falcon::TaskStatus::Preparing:
-                pause_button_->setEnabled(true);
-                cancel_button_->setEnabled(true);
-                break;
-            case falcon::TaskStatus::Paused:
-            case falcon::TaskStatus::Pending:
-                resume_button_->setEnabled(true);
-                cancel_button_->setEnabled(true);
-                break;
-            case falcon::TaskStatus::Completed:
-            case falcon::TaskStatus::Failed:
-            case falcon::TaskStatus::Cancelled:
-                delete_button_->setEnabled(true);
-                break;
-        }
-        return;
-    }
-
-    if (current_table == completed_table_ || current_table == history_table_ || current_table == trash_table_) {
-        if (selected_archived_task_id(current_table) != falcon::INVALID_TASK_ID) {
-            delete_button_->setEnabled(true);
-        }
-    }
+    // TODO: 根据选中的任务状态更新按钮状态
 }
 
 falcon::DownloadTask::Ptr DownloadPage::selected_task() const
 {
-    if (!downloading_table_ || !downloading_table_->selectionModel()) {
+    if (!task_table_ || !task_table_->selectionModel()) {
         return nullptr;
     }
 
-    const auto selected_rows = downloading_table_->selectionModel()->selectedRows();
+    const auto selected_rows = task_table_->selectionModel()->selectedRows();
     if (selected_rows.isEmpty()) {
         return nullptr;
     }
 
-    auto* item = downloading_table_->item(selected_rows.first().row(), 0);
+    auto* item = task_table_->item(selected_rows.first().row(), 0);
     if (!item) {
         return nullptr;
     }
@@ -456,240 +202,48 @@ falcon::DownloadTask::Ptr DownloadPage::selected_task() const
     return record_it->task;
 }
 
-falcon::TaskId DownloadPage::selected_archived_task_id(QTableWidget* table) const
+void DownloadPage::on_new_task_clicked()
 {
-    if (!table || !table->selectionModel()) {
-        return falcon::INVALID_TASK_ID;
-    }
-
-    const auto selected_rows = table->selectionModel()->selectedRows();
-    if (selected_rows.isEmpty()) {
-        return falcon::INVALID_TASK_ID;
-    }
-
-    auto* item = table->item(selected_rows.first().row(), 0);
-    if (!item) {
-        return falcon::INVALID_TASK_ID;
-    }
-
-    return static_cast<falcon::TaskId>(item->data(Qt::UserRole).toULongLong());
+    emit new_task_requested();
 }
 
-void DownloadPage::remove_downloading_row(falcon::TaskId id)
+void DownloadPage::on_refresh_clicked()
 {
-    const qulonglong key = static_cast<qulonglong>(id);
-    auto row_it = row_by_task_id_.find(key);
-    if (row_it == row_by_task_id_.end()) {
-        return;
-    }
+    refresh_engine_tasks();
+}
 
-    const int removed_row = row_it.value();
-    downloading_table_->removeRow(removed_row);
-    row_by_task_id_.erase(row_it);
-    for (auto it = row_by_task_id_.begin(); it != row_by_task_id_.end(); ++it) {
-        if (it.value() > removed_row) {
-            it.value() -= 1;
-        }
+void DownloadPage::on_view_toggle_clicked()
+{
+    // TODO: 实现视图切换（列表/网格）
+}
+
+void DownloadPage::on_more_options_clicked()
+{
+    // TODO: 显示更多选项菜单
+}
+
+void DownloadPage::on_pause_selected()
+{
+    const auto task = selected_task();
+    if (task) {
+        (void)task->pause();
     }
 }
 
-void DownloadPage::append_trash_entry(falcon::TaskId id, const QString& reason)
+void DownloadPage::on_resume_selected()
 {
-    const qulonglong key = static_cast<qulonglong>(id);
-    auto record_it = task_records_.find(key);
-    if (record_it == task_records_.end()) {
-        return;
-    }
-
-    TaskRecord& record = record_it.value();
-    if (record.in_trash) {
-        return;
-    }
-
-    const int row = trash_table_->rowCount();
-    trash_table_->insertRow(row);
-    trash_row_by_task_id_.insert(key, row);
-    record.in_trash = true;
-
-    auto set_item = [&](int col, const QString& text) {
-        auto* item = new QTableWidgetItem(text);
-        item->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-        item->setData(Qt::UserRole, QVariant::fromValue<qulonglong>(key));
-        trash_table_->setItem(row, col, item);
-    };
-
-    set_item(0, record.filename);
-    set_item(1, record.size_text);
-    set_item(2, format_timestamp(QDateTime::currentDateTime()));
-    set_item(3, reason);
-    set_item(4, "...");
-}
-
-void DownloadPage::upsert_completed_row(falcon::TaskId id)
-{
-    const qulonglong key = static_cast<qulonglong>(id);
-    auto record_it = task_records_.find(key);
-    if (record_it == task_records_.end()) {
-        return;
-    }
-
-    const TaskRecord& record = record_it.value();
-    const int row = completed_row_by_task_id_.contains(key)
-        ? completed_row_by_task_id_.value(key)
-        : completed_table_->rowCount();
-
-    if (!completed_row_by_task_id_.contains(key)) {
-        completed_table_->insertRow(row);
-        completed_row_by_task_id_.insert(key, row);
-    }
-
-    auto set_item = [&](int col, const QString& text) {
-        auto* item = completed_table_->item(row, col);
-        if (!item) {
-            item = new QTableWidgetItem();
-            item->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-            item->setData(Qt::UserRole, QVariant::fromValue<qulonglong>(key));
-            completed_table_->setItem(row, col, item);
-        }
-        item->setText(text);
-    };
-
-    set_item(0, record.filename);
-    set_item(1, record.size_text);
-    set_item(2, format_timestamp(record.finished_at));
-    set_item(3, record.save_path);
-    set_item(4, tr("Download"));
-    set_item(5, "...");
-}
-
-void DownloadPage::upsert_history_row(falcon::TaskId id)
-{
-    const qulonglong key = static_cast<qulonglong>(id);
-    auto record_it = task_records_.find(key);
-    if (record_it == task_records_.end()) {
-        return;
-    }
-
-    const TaskRecord& record = record_it.value();
-    const int row = history_row_by_task_id_.contains(key)
-        ? history_row_by_task_id_.value(key)
-        : history_table_->rowCount();
-
-    if (!history_row_by_task_id_.contains(key)) {
-        history_table_->insertRow(row);
-        history_row_by_task_id_.insert(key, row);
-    }
-
-    auto set_item = [&](int col, const QString& text) {
-        auto* item = history_table_->item(row, col);
-        if (!item) {
-            item = new QTableWidgetItem();
-            item->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-            item->setData(Qt::UserRole, QVariant::fromValue<qulonglong>(key));
-            history_table_->setItem(row, col, item);
-        }
-        item->setText(text);
-    };
-
-    const QString status = record.error_text.isEmpty()
-        ? record.status_text
-        : tr("%1 (%2)").arg(record.status_text, record.error_text);
-    set_item(0, record.filename);
-    set_item(1, record.size_text);
-    set_item(2, format_timestamp(record.added_at));
-    set_item(3, format_timestamp(record.finished_at));
-    set_item(4, status);
-    set_item(5, "...");
-}
-
-void DownloadPage::remove_completed_row(falcon::TaskId id)
-{
-    const qulonglong key = static_cast<qulonglong>(id);
-    auto row_it = completed_row_by_task_id_.find(key);
-    if (row_it == completed_row_by_task_id_.end()) {
-        return;
-    }
-
-    const int removed_row = row_it.value();
-    completed_table_->removeRow(removed_row);
-    completed_row_by_task_id_.erase(row_it);
-    for (auto it = completed_row_by_task_id_.begin(); it != completed_row_by_task_id_.end(); ++it) {
-        if (it.value() > removed_row) {
-            it.value() -= 1;
-        }
+    const auto task = selected_task();
+    if (task) {
+        (void)task->resume();
     }
 }
 
-void DownloadPage::remove_tracked_task(falcon::TaskId id)
+void DownloadPage::on_delete_selected()
 {
-    const qulonglong key = static_cast<qulonglong>(id);
-    auto record_it = task_records_.find(key);
-    if (record_it == task_records_.end()) {
-        return;
+    const auto task = selected_task();
+    if (task) {
+        emit remove_task_requested(task->id());
     }
-
-    record_it->task.reset();
-    row_by_task_id_.remove(key);
-    completed_row_by_task_id_.remove(key);
-}
-
-void DownloadPage::sync_task_tables(const falcon::DownloadTask::Ptr& task)
-{
-    if (!task) {
-        return;
-    }
-
-    const qulonglong key = static_cast<qulonglong>(task->id());
-    auto record_it = task_records_.find(key);
-    if (record_it == task_records_.end()) {
-        return;
-    }
-
-    TaskRecord& record = record_it.value();
-    const auto status = task->status();
-    if (status == falcon::TaskStatus::Completed ||
-        status == falcon::TaskStatus::Failed ||
-        status == falcon::TaskStatus::Cancelled) {
-        if (!record.finished_at.isValid()) {
-            record.finished_at = QDateTime::currentDateTime();
-        }
-        remove_downloading_row(task->id());
-        if (status == falcon::TaskStatus::Completed) {
-            upsert_completed_row(task->id());
-        } else {
-            remove_completed_row(task->id());
-        }
-        upsert_history_row(task->id());
-        return;
-    }
-
-    if (row_by_task_id_.contains(key)) {
-        return;
-    }
-
-    const int row = downloading_table_->rowCount();
-    downloading_table_->insertRow(row);
-    row_by_task_id_.insert(key, row);
-
-    auto set_item = [&](int col, const QString& text) {
-        auto* item = new QTableWidgetItem(text);
-        item->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-        item->setData(Qt::UserRole, QVariant::fromValue<qulonglong>(key));
-        downloading_table_->setItem(row, col, item);
-    };
-
-    set_item(0, record.filename);
-    set_item(1, record.size_text);
-    set_item(3, "0 B/s");
-    set_item(4, record.status_text);
-    set_item(5, record.save_path);
-    set_item(6, "...");
-
-    auto* progress_bar = new QProgressBar(this);
-    progress_bar->setRange(0, 100);
-    progress_bar->setValue(0);
-    progress_bar->setTextVisible(false);
-    downloading_table_->setCellWidget(row, 2, progress_bar);
 }
 
 QString DownloadPage::format_bytes(uint64_t bytes)
@@ -715,11 +269,6 @@ QString DownloadPage::format_speed(uint64_t bytes_per_second)
     return format_bytes(bytes_per_second) + "/s";
 }
 
-QString DownloadPage::format_timestamp(const QDateTime& timestamp)
-{
-    return timestamp.isValid() ? timestamp.toString("yyyy-MM-dd HH:mm:ss") : "-";
-}
-
 void DownloadPage::add_engine_task(const falcon::DownloadTask::Ptr& task)
 {
     if (!task) {
@@ -742,11 +291,9 @@ void DownloadPage::add_engine_task(const falcon::DownloadTask::Ptr& task)
     record.size_text = "-";
     record.status_text = QString::fromUtf8(falcon::to_string(task->status()));
     record.error_text = QString::fromStdString(task->error_message());
-    record.added_at = QDateTime::currentDateTime();
     task_records_.insert(key, record);
 
     sync_task_tables(task);
-    update_action_buttons();
 }
 
 void DownloadPage::refresh_engine_tasks()
@@ -765,18 +312,6 @@ void DownloadPage::refresh_engine_tasks()
         record.status_text = QString::fromUtf8(falcon::to_string(task->status()));
         record.error_text = QString::fromStdString(task->error_message());
 
-        if (record.save_path.isEmpty()) {
-            record.save_path = QString::fromStdString(task->options().output_directory);
-        }
-        if (record.filename == tr("(unknown)")) {
-            const QString resolved_filename = !task->options().output_filename.empty()
-                ? QString::fromStdString(task->options().output_filename)
-                : QString::fromStdString(task->file_info().filename);
-            if (!resolved_filename.isEmpty()) {
-                record.filename = resolved_filename;
-            }
-        }
-
         sync_task_tables(task);
 
         auto row_it = row_by_task_id_.find(it.key());
@@ -785,22 +320,29 @@ void DownloadPage::refresh_engine_tasks()
         }
 
         const int row = row_it.value();
-        if (auto* name_item = downloading_table_->item(row, 0)) {
+
+        // 更新文件名
+        if (auto* name_item = task_table_->item(row, 0)) {
             name_item->setText(record.filename);
         }
-        if (auto* size_item = downloading_table_->item(row, 1)) {
+
+        // 更新大小
+        if (auto* size_item = task_table_->item(row, 2)) {
             size_item->setText(record.size_text);
         }
-        if (auto* speed_item = downloading_table_->item(row, 3)) {
+
+        // 更新速度
+        if (auto* speed_item = task_table_->item(row, 3)) {
             speed_item->setText(format_speed(speed));
         }
-        if (auto* status_item = downloading_table_->item(row, 4)) {
+
+        // 更新状态
+        if (auto* status_item = task_table_->item(row, 4)) {
             status_item->setText(record.status_text);
         }
-        if (auto* path_item = downloading_table_->item(row, 5)) {
-            path_item->setText(record.save_path);
-        }
-        if (auto* widget = downloading_table_->cellWidget(row, 2)) {
+
+        // 更新进度条
+        if (auto* widget = task_table_->cellWidget(row, 1)) {
             if (auto* bar = qobject_cast<QProgressBar*>(widget)) {
                 bar->setValue(std::max(0, std::min(100, pct)));
             }
@@ -808,6 +350,116 @@ void DownloadPage::refresh_engine_tasks()
     }
 
     update_action_buttons();
+}
+
+void DownloadPage::sync_task_tables(const falcon::DownloadTask::Ptr& task)
+{
+    if (!task) {
+        return;
+    }
+
+    const qulonglong key = static_cast<qulonglong>(task->id());
+    auto record_it = task_records_.find(key);
+    if (record_it == task_records_.end()) {
+        return;
+    }
+
+    const TaskRecord& record = record_it.value();
+
+    // 根据视图模式过滤任务
+    const auto status = task->status();
+    bool should_show = false;
+
+    switch (view_mode_) {
+        case DownloadViewMode::Downloading:
+            should_show = (status == falcon::TaskStatus::Downloading ||
+                          status == falcon::TaskStatus::Preparing ||
+                          status == falcon::TaskStatus::Paused ||
+                          status == falcon::TaskStatus::Pending);
+            break;
+        case DownloadViewMode::Completed:
+            should_show = (status == falcon::TaskStatus::Completed);
+            break;
+        case DownloadViewMode::CloudAdd:
+            should_show = false;  // TODO: 实现云添加任务过滤
+            break;
+    }
+
+    if (!should_show) {
+        // 移除行
+        if (row_by_task_id_.contains(key)) {
+            const int row = row_by_task_id_.value(key);
+            task_table_->removeRow(row);
+            row_by_task_id_.remove(key);
+            for (auto it = row_by_task_id_.begin(); it != row_by_task_id_.end(); ++it) {
+                if (it.value() > row) {
+                    it.value() -= 1;
+                }
+            }
+        }
+        return;
+    }
+
+    // 添加或更新行
+    if (row_by_task_id_.contains(key)) {
+        return;  // 行已存在，由 refresh_engine_tasks 更新
+    }
+
+    const int row = task_table_->rowCount();
+    task_table_->insertRow(row);
+    task_table_->setRowHeight(row, kRowHeight);
+    row_by_task_id_.insert(key, row);
+
+    // 文件名（带图标）
+    auto* name_item = new QTableWidgetItem("📄 " + record.filename);
+    name_item->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    name_item->setData(Qt::UserRole, QVariant::fromValue<qulonglong>(key));
+    task_table_->setItem(row, 0, name_item);
+
+    // 进度条
+    auto* progress_bar = new QProgressBar(this);
+    progress_bar->setRange(0, 100);
+    progress_bar->setValue(0);
+    progress_bar->setTextVisible(true);
+    progress_bar->setObjectName("taskProgressBar");
+    task_table_->setCellWidget(row, 1, progress_bar);
+
+    // 大小
+    auto* size_item = new QTableWidgetItem(record.size_text);
+    size_item->setTextAlignment(Qt::AlignCenter);
+    task_table_->setItem(row, 2, size_item);
+
+    // 速度
+    auto* speed_item = new QTableWidgetItem("0 B/s");
+    speed_item->setTextAlignment(Qt::AlignCenter);
+    task_table_->setItem(row, 3, speed_item);
+
+    // 状态
+    auto* status_item = new QTableWidgetItem(record.status_text);
+    status_item->setTextAlignment(Qt::AlignCenter);
+    task_table_->setItem(row, 4, status_item);
+
+    // 操作按钮
+    auto* actions_widget = new QWidget(this);
+    auto* actions_layout = new QHBoxLayout(actions_widget);
+    actions_layout->setContentsMargins(4, 0, 4, 0);
+    actions_layout->setSpacing(4);
+
+    auto* pause_btn = new QPushButton(tr("⏸"), actions_widget);
+    pause_btn->setObjectName("rowActionButton");
+    pause_btn->setFixedSize(24, 24);
+    pause_btn->setToolTip(tr("暂停"));
+    connect(pause_btn, &QPushButton::clicked, this, &DownloadPage::on_pause_selected);
+    actions_layout->addWidget(pause_btn);
+
+    auto* delete_btn = new QPushButton(tr("✕"), actions_widget);
+    delete_btn->setObjectName("rowActionButton");
+    delete_btn->setFixedSize(24, 24);
+    delete_btn->setToolTip(tr("删除"));
+    connect(delete_btn, &QPushButton::clicked, this, &DownloadPage::on_delete_selected);
+    actions_layout->addWidget(delete_btn);
+
+    task_table_->setCellWidget(row, 5, actions_widget);
 }
 
 } // namespace falcon::desktop

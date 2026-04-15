@@ -15,7 +15,12 @@
 
 namespace falcon::desktop {
 
+// 前向声明
+enum class DownloadViewMode : int;
+
 class SideBar;
+class TopBar;
+class StatusBar;
 class DownloadPage;
 class SettingsPage;
 class ClipboardMonitor;
@@ -51,9 +56,13 @@ private slots:
     void on_direct_download_requested(const QString& url, bool start_immediately);
     void on_remove_task_requested(falcon::TaskId id);
     void on_remove_finished_tasks_requested();
+    void on_minimize_requested();
+    void on_maximize_requested();
+    void on_close_requested();
 
 private:
     void setup_ui();
+    void create_top_bar();
     void create_side_bar();
     void create_content_area();
     void create_pages();
@@ -66,8 +75,14 @@ private:
     void save_settings() const;
     void apply_settings_to_runtime();
 
+    // 顶部工具栏
+    TopBar* top_bar_;
+
     // 侧边导航栏
     SideBar* side_bar_;
+
+    // 底部状态栏
+    StatusBar* status_bar_;
 
     // 内容区域
     QStackedWidget* content_stack_;

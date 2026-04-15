@@ -1,0 +1,220 @@
+/**
+ * @file main.qss
+ * @brief 迅雷风格全局样式表
+ * @author Falcon Team
+ * @date 2026-04-15
+ */
+
+/* 全局样式 */
+QWidget {
+    background-color: #FFFFFF;
+    color: #000000;
+    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+    font-size: 13px;
+}
+
+/* 头部标题 */
+QLabel#headerLabel {
+    font-size: 14px;
+    font-weight: bold;
+    color: #000000;
+}
+
+/* 任务表格 */
+QTableWidget#taskTable {
+    background-color: transparent;
+    border: none;
+    gridline-color: #F5F5F5;
+}
+
+QTableWidget#taskTable::item {
+    height: 56px;
+    border-bottom: 1px solid #F5F5F5;
+    color: #333333;
+}
+
+QTableWidget#taskTable::item:hover {
+    background-color: #F9F9F9;
+}
+
+QTableWidget#taskTable::item:selected {
+    background-color: #E3F2FD;
+    color: #000000;
+}
+
+/* 进度条 */
+QProgressBar#taskProgressBar {
+    border: none;
+    background-color: #E0E0E0;
+    border-radius: 4px;
+    text-align: center;
+    color: #666666;
+}
+
+QProgressBar#taskProgressBar::chunk {
+    background-color: #2196F3;
+    border-radius: 4px;
+}
+
+/* 行内操作按钮 */
+QPushButton#rowActionButton {
+    border: none;
+    background: transparent;
+    border-radius: 12px;
+    font-size: 12px;
+}
+
+QPushButton#rowActionButton:hover {
+    background: #E3F2FD;
+}
+
+QPushButton#rowActionButton:pressed {
+    background: #BBDEFB;
+}
+
+/* 顶部工具栏 */
+#topBar {
+    background-color: #FFFFFF;
+    border-bottom: 1px solid #E0E0E0;
+}
+
+/* 侧边栏 */
+QWidget#sideBar {
+    background-color: #F5F5F5;
+}
+
+/* 分隔线 */
+QWidget[accessibleName="separator"] {
+    background-color: #E0E0E0;
+}
+
+/* 导航标签样式 */
+QLabel#navLabel {
+    font-size: 12px;
+    color: #999999;
+    font-weight: 500;
+}
+
+QPushButton#navTab {
+    background-color: transparent;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 16px;
+    text-align: left;
+    color: #666666;
+    font-size: 14px;
+}
+
+QPushButton#navTab:hover {
+    background-color: #E8E8E8;
+}
+
+QPushButton#navTab:checked {
+    background-color: #2196F3;
+    color: #FFFFFF;
+    font-weight: 500;
+}
+
+/* 工具按钮样式 */
+QPushButton#toolButton {
+    border: none;
+    background: transparent;
+    border-radius: 16px;
+    padding: 8px;
+}
+
+QPushButton#toolButton:hover {
+    background: #E3F2FD;
+}
+
+QPushButton#toolButton:pressed {
+    background: #BBDEFB;
+}
+
+/* 主按钮样式 */
+QPushButton#primaryButton {
+    background-color: #2196F3;
+    color: #FFFFFF;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 16px;
+    font-weight: 500;
+    font-size: 14px;
+}
+
+QPushButton#primaryButton:hover {
+    background-color: #1976D2;
+}
+
+QPushButton#primaryButton:pressed {
+    background-color: #0D47A1;
+}
+
+QPushButton#primaryButton:disabled {
+    background-color: #BDBDBD;
+    color: #757575;
+}
+
+/* 表格样式 */
+QTableView {
+    background-color: transparent;
+    border: none;
+    gridline-color: #F5F5F5;
+    selection-background-color: #E3F2FD;
+    selection-color: #000000;
+}
+
+QTableView::item {
+    height: 48px;
+    border-bottom: 1px solid #F5F5F5;
+}
+
+QTableView::item:hover {
+    background-color: #F9F9F9;
+}
+
+QHeaderView::section {
+    background-color: #FAFAFA;
+    color: #666666;
+    padding: 8px;
+    border: none;
+    border-bottom: 1px solid #E0E0E0;
+    font-weight: 500;
+}
+
+/* 滚动条样式 */
+QScrollBar:vertical {
+    background: #F5F5F5;
+    width: 8px;
+    border-radius: 4px;
+}
+
+QScrollBar::handle:vertical {
+    background: #BDBDBD;
+    border-radius: 4px;
+    min-height: 30px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background: #9E9E9E;
+}
+
+/* 状态栏 */
+QWidget#statusBar {
+    background-color: #FAFAFA;
+    border-top: 1px solid #E0E0E0;
+}
+
+QPushButton#statusBarButton {
+    background: transparent;
+    border: none;
+    color: #666666;
+    padding: 6px 12px;
+    font-size: 12px;
+    border-radius: 4px;
+}
+
+QPushButton#statusBarButton:hover {
+    color: #2196F3;
+    background-color: #F5F5F5;
+}

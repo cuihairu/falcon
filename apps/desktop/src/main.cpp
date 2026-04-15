@@ -11,6 +11,7 @@
 #include <QLocale>
 #include <QUrl>
 #include <QUrlQuery>
+#include <QFile>
 #include "main_window.hpp"
 
 namespace {
@@ -47,6 +48,14 @@ int main(int argc, char* argv[])
         (void)app_translator.load("falcon_desktop_" + locale, QCoreApplication::applicationDirPath() + "/i18n");
     }
     app.installTranslator(&app_translator);
+
+    // 加载全局样式表
+    QFile style_file(":/styles/main.qss");
+    if (style_file.open(QFile::ReadOnly)) {
+        QString style_sheet = QString::fromUtf8(style_file.readAll());
+        app.setStyleSheet(style_sheet);
+        style_file.close();
+    }
 
     falcon::desktop::MainWindow window;
     window.resize(1200, 800);

@@ -18,6 +18,8 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(SOURCES
     src/main.cpp
     src/main_window.cpp
+    src/widgets/top_bar.cpp
+    src/widgets/status_bar.cpp
     src/navigation/sidebar.cpp
     src/pages/download_page.cpp
     src/pages/cloud_page.cpp
@@ -33,6 +35,8 @@ set(SOURCES
 set(HEADERS
     src/styles.hpp
     src/main_window.hpp
+    src/widgets/top_bar.hpp
+    src/widgets/status_bar.hpp
     src/navigation/sidebar.hpp
     src/pages/download_page.hpp
     src/pages/cloud_page.hpp
@@ -48,6 +52,14 @@ set(HEADERS
 set(UI_FILES
     # 暂时手动编码，不使用 .ui 文件
 )
+
+# 资源文件
+set(RESOURCES
+    resources.qrc
+)
+
+# 添加资源到可执行文件
+qt_add_resources(falcon-desktop ${RESOURCES})
 
 # 创建可执行文件
 add_executable(falcon-desktop ${SOURCES} ${HEADERS} ${UI_FILES})
