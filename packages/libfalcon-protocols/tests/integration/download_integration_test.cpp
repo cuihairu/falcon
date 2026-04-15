@@ -419,6 +419,10 @@ protected:
 };
 
 TEST_F(DownloadIntegrationTest, LocalHttpDownloadFile) {
+    if (!env_truthy("FALCON_RUN_INTEGRATION_TESTS")) {
+        GTEST_SKIP() << "Set FALCON_RUN_INTEGRATION_TESTS=1 to enable local HTTP integration tests";
+    }
+
     LocalHttpServer server;
     const std::string payload = R"({"hello":"world"})";
     server.add_file("/test.json",
@@ -454,6 +458,10 @@ TEST_F(DownloadIntegrationTest, LocalHttpDownloadFile) {
 }
 
 TEST_F(DownloadIntegrationTest, LocalHttpSegmentedDownloadFile) {
+    if (!env_truthy("FALCON_RUN_INTEGRATION_TESTS")) {
+        GTEST_SKIP() << "Set FALCON_RUN_INTEGRATION_TESTS=1 to enable local HTTP integration tests";
+    }
+
     LocalHttpServer server;
 
     std::vector<std::uint8_t> payload(512 * 1024);
@@ -496,6 +504,10 @@ TEST_F(DownloadIntegrationTest, LocalHttpSegmentedDownloadFile) {
 }
 
 TEST_F(DownloadIntegrationTest, LocalHttpDownloadFileV2) {
+    if (!env_truthy("FALCON_RUN_INTEGRATION_TESTS")) {
+        GTEST_SKIP() << "Set FALCON_RUN_INTEGRATION_TESTS=1 to enable local HTTP integration tests";
+    }
+
     LocalHttpServer server;
     const std::string payload = R"({"hello":"world"})";
     server.add_file("/test.json",
@@ -541,6 +553,10 @@ TEST_F(DownloadIntegrationTest, LocalHttpDownloadFileV2) {
 }
 
 TEST_F(DownloadIntegrationTest, LocalHttpSegmentedDownloadFileV2) {
+    if (!env_truthy("FALCON_RUN_INTEGRATION_TESTS")) {
+        GTEST_SKIP() << "Set FALCON_RUN_INTEGRATION_TESTS=1 to enable local HTTP integration tests";
+    }
+
     LocalHttpServer server;
 
     std::vector<std::uint8_t> payload(512 * 1024);

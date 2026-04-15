@@ -120,6 +120,8 @@ jobs:
       - name: Test
         timeout-minutes: 15
         working-directory: ${{ steps.strings.outputs.build-output-dir }}
+        env:
+          FALCON_RUN_INTEGRATION_TESTS: "1"
         run: ctest --build-config ${{ matrix.build_type }} --output-on-failure --timeout 120
 
   coverage:

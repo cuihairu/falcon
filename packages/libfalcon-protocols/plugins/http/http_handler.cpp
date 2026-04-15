@@ -297,6 +297,7 @@ static bool download_segment_curl(
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &file);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, static_cast<long>(options.timeout_seconds));
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
 
     // Set Range header for segmented download
     std::string range_header = std::to_string(start) + "-" + std::to_string(end);
@@ -370,6 +371,7 @@ public:
         curl_easy_setopt(curl, CURLOPT_HEADERDATA, &header_data);
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, static_cast<long>(options.timeout_seconds));
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
         CurlHeaderList header_list;
         CurlAuthStrings auth_strings;
         apply_common_curl_options(curl, options, /*enable_cookie_jar=*/true, header_list, auth_strings);
@@ -512,6 +514,7 @@ public:
             curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
             curl_easy_setopt(curl, CURLOPT_TIMEOUT,
                              static_cast<long>(options.timeout_seconds));
+            curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
             curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress_callback);
             curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &progress_data);
             curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
