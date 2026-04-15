@@ -4,8 +4,10 @@
 #include <falcon/download_engine.hpp>
 #include <falcon/download_options.hpp>
 #include <falcon/download_engine_v2.hpp>
-#include <falcon/plugin_manager.hpp>
 #include <gtest/gtest.h>
+
+// HTTP handler factory for V1 engine tests
+#include "../../plugins/http/http_handler.hpp"
 
 #include <fstream>
 #include <filesystem>
@@ -404,14 +406,6 @@ protected:
         // Create test directory
         test_dir_ = make_unique_test_dir("falcon_test");
         std::filesystem::create_directories(test_dir_);
-
-        // Ensure HTTP plugin is registered
-        static bool plugins_registered = false;
-        if (!plugins_registered) {
-            falcon::register_builtin_protocol_handlers(
-                falcon::PluginManager::instance());
-            plugins_registered = true;
-        }
     }
 
     void TearDown() override {
@@ -432,6 +426,7 @@ TEST_F(DownloadIntegrationTest, LocalHttpDownloadFile) {
     ASSERT_TRUE(server.start());
 
     DownloadEngine engine;
+    engine.register_handler(protocols::create_http_handler());
 
     DownloadOptions options;
     options.output_directory = test_dir_.string();
@@ -469,6 +464,7 @@ TEST_F(DownloadIntegrationTest, LocalHttpSegmentedDownloadFile) {
     ASSERT_TRUE(server.start());
 
     DownloadEngine engine;
+    engine.register_handler(protocols::create_http_handler());
 
     DownloadOptions options;
     options.output_directory = test_dir_.string();
@@ -583,6 +579,7 @@ TEST_F(DownloadIntegrationTest, HttpDownloadFile) {
     }
 
     DownloadEngine engine;
+    engine.register_handler(protocols::create_http_handler());
 
     DownloadOptions options;
     options.output_directory = test_dir_.string();
@@ -628,6 +625,7 @@ TEST_F(DownloadIntegrationTest, MultipleDownloads) {
     }
 
     DownloadEngine engine;
+    engine.register_handler(protocols::create_http_handler());
 
     DownloadOptions options;
     options.output_directory = test_dir_.string();
@@ -676,6 +674,7 @@ TEST_F(DownloadIntegrationTest, PauseAndResume) {
     }
 
     DownloadEngine engine;
+    engine.register_handler(protocols::create_http_handler());
 
     DownloadOptions options;
     options.output_directory = test_dir_.string();
@@ -721,6 +720,7 @@ TEST_F(DownloadIntegrationTest, CancelDownload) {
     }
 
     DownloadEngine engine;
+    engine.register_handler(protocols::create_http_handler());
 
     DownloadOptions options;
     options.output_directory = test_dir_.string();
@@ -754,6 +754,7 @@ TEST_F(DownloadIntegrationTest, GetStatistics) {
     }
 
     DownloadEngine engine;
+    engine.register_handler(protocols::create_http_handler());
 
     DownloadOptions options;
     options.output_directory = test_dir_.string();
