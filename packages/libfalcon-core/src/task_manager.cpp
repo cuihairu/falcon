@@ -40,6 +40,99 @@ TaskStatus sanitize_status_for_restore(TaskStatus status) {
     }
     return status;
 }
+
+/**
+ * @brief 从流中读取下载选项
+ */
+bool read_download_options(std::istream& in, DownloadOptions& options) {
+    if (!(in >> options.max_connections >> options.timeout_seconds >> options.max_retries >>
+          options.retry_delay_seconds)) {
+        return false;
+    }
+    if (!(in >> std::quoted(options.output_directory) >> std::quoted(options.output_filename))) {
+        return false;
+    }
+    if (!(in >> options.speed_limit)) {
+        return false;
+    }
+
+    int resume_enabled = 1;
+    if (!read_int(in, resume_enabled)) {
+        return false;
+    }
+    options.resume_enabled = resume_enabled != 0;
+
+    if (!(in >> std::quoted(options.user_agent) >> std::quoted(options.proxy) >>
+          std::quoted(options.proxy_type) >>
+          std::quoted(options.proxy_username) >>
+          std::quoted(options.proxy_password))) {
+        return false;
+    }
+
+    int verify_ssl = 1;
+    if (!read_int(in, verify_ssl)) {
+        return false;
+    }
+    options.verify_ssl = verify_ssl != 0;
+
+    if (!(in >> std::quoted(options.referer) >> std::quoted(options.cookie_file) >>
+          std::quoted(options.cookie_jar))) {
+        return false;
+    }
+
+    if (!(in >> options.min_segment_size)) {
+        return false;
+    }
+
+    int adaptive = 1;
+    if (!read_int(in, adaptive)) {
+        return false;
+    }
+    options.adaptive_segment_sizing = adaptive != 0;
+
+    if (!(in >> options.progress_interval_ms)) {
+        return false;
+    }
+
+    int create_dir = 1;
+    int overwrite = 0;
+    if (!read_int(in, create_dir) || !read_int(in, overwrite)) {
+        return false;
+    }
+    options.create_directory = create_dir != 0;
+    options.overwrite_existing = overwrite != 0;
+
+    std::size_t header_count = 0;
+    if (!(in >> header_count)) {
+        return false;
+    }
+    for (std::size_t i = 0; i < header_count; ++i) {
+        std::string k;
+        std::string v;
+        if (!(in >> std::quoted(k) >> std::quoted(v))) {
+            return false;
+        }
+        options.headers.emplace(std::move(k), std::move(v));
+    }
+
+    return true;
+}
+
+/**
+ * @brief 从流中读取单个任务数据
+ */
+bool read_task_data(std::istream& in, TaskId& id, std::string& url, std::string& output_path,
+                     std::string& error_message, Bytes& downloaded_bytes, Bytes& total_bytes,
+                     BytesPerSecond& speed, int& status_int) {
+    if (!(in >> id >> status_int >> downloaded_bytes >> total_bytes >> speed)) {
+        return false;
+    }
+    if (!(in >> std::quoted(url) >> std::quoted(output_path) >> std::quoted(error_message))) {
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 /**
@@ -479,6 +572,7 @@ public:
             return false;
         }
 
+        // Clear existing state
         {
             std::lock_guard<std::mutex> lock(tasks_mutex_);
             tasks_.clear();
@@ -493,6 +587,7 @@ public:
             active_count_.store(0);
         }
 
+        // Read task lines
         std::string line;
         std::getline(file, line); // consume remainder of header line
         while (std::getline(file, line)) {
@@ -505,94 +600,25 @@ public:
                 return false;
             }
 
+            // Read basic task data
             TaskId id = INVALID_TASK_ID;
-            int status_int = 0;
-            Bytes downloaded_bytes = 0;
-            Bytes total_bytes = 0;
+            std::string url, output_path, error_message;
+            Bytes downloaded_bytes = 0, total_bytes = 0;
             BytesPerSecond speed = 0;
-            std::string url;
-            std::string output_path;
-            std::string error_message;
+            int status_int = 0;
 
-            if (!(in >> id >> status_int >> downloaded_bytes >> total_bytes >> speed)) {
-                continue;
-            }
-            if (!(in >> std::quoted(url) >> std::quoted(output_path) >> std::quoted(error_message))) {
+            if (!read_task_data(in, id, url, output_path, error_message,
+                                 downloaded_bytes, total_bytes, speed, status_int)) {
                 continue;
             }
 
+            // Read download options
             DownloadOptions options;
-
-            if (!(in >> options.max_connections >> options.timeout_seconds >> options.max_retries >>
-                  options.retry_delay_seconds)) {
-                continue;
-            }
-            if (!(in >> std::quoted(options.output_directory) >> std::quoted(options.output_filename))) {
-                continue;
-            }
-            if (!(in >> options.speed_limit)) {
+            if (!read_download_options(in, options)) {
                 continue;
             }
 
-            int resume_enabled = 1;
-            if (!read_int(in, resume_enabled)) {
-                continue;
-            }
-            options.resume_enabled = resume_enabled != 0;
-
-            if (!(in >> std::quoted(options.user_agent) >> std::quoted(options.proxy) >>
-                  std::quoted(options.proxy_type) >>
-                  std::quoted(options.proxy_username) >>
-                  std::quoted(options.proxy_password))) {
-                continue;
-            }
-
-            int verify_ssl = 1;
-            if (!read_int(in, verify_ssl)) {
-                continue;
-            }
-            options.verify_ssl = verify_ssl != 0;
-
-            if (!(in >> std::quoted(options.referer) >> std::quoted(options.cookie_file) >>
-                  std::quoted(options.cookie_jar))) {
-                continue;
-            }
-
-            if (!(in >> options.min_segment_size)) {
-                continue;
-            }
-
-            int adaptive = 1;
-            if (!read_int(in, adaptive)) {
-                continue;
-            }
-            options.adaptive_segment_sizing = adaptive != 0;
-
-            if (!(in >> options.progress_interval_ms)) {
-                continue;
-            }
-
-            int create_dir = 1;
-            int overwrite = 0;
-            if (!read_int(in, create_dir) || !read_int(in, overwrite)) {
-                continue;
-            }
-            options.create_directory = create_dir != 0;
-            options.overwrite_existing = overwrite != 0;
-
-            std::size_t header_count = 0;
-            if (!(in >> header_count)) {
-                continue;
-            }
-            for (std::size_t i = 0; i < header_count; ++i) {
-                std::string k;
-                std::string v;
-                if (!(in >> std::quoted(k) >> std::quoted(v))) {
-                    break;
-                }
-                options.headers.emplace(std::move(k), std::move(v));
-            }
-
+            // Validate and create task
             if (id == INVALID_TASK_ID || url.empty()) {
                 continue;
             }
