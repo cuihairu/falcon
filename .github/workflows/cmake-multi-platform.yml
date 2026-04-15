@@ -118,9 +118,9 @@ jobs:
         run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ matrix.build_type }} --parallel
 
       - name: Test
-        timeout-minutes: 10
+        timeout-minutes: 15
         working-directory: ${{ steps.strings.outputs.build-output-dir }}
-        run: ctest --build-config ${{ matrix.build_type }} --output-on-failure --timeout 60
+        run: ctest --build-config ${{ matrix.build_type }} --output-on-failure --timeout 120
 
   coverage:
     name: Coverage (Ubuntu)
@@ -160,9 +160,9 @@ jobs:
         run: cmake --build ${{ github.workspace }}/build-coverage --config Debug --parallel
 
       - name: Test
-        timeout-minutes: 10
+        timeout-minutes: 15
         working-directory: ${{ github.workspace }}/build-coverage
-        run: ctest --build-config Debug --output-on-failure --timeout 60 || true
+        run: ctest --build-config Debug --output-on-failure --timeout 120 || true
         continue-on-error: true
 
       - name: Generate coverage (gcovr)

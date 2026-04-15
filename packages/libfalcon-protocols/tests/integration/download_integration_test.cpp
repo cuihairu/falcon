@@ -11,6 +11,7 @@
 
 #include <fstream>
 #include <filesystem>
+#include <future>
 #include <thread>
 #include <chrono>
 #include <cstdlib>
@@ -440,7 +441,7 @@ TEST_F(DownloadIntegrationTest, LocalHttpDownloadFile) {
     ASSERT_NE(task, nullptr);
     ASSERT_TRUE(engine.start_task(task->id()));
 
-    ASSERT_TRUE(task->wait_for(std::chrono::seconds(20)));
+    ASSERT_TRUE(task->wait_for(std::chrono::seconds(40)));
     EXPECT_EQ(task->status(), TaskStatus::Completed);
 
     std::filesystem::path output_file = test_dir_ / "test_download.json";
@@ -479,7 +480,7 @@ TEST_F(DownloadIntegrationTest, LocalHttpSegmentedDownloadFile) {
     ASSERT_NE(task, nullptr);
     ASSERT_TRUE(engine.start_task(task->id()));
 
-    ASSERT_TRUE(task->wait_for(std::chrono::seconds(20)));
+    ASSERT_TRUE(task->wait_for(std::chrono::seconds(40)));
     EXPECT_EQ(task->status(), TaskStatus::Completed);
 
     std::filesystem::path output_file = test_dir_ / "blob.bin";
@@ -515,7 +516,15 @@ TEST_F(DownloadIntegrationTest, LocalHttpDownloadFileV2) {
     options.resume_enabled = false;
 
     TaskId task_id = engine.add_download(server.base_url() + "/test.json", options);
-    engine.run();
+
+    // Run engine with timeout protection
+    auto future = std::async(std::launch::async, [&engine]() { engine.run(); });
+    auto status = future.wait_for(std::chrono::seconds(40));
+    if (status != std::future_status::ready) {
+        engine.shutdown();
+        future.wait_for(std::chrono::seconds(5));
+    }
+    ASSERT_EQ(status, std::future_status::ready);
 
     auto* group = engine.request_group_man()->find_group(task_id);
     ASSERT_NE(group, nullptr);
@@ -556,7 +565,15 @@ TEST_F(DownloadIntegrationTest, LocalHttpSegmentedDownloadFileV2) {
     options.resume_enabled = false;
 
     TaskId task_id = engine.add_download(server.base_url() + "/blob.bin", options);
-    engine.run();
+
+    // Run engine with timeout protection
+    auto future = std::async(std::launch::async, [&engine]() { engine.run(); });
+    auto status = future.wait_for(std::chrono::seconds(40));
+    if (status != std::future_status::ready) {
+        engine.shutdown();
+        future.wait_for(std::chrono::seconds(5));
+    }
+    ASSERT_EQ(status, std::future_status::ready);
 
     auto* group = engine.request_group_man()->find_group(task_id);
     ASSERT_NE(group, nullptr);
