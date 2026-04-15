@@ -58,7 +58,7 @@ public:
             curl_easy_setopt(curl_, CURLOPT_PROXY, proxy_url.c_str());
 
             // 设置代理类型
-            curl_proxytype type = CURLPROXY_HTTP;
+            long type = CURLPROXY_HTTP;
             if (!proxy_type.empty()) {
                 if (proxy_type == "socks4") {
                     type = CURLPROXY_SOCKS4;
