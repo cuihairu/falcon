@@ -11,11 +11,11 @@ namespace falcon {
 
 void register_builtin_protocol_handlers(PluginManager& manager) {
 #if defined(FALCON_ENABLE_HTTP_PLUGIN) || defined(FALCON_ENABLE_HTTP)
-    manager.registerPlugin(plugins::create_http_handler());
+    manager.registerPlugin(protocols::create_http_handler());
 #endif
 
 #ifdef FALCON_ENABLE_FTP_PLUGIN
-    manager.registerPlugin(plugins::create_ftp_handler());
+    manager.registerPlugin(protocols::create_ftp_handler());
 #endif
 }
 

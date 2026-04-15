@@ -119,7 +119,7 @@ public:
 
         CURLcode res = curl_easy_perform(curl_);
         if (res != CURLE_OK) {
-            FALCON_LOG_ERROR("CURL error: " << curl_easy_strerror(res));
+            FALCON_LOG_ERROR_STREAM("CURL error: " << curl_easy_strerror(res));
             return "";
         }
 
@@ -160,11 +160,11 @@ public:
         }
 
         // 发送请求
-        FALCON_LOG_DEBUG("Searching " << config_.name << " with query: " << query.keyword);
+        FALCON_LOG_DEBUG_STREAM("Searching " << config_.name << " with query: " << query.keyword);
         std::string response = crawler_->get(search_url);
 
         if (response.empty()) {
-            FALCON_LOG_WARN("No response from " << config_.name);
+            FALCON_LOG_WARN_STREAM("No response from " << config_.name);
             return results;
         }
 
@@ -179,7 +179,7 @@ public:
         // 应用过滤
         results = filter_results(results, query);
 
-        FALCON_LOG_DEBUG("Found " << results.size() << " results from " << config_.name);
+        FALCON_LOG_DEBUG_STREAM("Found " << results.size() << " results from " << config_.name);
         return results;
     }
 
@@ -341,7 +341,7 @@ protected:
                 }
             }
         } catch (const std::exception& e) {
-            FALCON_LOG_ERROR("Failed to parse JSON response: " << e.what());
+            FALCON_LOG_ERROR_STREAM("Failed to parse JSON response: " << e.what());
         }
 
         return results;
@@ -439,7 +439,7 @@ private:
             confidence += 0.1;
         }
 
-        return std::min(confidence, 1.0);
+        return (std::min)(confidence, 1.0);
     }
 
     std::string url_encode(const std::string& str) {
@@ -529,7 +529,7 @@ public:
     bool load_config(const std::string& config_file) {
         std::ifstream file(config_file);
         if (!file.is_open()) {
-            FALCON_LOG_WARN("Failed to open search engine config file: " << config_file);
+            FALCON_LOG_WARN_STREAM("Failed to open search engine config file: " << config_file);
             return false;
         }
 
@@ -611,11 +611,11 @@ public:
                 }
             }
 
-            FALCON_LOG_INFO("Loaded " << providers_.size() << " search engines");
+            FALCON_LOG_INFO_STREAM("Loaded " << providers_.size() << " search engines");
             return true;
 
         } catch (const std::exception& e) {
-            FALCON_LOG_ERROR("Failed to parse search engine config: " << e.what());
+            FALCON_LOG_ERROR_STREAM("Failed to parse search engine config: " << e.what());
             return false;
         }
     }
@@ -661,7 +661,7 @@ std::vector<SearchResult> ResourceSearchManager::search_all(const SearchQuery& q
                              std::make_move_iterator(results.begin()),
                              std::make_move_iterator(results.end()));
         } catch (const std::exception& e) {
-            FALCON_LOG_ERROR("Search error: " << e.what());
+            FALCON_LOG_ERROR_STREAM("Search error: " << e.what());
         }
     }
 

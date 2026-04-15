@@ -612,7 +612,7 @@ private:
                 auto json = nlohmann::json::parse(opts_json);
                 record.options = deserialize_options(json);
             } catch (const std::exception& e) {
-                FALCON_LOG_WARN("Failed to parse options JSON: " << e.what());
+                FALCON_LOG_WARN_STREAM("Failed to parse options JSON: " << e.what());
             }
         }
 

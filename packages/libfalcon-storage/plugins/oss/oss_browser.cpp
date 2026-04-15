@@ -192,7 +192,7 @@ public:
         }
 
         if (res != CURLE_OK) {
-            FALCON_LOG_ERROR("OSS request failed: " << curl_easy_strerror(res));
+            FALCON_LOG_ERROR_STREAM("OSS request failed: " << curl_easy_strerror(res));
             return "";
         }
 
@@ -434,7 +434,7 @@ std::vector<RemoteResource> OSSBrowser::list_directory(
     std::string response = p_impl_->perform_oss_request("GET", url, {}, query_string);
 
     if (response.empty()) {
-        FALCON_LOG_ERROR("Failed to list OSS directory");
+        FALCON_LOG_ERROR_STREAM("Failed to list OSS directory");
         return resources;
     }
 
@@ -472,7 +472,7 @@ std::vector<RemoteResource> OSSBrowser::list_directory(
         }
 
     } catch (const std::exception& e) {
-        FALCON_LOG_ERROR("Failed to parse OSS response: " << e.what());
+        FALCON_LOG_ERROR_STREAM("Failed to parse OSS response: " << e.what());
     }
 #endif
 
@@ -601,7 +601,7 @@ std::map<std::string, uint64_t> OSSBrowser::get_quota_info() {
             }
         }
     } catch (const std::exception& e) {
-        FALCON_LOG_ERROR("Failed to parse quota info: " << e.what());
+        FALCON_LOG_ERROR_STREAM("Failed to parse quota info: " << e.what());
     }
 #endif
 

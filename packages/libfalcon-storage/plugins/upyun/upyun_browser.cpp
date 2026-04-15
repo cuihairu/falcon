@@ -129,7 +129,7 @@ public:
         unsigned char hmac[EVP_MAX_MD_SIZE];
         unsigned int hmac_len = 0;
         if (password_md5.length() > static_cast<std::size_t>(INT_MAX)) {
-            FALCON_LOG_ERROR("password_md5 长度过大，无法传递给 OpenSSL HMAC");
+            FALCON_LOG_ERROR_STREAM("password_md5 长度过大，无法传递给 OpenSSL HMAC");
             return "";
         }
         unsigned char* result = HMAC(EVP_md5(),
@@ -200,7 +200,7 @@ public:
         }
 
         if (res != CURLE_OK) {
-            FALCON_LOG_ERROR("Upyun request failed: " << curl_easy_strerror(res));
+            FALCON_LOG_ERROR_STREAM("Upyun request failed: " << curl_easy_strerror(res));
             return "";
         }
 
@@ -279,7 +279,7 @@ public:
 
     std::string base64_encode(const unsigned char* data, size_t length) {
         if (length > static_cast<std::size_t>(INT_MAX)) {
-            FALCON_LOG_ERROR("Base64 输入过大，无法传递给 OpenSSL BIO_write");
+            FALCON_LOG_ERROR_STREAM("Base64 输入过大，无法传递给 OpenSSL BIO_write");
             return "";
         }
         BIO* b64 = BIO_new(BIO_f_base64());
@@ -419,7 +419,7 @@ std::vector<RemoteResource> UpyunBrowser::list_directory(
     std::string response = p_impl_->perform_upyun_request("GET", uri, headers);
 
     if (response.empty()) {
-        FALCON_LOG_ERROR("Failed to list Upyun directory");
+        FALCON_LOG_ERROR_STREAM("Failed to list Upyun directory");
         return resources;
     }
 
@@ -620,7 +620,7 @@ std::map<std::string, uint64_t> UpyunBrowser::get_quota_info() {
             }
         }
     } catch (const std::exception& e) {
-        FALCON_LOG_ERROR("Failed to parse quota info: " << e.what());
+        FALCON_LOG_ERROR_STREAM("Failed to parse quota info: " << e.what());
     }
 #endif
 

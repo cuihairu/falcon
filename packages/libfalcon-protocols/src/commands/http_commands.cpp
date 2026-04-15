@@ -122,7 +122,7 @@ bool HttpInitiateConnectionCommand::execute(DownloadEngineV2* engine) {
         }
 
         if (use_https_) {
-            FALCON_LOG_ERROR("当前 HTTP 命令链路暂不支持 HTTPS: " << url_);
+            FALCON_LOG_ERROR_STREAM("当前 HTTP 命令链路暂不支持 HTTPS: " << url_);
             return handle_result(ExecutionResult::ERROR_OCCURRED);
         }
 
@@ -131,13 +131,13 @@ bool HttpInitiateConnectionCommand::execute(DownloadEngineV2* engine) {
                 // 创建新连接
                 // 步骤 1: 创建 Socket
                 if (!create_socket()) {
-                    FALCON_LOG_ERROR("创建 Socket 失败");
+                    FALCON_LOG_ERROR_STREAM("创建 Socket 失败");
                     return handle_result(ExecutionResult::ERROR_OCCURRED);
                 }
 
                 // 步骤 2: 开始连接
                 if (!connect_socket()) {
-                    FALCON_LOG_ERROR("连接失败: " << host_);
+                    FALCON_LOG_ERROR_STREAM("连接失败: " << host_);
                     return handle_result(ExecutionResult::ERROR_OCCURRED);
                 }
 
@@ -165,7 +165,7 @@ bool HttpInitiateConnectionCommand::execute(DownloadEngineV2* engine) {
                         return handle_result(ExecutionResult::ERROR_OCCURRED);
                     }
                     if (error != 0) {
-                        FALCON_LOG_ERROR("连接失败: " << strerror(error));
+                        FALCON_LOG_ERROR_STREAM("连接失败: " << strerror(error));
                         close_socket_fd(socket_fd_);
                         socket_fd_ = -1;
                         return handle_result(ExecutionResult::ERROR_OCCURRED);
@@ -179,7 +179,7 @@ bool HttpInitiateConnectionCommand::execute(DownloadEngineV2* engine) {
                 return handle_result(ExecutionResult::ERROR_OCCURRED);
         }
     } catch (const std::exception& e) {
-        FALCON_LOG_ERROR("HTTP 连接异常: " << e.what());
+        FALCON_LOG_ERROR_STREAM("HTTP 连接异常: " << e.what());
         close_socket_fd(socket_fd_);
         socket_fd_ = -1;
         return handle_result(ExecutionResult::ERROR_OCCURRED);
@@ -197,7 +197,7 @@ bool HttpInitiateConnectionCommand::resolve_host(
     struct addrinfo* result = nullptr;
     int ret = getaddrinfo(host.c_str(), nullptr, &hints, &result);
     if (ret != 0) {
-        FALCON_LOG_ERROR("getaddrinfo 失败: " << gai_strerror(ret));
+        FALCON_LOG_ERROR_STREAM("getaddrinfo 失败: " << gai_strerror(ret));
         return false;
     }
 
@@ -225,14 +225,14 @@ bool HttpInitiateConnectionCommand::resolve_host(
     ip = addr_str;
     freeaddrinfo(result);
 
-    FALCON_LOG_INFO(host << " 解析为 " << ip);
+    FALCON_LOG_INFO_STREAM(host << " 解析为 " << ip);
     return true;
 }
 
 bool HttpInitiateConnectionCommand::create_socket() {
     socket_fd_ = socket(AF_INET, SOCK_STREAM, 0);
     if (socket_fd_ < 0) {
-        FALCON_LOG_ERROR("socket() 失败: " << strerror(errno));
+        FALCON_LOG_ERROR_STREAM("socket() 失败: " << strerror(errno));
         return false;
     }
 
@@ -253,7 +253,7 @@ bool HttpInitiateConnectionCommand::create_socket() {
     }
 #endif
 
-    FALCON_LOG_DEBUG("创建 Socket: fd=" << socket_fd_);
+    FALCON_LOG_DEBUG_STREAM("创建 Socket: fd=" << socket_fd_);
     return true;
 }
 
@@ -270,14 +270,14 @@ bool HttpInitiateConnectionCommand::connect_socket() {
             ip = resolved_ip_;
         } else {
             if (!resolve_host(host_, ip)) {
-                FALCON_LOG_ERROR("解析主机失败: " << host_);
+                FALCON_LOG_ERROR_STREAM("解析主机失败: " << host_);
                 return false;
             }
             resolved_ip_ = ip;
         }
 
         if (inet_pton(AF_INET, ip.c_str(), &addr.sin_addr) <= 0) {
-            FALCON_LOG_ERROR("inet_pton 失败: " << ip);
+            FALCON_LOG_ERROR_STREAM("inet_pton 失败: " << ip);
             return false;
         }
     }
@@ -286,12 +286,12 @@ bool HttpInitiateConnectionCommand::connect_socket() {
                      reinterpret_cast<struct sockaddr*>(&addr),
                      sizeof(addr));
     if (ret < 0 && errno != EINPROGRESS) {
-        FALCON_LOG_ERROR("connect() 失败: " << strerror(errno));
+        FALCON_LOG_ERROR_STREAM("connect() 失败: " << strerror(errno));
         return false;
     }
 
     connect_in_progress_ = (ret < 0 && errno == EINPROGRESS);
-    FALCON_LOG_INFO("正在连接 " << host_ << ":" << port_
+    FALCON_LOG_INFO_STREAM("正在连接 " << host_ << ":" << port_
                                  << (connect_in_progress_ ? " (in progress)" : " (connected)"));
     return true;
 }
@@ -299,7 +299,7 @@ bool HttpInitiateConnectionCommand::connect_socket() {
 bool HttpInitiateConnectionCommand::setup_tls() {
     // TODO: 实现 OpenSSL TLS 握手
     // 这是一个占位实现
-    FALCON_LOG_WARN("TLS 支持待实现");
+    FALCON_LOG_WARN_STREAM("TLS 支持待实现");
     return true;
 }
 
@@ -323,7 +323,7 @@ bool HttpInitiateConnectionCommand::prepare_http_request() {
 
     request_data_ = http_request_->to_string();
     request_sent_ = 0;
-    FALCON_LOG_DEBUG("准备 HTTP 请求: " << host_ << ":" << port_ << " " << path_);
+    FALCON_LOG_DEBUG_STREAM("准备 HTTP 请求: " << host_ << ":" << port_ << " " << path_);
     return !request_data_.empty();
 }
 
@@ -334,7 +334,7 @@ AbstractCommand::ExecutionResult HttpInitiateConnectionCommand::send_http_reques
 
     if (request_data_.empty()) {
         if (!prepare_http_request()) {
-            FALCON_LOG_ERROR("准备 HTTP 请求失败");
+            FALCON_LOG_ERROR_STREAM("准备 HTTP 请求失败");
             return ExecutionResult::ERROR_OCCURRED;
         }
     }
@@ -350,7 +350,7 @@ AbstractCommand::ExecutionResult HttpInitiateConnectionCommand::send_http_reques
                     socket_fd_, static_cast<int>(net::IOEvent::WRITE), id());
                 return ExecutionResult::WAIT_FOR_SOCKET;
             }
-            FALCON_LOG_ERROR("send() 失败: " << strerror(errno));
+            FALCON_LOG_ERROR_STREAM("send() 失败: " << strerror(errno));
             return ExecutionResult::ERROR_OCCURRED;
         }
 
@@ -454,12 +454,12 @@ AbstractCommand::ExecutionResult HttpResponseCommand::receive_response_headers(D
                 }
                 return ExecutionResult::WAIT_FOR_SOCKET;
             }
-            FALCON_LOG_ERROR("recv() 失败: " << strerror(errno));
+            FALCON_LOG_ERROR_STREAM("recv() 失败: " << strerror(errno));
             return ExecutionResult::ERROR_OCCURRED;
         }
 
         if (n == 0) {
-            FALCON_LOG_ERROR("接收响应头时连接关闭");
+            FALCON_LOG_ERROR_STREAM("接收响应头时连接关闭");
             return ExecutionResult::ERROR_OCCURRED;
         }
 
@@ -476,7 +476,7 @@ AbstractCommand::ExecutionResult HttpResponseCommand::receive_response_headers(D
 
         // 继续循环尝试读取更多，直到遇到 EAGAIN 或完整头部
         if (response_buffer_.size() > 1024 * 1024) {
-            FALCON_LOG_ERROR("响应头过大，终止解析");
+            FALCON_LOG_ERROR_STREAM("响应头过大，终止解析");
             return ExecutionResult::ERROR_OCCURRED;
         }
     }
@@ -494,7 +494,7 @@ bool HttpResponseCommand::parse_status_line(const std::string& line) {
     std::string status_str = line.substr(pos1 + 1, pos2 - pos1 - 1);
 
     status_code_ = std::stoi(status_str);
-    FALCON_LOG_INFO("HTTP 状态: " << status_code_);
+    FALCON_LOG_INFO_STREAM("HTTP 状态: " << status_code_);
 
     return true;
 }
@@ -527,7 +527,7 @@ bool HttpResponseCommand::parse_header_line(const std::string& line) {
 }
 
 bool HttpResponseCommand::handle_redirect() {
-    FALCON_LOG_INFO("重定向到: " << redirect_url_);
+    FALCON_LOG_INFO_STREAM("重定向到: " << redirect_url_);
     // TODO: 创建新的 HttpInitiateConnectionCommand 跟随重定向
     return true;
 }
@@ -537,10 +537,10 @@ bool HttpResponseCommand::determine_download_strategy(DownloadEngineV2* engine) 
 
     // 单连接下载：后续可按 Accept-Ranges + min_segment_size 切换多连接
     if (accepts_range_ && content_length_ > options_.min_segment_size) {
-        FALCON_LOG_INFO("支持分段下载，启用多线程模式");
+        FALCON_LOG_INFO_STREAM("支持分段下载，启用多线程模式");
         // TODO: 创建多个 HttpDownloadCommand
     } else {
-        FALCON_LOG_INFO("单线程下载模式");
+        FALCON_LOG_INFO_STREAM("单线程下载模式");
     }
     schedule_next(engine,
                   std::make_unique<HttpDownloadCommand>(get_task_id(),
@@ -718,7 +718,7 @@ AbstractCommand::ExecutionResult HttpDownloadCommand::receive_data(DownloadEngin
                 }
                 return ExecutionResult::WAIT_FOR_SOCKET;
             }
-            FALCON_LOG_ERROR("recv() 失败: " << strerror(errno));
+            FALCON_LOG_ERROR_STREAM("recv() 失败: " << strerror(errno));
             return ExecutionResult::ERROR_OCCURRED;
         }
 
@@ -777,7 +777,7 @@ bool HttpDownloadCommand::write_to_segment(const char* data,
         }
     }
 
-    FALCON_LOG_DEBUG("写入 " << size << " 字节到分段 " << segment_id_);
+    FALCON_LOG_DEBUG_STREAM("写入 " << size << " 字节到分段 " << segment_id_);
     return true;
 }
 
@@ -797,7 +797,7 @@ void HttpDownloadCommand::update_progress() {
         bytes_since_last_update_ = 0;
         last_update_ = now;
 
-        FALCON_LOG_DEBUG("下载速度: " << (download_speed_ / 1024) << " KB/s");
+        FALCON_LOG_DEBUG_STREAM("下载速度: " << (download_speed_ / 1024) << " KB/s");
     }
 }
 
@@ -828,11 +828,11 @@ HttpRetryCommand::HttpRetryCommand(
 
 bool HttpRetryCommand::execute(DownloadEngineV2* /*engine*/) {
     if (!should_retry()) {
-        FALCON_LOG_ERROR("达到最大重试次数: " << max_retries_);
+        FALCON_LOG_ERROR_STREAM("达到最大重试次数: " << max_retries_);
         return handle_result(ExecutionResult::ERROR_OCCURRED);
     }
 
-    FALCON_LOG_INFO("重试下载 (" << retry_count_ << "/" << max_retries_ << "): " << url_);
+    FALCON_LOG_INFO_STREAM("重试下载 (" << retry_count_ << "/" << max_retries_ << "): " << url_);
 
     // 等待一段时间后重试
     std::this_thread::sleep_for(retry_wait_);

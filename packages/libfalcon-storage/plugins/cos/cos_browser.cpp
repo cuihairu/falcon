@@ -249,7 +249,7 @@ public:
         }
 
         if (res != CURLE_OK) {
-            FALCON_LOG_ERROR("COS request failed: " << curl_easy_strerror(res));
+            FALCON_LOG_ERROR_STREAM("COS request failed: " << curl_easy_strerror(res));
             return "";
         }
 
@@ -527,7 +527,7 @@ std::vector<RemoteResource> COSBrowser::list_directory(
     std::string response = p_impl_->perform_cos_request("GET", url, {}, query_string);
 
     if (response.empty()) {
-        FALCON_LOG_ERROR("Failed to list COS directory");
+        FALCON_LOG_ERROR_STREAM("Failed to list COS directory");
         return resources;
     }
 
@@ -565,7 +565,7 @@ std::vector<RemoteResource> COSBrowser::list_directory(
         }
 
     } catch (const std::exception& e) {
-        FALCON_LOG_ERROR("Failed to parse COS response: " << e.what());
+        FALCON_LOG_ERROR_STREAM("Failed to parse COS response: " << e.what());
     }
 #endif
 
@@ -687,7 +687,7 @@ std::map<std::string, uint64_t> COSBrowser::get_quota_info() {
             }
         }
     } catch (const std::exception& e) {
-        FALCON_LOG_ERROR("Failed to parse quota info: " << e.what());
+        FALCON_LOG_ERROR_STREAM("Failed to parse quota info: " << e.what());
     }
 #endif
 

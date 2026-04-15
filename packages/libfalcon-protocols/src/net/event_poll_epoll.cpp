@@ -33,7 +33,7 @@ EPollEventPoll::EPollEventPoll(int max_events)
         return;
     }
 
-    FALCON_LOG_INFO("创建 epoll 实例: fd=" << epoll_fd_);
+    FALCON_LOG_INFO_STREAM("创建 epoll 实例: fd=" << epoll_fd_);
 }
 
 EPollEventPoll::~EPollEventPoll() {
@@ -41,7 +41,7 @@ EPollEventPoll::~EPollEventPoll() {
 
     if (epoll_fd_ >= 0) {
         close(epoll_fd_);
-        FALCON_LOG_DEBUG("关闭 epoll 实例: fd=" << epoll_fd_);
+        FALCON_LOG_DEBUG_STREAM("关闭 epoll 实例: fd=" << epoll_fd_);
     }
 }
 
@@ -80,7 +80,7 @@ bool EPollEventPoll::add_event(int fd, int events,
     // 保存回调信息
     events_[fd] = EventEntry(fd, events, std::move(callback), user_data);
 
-    FALCON_LOG_DEBUG("添加 epoll 事件: fd=" << fd << ", events=" << events);
+    FALCON_LOG_DEBUG_STREAM("添加 epoll 事件: fd=" << fd << ", events=" << events);
     return true;
 }
 
@@ -115,7 +115,7 @@ bool EPollEventPoll::modify_event(int fd, int events) {
     // 更新事件类型
     it->second.events = events;
 
-    FALCON_LOG_DEBUG("修改 epoll 事件: fd=" << fd << ", events=" << events);
+    FALCON_LOG_DEBUG_STREAM("修改 epoll 事件: fd=" << fd << ", events=" << events);
     return true;
 }
 
@@ -131,7 +131,7 @@ bool EPollEventPoll::remove_event(int fd) {
 
     events_.erase(fd);
 
-    FALCON_LOG_DEBUG("移除 epoll 事件: fd=" << fd);
+    FALCON_LOG_DEBUG_STREAM("移除 epoll 事件: fd=" << fd);
     return true;
 }
 
@@ -170,7 +170,7 @@ int EPollEventPoll::poll(int timeout_ms) {
 
         auto it = events_.find(fd);
         if (it == events_.end()) {
-            FALCON_LOG_WARN("未知 fd 事件: fd=" << fd);
+            FALCON_LOG_WARN_STREAM("未知 fd 事件: fd=" << fd);
             continue;
         }
 
@@ -216,7 +216,7 @@ void EPollEventPoll::clear() {
 
 bool EPollEventPoll::set_error(const std::string& msg) {
     error_msg_ = msg;
-    FALCON_LOG_ERROR("EPollEventPoll: " << msg);
+    FALCON_LOG_ERROR_STREAM("EPollEventPoll: " << msg);
     return false;
 }
 

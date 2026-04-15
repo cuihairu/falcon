@@ -27,14 +27,14 @@ DownloadEngineV2::DownloadEngineV2(const EngineConfigV2& config)
           16))                        // 最大空闲连接数
     , config_(config)
 {
-    FALCON_LOG_INFO("创建 DownloadEngineV2");
-    FALCON_LOG_INFO("  最大并发任务: " << config.max_concurrent_tasks);
-    FALCON_LOG_INFO("  全局限速: " << config.global_speed_limit);
-    FALCON_LOG_INFO("  Socket 池超时: 30s, 最大空闲: 16");
+    FALCON_LOG_INFO_STREAM("创建 DownloadEngineV2");
+    FALCON_LOG_INFO_STREAM("  最大并发任务: " << config.max_concurrent_tasks);
+    FALCON_LOG_INFO_STREAM("  全局限速: " << config.global_speed_limit);
+    FALCON_LOG_INFO_STREAM("  Socket 池超时: 30s, 最大空闲: 16");
 }
 
 DownloadEngineV2::~DownloadEngineV2() {
-    FALCON_LOG_INFO("销毁 DownloadEngineV2");
+    FALCON_LOG_INFO_STREAM("销毁 DownloadEngineV2");
 }
 
 TaskId DownloadEngineV2::add_download(const std::string& url,
@@ -46,7 +46,7 @@ TaskId DownloadEngineV2::add_download(const std::string& url,
 TaskId DownloadEngineV2::add_download(const std::vector<std::string>& urls,
                                         const DownloadOptions& options) {
     if (urls.empty()) {
-        FALCON_LOG_WARN("尝试添加空下载 URL 列表");
+        FALCON_LOG_WARN_STREAM("尝试添加空下载 URL 列表");
         return INVALID_TASK_ID;
     }
 
@@ -54,7 +54,7 @@ TaskId DownloadEngineV2::add_download(const std::vector<std::string>& urls,
     static std::atomic<TaskId> id_counter{1};
     TaskId id = id_counter.fetch_add(1, std::memory_order_relaxed);
 
-    FALCON_LOG_INFO("添加下载任务: id=" << id << ", url=" << urls[0]);
+    FALCON_LOG_INFO_STREAM("添加下载任务: id=" << id << ", url=" << urls[0]);
 
     // 创建请求组
     auto group = std::make_unique<RequestGroup>(id, urls, options);
@@ -71,17 +71,17 @@ TaskId DownloadEngineV2::add_download(const std::vector<std::string>& urls,
 }
 
 bool DownloadEngineV2::pause_task(TaskId id) {
-    FALCON_LOG_INFO("暂停任务: id=" << id);
+    FALCON_LOG_INFO_STREAM("暂停任务: id=" << id);
     return request_group_man_->pause_group(id);
 }
 
 bool DownloadEngineV2::resume_task(TaskId id) {
-    FALCON_LOG_INFO("恢复任务: id=" << id);
+    FALCON_LOG_INFO_STREAM("恢复任务: id=" << id);
     return request_group_man_->resume_group(id);
 }
 
 bool DownloadEngineV2::cancel_task(TaskId id) {
-    FALCON_LOG_INFO("取消任务: id=" << id);
+    FALCON_LOG_INFO_STREAM("取消任务: id=" << id);
     auto* group = request_group_man_->find_group(id);
     if (group) {
         if (auto task = group->download_task()) {
@@ -92,7 +92,7 @@ bool DownloadEngineV2::cancel_task(TaskId id) {
 }
 
 void DownloadEngineV2::pause_all() {
-    FALCON_LOG_INFO("暂停所有任务");
+    FALCON_LOG_INFO_STREAM("暂停所有任务");
     for (const auto& group : request_group_man_->all_groups()) {
         if (group && group->status() == RequestGroupStatus::ACTIVE) {
             pause_task(group->id());
@@ -101,7 +101,7 @@ void DownloadEngineV2::pause_all() {
 }
 
 void DownloadEngineV2::resume_all() {
-    FALCON_LOG_INFO("恢复所有任务");
+    FALCON_LOG_INFO_STREAM("恢复所有任务");
     for (const auto& group : request_group_man_->all_groups()) {
         if (group && group->status() == RequestGroupStatus::PAUSED) {
             resume_task(group->id());
@@ -110,7 +110,7 @@ void DownloadEngineV2::resume_all() {
 }
 
 void DownloadEngineV2::cancel_all() {
-    FALCON_LOG_INFO("取消所有任务");
+    FALCON_LOG_INFO_STREAM("取消所有任务");
     for (const auto& group : request_group_man_->all_groups()) {
         if (group && (group->status() == RequestGroupStatus::ACTIVE ||
                       group->status() == RequestGroupStatus::WAITING ||
@@ -123,7 +123,7 @@ void DownloadEngineV2::cancel_all() {
 
 void DownloadEngineV2::add_command(std::unique_ptr<Command> command) {
     if (!command) {
-        FALCON_LOG_WARN("尝试添加空命令");
+        FALCON_LOG_WARN_STREAM("尝试添加空命令");
         return;
     }
 
@@ -133,7 +133,7 @@ void DownloadEngineV2::add_command(std::unique_ptr<Command> command) {
 
 void DownloadEngineV2::add_routine_command(std::unique_ptr<Command> command) {
     if (!command) {
-        FALCON_LOG_WARN("尝试添加空例程命令");
+        FALCON_LOG_WARN_STREAM("尝试添加空例程命令");
         return;
     }
 
@@ -178,7 +178,7 @@ DownloadEngineV2::Statistics DownloadEngineV2::get_statistics() const {
 }
 
 void DownloadEngineV2::run() {
-    FALCON_LOG_INFO("启动下载引擎事件循环");
+    FALCON_LOG_INFO_STREAM("启动下载引擎事件循环");
 
     running_ = true;
     halt_requested_ = 0;
@@ -190,7 +190,7 @@ void DownloadEngineV2::run() {
     while (!is_shutdown_requested()) {
         // 检查是否所有任务完成
         if (request_group_man_->all_completed()) {
-            FALCON_LOG_INFO("所有任务已完成");
+            FALCON_LOG_INFO_STREAM("所有任务已完成");
             break;
         }
 
@@ -220,7 +220,7 @@ void DownloadEngineV2::run() {
 
     running_ = false;
 
-    FALCON_LOG_INFO("下载引擎事件循环结束");
+    FALCON_LOG_INFO_STREAM("下载引擎事件循环结束");
 }
 
 void DownloadEngineV2::execute_commands() {
@@ -306,7 +306,7 @@ bool DownloadEngineV2::register_socket_event(int fd, int events, CommandId comma
             std::lock_guard<std::mutex> lock(socket_map_mutex_);
             auto it = socket_command_map_.find(socket_fd);
             if (it == socket_command_map_.end()) {
-                FALCON_LOG_DEBUG("Socket 事件就绪但无关联命令: fd=" << socket_fd);
+                FALCON_LOG_DEBUG_STREAM("Socket 事件就绪但无关联命令: fd=" << socket_fd);
                 return;
             }
             cmd_id = it->second;
@@ -325,7 +325,7 @@ bool DownloadEngineV2::register_socket_event(int fd, int events, CommandId comma
         event_poll_->remove_event(socket_fd);
 
         if (!resumed) {
-            FALCON_LOG_DEBUG("Socket 事件就绪但命令不存在: fd=" << socket_fd << ", cmd=" << cmd_id);
+            FALCON_LOG_DEBUG_STREAM("Socket 事件就绪但命令不存在: fd=" << socket_fd << ", cmd=" << cmd_id);
             return;
         }
 
@@ -334,19 +334,19 @@ bool DownloadEngineV2::register_socket_event(int fd, int events, CommandId comma
             command_queue_.push_back(std::move(resumed));
         }
 
-        FALCON_LOG_DEBUG("Socket 事件就绪: fd=" << socket_fd << ", events=" << ready_events
+        FALCON_LOG_DEBUG_STREAM("Socket 事件就绪: fd=" << socket_fd << ", events=" << ready_events
                                               << ", 恢复命令=" << cmd_id);
     };
 
     // 已存在则修改事件，否则新增事件
     if (socket_command_map_.find(fd) != socket_command_map_.end()) {
         if (!event_poll_->modify_event(fd, events)) {
-            FALCON_LOG_ERROR("修改 Socket 事件失败: fd=", fd);
+            FALCON_LOG_ERROR_STREAM("修改 Socket 事件失败: fd=", fd);
             return false;
         }
     } else {
         if (!event_poll_->add_event(fd, events, callback)) {
-            FALCON_LOG_ERROR("注册 Socket 事件失败: fd=", fd);
+            FALCON_LOG_ERROR_STREAM("注册 Socket 事件失败: fd=", fd);
             return false;
         }
     }
@@ -359,7 +359,7 @@ bool DownloadEngineV2::unregister_socket_event(int fd) {
     std::lock_guard<std::mutex> lock(socket_map_mutex_);
 
     if (!event_poll_->remove_event(fd)) {
-        FALCON_LOG_WARN("取消注册 Socket 事件失败: fd=" << fd);
+        FALCON_LOG_WARN_STREAM("取消注册 Socket 事件失败: fd=" << fd);
         return false;
     }
 

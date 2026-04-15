@@ -833,6 +833,17 @@ int main(int argc, char* argv[]) {
         bool show_progress = !args.quiet;
         CliEventListener listener(args.verbose, show_progress);
 
+        if (!args.quiet) {
+            engine.add_listener(&listener);
+        }
+
+        // 添加下载任务
+        auto tasks = engine.add_tasks(urls, options);
+        if (tasks.empty()) {
+            std::cerr << term::red("Error: ") << "cannot add download tasks (unsupported URL or plugin disabled)\n";
+            return 1;
+        }
+
         // Build task name map for multi-task display
         if (tasks.size() > 1 && show_progress) {
             std::map<falcon::TaskId, std::string> task_names;
@@ -849,17 +860,6 @@ int main(int argc, char* argv[]) {
         }
 
         if (!args.quiet) {
-            engine.add_listener(&listener);
-        }
-
-        // 添加下载任务
-        auto tasks = engine.add_tasks(urls, options);
-        if (tasks.empty()) {
-            std::cerr << term::red("Error: ") << "cannot add download tasks (unsupported URL or plugin disabled)\n";
-            return 1;
-        }
-
-        if (!args.quiet) {
             if (tasks.size() == 1) {
                 std::cout << term::bold() << "Downloading:" << term::reset()
                           << " " << tasks.front()->url() << "\n";
@@ -873,7 +873,7 @@ int main(int argc, char* argv[]) {
         // 启动任务
         for (const auto& task : tasks) {
             if (!engine.start_task(task->id())) {
-                std::cerr << "错误：无法启动下载任务: " << task->url() << "\n";
+                std::cerr << term::red("Error: ") << "cannot start download task: " << task->url() << "\n";
                 return 1;
             }
         }
@@ -971,5 +971,8 @@ int main(int argc, char* argv[]) {
 
         return (failed + cancelled == 0) ? 0 : 1;
 
-    return 0;
+    } catch (const std::exception& e) {
+        std::cerr << term::red("Fatal: ") << e.what() << "\n";
+        return 1;
+    }
 }

@@ -99,15 +99,15 @@ RequestGroup::RequestGroup(TaskId id,
     info.url = uris_[0];
     files_.push_back(info);
 
-    FALCON_LOG_INFO("创建 RequestGroup: id=" << id_ << ", url=" << uris_[0]);
+    FALCON_LOG_INFO_STREAM("创建 RequestGroup: id=" << id_ << ", url=" << uris_[0]);
 }
 
 RequestGroup::~RequestGroup() {
-    FALCON_LOG_DEBUG("销毁 RequestGroup: id=" << id_);
+    FALCON_LOG_DEBUG_STREAM("销毁 RequestGroup: id=" << id_);
 }
 
 bool RequestGroup::init() {
-    FALCON_LOG_DEBUG("初始化 RequestGroup: id=" << id_);
+    FALCON_LOG_DEBUG_STREAM("初始化 RequestGroup: id=" << id_);
     if (status_ == RequestGroupStatus::FAILED) {
         return false;
     }
@@ -136,7 +136,7 @@ bool RequestGroup::init() {
 }
 
 std::unique_ptr<Command> RequestGroup::create_initial_command() {
-    FALCON_LOG_DEBUG("创建初始命令: id=" << id_ << ", url=" << current_uri());
+    FALCON_LOG_DEBUG_STREAM("创建初始命令: id=" << id_ << ", url=" << current_uri());
 
     if (!init() || !download_task_) {
         if (status_ != RequestGroupStatus::FAILED) {
@@ -175,7 +175,7 @@ RequestGroup::Progress RequestGroup::get_progress() const {
 void RequestGroup::pause() {
     if (status_ == RequestGroupStatus::ACTIVE) {
         status_ = RequestGroupStatus::PAUSED;
-        FALCON_LOG_INFO("暂停 RequestGroup: id=" << id_);
+        FALCON_LOG_INFO_STREAM("暂停 RequestGroup: id=" << id_);
 
         if (download_task_) {
             download_task_->pause();
@@ -186,7 +186,7 @@ void RequestGroup::pause() {
 void RequestGroup::resume() {
     if (status_ == RequestGroupStatus::PAUSED) {
         status_ = RequestGroupStatus::WAITING;
-        FALCON_LOG_INFO("恢复 RequestGroup: id=" << id_);
+        FALCON_LOG_INFO_STREAM("恢复 RequestGroup: id=" << id_);
     }
 }
 
@@ -201,12 +201,12 @@ DownloadTask::Ptr RequestGroup::download_task() const noexcept {
 RequestGroupMan::RequestGroupMan(std::size_t max_concurrent)
     : max_concurrent_(max_concurrent)
 {
-    FALCON_LOG_INFO("创建 RequestGroupMan: max_concurrent=" << max_concurrent);
+    FALCON_LOG_INFO_STREAM("创建 RequestGroupMan: max_concurrent=" << max_concurrent);
 }
 
 void RequestGroupMan::add_request_group(std::unique_ptr<RequestGroup> group) {
     if (!group) {
-        FALCON_LOG_ERROR("尝试添加空 RequestGroup");
+        FALCON_LOG_ERROR_STREAM("尝试添加空 RequestGroup");
         return;
     }
 
@@ -215,11 +215,11 @@ void RequestGroupMan::add_request_group(std::unique_ptr<RequestGroup> group) {
 
     // 检查是否已存在
     if (group_map_.find(id) != group_map_.end()) {
-        FALCON_LOG_WARN("RequestGroup 已存在: id=" << id);
+        FALCON_LOG_WARN_STREAM("RequestGroup 已存在: id=" << id);
         return;
     }
 
-    FALCON_LOG_INFO("添加 RequestGroup: id=" << id << ", url=" << group->current_uri());
+    FALCON_LOG_INFO_STREAM("添加 RequestGroup: id=" << id << ", url=" << group->current_uri());
 
     // 添加到所有组列表（转移所有权）
     all_groups_.push_back(std::move(group));
@@ -231,7 +231,7 @@ void RequestGroupMan::add_request_group(std::unique_ptr<RequestGroup> group) {
     // 新任务默认进入等待队列，实际激活由引擎调度
     raw_ptr->set_status(RequestGroupStatus::WAITING);
     reserved_groups_.push_back(raw_ptr);
-    FALCON_LOG_DEBUG("任务加入等待队列: id=" << id);
+    FALCON_LOG_DEBUG_STREAM("任务加入等待队列: id=" << id);
 }
 
 void RequestGroupMan::fill_request_group_from_reserver(DownloadEngineV2* engine) {
@@ -265,7 +265,7 @@ void RequestGroupMan::fill_request_group_from_reserver(DownloadEngineV2* engine)
             group->set_status(RequestGroupStatus::ACTIVE);
             request_groups_.push_back(group);
 
-            FALCON_LOG_INFO("从等待队列激活任务: id=" << id);
+            FALCON_LOG_INFO_STREAM("从等待队列激活任务: id=" << id);
             found_waiting = true;
 
             if (engine) {
@@ -289,7 +289,7 @@ bool RequestGroupMan::pause_group(TaskId id) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = group_map_.find(id);
     if (it == group_map_.end()) {
-        FALCON_LOG_WARN("任务不存在: id=" << id);
+        FALCON_LOG_WARN_STREAM("任务不存在: id=" << id);
         return false;
     }
 
@@ -312,7 +312,7 @@ bool RequestGroupMan::resume_group(TaskId id) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = group_map_.find(id);
     if (it == group_map_.end()) {
-        FALCON_LOG_WARN("任务不存在: id=" << id);
+        FALCON_LOG_WARN_STREAM("任务不存在: id=" << id);
         return false;
     }
 
@@ -337,7 +337,7 @@ bool RequestGroupMan::remove_group(TaskId id) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = group_map_.find(id);
     if (it == group_map_.end()) {
-        FALCON_LOG_WARN("任务不存在: id=" << id);
+        FALCON_LOG_WARN_STREAM("任务不存在: id=" << id);
         return false;
     }
 
@@ -357,7 +357,7 @@ bool RequestGroupMan::remove_group(TaskId id) {
         reserved_groups_.end()
     );
 
-    FALCON_LOG_INFO("标记 RequestGroup 为 REMOVED: id=" << id);
+    FALCON_LOG_INFO_STREAM("标记 RequestGroup 为 REMOVED: id=" << id);
     return true;
 }
 

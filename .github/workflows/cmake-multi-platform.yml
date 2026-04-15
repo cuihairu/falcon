@@ -173,7 +173,10 @@ jobs:
             --exclude '.*(/|\\\\)build.*' \
             --exclude '.*(/|\\\\)vcpkg_installed.*' \
             --exclude '.*(/|\\\\)third_party.*' \
-            --exclude '.*(/|\\\\)packages(/|\\\\)libfalcon(/|\\\\)tests(/|\\\\).*' \
+            --exclude '.*(/|\\\\)packages(/|\\\\)libfalcon-core(/|\\\\)tests(/|\\\\).*' \
+	            --exclude '.*(/|\\\\)packages(/|\\\\)libfalcon-protocols(/|\\\\)tests(/|\\\\).*' \
+	            --exclude '.*(/|\\\\)packages(/|\\\\)libfalcon-storage(/|\\\\)tests(/|\\\\).*' \
+	            --exclude '.*(/|\\\\)packages(/|\\\\)libfalcon-drives(/|\\\\)tests(/|\\\\).*' \
             --xml-pretty -o coverage.xml
 
       - name: Upload to Codecov

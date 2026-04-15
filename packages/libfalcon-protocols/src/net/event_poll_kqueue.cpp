@@ -35,7 +35,7 @@ KqueueEventPoll::KqueueEventPoll(int max_events)
         return;
     }
 
-    FALCON_LOG_INFO("创建 kqueue 实例: fd=" << kqueue_fd_);
+    FALCON_LOG_INFO_STREAM("创建 kqueue 实例: fd=" << kqueue_fd_);
 }
 
 KqueueEventPoll::~KqueueEventPoll() {
@@ -43,7 +43,7 @@ KqueueEventPoll::~KqueueEventPoll() {
 
     if (kqueue_fd_ >= 0) {
         close(kqueue_fd_);
-        FALCON_LOG_DEBUG("关闭 kqueue 实例: fd=" << kqueue_fd_);
+        FALCON_LOG_DEBUG_STREAM("关闭 kqueue 实例: fd=" << kqueue_fd_);
     }
 }
 
@@ -88,7 +88,7 @@ bool KqueueEventPoll::add_event(int fd, int events,
     // 保存回调信息
     events_[fd] = EventEntry(fd, events, std::move(callback), user_data);
 
-    FALCON_LOG_DEBUG("添加 kqueue 事件: fd=" << fd << ", events=" << events);
+    FALCON_LOG_DEBUG_STREAM("添加 kqueue 事件: fd=" << fd << ", events=" << events);
     return true;
 }
 
@@ -146,7 +146,7 @@ bool KqueueEventPoll::modify_event(int fd, int events) {
     // 更新事件类型
     it->second.events = events;
 
-    FALCON_LOG_DEBUG("修改 kqueue 事件: fd=" << fd << ", events=" << events);
+    FALCON_LOG_DEBUG_STREAM("修改 kqueue 事件: fd=" << fd << ", events=" << events);
     return true;
 }
 
@@ -188,7 +188,7 @@ bool KqueueEventPoll::remove_event(int fd) {
 
     events_.erase(fd);
 
-    FALCON_LOG_DEBUG("移除 kqueue 事件: fd=" << fd);
+    FALCON_LOG_DEBUG_STREAM("移除 kqueue 事件: fd=" << fd);
     return true;
 }
 
@@ -242,7 +242,7 @@ int KqueueEventPoll::poll(int timeout_ms) {
 
         auto it = events_.find(fd);
         if (it == events_.end()) {
-            FALCON_LOG_WARN("未知 fd 事件: fd=" << fd);
+            FALCON_LOG_WARN_STREAM("未知 fd 事件: fd=" << fd);
             continue;
         }
 
@@ -301,7 +301,7 @@ void KqueueEventPoll::clear() {
 
 bool KqueueEventPoll::set_error(const std::string& msg) {
     error_msg_ = msg;
-    FALCON_LOG_ERROR("KqueueEventPoll: " << msg);
+    FALCON_LOG_ERROR_STREAM("KqueueEventPoll: " << msg);
     return false;
 }
 

@@ -113,7 +113,7 @@ public:
     std::string encode_base64_url(const std::string& str) {
         // Base64 URL安全编码
         if (str.length() > static_cast<std::size_t>(INT_MAX)) {
-            FALCON_LOG_ERROR("Base64 输入过大，无法传递给 OpenSSL BIO_write");
+            FALCON_LOG_ERROR_STREAM("Base64 输入过大，无法传递给 OpenSSL BIO_write");
             return "";
         }
         BIO* b64 = BIO_new(BIO_f_base64());
@@ -150,7 +150,7 @@ public:
         unsigned char hmac[EVP_MAX_MD_SIZE];
         unsigned int hmac_len;
         if (config_.secret_key.length() > static_cast<std::size_t>(INT_MAX)) {
-            FALCON_LOG_ERROR("secret_key 过长，无法传递给 OpenSSL HMAC");
+            FALCON_LOG_ERROR_STREAM("secret_key 过长，无法传递给 OpenSSL HMAC");
             return "";
         }
         HMAC(EVP_sha1(), config_.secret_key.c_str(), static_cast<int>(config_.secret_key.length()),
@@ -162,7 +162,7 @@ public:
         BIO* bmem = BIO_new(BIO_s_mem());
         b64 = BIO_push(b64, bmem);
         if (hmac_len > static_cast<unsigned int>(INT_MAX)) {
-            FALCON_LOG_ERROR("HMAC 输出过大，无法传递给 OpenSSL BIO_write");
+            FALCON_LOG_ERROR_STREAM("HMAC 输出过大，无法传递给 OpenSSL BIO_write");
             BIO_free_all(b64);
             return "";
         }
@@ -217,7 +217,7 @@ public:
         }
 
         if (res != CURLE_OK) {
-            FALCON_LOG_ERROR("Kodo request failed: " << curl_easy_strerror(res));
+            FALCON_LOG_ERROR_STREAM("Kodo request failed: " << curl_easy_strerror(res));
             return "";
         }
 
@@ -420,7 +420,7 @@ std::vector<RemoteResource> KodoBrowser::list_directory(
     std::string response = p_impl_->perform_kodo_request("POST", list_url, body, true);
 
     if (response.empty()) {
-        FALCON_LOG_ERROR("Failed to list Kodo directory");
+        FALCON_LOG_ERROR_STREAM("Failed to list Kodo directory");
         return resources;
     }
 
@@ -460,7 +460,7 @@ std::vector<RemoteResource> KodoBrowser::list_directory(
         }
 
     } catch (const std::exception& e) {
-        FALCON_LOG_ERROR("Failed to parse Kodo response: " << e.what());
+        FALCON_LOG_ERROR_STREAM("Failed to parse Kodo response: " << e.what());
     }
 #endif
 
@@ -502,7 +502,7 @@ RemoteResource KodoBrowser::get_resource_info(const std::string& path) {
                 info.mime_type = json_response["mimeType"];
             }
         } catch (const std::exception& e) {
-            FALCON_LOG_ERROR("Failed to parse stat response: " << e.what());
+            FALCON_LOG_ERROR_STREAM("Failed to parse stat response: " << e.what());
         }
 #endif
     }
@@ -627,7 +627,7 @@ std::map<std::string, uint64_t> KodoBrowser::get_quota_info() {
             }
         }
     } catch (const std::exception& e) {
-        FALCON_LOG_ERROR("Failed to parse quota info: " << e.what());
+        FALCON_LOG_ERROR_STREAM("Failed to parse quota info: " << e.what());
     }
 #endif
 

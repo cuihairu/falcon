@@ -45,6 +45,11 @@ target_include_directories(falcon_protocols
 
 target_compile_features(falcon_protocols PUBLIC cxx_std_17)
 
+# Prevent Windows.h from defining min/max macros
+if(WIN32)
+    target_compile_definitions(falcon_protocols PUBLIC NOMINMAX)
+endif()
+
 if(BUILD_SHARED_LIBS)
     target_compile_definitions(falcon_protocols
         PRIVATE FALCON_EXPORTS

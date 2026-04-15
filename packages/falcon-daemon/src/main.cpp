@@ -217,11 +217,11 @@ int main(int argc, char* argv[]) {
 
         task_storage = std::make_unique<falcon::daemon::TaskStorage>(storage_config);
         if (task_storage->initialize()) {
-            FALCON_LOG_INFO("Task storage initialized: " << task_storage->get_db_path());
+            FALCON_LOG_INFO_STREAM("Task storage initialized: " << task_storage->get_db_path());
 
             // Load saved tasks
             auto saved_tasks = task_storage->get_active_tasks();
-            FALCON_LOG_INFO("Loading " << saved_tasks.size() << " saved tasks...");
+            FALCON_LOG_INFO_STREAM("Loading " << saved_tasks.size() << " saved tasks...");
 
             for (const auto& record : saved_tasks) {
                 // Skip completed or failed tasks
@@ -243,26 +243,26 @@ int main(int argc, char* argv[]) {
                         record.status == falcon::TaskStatus::Preparing) {
                         engine.start_task(task->id());
                     }
-                    FALCON_LOG_INFO("Restored task: " << record.url);
+                    FALCON_LOG_INFO_STREAM("Restored task: " << record.url);
                 }
             }
         } else {
-            FALCON_LOG_WARN("Failed to initialize task storage: " << task_storage->get_last_error());
+            FALCON_LOG_WARN_STREAM("Failed to initialize task storage: " << task_storage->get_last_error());
             task_storage.reset();
         }
 #else
-        FALCON_LOG_INFO("Task persistence disabled (SQLite3 not available)");
+        FALCON_LOG_INFO_STREAM("Task persistence disabled (SQLite3 not available)");
 #endif
 
         // Setup stop callback
         daemon_manager.set_stop_callback([&engine]() {
-            FALCON_LOG_INFO("Shutting down...");
+            FALCON_LOG_INFO_STREAM("Shutting down...");
             engine.cancel_all();
         });
 
         // Setup reload callback
         daemon_manager.set_reload_callback([]() {
-            FALCON_LOG_INFO("Reloading configuration...");
+            FALCON_LOG_INFO_STREAM("Reloading configuration...");
             // TODO: Reload configuration file
         });
 
@@ -278,10 +278,10 @@ int main(int argc, char* argv[]) {
                 std::cerr << "Failed to start JSON-RPC server\n";
                 return 1;
             }
-            FALCON_LOG_INFO("JSON-RPC server started on "
+            FALCON_LOG_INFO_STREAM("JSON-RPC server started on "
                           << rpc_config.bind_address << ":" << rpc_config.listen_port);
         } else {
-            FALCON_LOG_INFO("RPC disabled (start with --enable-rpc)");
+            FALCON_LOG_INFO_STREAM("RPC disabled (start with --enable-rpc)");
         }
 
         // Run main loop

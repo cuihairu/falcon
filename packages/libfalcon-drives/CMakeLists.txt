@@ -26,6 +26,11 @@ target_include_directories(falcon_drives
 
 target_compile_features(falcon_drives PUBLIC cxx_std_17)
 
+# Prevent Windows.h from defining min/max macros
+if(WIN32)
+    target_compile_definitions(falcon_drives PUBLIC NOMINMAX)
+endif()
+
 if(BUILD_SHARED_LIBS)
     target_compile_definitions(falcon_drives
         PRIVATE FALCON_EXPORTS

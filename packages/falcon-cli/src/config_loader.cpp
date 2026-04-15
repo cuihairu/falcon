@@ -152,7 +152,7 @@ std::optional<CliConfig> ConfigLoader::load(const std::string& config_path) {
     for (const auto& path : get_config_search_paths()) {
         auto config = load_from_file(path);
         if (config.has_value()) {
-            FALCON_LOG_DEBUG("Loaded config from: " << path);
+            FALCON_LOG_DEBUG_STREAM("Loaded config from: " << path);
             return config;
         }
     }
@@ -262,11 +262,11 @@ bool ConfigLoader::save(const CliConfig& config, const std::string& config_path)
         }
 
         file << j.dump(4) << std::endl;
-        FALCON_LOG_INFO("Config saved to: " << path);
+        FALCON_LOG_INFO_STREAM("Config saved to: " << path);
         return true;
     } catch (const std::exception& e) {
         last_error_ = std::string("Failed to serialize config: ") + e.what();
-        FALCON_LOG_ERROR(last_error_);
+        FALCON_LOG_ERROR_STREAM(last_error_);
         return false;
     }
 #else
@@ -465,7 +465,7 @@ std::optional<CliConfig> ConfigLoader::load_from_file(const std::string& path) {
         return config;
     } catch (const std::exception& e) {
         last_error_ = std::string("Failed to parse config file: ") + e.what();
-        FALCON_LOG_ERROR(last_error_);
+        FALCON_LOG_ERROR_STREAM(last_error_);
         return std::nullopt;
     }
 #else
@@ -523,7 +523,7 @@ bool ConfigLoader::create_config_directories(const std::string& path) {
         }
         return true;
     } catch (const std::exception& e) {
-        FALCON_LOG_ERROR("Failed to create directories: " << e.what());
+        FALCON_LOG_ERROR_STREAM("Failed to create directories: " << e.what());
         return false;
     }
 }

@@ -175,12 +175,12 @@ public:
         : timeout_(timeout)
         , max_idle_(max_idle)
     {
-        FALCON_LOG_INFO("创建 SocketPool: timeout=" << timeout.count() << "s");
+        FALCON_LOG_INFO_STREAM("创建 SocketPool: timeout=" << timeout.count() << "s");
     }
 
     ~SocketPool() {
         clear();
-        FALCON_LOG_INFO("销毁 SocketPool");
+        FALCON_LOG_INFO_STREAM("销毁 SocketPool");
     }
 
     // 禁止拷贝和移动
@@ -268,7 +268,7 @@ inline std::shared_ptr<PooledSocket> SocketPool::acquire(const SocketKey& key) {
         socket = find_available(key);
     }
     if (socket && socket->is_valid()) {
-        FALCON_LOG_DEBUG("复用 Socket 连接: " << key.to_string());
+        FALCON_LOG_DEBUG_STREAM("复用 Socket 连接: " << key.to_string());
         socket->touch();
         return socket;
     }
@@ -315,7 +315,7 @@ inline void SocketPool::release(std::shared_ptr<PooledSocket> socket) {
     auto& sockets = pool_[key];
     sockets.push_back(std::move(socket));
 
-    FALCON_LOG_DEBUG("归还 Socket 连接: " << key.to_string());
+    FALCON_LOG_DEBUG_STREAM("归还 Socket 连接: " << key.to_string());
 
     // 如果连接数超过限制，清理最老的连接
     if (sockets.size() > max_idle_) {
@@ -361,7 +361,7 @@ inline std::size_t SocketPool::cleanup_expired_locked() {
     }
 
     if (cleaned > 0) {
-        FALCON_LOG_DEBUG("清理过期 Socket 连接: count=" << cleaned);
+        FALCON_LOG_DEBUG_STREAM("清理过期 Socket 连接: count=" << cleaned);
     }
 
     return cleaned;
@@ -370,7 +370,7 @@ inline std::size_t SocketPool::cleanup_expired_locked() {
 inline void SocketPool::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     pool_.clear();
-    FALCON_LOG_DEBUG("清空 Socket 连接池");
+    FALCON_LOG_DEBUG_STREAM("清空 Socket 连接池");
 }
 
 inline SocketPool::Stats SocketPool::get_stats() const {

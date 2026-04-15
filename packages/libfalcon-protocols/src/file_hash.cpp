@@ -33,7 +33,7 @@ std::string FileHasher::calculate(const std::string& file_path,
                                    HashAlgorithm algorithm) {
     std::ifstream file(file_path, std::ios::binary);
     if (!file) {
-        FALCON_LOG_ERROR("无法打开文件: " << file_path);
+        FALCON_LOG_ERROR_STREAM("无法打开文件: " << file_path);
         return "";
     }
 
@@ -48,7 +48,7 @@ std::string FileHasher::calculate(const std::string& file_path,
     file.seekg(0, std::ios::beg);
 
     if (file_size > 100 * 1024 * 1024) {  // > 100MB 警告
-        FALCON_LOG_WARN("大文件哈希计算可能较慢: " << file_path);
+        FALCON_LOG_WARN_STREAM("大文件哈希计算可能较慢: " << file_path);
     }
 
     while (file.read(buffer, BUFFER_SIZE)) {
@@ -76,25 +76,25 @@ std::string FileHasher::calculate(const char* data, std::size_t size,
     // 使用 OpenSSL 3.0 EVP API
     EVP_MD_CTX* mdctx = EVP_MD_CTX_new();
     if (!mdctx) {
-        FALCON_LOG_ERROR("创建 EVP_MD_CTX 失败");
+        FALCON_LOG_ERROR_STREAM("创建 EVP_MD_CTX 失败");
         return "";
     }
 
     const EVP_MD* md = EVP_get_digestbyname(md_type);
     if (!md) {
-        FALCON_LOG_ERROR("获取哈希算法失败: " << md_type);
+        FALCON_LOG_ERROR_STREAM("获取哈希算法失败: " << md_type);
         EVP_MD_CTX_free(mdctx);
         return "";
     }
 
     if (EVP_DigestInit_ex(mdctx, md, nullptr) != 1) {
-        FALCON_LOG_ERROR("初始化哈希失败");
+        FALCON_LOG_ERROR_STREAM("初始化哈希失败");
         EVP_MD_CTX_free(mdctx);
         return "";
     }
 
     if (EVP_DigestUpdate(mdctx, data, size) != 1) {
-        FALCON_LOG_ERROR("更新哈希失败");
+        FALCON_LOG_ERROR_STREAM("更新哈希失败");
         EVP_MD_CTX_free(mdctx);
         return "";
     }
@@ -102,7 +102,7 @@ std::string FileHasher::calculate(const char* data, std::size_t size,
     unsigned char hash_value[EVP_MAX_MD_SIZE];
     unsigned int hash_len = 0;
     if (EVP_DigestFinal_ex(mdctx, hash_value, &hash_len) != 1) {
-        FALCON_LOG_ERROR("完成哈希失败");
+        FALCON_LOG_ERROR_STREAM("完成哈希失败");
         EVP_MD_CTX_free(mdctx);
         return "";
     }
@@ -232,11 +232,11 @@ bool HashVerifyCommand::execute() const {
     result_ = FileHasher::verify(file_path_, expected_hash_, algorithm_);
 
     if (result_.valid) {
-        FALCON_LOG_INFO("哈希验证通过: " << file_path_);
+        FALCON_LOG_INFO_STREAM("哈希验证通过: " << file_path_);
     } else {
-        FALCON_LOG_WARN("哈希验证失败: " << file_path_);
-        FALCON_LOG_WARN("  期望: " << result_.expected);
-        FALCON_LOG_WARN("  实际: " << result_.calculated);
+        FALCON_LOG_WARN_STREAM("哈希验证失败: " << file_path_);
+        FALCON_LOG_WARN_STREAM("  期望: " << result_.expected);
+        FALCON_LOG_WARN_STREAM("  实际: " << result_.calculated);
     }
 
     return result_.valid;
@@ -258,7 +258,7 @@ std::vector<bool> PieceHashVerifier::verify(const std::string& file_path) const 
 
     std::ifstream file(file_path, std::ios::binary);
     if (!file) {
-        FALCON_LOG_ERROR("无法打开文件: " << file_path);
+        FALCON_LOG_ERROR_STREAM("无法打开文件: " << file_path);
         return results;
     }
 
@@ -286,7 +286,7 @@ std::vector<bool> PieceHashVerifier::verify(const std::string& file_path) const 
     }
 
     const auto valid_count = std::count(results.begin(), results.end(), true);
-    FALCON_LOG_INFO("分块哈希验证完成: " << valid_count << "/" << results.size() << " 通过");
+    FALCON_LOG_INFO_STREAM("分块哈希验证完成: " << valid_count << "/" << results.size() << " 通过");
 
     return results;
 }

@@ -236,7 +236,7 @@ JsonRpcServer::~JsonRpcServer() {
 
 bool JsonRpcServer::start() {
     if (!engine_) {
-        FALCON_LOG_ERROR("JsonRpcServer start failed: engine is null");
+        FALCON_LOG_ERROR_STREAM("JsonRpcServer start failed: engine is null");
         return false;
     }
     if (accept_thread_.joinable()) {
@@ -248,7 +248,7 @@ bool JsonRpcServer::start() {
 
     listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
     if (listen_fd_ < 0) {
-        FALCON_LOG_ERROR("socket() failed: " << std::strerror(errno));
+        FALCON_LOG_ERROR_STREAM("socket() failed: " << std::strerror(errno));
         return false;
     }
 
@@ -265,14 +265,14 @@ bool JsonRpcServer::start() {
     addr.sin_family = AF_INET;
     addr.sin_port = htons(config_.listen_port);
     if (::inet_pton(AF_INET, config_.bind_address.c_str(), &addr.sin_addr) != 1) {
-        FALCON_LOG_ERROR("inet_pton() failed for bind_address=" << config_.bind_address);
+        FALCON_LOG_ERROR_STREAM("inet_pton() failed for bind_address=" << config_.bind_address);
         socket_close(listen_fd_);
         listen_fd_ = -1;
         return false;
     }
 
     if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
-        FALCON_LOG_ERROR("bind() failed: " << std::strerror(errno));
+        FALCON_LOG_ERROR_STREAM("bind() failed: " << std::strerror(errno));
         socket_close(listen_fd_);
         listen_fd_ = -1;
         return false;
@@ -288,14 +288,14 @@ bool JsonRpcServer::start() {
     }
 
     if (::listen(listen_fd_, 128) < 0) {
-        FALCON_LOG_ERROR("listen() failed: " << std::strerror(errno));
+        FALCON_LOG_ERROR_STREAM("listen() failed: " << std::strerror(errno));
         socket_close(listen_fd_);
         listen_fd_ = -1;
         return false;
     }
 
     accept_thread_ = std::thread([this] { accept_loop(); });
-    FALCON_LOG_INFO("JSON-RPC server listening on " << config_.bind_address << ":" << config_.listen_port);
+    FALCON_LOG_INFO_STREAM("JSON-RPC server listening on " << config_.bind_address << ":" << config_.listen_port);
     return true;
 }
 

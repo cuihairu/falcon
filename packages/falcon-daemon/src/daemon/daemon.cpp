@@ -72,7 +72,7 @@ bool create_directories(const std::string& path) {
         std::filesystem::create_directories(path);
         return true;
     } catch (const std::exception& e) {
-        FALCON_LOG_ERROR("Failed to create directories: " << path << " - " << e.what());
+        FALCON_LOG_ERROR_STREAM("Failed to create directories: " << path << " - " << e.what());
         return false;
     }
 }
@@ -106,7 +106,7 @@ bool DaemonManager::daemonize() {
 #ifdef _WIN32
     // Windows: 不支持传统 fork() 守护化
     // 如需 Windows Service，使用 run_as_service()
-    FALCON_LOG_WARN("Windows does not support fork-based daemonization. Use run_as_service() for Windows Service.");
+    FALCON_LOG_WARN_STREAM("Windows does not support fork-based daemonization. Use run_as_service() for Windows Service.");
     is_daemon_ = true;
     state_ = DaemonState::Running;
 
@@ -121,7 +121,7 @@ bool DaemonManager::daemonize() {
     pid_t pid = fork();
     if (pid < 0) {
         last_error_ = "First fork failed";
-        FALCON_LOG_ERROR(last_error_);
+        FALCON_LOG_ERROR_STREAM(last_error_);
         return false;
     }
     if (pid > 0) {
@@ -132,7 +132,7 @@ bool DaemonManager::daemonize() {
     // 2. 创建新会话
     if (setsid() < 0) {
         last_error_ = "setsid() failed";
-        FALCON_LOG_ERROR(last_error_);
+        FALCON_LOG_ERROR_STREAM(last_error_);
         return false;
     }
 
@@ -140,7 +140,7 @@ bool DaemonManager::daemonize() {
     pid = fork();
     if (pid < 0) {
         last_error_ = "Second fork failed";
-        FALCON_LOG_ERROR(last_error_);
+        FALCON_LOG_ERROR_STREAM(last_error_);
         return false;
     }
     if (pid > 0) {
@@ -171,7 +171,7 @@ bool DaemonManager::daemonize() {
         }
     }
 
-    FALCON_LOG_INFO("Daemon started successfully (PID: " << getpid() << ")");
+    FALCON_LOG_INFO_STREAM("Daemon started successfully (PID: " << getpid() << ")");
     return true;
 #endif
 }
@@ -190,12 +190,12 @@ void DaemonManager::run(ServiceControlCallback stop_callback,
 
     // 调用停止回调
     if (stop_callback_) {
-        FALCON_LOG_INFO("Executing stop callback...");
+        FALCON_LOG_INFO_STREAM("Executing stop callback...");
         stop_callback_();
     }
 
     state_ = DaemonState::Stopped;
-    FALCON_LOG_INFO("Daemon stopped");
+    FALCON_LOG_INFO_STREAM("Daemon stopped");
 }
 
 bool DaemonManager::is_daemon() const {
@@ -284,7 +284,7 @@ void WINAPI DaemonManager::service_main(DWORD argc, LPSTR* argv) {
         "falcon-daemon", service_control_handler);
 
     if (!instance_->status_handle_) {
-        FALCON_LOG_ERROR("RegisterServiceCtrlHandler failed");
+        FALCON_LOG_ERROR_STREAM("RegisterServiceCtrlHandler failed");
         return;
     }
 
@@ -375,7 +375,7 @@ bool DaemonManager::run_as_service() {
 
     if (!StartServiceCtrlDispatcherA(service_table)) {
         last_error_ = "StartServiceCtrlDispatcher failed: " + std::to_string(GetLastError());
-        FALCON_LOG_ERROR(last_error_);
+        FALCON_LOG_ERROR_STREAM(last_error_);
         return false;
     }
 
@@ -388,7 +388,7 @@ bool DaemonManager::install_service(const std::string& binary_path,
     SC_HANDLE scm = OpenSCManagerA(nullptr, nullptr, SC_MANAGER_CREATE_SERVICE);
     if (!scm) {
         last_error_ = "Failed to open SCM: " + std::to_string(GetLastError());
-        FALCON_LOG_ERROR(last_error_);
+        FALCON_LOG_ERROR_STREAM(last_error_);
         return false;
     }
 
@@ -410,7 +410,7 @@ bool DaemonManager::install_service(const std::string& binary_path,
 
     if (!service) {
         last_error_ = "Failed to create service: " + std::to_string(GetLastError());
-        FALCON_LOG_ERROR(last_error_);
+        FALCON_LOG_ERROR_STREAM(last_error_);
         CloseServiceHandle(scm);
         return false;
     }
@@ -425,7 +425,7 @@ bool DaemonManager::install_service(const std::string& binary_path,
     CloseServiceHandle(service);
     CloseServiceHandle(scm);
 
-    FALCON_LOG_INFO("Service installed successfully");
+    FALCON_LOG_INFO_STREAM("Service installed successfully");
     return true;
 }
 
@@ -433,14 +433,14 @@ bool DaemonManager::uninstall_service() {
     SC_HANDLE scm = OpenSCManagerA(nullptr, nullptr, SC_MANAGER_CONNECT);
     if (!scm) {
         last_error_ = "Failed to open SCM: " + std::to_string(GetLastError());
-        FALCON_LOG_ERROR(last_error_);
+        FALCON_LOG_ERROR_STREAM(last_error_);
         return false;
     }
 
     SC_HANDLE service = OpenServiceA(scm, "falcon-daemon", SERVICE_STOP | DELETE);
     if (!service) {
         last_error_ = "Failed to open service: " + std::to_string(GetLastError());
-        FALCON_LOG_ERROR(last_error_);
+        FALCON_LOG_ERROR_STREAM(last_error_);
         CloseServiceHandle(scm);
         return false;
     }
@@ -456,11 +456,11 @@ bool DaemonManager::uninstall_service() {
     CloseServiceHandle(scm);
 
     if (result) {
-        FALCON_LOG_INFO("Service uninstalled successfully");
+        FALCON_LOG_INFO_STREAM("Service uninstalled successfully");
         return true;
     } else {
         last_error_ = "Failed to delete service: " + std::to_string(GetLastError());
-        FALCON_LOG_ERROR(last_error_);
+        FALCON_LOG_ERROR_STREAM(last_error_);
         return false;
     }
 }
@@ -473,7 +473,7 @@ void DaemonManager::stop() {
 
 void DaemonManager::reload() {
     if (reload_callback_) {
-        FALCON_LOG_INFO("Executing reload callback...");
+        FALCON_LOG_INFO_STREAM("Executing reload callback...");
         reload_callback_();
     }
 }
@@ -528,7 +528,7 @@ bool DaemonManager::create_pid_file() {
         } else {
             last_error_ = "Failed to create PID file: " + std::to_string(GetLastError());
         }
-        FALCON_LOG_ERROR(last_error_);
+        FALCON_LOG_ERROR_STREAM(last_error_);
         return false;
     }
 
@@ -550,7 +550,7 @@ bool DaemonManager::create_pid_file() {
         // 检查进程是否存在
         if (existing > 0 && kill(existing, 0) == 0) {
             last_error_ = "Another instance is already running (PID: " + std::to_string(existing) + ")";
-            FALCON_LOG_ERROR(last_error_);
+            FALCON_LOG_ERROR_STREAM(last_error_);
             return false;
         }
     }
@@ -559,7 +559,7 @@ bool DaemonManager::create_pid_file() {
     std::ofstream pid_file(config_.pid_file);
     if (!pid_file.is_open()) {
         last_error_ = "Failed to create PID file";
-        FALCON_LOG_ERROR(last_error_);
+        FALCON_LOG_ERROR_STREAM(last_error_);
         return false;
     }
 
@@ -570,14 +570,14 @@ bool DaemonManager::create_pid_file() {
     chmod(config_.pid_file.c_str(), 0644);
 #endif
 
-    FALCON_LOG_INFO("PID file created: " << config_.pid_file);
+    FALCON_LOG_INFO_STREAM("PID file created: " << config_.pid_file);
     return true;
 }
 
 void DaemonManager::remove_pid_file() {
     if (!config_.pid_file.empty() && std::filesystem::exists(config_.pid_file)) {
         std::filesystem::remove(config_.pid_file);
-        FALCON_LOG_INFO("PID file removed: " << config_.pid_file);
+        FALCON_LOG_INFO_STREAM("PID file removed: " << config_.pid_file);
     }
 }
 
@@ -624,7 +624,7 @@ void DaemonManager::setup_signal_handlers() {
     // SIGPIPE - 忽略管道断开
     sigaction(SIGPIPE, &sa, nullptr);
 
-    FALCON_LOG_DEBUG("Signal handlers configured");
+    FALCON_LOG_DEBUG_STREAM("Signal handlers configured");
 #else
     // Windows 使用 SetConsoleCtrlHandler
     SetConsoleCtrlHandler([](DWORD ctrl_type) -> BOOL {
@@ -676,7 +676,7 @@ void DaemonManager::redirect_stdio() {
 void DaemonManager::change_working_directory() {
     if (!config_.working_dir.empty()) {
         std::filesystem::current_path(config_.working_dir);
-        FALCON_LOG_DEBUG("Changed working directory to: " << config_.working_dir);
+        FALCON_LOG_DEBUG_STREAM("Changed working directory to: " << config_.working_dir);
     } else {
 #ifndef _WIN32
         // 默认切换到根目录

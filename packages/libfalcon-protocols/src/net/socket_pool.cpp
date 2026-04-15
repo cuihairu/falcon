@@ -37,12 +37,12 @@ namespace falcon::net {
 
 std::shared_ptr<PooledSocket> SocketPool::create_connection(const SocketKey& key) {
     if (key.host.empty() || key.port == 0) {
-        FALCON_LOG_ERROR("连接参数无效: " << key.to_string());
+        FALCON_LOG_ERROR_STREAM("连接参数无效: " << key.to_string());
         return nullptr;
     }
     if (std::any_of(key.host.begin(), key.host.end(),
                     [](unsigned char ch) { return std::isspace(ch) != 0; })) {
-        FALCON_LOG_ERROR("主机名包含空白字符: " << key.host);
+        FALCON_LOG_ERROR_STREAM("主机名包含空白字符: " << key.host);
         return nullptr;
     }
 
@@ -55,9 +55,9 @@ std::shared_ptr<PooledSocket> SocketPool::create_connection(const SocketKey& key
     int ret = getaddrinfo(key.host.c_str(), std::to_string(key.port).c_str(), &hints, &result);
     if (ret != 0) {
 #ifdef _WIN32
-        FALCON_LOG_ERROR("DNS 解析失败: " << key.host << ": error=" << ret);
+        FALCON_LOG_ERROR_STREAM("DNS 解析失败: " << key.host << ": error=" << ret);
 #else
-        FALCON_LOG_ERROR("DNS 解析失败: " << key.host << ": " << gai_strerror(ret));
+        FALCON_LOG_ERROR_STREAM("DNS 解析失败: " << key.host << ": " << gai_strerror(ret));
 #endif
         return nullptr;
     }
@@ -143,11 +143,11 @@ std::shared_ptr<PooledSocket> SocketPool::create_connection(const SocketKey& key
     freeaddrinfo(result);
 
     if (socket_fd < 0) {
-        FALCON_LOG_ERROR("连接失败: " << key.to_string());
+        FALCON_LOG_ERROR_STREAM("连接失败: " << key.to_string());
         return nullptr;
     }
 
-    FALCON_LOG_DEBUG("创建新 Socket 连接: " << key.to_string() << ", fd=" << socket_fd);
+    FALCON_LOG_DEBUG_STREAM("创建新 Socket 连接: " << key.to_string() << ", fd=" << socket_fd);
 
     // 3. 创建 PooledSocket 对象
     return std::make_shared<PooledSocket>(socket_fd, key);
