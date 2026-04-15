@@ -34,11 +34,23 @@ using namespace falcon::net;
 // 测试辅助函数
 //==============================================================================
 
+#ifdef _WIN32
+static void ensure_winsock_init() {
+    static bool initialized = false;
+    if (!initialized) {
+        WSADATA wsa_data;
+        WSAStartup(MAKEWORD(2, 2), &wsa_data);
+        initialized = true;
+    }
+}
+#endif
+
 /**
  * @brief 创建一个测试 Socket
  */
 int create_test_socket() {
 #ifdef _WIN32
+    ensure_winsock_init();
     SOCKET fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (fd == INVALID_SOCKET) {
         return -1;

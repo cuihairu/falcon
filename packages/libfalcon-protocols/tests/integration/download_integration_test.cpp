@@ -4,6 +4,7 @@
 #include <falcon/download_engine.hpp>
 #include <falcon/download_options.hpp>
 #include <falcon/download_engine_v2.hpp>
+#include <falcon/plugin_manager.hpp>
 #include <gtest/gtest.h>
 
 #include <fstream>
@@ -403,6 +404,14 @@ protected:
         // Create test directory
         test_dir_ = make_unique_test_dir("falcon_test");
         std::filesystem::create_directories(test_dir_);
+
+        // Ensure HTTP plugin is registered
+        static bool plugins_registered = false;
+        if (!plugins_registered) {
+            falcon::register_builtin_protocol_handlers(
+                falcon::PluginManager::instance());
+            plugins_registered = true;
+        }
     }
 
     void TearDown() override {

@@ -974,6 +974,7 @@ TEST(PieceHashVerifier, LargePieceCount) {
 //==============================================================================
 
 TEST(HashVerifyCommand, BasicExecution) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("test_verify_cmd.txt");
     create_test_file(path, "Hello, World!");
 

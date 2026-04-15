@@ -100,7 +100,7 @@ void HttpIpcServer::handle_socket(QTcpSocket* socket)
         return;
     }
     if (parse_result == ParseResult::Error) {
-        write_text(socket, 400, error.isEmpty() ? "Bad request" : error);
+        write_text(socket, 400, error.isEmpty() ? QByteArray("Bad request") : error);
         socket->disconnectFromHost();
         return;
     }
