@@ -5,7 +5,7 @@
  * @date 2025-12-24
  */
 
-#include <falcon/net/event_poll.hpp>
+#include <falcon/protocols/net/event_poll.hpp>
 #include <falcon/logger.hpp>
 
 #ifdef _WIN32

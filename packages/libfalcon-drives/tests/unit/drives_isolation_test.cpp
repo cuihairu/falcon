@@ -1,7 +1,7 @@
 // Verify falcon_drives can operate independently of falcon_protocols.
 // Links against falcon_core + falcon_drives only.
 
-#include <falcon/cloud_storage_plugin.hpp>
+#include <falcon/drives/cloud_storage_plugin.hpp>
 
 #include <gtest/gtest.h>
 

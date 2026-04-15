@@ -7,8 +7,8 @@
  * 展示如何使用 DownloadEngineV2 进行 aria2 风格的下载
  */
 
-#include <falcon/download_engine_v2.hpp>
-#include <falcon/file_hash.hpp>
+#include <falcon/protocols/download_engine_v2.hpp>
+#include <falcon/protocols/file_hash.hpp>
 #include <falcon/logger.hpp>
 
 #include <iostream>

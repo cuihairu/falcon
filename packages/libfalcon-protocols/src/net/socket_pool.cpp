@@ -5,7 +5,7 @@
  * @date 2025-12-25
  */
 
-#include <falcon/net/socket_pool.hpp>
+#include <falcon/protocols/net/socket_pool.hpp>
 #include <falcon/logger.hpp>
 
 #ifdef _WIN32

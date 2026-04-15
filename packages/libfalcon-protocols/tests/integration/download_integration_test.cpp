@@ -3,7 +3,7 @@
 
 #include <falcon/download_engine.hpp>
 #include <falcon/download_options.hpp>
-#include <falcon/download_engine_v2.hpp>
+#include <falcon/protocols/download_engine_v2.hpp>
 #include <gtest/gtest.h>
 
 // HTTP handler factory for V1 engine tests

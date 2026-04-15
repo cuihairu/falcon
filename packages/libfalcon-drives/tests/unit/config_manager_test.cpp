@@ -1,6 +1,6 @@
 // Falcon Config Manager Unit Tests
 
-#include <falcon/config_manager.hpp>
+#include <falcon/drives/config_manager.hpp>
 
 #include <gtest/gtest.h>
 

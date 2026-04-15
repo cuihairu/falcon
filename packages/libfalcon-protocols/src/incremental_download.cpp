@@ -5,7 +5,7 @@
  * @date 2025-12-27
  */
 
-#include <falcon/incremental_download.hpp>
+#include <falcon/protocols/incremental_download.hpp>
 #include <falcon/logger.hpp>
 #include <fstream>
 #include <sstream>

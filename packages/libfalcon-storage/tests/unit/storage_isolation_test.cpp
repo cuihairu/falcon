@@ -1,7 +1,7 @@
 // Verify falcon_storage can operate independently of falcon_protocols.
 // Links against falcon_core + falcon_storage only.
 
-#include <falcon/resource_browser.hpp>
+#include <falcon/storage/resource_browser.hpp>
 
 #include <gtest/gtest.h>
 

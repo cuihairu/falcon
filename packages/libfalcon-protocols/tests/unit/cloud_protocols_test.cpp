@@ -6,7 +6,7 @@
  */
 
 #include <gtest/gtest.h>
-#include <falcon/cloud_url_protocols.hpp>
+#include <falcon/storage/cloud_url_protocols.hpp>
 
 using namespace falcon::cloud;
 

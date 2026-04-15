@@ -1,6 +1,6 @@
 // Falcon Resource Browser Utils Unit Tests
 
-#include <falcon/resource_browser.hpp>
+#include <falcon/storage/resource_browser.hpp>
 
 #include <gtest/gtest.h>
 

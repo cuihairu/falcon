@@ -1,7 +1,7 @@
 // Falcon Resource Browser Implementations Unit Tests
 
-#include <falcon/ftp_browser.hpp>
-#include <falcon/s3_browser.hpp>
+#include <falcon/storage/ftp_browser.hpp>
+#include <falcon/storage/s3_browser.hpp>
 
 #include <gtest/gtest.h>
 

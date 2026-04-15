@@ -5,7 +5,7 @@
  * @date 2025-12-21
  */
 
-#include <falcon/resource_browser.hpp>
+#include <falcon/storage/resource_browser.hpp>
 #include <algorithm>
 #include <cctype>
 

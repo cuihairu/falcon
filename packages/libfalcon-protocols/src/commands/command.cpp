@@ -5,8 +5,8 @@
  * @date 2025-12-31
  */
 
-#include <falcon/commands/command.hpp>
-#include <falcon/download_engine_v2.hpp>
+#include <falcon/protocols/commands/command.hpp>
+#include <falcon/protocols/download_engine_v2.hpp>
 
 namespace falcon {
 

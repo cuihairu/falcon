@@ -1,7 +1,7 @@
 // Falcon Segment Downloader - Implementation
 // Copyright (c) 2025 Falcon Project
 
-#include <falcon/segment_downloader.hpp>
+#include <falcon/protocols/segment_downloader.hpp>
 
 #include <falcon/exceptions.hpp>
 

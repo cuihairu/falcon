@@ -1,9 +1,9 @@
 // Falcon Cloud Resource Browsers Unit Tests (requires OpenSSL)
 
-#include <falcon/cos_browser.hpp>
-#include <falcon/kodo_browser.hpp>
-#include <falcon/oss_browser.hpp>
-#include <falcon/upyun_browser.hpp>
+#include <falcon/storage/cos_browser.hpp>
+#include <falcon/storage/kodo_browser.hpp>
+#include <falcon/storage/oss_browser.hpp>
+#include <falcon/storage/upyun_browser.hpp>
 
 #include <gtest/gtest.h>
 

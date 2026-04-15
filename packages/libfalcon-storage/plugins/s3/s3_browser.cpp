@@ -5,8 +5,8 @@
  * @date 2025-12-21
  */
 
-#include <falcon/s3_browser.hpp>
-#include <falcon/cloud_url_protocols.hpp>
+#include <falcon/storage/s3_browser.hpp>
+#include <falcon/storage/cloud_url_protocols.hpp>
 #include <falcon/logger.hpp>
 
 // Use spdlog for logging if available

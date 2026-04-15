@@ -1,6 +1,6 @@
 // Falcon Segment Downloader Unit Tests
 
-#include <falcon/segment_downloader.hpp>
+#include <falcon/protocols/segment_downloader.hpp>
 #include <falcon/download_task.hpp>
 #include <falcon/download_options.hpp>
 

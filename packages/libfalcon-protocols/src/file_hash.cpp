@@ -5,7 +5,7 @@
  * @date 2025-12-25
  */
 
-#include <falcon/file_hash.hpp>
+#include <falcon/protocols/file_hash.hpp>
 #include <falcon/logger.hpp>
 
 #include <fstream>

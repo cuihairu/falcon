@@ -5,7 +5,7 @@
  * @date 2025-12-21
  */
 
-#include <falcon/cloud_storage_plugin.hpp>
+#include <falcon/drives/cloud_storage_plugin.hpp>
 #include <falcon/logger.hpp>
 #ifdef HAVE_NLOHMANN_JSON
 #include <nlohmann/json.hpp>

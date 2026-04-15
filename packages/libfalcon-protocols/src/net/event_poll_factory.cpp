@@ -5,7 +5,7 @@
  * @date 2025-12-25
  */
 
-#include <falcon/net/event_poll.hpp>
+#include <falcon/protocols/net/event_poll.hpp>
 #include <falcon/logger.hpp>
 
 namespace falcon::net {

@@ -8,7 +8,7 @@
 // 仅在 macOS/BSD 上编译 kqueue 实现
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
 
-#include <falcon/net/event_poll.hpp>
+#include <falcon/protocols/net/event_poll.hpp>
 #include <falcon/logger.hpp>
 
 #include <sys/event.h>

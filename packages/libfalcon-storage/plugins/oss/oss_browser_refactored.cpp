@@ -5,8 +5,8 @@
  * @date 2025-12-27
  */
 
-#include <falcon/oss_browser.hpp>
-#include <falcon/cloud_url_protocols.hpp>
+#include <falcon/storage/oss_browser.hpp>
+#include <falcon/storage/cloud_url_protocols.hpp>
 
 namespace falcon {
 

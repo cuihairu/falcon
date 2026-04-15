@@ -6,7 +6,7 @@
  */
 
 #include <gtest/gtest.h>
-#include <falcon/resource_search.hpp>
+#include <falcon/drives/resource_search.hpp>
 #include <falcon/download_engine.hpp>
 #include <nlohmann/json.hpp>
 #include <fstream>

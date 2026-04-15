@@ -5,7 +5,7 @@
  * @date 2025-12-21
  */
 
-#include <falcon/resource_search.hpp>
+#include <falcon/drives/resource_search.hpp>
 #include <falcon/logger.hpp>
 #include <curl/curl.h>
 #ifdef HAVE_NLOHMANN_JSON

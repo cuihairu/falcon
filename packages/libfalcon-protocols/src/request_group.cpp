@@ -5,10 +5,10 @@
  * @date 2025-12-24
  */
 
-#include <falcon/request_group.hpp>
+#include <falcon/protocols/request_group.hpp>
 #include <falcon/logger.hpp>
-#include <falcon/download_engine_v2.hpp>
-#include <falcon/commands/http_commands.hpp>
+#include <falcon/protocols/download_engine_v2.hpp>
+#include <falcon/protocols/commands/http_commands.hpp>
 
 #include <algorithm>
 #include <filesystem>

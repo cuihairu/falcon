@@ -6,7 +6,7 @@
  */
 
 #include <gtest/gtest.h>
-#include <falcon/incremental_download.hpp>
+#include <falcon/protocols/incremental_download.hpp>
 #include <filesystem>
 #include <fstream>
 #include <cstdio>

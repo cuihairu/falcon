@@ -6,8 +6,8 @@
  */
 
 #include <gtest/gtest.h>
-#include <falcon/download_engine_v2.hpp>
-#include <falcon/commands/command.hpp>
+#include <falcon/protocols/download_engine_v2.hpp>
+#include <falcon/protocols/commands/command.hpp>
 #include <thread>
 #include <chrono>
 #ifndef _WIN32

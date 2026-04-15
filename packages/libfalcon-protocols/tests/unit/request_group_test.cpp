@@ -12,8 +12,8 @@
 #endif
 
 #include <gtest/gtest.h>
-#include <falcon/request_group.hpp>
-#include <falcon/download_engine_v2.hpp>
+#include <falcon/protocols/request_group.hpp>
+#include <falcon/protocols/download_engine_v2.hpp>
 #include <memory>
 #include <vector>
 

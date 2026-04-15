@@ -5,8 +5,8 @@
  * @date 2025-12-21
  */
 
-#include <falcon/kodo_browser.hpp>
-#include <falcon/cloud_url_protocols.hpp>
+#include <falcon/storage/kodo_browser.hpp>
+#include <falcon/storage/cloud_url_protocols.hpp>
 #include <falcon/logger.hpp>
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>

@@ -6,7 +6,7 @@
  */
 
 #include <gtest/gtest.h>
-#include <falcon/net/socket_pool.hpp>
+#include <falcon/protocols/net/socket_pool.hpp>
 #include <thread>
 #include <chrono>
 #include <cstring>

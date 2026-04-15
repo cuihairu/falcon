@@ -6,7 +6,7 @@
  */
 
 #include <gtest/gtest.h>
-#include <falcon/file_hash.hpp>
+#include <falcon/protocols/file_hash.hpp>
 #include <chrono>
 #include <cstring>
 #include <filesystem>

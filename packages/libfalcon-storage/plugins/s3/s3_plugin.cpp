@@ -5,7 +5,7 @@
  * @date 2025-12-21
  */
 
-#include <falcon/s3_plugin.hpp>
+#include <falcon/storage/s3_plugin.hpp>
 #include <falcon/logger.hpp>
 #include <falcon/download_task.hpp>
 #include <falcon/download_options.hpp>

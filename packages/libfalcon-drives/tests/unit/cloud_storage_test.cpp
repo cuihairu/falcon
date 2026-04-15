@@ -6,7 +6,7 @@
  */
 
 #include <gtest/gtest.h>
-#include <falcon/cloud_storage_plugin.hpp>
+#include <falcon/drives/cloud_storage_plugin.hpp>
 #include <algorithm>
 #include <chrono>
 

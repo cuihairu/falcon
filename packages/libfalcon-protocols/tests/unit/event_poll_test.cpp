@@ -6,7 +6,7 @@
  */
 
 #include <gtest/gtest.h>
-#include <falcon/net/event_poll.hpp>
+#include <falcon/protocols/net/event_poll.hpp>
 #include <thread>
 #include <chrono>
 #include <array>

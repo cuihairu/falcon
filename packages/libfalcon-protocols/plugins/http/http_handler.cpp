@@ -3,7 +3,7 @@
 
 #include "http_handler.hpp"
 
-#include <falcon/segment_downloader.hpp>
+#include <falcon/protocols/segment_downloader.hpp>
 #include <falcon/exceptions.hpp>
 #include <algorithm>
 #include <iostream>
