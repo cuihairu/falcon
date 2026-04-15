@@ -635,68 +635,14 @@ void show_help() {
     std::cout << "  falcon-cli https://example.com/file.zip -x 16 -s 16 --min-segment-size 1M\n";
 }
 
-int main(int argc, char* argv[]) {
-    // Initialize terminal ANSI support
-    term::enable_ansi();
+//==============================================================================
+// 辅助函数：拆分 main() 的职责
+//==============================================================================
 
-    // 设置信号处理
-    std::signal(SIGINT, signal_handler);
-    std::signal(SIGTERM, signal_handler);
-
-    // 解析命令行参数
-    auto args = parse_args(argc, argv);
-
-    // Handle color settings
-    if (args.no_color || !term::is_terminal()) {
-        term::color_enabled() = false;
-    }
-
-    // 显示帮助或版本信息
-    if (args.show_help) {
-        show_help();
-        return 0;
-    }
-
-    if (args.show_version) {
-        std::cout << term::bold() << "Falcon CLI" << term::reset() << " v0.2.0\n";
-        return 0;
-    }
-
-    // 显示配置文件路径
-    if (args.show_config_path) {
-#ifdef FALCON_USE_JSON
-        std::cout << "Config search paths (in priority order):\n";
-        for (const auto& path : falcon::cli::ConfigLoader::get_config_search_paths()) {
-            std::cout << "  " << path;
-            if (std::filesystem::exists(path)) {
-                std::cout << " (exists)";
-            }
-            std::cout << "\n";
-        }
-        std::cout << "\nDefault config path: " << falcon::cli::ConfigLoader::get_default_config_path() << "\n";
-#else
-        std::cout << "Config file support not available (JSON library not linked)\n";
-#endif
-        return 0;
-    }
-
-    // 创建默认配置文件
-    if (args.create_default_config) {
-#ifdef FALCON_USE_JSON
-        std::string path = falcon::cli::ConfigLoader::get_default_config_path();
-        if (falcon::cli::ConfigLoader::create_default_config(path)) {
-            std::cout << "Default config created at: " << path << "\n";
-            return 0;
-        } else {
-            std::cerr << "Failed to create default config: " << falcon::cli::ConfigLoader::get_last_error() << "\n";
-            return 1;
-        }
-#else
-        std::cerr << "Config file support not available\n";
-        return 1;
-#endif
-    }
-
+/**
+ * @brief 合并配置文件和命令行参数
+ */
+static void merge_config_with_file(CliArgs& args) {
 #ifdef FALCON_USE_JSON
     // 加载配置文件
     auto file_config = falcon::cli::ConfigLoader::load_or_default(args.config_file);
@@ -764,19 +710,234 @@ int main(int argc, char* argv[]) {
             args.headers.push_back({k, v});
         }
     }
+#else
+    (void)args; // 避免未使用参数警告
 #endif
+}
 
-    // 收集 URL 列表（命令行 + 输入文件）
+/**
+ * @brief 收集 URL 列表（命令行 + 输入文件）
+ */
+static std::vector<std::string> collect_urls(const CliArgs& args) {
     std::vector<std::string> urls = args.urls;
     if (!args.input_file.empty()) {
         auto file_urls = read_urls_from_file(args.input_file);
         urls.insert(urls.end(), file_urls.begin(), file_urls.end());
         if (file_urls.empty() && urls.empty()) {
             std::cerr << term::red("Error: ") << "cannot read URLs from: " << args.input_file << "\n";
-            return 1;
+        }
+    }
+    return urls;
+}
+
+/**
+ * @brief 设置下载选项
+ */
+static falcon::DownloadOptions setup_download_options(const CliArgs& args) {
+    falcon::DownloadOptions options;
+    options.max_connections = static_cast<size_t>(args.connections);
+    options.timeout_seconds = static_cast<size_t>(args.timeout);
+    options.max_retries = static_cast<size_t>(args.max_retries);
+    options.retry_delay_seconds = static_cast<size_t>(std::max(0, args.retry_wait));
+    options.resume_enabled = args.continue_download;
+    options.speed_limit = args.speed_limit;
+    options.min_segment_size = args.min_segment_size;
+    options.adaptive_segment_sizing = args.adaptive_sizing;
+    options.user_agent = args.user_agent;
+    options.verify_ssl = args.verify_ssl;
+    options.proxy = args.proxy;
+    options.proxy_username = args.proxy_user;
+    options.proxy_password = args.proxy_passwd;
+    options.referer = args.referer;
+    options.cookie_file = args.cookie_file;
+    options.cookie_jar = args.save_cookies;
+    options.http_username = args.http_user;
+    options.http_password = args.http_passwd;
+
+    // 添加自定义 HTTP 头
+    for (const auto& header : args.headers) {
+        options.headers[header.first] = header.second;
+    }
+
+    // 设置输出路径
+    if (!args.output_dir.empty()) {
+        options.output_directory = args.output_dir;
+    }
+    if (!args.output_file.empty()) {
+        options.output_filename = args.output_file;
+    }
+
+    return options;
+}
+
+/**
+ * @brief 交互式控制循环
+ */
+static bool interactive_control_loop(
+    falcon::DownloadEngine& engine,
+    const std::vector<std::shared_ptr<falcon::DownloadTask>>& tasks
+) {
+#ifndef _WIN32
+    struct termios old_tio, new_tio;
+    tcgetattr(STDIN_FILENO, &old_tio);
+    new_tio = old_tio;
+    new_tio.c_lflag &= ~(ICANON | ECHO);
+    tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
+#endif
+
+    std::cout << term::fg(term::Color::Yellow) << "\n  [p] Pause  [r] Resume  [q] Quit\n"
+              << term::reset();
+
+    while (!g_interrupted) {
+        // 检查是否所有任务完成
+        bool all_done = true;
+        for (const auto& task : tasks) {
+            auto s = task->status();
+            if (s != falcon::TaskStatus::Completed &&
+                s != falcon::TaskStatus::Failed &&
+                s != falcon::TaskStatus::Cancelled) {
+                all_done = false;
+                break;
+            }
+        }
+        if (all_done) break;
+
+        // 检查键盘输入
+        if (kbhit_check()) {
+            int ch = getch_nb();
+            if (ch == 'q' || ch == 'Q' || ch == 27) { // q or Esc
+                g_interrupted = true;
+                if (g_engine) g_engine->cancel_all();
+                break;
+            } else if (ch == 'p' || ch == 'P') {
+                for (const auto& task : tasks) {
+                    if (task->status() == falcon::TaskStatus::Downloading) {
+                        engine.pause_task(task->id());
+                    }
+                }
+                std::cout << "\n" << term::yellow("Paused all active tasks") << "\n";
+            } else if (ch == 'r' || ch == 'R') {
+                for (const auto& task : tasks) {
+                    if (task->status() == falcon::TaskStatus::Paused) {
+                        engine.resume_task(task->id());
+                    }
+                }
+                std::cout << "\n" << term::green("Resumed all paused tasks") << "\n";
+            }
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+#ifndef _WIN32
+    tcsetattr(STDIN_FILENO, TCSANOW, &old_tio);
+#endif
+
+    return !g_interrupted;
+}
+
+/**
+ * @brief 生成下载摘要统计
+ */
+static int generate_summary(const std::vector<std::shared_ptr<falcon::DownloadTask>>& tasks) {
+    int ok = 0, failed = 0, cancelled = 0;
+    for (const auto& task : tasks) {
+        auto s = task->status();
+        if (s == falcon::TaskStatus::Completed) ok++;
+        else if (s == falcon::TaskStatus::Failed) {
+            failed++;
+            std::cerr << term::red("FAIL") << " " << task->url()
+                      << "\n  " << task->error_message() << "\n";
+        } else if (s == falcon::TaskStatus::Cancelled) {
+            cancelled++;
+            std::cerr << term::yellow("SKIP") << " " << task->url() << "\n";
         }
     }
 
+    if (tasks.size() > 1 || failed > 0 || cancelled > 0) {
+        std::cout << "\n"
+                  << term::green(std::to_string(ok) + " OK");
+        if (failed > 0)
+            std::cout << "  " << term::red(std::to_string(failed) + " FAILED");
+        if (cancelled > 0)
+            std::cout << "  " << term::yellow(std::to_string(cancelled) + " CANCELLED");
+        std::cout << "\n";
+    }
+
+    return (failed + cancelled == 0) ? 0 : 1;
+}
+
+//==============================================================================
+// 主函数
+//==============================================================================
+
+int main(int argc, char* argv[]) {
+    // Initialize terminal ANSI support
+    term::enable_ansi();
+
+    // 设置信号处理
+    std::signal(SIGINT, signal_handler);
+    std::signal(SIGTERM, signal_handler);
+
+    // 解析命令行参数
+    auto args = parse_args(argc, argv);
+
+    // Handle color settings
+    if (args.no_color || !term::is_terminal()) {
+        term::color_enabled() = false;
+    }
+
+    // 显示帮助或版本信息
+    if (args.show_help) {
+        show_help();
+        return 0;
+    }
+
+    if (args.show_version) {
+        std::cout << term::bold() << "Falcon CLI" << term::reset() << " v0.2.0\n";
+        return 0;
+    }
+
+    // 显示配置文件路径
+    if (args.show_config_path) {
+#ifdef FALCON_USE_JSON
+        std::cout << "Config search paths (in priority order):\n";
+        for (const auto& path : falcon::cli::ConfigLoader::get_config_search_paths()) {
+            std::cout << "  " << path;
+            if (std::filesystem::exists(path)) {
+                std::cout << " (exists)";
+            }
+            std::cout << "\n";
+        }
+        std::cout << "\nDefault config path: " << falcon::cli::ConfigLoader::get_default_config_path() << "\n";
+#else
+        std::cout << "Config file support not available (JSON library not linked)\n";
+#endif
+        return 0;
+    }
+
+    // 创建默认配置文件
+    if (args.create_default_config) {
+#ifdef FALCON_USE_JSON
+        std::string path = falcon::cli::ConfigLoader::get_default_config_path();
+        if (falcon::cli::ConfigLoader::create_default_config(path)) {
+            std::cout << "Default config created at: " << path << "\n";
+            return 0;
+        } else {
+            std::cerr << "Failed to create default config: " << falcon::cli::ConfigLoader::get_last_error() << "\n";
+            return 1;
+        }
+#else
+        std::cerr << "Config file support not available\n";
+        return 1;
+#endif
+    }
+
+    // 合并配置文件
+    merge_config_with_file(args);
+
+    // 收集 URL 列表
+    std::vector<std::string> urls = collect_urls(args);
     if (urls.empty()) {
         std::cerr << term::red("Error: ") << "missing URL argument\n"
                   << "Use --help for usage information\n";
@@ -795,39 +956,8 @@ int main(int argc, char* argv[]) {
         falcon::DownloadEngine engine(engine_config);
         g_engine = &engine;
 
-        // 配置下载选项
-        falcon::DownloadOptions options;
-        options.max_connections = static_cast<size_t>(args.connections);
-        options.timeout_seconds = static_cast<size_t>(args.timeout);
-        options.max_retries = static_cast<size_t>(args.max_retries);
-        options.retry_delay_seconds = static_cast<size_t>(std::max(0, args.retry_wait));
-        options.resume_enabled = args.continue_download;
-        options.speed_limit = args.speed_limit;
-        options.min_segment_size = args.min_segment_size;
-        options.adaptive_segment_sizing = args.adaptive_sizing;
-        options.user_agent = args.user_agent;
-        options.verify_ssl = args.verify_ssl;
-        options.proxy = args.proxy;
-        options.proxy_username = args.proxy_user;
-        options.proxy_password = args.proxy_passwd;
-        options.referer = args.referer;
-        options.cookie_file = args.cookie_file;
-        options.cookie_jar = args.save_cookies;
-        options.http_username = args.http_user;
-        options.http_password = args.http_passwd;
-
-        // 添加自定义 HTTP 头
-        for (const auto& header : args.headers) {
-            options.headers[header.first] = header.second;
-        }
-
-        // 设置输出路径
-        if (!args.output_dir.empty()) {
-            options.output_directory = args.output_dir;
-        }
-        if (!args.output_file.empty()) {
-            options.output_filename = args.output_file;
-        }
+        // 设置下载选项
+        auto options = setup_download_options(args);
 
         // 创建事件监听器
         bool show_progress = !args.quiet;
@@ -878,98 +1008,21 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Interactive wait loop with keyboard control
+        // 等待任务完成
+        bool success = true;
         if (term::is_terminal() && !args.quiet) {
-            // Set stdin to non-blocking raw mode (Unix)
-#ifndef _WIN32
-            struct termios old_tio, new_tio;
-            tcgetattr(STDIN_FILENO, &old_tio);
-            new_tio = old_tio;
-            new_tio.c_lflag &= ~(ICANON | ECHO);
-            tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
-#endif
-            std::cout << term::fg(term::Color::Yellow) << "\n  [p] Pause  [r] Resume  [q] Quit\n"
-                      << term::reset();
-
-            while (!g_interrupted) {
-                // Check if all tasks finished
-                bool all_done = true;
-                for (const auto& task : tasks) {
-                    auto s = task->status();
-                    if (s != falcon::TaskStatus::Completed &&
-                        s != falcon::TaskStatus::Failed &&
-                        s != falcon::TaskStatus::Cancelled) {
-                        all_done = false;
-                        break;
-                    }
-                }
-                if (all_done) break;
-
-                // Check keyboard input
-                if (kbhit_check()) {
-                    int ch = getch_nb();
-                    if (ch == 'q' || ch == 'Q' || ch == 27) { // q or Esc
-                        g_interrupted = true;
-                        if (g_engine) g_engine->cancel_all();
-                        break;
-                    } else if (ch == 'p' || ch == 'P') {
-                        for (const auto& task : tasks) {
-                            if (task->status() == falcon::TaskStatus::Downloading) {
-                                engine.pause_task(task->id());
-                            }
-                        }
-                        std::cout << "\n" << term::yellow("Paused all active tasks") << "\n";
-                    } else if (ch == 'r' || ch == 'R') {
-                        for (const auto& task : tasks) {
-                            if (task->status() == falcon::TaskStatus::Paused) {
-                                engine.resume_task(task->id());
-                            }
-                        }
-                        std::cout << "\n" << term::green("Resumed all paused tasks") << "\n";
-                    }
-                }
-
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            }
-
-#ifndef _WIN32
-            tcsetattr(STDIN_FILENO, TCSANOW, &old_tio);
-#endif
+            success = interactive_control_loop(engine, tasks);
         } else {
             engine.wait_all();
         }
 
-        if (g_interrupted) {
+        if (g_interrupted || !success) {
             std::cerr << "\n" << term::yellow("Download cancelled") << "\n";
             return 1;
         }
 
-        // Summary
-        int ok = 0, failed = 0, cancelled = 0;
-        for (const auto& task : tasks) {
-            auto s = task->status();
-            if (s == falcon::TaskStatus::Completed) ok++;
-            else if (s == falcon::TaskStatus::Failed) {
-                failed++;
-                std::cerr << term::red("FAIL") << " " << task->url()
-                          << "\n  " << task->error_message() << "\n";
-            } else if (s == falcon::TaskStatus::Cancelled) {
-                cancelled++;
-                std::cerr << term::yellow("SKIP") << " " << task->url() << "\n";
-            }
-        }
-
-        if (tasks.size() > 1 || failed > 0 || cancelled > 0) {
-            std::cout << "\n"
-                      << term::green(std::to_string(ok) + " OK");
-            if (failed > 0)
-                std::cout << "  " << term::red(std::to_string(failed) + " FAILED");
-            if (cancelled > 0)
-                std::cout << "  " << term::yellow(std::to_string(cancelled) + " CANCELLED");
-            std::cout << "\n";
-        }
-
-        return (failed + cancelled == 0) ? 0 : 1;
+        // 生成摘要统计
+        return generate_summary(tasks);
 
     } catch (const std::exception& e) {
         std::cerr << term::red("Fatal: ") << e.what() << "\n";
