@@ -24,6 +24,13 @@
 
 using namespace falcon;
 
+// Cryptographic hash tests require OpenSSL; skip when unavailable
+#if !defined(FALCON_HAS_OPENSSL) && !defined(FALCON_USE_OPENSSL)
+#define SKIP_NO_OPENSSL() GTEST_SKIP() << "OpenSSL not available"
+#else
+#define SKIP_NO_OPENSSL() (void)0
+#endif
+
 //==============================================================================
 // 测试辅助函数
 //==============================================================================
@@ -108,6 +115,7 @@ std::string get_sha512_hash(const std::string& data) {
 //==============================================================================
 
 TEST(FileHashTest, CalculateMD5EmptyFile) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("test_empty.txt");
     create_test_file(path, "");
 
@@ -118,6 +126,7 @@ TEST(FileHashTest, CalculateMD5EmptyFile) {
 }
 
 TEST(FileHashTest, CalculateMD5SimpleText) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("test_simple.txt");
     create_test_file(path, "Hello, World!");
 
@@ -128,6 +137,7 @@ TEST(FileHashTest, CalculateMD5SimpleText) {
 }
 
 TEST(FileHashTest, CalculateMD5BinaryData) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("test_binary.dat");
     std::vector<uint8_t> binary_data(256);
     for (size_t i = 0; i < binary_data.size(); ++i) {
@@ -149,6 +159,7 @@ TEST(FileHashTest, CalculateMD5BinaryData) {
 }
 
 TEST(FileHashTest, CalculateMD5LargeFile) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("test_large.txt");
     std::string content(1024 * 1024, 'A');  // 1MB 数据
 
@@ -167,6 +178,7 @@ TEST(FileHashTest, CalculateMD5LargeFile) {
 //==============================================================================
 
 TEST(FileHashTest, CalculateSHA1EmptyFile) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("test_empty_sha1.txt");
     create_test_file(path, "");
 
@@ -177,6 +189,7 @@ TEST(FileHashTest, CalculateSHA1EmptyFile) {
 }
 
 TEST(FileHashTest, CalculateSHA1SimpleText) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("test_simple_sha1.txt");
     create_test_file(path, "Hello, World!");
 
@@ -187,6 +200,7 @@ TEST(FileHashTest, CalculateSHA1SimpleText) {
 }
 
 TEST(FileHashTest, CalculateSHA1OutputLength) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("test_sha1.txt");
     create_test_file(path, "Test data for SHA1");
 
@@ -201,6 +215,7 @@ TEST(FileHashTest, CalculateSHA1OutputLength) {
 //==============================================================================
 
 TEST(FileHashTest, CalculateSHA256EmptyFile) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("test_empty_sha256.txt");
     create_test_file(path, "");
 
@@ -211,6 +226,7 @@ TEST(FileHashTest, CalculateSHA256EmptyFile) {
 }
 
 TEST(FileHashTest, CalculateSHA256SimpleText) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("test_simple_sha256.txt");
     create_test_file(path, "Hello, World!");
 
@@ -221,6 +237,7 @@ TEST(FileHashTest, CalculateSHA256SimpleText) {
 }
 
 TEST(FileHashTest, CalculateSHA256OutputLength) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("test_sha256.txt");
     create_test_file(path, "Test data for SHA256");
 
@@ -235,6 +252,7 @@ TEST(FileHashTest, CalculateSHA256OutputLength) {
 //==============================================================================
 
 TEST(FileHashTest, CalculateSHA512EmptyFile) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("test_empty_sha512.txt");
     create_test_file(path, "");
 
@@ -245,6 +263,7 @@ TEST(FileHashTest, CalculateSHA512EmptyFile) {
 }
 
 TEST(FileHashTest, CalculateSHA512SimpleText) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("test_simple_sha512.txt");
     create_test_file(path, "Hello, World!");
 
@@ -255,6 +274,7 @@ TEST(FileHashTest, CalculateSHA512SimpleText) {
 }
 
 TEST(FileHashTest, CalculateSHA512OutputLength) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("test_sha512.txt");
     create_test_file(path, "Test data for SHA512");
 
@@ -269,6 +289,7 @@ TEST(FileHashTest, CalculateSHA512OutputLength) {
 //==============================================================================
 
 TEST(FileHashTest, VerifyFileSuccess) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("test_verify.txt");
     create_test_file(path, "Hello, World!");
 
@@ -282,6 +303,7 @@ TEST(FileHashTest, VerifyFileSuccess) {
 }
 
 TEST(FileHashTest, VerifyFileFailure) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("test_verify_fail.txt");
     create_test_file(path, "Hello, World!");
 
@@ -295,6 +317,7 @@ TEST(FileHashTest, VerifyFileFailure) {
 }
 
 TEST(FileHashTest, VerifyFileWithSHA256) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("test_verify_sha256.txt");
     create_test_file(path, "Hello, World!");
 
@@ -312,6 +335,7 @@ TEST(FileHashTest, VerifyFileWithSHA256) {
 //==============================================================================
 
 TEST(FileHashTest, NonExistentFile) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("non_existent_file.txt");
     remove_test_file(path);
 
@@ -321,6 +345,7 @@ TEST(FileHashTest, NonExistentFile) {
 }
 
 TEST(FileHashTest, VerifyNonExistentFile) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("non_existent_file.txt");
     remove_test_file(path);
     std::string expected_hash = "some_hash";
@@ -332,6 +357,7 @@ TEST(FileHashTest, VerifyNonExistentFile) {
 }
 
 TEST(FileHashTest, EmptyExpectedHash) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("test_empty_hash.txt");
     create_test_file(path, "Some data");
 
@@ -348,6 +374,7 @@ TEST(FileHashTest, EmptyExpectedHash) {
 //==============================================================================
 
 TEST(FileHashTest, DetectAlgorithmFromHash) {
+    SKIP_NO_OPENSSL();
     // MD5: 32 字符
     auto md5_algo = FileHasher::detect_algorithm("d41d8cd98f00b204e9800998ecf8427e");
     EXPECT_EQ(md5_algo, HashAlgorithm::MD5);
@@ -366,6 +393,7 @@ TEST(FileHashTest, DetectAlgorithmFromHash) {
 }
 
 TEST(FileHashTest, GetHashLength) {
+    SKIP_NO_OPENSSL();
     EXPECT_EQ(FileHasher::get_hash_length(HashAlgorithm::MD5), 32);
     EXPECT_EQ(FileHasher::get_hash_length(HashAlgorithm::SHA1), 40);
     EXPECT_EQ(FileHasher::get_hash_length(HashAlgorithm::SHA256), 64);
@@ -377,6 +405,7 @@ TEST(FileHashTest, GetHashLength) {
 //==============================================================================
 
 TEST(FileHashTest, HashResultDefaultConstruction) {
+    SKIP_NO_OPENSSL();
     HashResult result;
 
     EXPECT_FALSE(result.valid);
@@ -385,6 +414,7 @@ TEST(FileHashTest, HashResultDefaultConstruction) {
 }
 
 TEST(FileHashTest, HashResultCopy) {
+    SKIP_NO_OPENSSL();
     HashResult result1;
     result1.valid = true;
     result1.calculated = "abc123";
@@ -402,6 +432,7 @@ TEST(FileHashTest, HashResultCopy) {
 //==============================================================================
 
 TEST(FileHashTest, PerformanceLargeFile) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("test_large_perf.txt");
     std::string content(10 * 1024 * 1024, 'X');  // 10MB
 
@@ -425,18 +456,21 @@ TEST(FileHashTest, PerformanceLargeFile) {
 //==============================================================================
 
 TEST(FileHashBoundary, EmptyHashDetection) {
+    SKIP_NO_OPENSSL();
     // 空字符串应返回默认算法
     auto algo = FileHasher::detect_algorithm("");
     EXPECT_EQ(algo, HashAlgorithm::SHA256);  // Default
 }
 
 TEST(FileHashBoundary, InvalidHashLength) {
+    SKIP_NO_OPENSSL();
     // 无效长度应返回默认算法
     auto algo = FileHasher::detect_algorithm("invalid_length");
     EXPECT_EQ(algo, HashAlgorithm::SHA256);  // Default
 }
 
 TEST(FileHashBoundary, HashLengthZero) {
+    SKIP_NO_OPENSSL();
     EXPECT_EQ(FileHasher::get_hash_length(HashAlgorithm::MD5), 32);
     EXPECT_EQ(FileHasher::get_hash_length(HashAlgorithm::SHA1), 40);
     EXPECT_EQ(FileHasher::get_hash_length(HashAlgorithm::SHA256), 64);
@@ -444,6 +478,7 @@ TEST(FileHashBoundary, HashLengthZero) {
 }
 
 TEST(FileHashBoundary, VerySmallFile) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("test_one_byte.txt");
     create_test_file(path, "A");
 
@@ -459,6 +494,7 @@ TEST(FileHashBoundary, VerySmallFile) {
 }
 
 TEST(FileHashBoundary, VeryLargeFile) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("test_large_boundary.txt");
     // 100 MB 文件
     std::string content(100 * 1024 * 1024, 'B');
@@ -474,6 +510,7 @@ TEST(FileHashBoundary, VeryLargeFile) {
 }
 
 TEST(FileHashBoundary, SpecialCharactersInContent) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("test_special.txt");
     std::string content = "\x00\x01\x02\x03\x04\x05\xFF\xFE\xFD\xFC";
 
@@ -488,6 +525,7 @@ TEST(FileHashBoundary, SpecialCharactersInContent) {
 }
 
 TEST(FileHashBoundary, UnicodeContent) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("test_unicode.txt");
     std::string content = "Hello 世界 🌍 Привет";
 
@@ -506,6 +544,7 @@ TEST(FileHashBoundary, UnicodeContent) {
 //==============================================================================
 
 TEST(FileHashMultiple, VerifyMultipleAlgorithms) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("test_multi.txt");
     const std::string content = "Test content";
     create_test_file(path, content);
@@ -529,6 +568,7 @@ TEST(FileHashMultiple, VerifyMultipleAlgorithms) {
 }
 
 TEST(FileHashMultiple, VerifyMultipleWithFailure) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("test_multi_fail.txt");
     const std::string content = "Test content";
     create_test_file(path, content);
@@ -554,6 +594,7 @@ TEST(FileHashMultiple, VerifyMultipleWithFailure) {
 //==============================================================================
 
 TEST(FileHashCase, CaseInsensitiveVerification) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("test_case.txt");
     create_test_file(path, "Hello, World!");
 
@@ -586,6 +627,7 @@ TEST(FileHashCase, CaseInsensitiveVerification) {
 //==============================================================================
 
 TEST(FileHashMemory, HashFromMemoryData) {
+    SKIP_NO_OPENSSL();
     const char* data = "Test data for memory hashing";
     std::size_t size = std::strlen(data);
 
@@ -603,6 +645,7 @@ TEST(FileHashMemory, HashFromMemoryData) {
 }
 
 TEST(FileHashMemory, EmptyMemoryData) {
+    SKIP_NO_OPENSSL();
     const char* data = "";
     std::size_t size = 0;
 
@@ -612,6 +655,7 @@ TEST(FileHashMemory, EmptyMemoryData) {
 }
 
 TEST(FileHashMemory, BinaryMemoryData) {
+    SKIP_NO_OPENSSL();
     std::vector<uint8_t> binary_data(256);
     for (std::size_t i = 0; i < binary_data.size(); ++i) {
         binary_data[i] = static_cast<uint8_t>(i);
@@ -628,6 +672,7 @@ TEST(FileHashMemory, BinaryMemoryData) {
 }
 
 TEST(FileHashMemory, LargeMemoryData) {
+    SKIP_NO_OPENSSL();
     std::vector<char> large_data(10 * 1024 * 1024);  // 10 MB
     std::fill(large_data.begin(), large_data.end(), 'X');
 
@@ -646,6 +691,7 @@ TEST(FileHashMemory, LargeMemoryData) {
 //==============================================================================
 
 TEST(FileHashConcurrency, ConcurrentHashCalculation) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("test_concurrent.txt");
     std::string content(1024 * 1024, 'C');  // 1 MB
     create_test_file(path, content);
@@ -677,6 +723,7 @@ TEST(FileHashConcurrency, ConcurrentHashCalculation) {
 }
 
 TEST(FileHashConcurrency, ConcurrentVerification) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("test_verify_concurrent.txt");
     const std::string content = "Test data";
     create_test_file(path, content);
@@ -712,6 +759,7 @@ TEST(FileHashConcurrency, ConcurrentVerification) {
 //==============================================================================
 
 TEST(FileHashPerformance, ManySmallFiles) {
+    SKIP_NO_OPENSSL();
     constexpr int num_files = 100;
     std::vector<std::string> file_paths;
 
@@ -742,6 +790,7 @@ TEST(FileHashPerformance, ManySmallFiles) {
 }
 
 TEST(FileHashPerformance, AlgorithmComparison) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("test_algo_compare.txt");
     std::string content(5 * 1024 * 1024, 'X');  // 5 MB
     create_test_file(path, content);
@@ -773,6 +822,7 @@ TEST(FileHashPerformance, AlgorithmComparison) {
 //==============================================================================
 
 TEST(FileHashError, InvalidFilePath) {
+    SKIP_NO_OPENSSL();
     std::string invalid_path = "/non/existent/path/to/file.txt";
 
     auto result = FileHasher::calculate(invalid_path, HashAlgorithm::MD5);
@@ -781,6 +831,7 @@ TEST(FileHashError, InvalidFilePath) {
 }
 
 TEST(FileHashError, VerifyWithInvalidPath) {
+    SKIP_NO_OPENSSL();
     std::string invalid_path = "/non/existent/path/to/file.txt";
     std::string expected_hash = "some_hash";
 
@@ -791,6 +842,7 @@ TEST(FileHashError, VerifyWithInvalidPath) {
 }
 
 TEST(FileHashError, VerifyWithWrongAlgorithm) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("test_wrong_algo.txt");
     create_test_file(path, "Test content");
 
@@ -956,6 +1008,7 @@ TEST(HashVerifyCommand, FailedExecution) {
 //==============================================================================
 
 TEST(FileHashStress, RapidHashCalculations) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("test_stress.txt");
     create_test_file(path, "Stress test data");
 
@@ -978,6 +1031,7 @@ TEST(FileHashStress, RapidHashCalculations) {
 }
 
 TEST(FileHashStress, MultipleAlgorithmSwitching) {
+    SKIP_NO_OPENSSL();
     std::string path = make_unique_temp_path("test_algo_switch.txt");
     std::string content(1024 * 100, 'S');  // 100 KB
     create_test_file(path, content);

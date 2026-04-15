@@ -10,7 +10,9 @@
 #include <falcon/commands/command.hpp>
 #include <thread>
 #include <chrono>
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 
 using namespace falcon;
 

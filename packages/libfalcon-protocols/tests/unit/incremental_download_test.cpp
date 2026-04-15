@@ -276,6 +276,9 @@ TEST_F(IncrementalDownloadTest, CompareHashLists_RemoteSmaller) {
 // ============================================================================
 
 TEST_F(IncrementalDownloadTest, GenerateHashList_ValidFile) {
+#if !defined(FALCON_HAS_OPENSSL) && !defined(FALCON_USE_OPENSSL)
+    GTEST_SKIP() << "OpenSSL not available";
+#endif
     IncrementalDownloader downloader;
 
     std::string filePath = createTestFile("test_hashlist.bin", 2048);

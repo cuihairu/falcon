@@ -52,7 +52,6 @@ endfunction()
 # Protocols unit tests
 # ============================================================================
 add_executable(falcon_protocols_tests
-    unit/download_engine_v2_test.cpp
     unit/segment_downloader_test.cpp
     unit/incremental_download_test.cpp
     unit/request_group_test.cpp
@@ -63,6 +62,11 @@ add_executable(falcon_protocols_tests
     unit/cloud_protocols_test.cpp
     unit/builtin_protocol_handlers_test.cpp
 )
+
+# download_engine_v2_test uses POSIX pipe/close, skip on Windows
+if(NOT WIN32)
+    target_sources(falcon_protocols_tests PRIVATE unit/download_engine_v2_test.cpp)
+endif()
 
 # Conditional plugin tests
 if(FALCON_ENABLE_BITTORRENT)
@@ -98,6 +102,11 @@ target_link_libraries(falcon_protocols_tests
 
 add_test_compile_options(falcon_protocols_tests)
 add_test_includes(falcon_protocols_tests)
+
+# Pass OpenSSL availability to test code
+if(OPENSSL_FOUND AND TARGET OpenSSL::Crypto)
+    target_compile_definitions(falcon_protocols_tests PRIVATE FALCON_HAS_OPENSSL)
+endif()
 
 # Protocols tests may need storage headers (cloud_url_protocols.hpp)
 target_include_directories(falcon_protocols_tests PRIVATE

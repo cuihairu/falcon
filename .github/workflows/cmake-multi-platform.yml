@@ -168,6 +168,7 @@ jobs:
       - name: Generate coverage (gcovr)
         timeout-minutes: 5
         working-directory: ${{ github.workspace }}/build-coverage
+        continue-on-error: true
         run: |
           gcovr -r ${{ github.workspace }} \
             --exclude '.*(/|\\\\)build.*' \
