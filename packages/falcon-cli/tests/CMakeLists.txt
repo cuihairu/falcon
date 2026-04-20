@@ -32,7 +32,8 @@ add_executable(falcon_cli_tests
 
 target_link_libraries(falcon_cli_tests
     PRIVATE
-        Falcon::falcon
+        Falcon::core
+        Falcon::protocols
         GTest::gtest
         GTest::gtest_main
 )

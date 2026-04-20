@@ -10,9 +10,9 @@ add_executable(test_http_download test_http_download.cpp)
 add_executable(aria2_style_download aria2_style_download.cpp)
 
 # Link against Falcon library
-target_link_libraries(simple_download PRIVATE Falcon::core Falcon::protocols)
-target_link_libraries(test_http_download PRIVATE Falcon::core Falcon::protocols)
-target_link_libraries(aria2_style_download PRIVATE Falcon::core Falcon::protocols)
+target_link_libraries(simple_download PRIVATE Falcon::protocols Falcon::core)
+target_link_libraries(test_http_download PRIVATE Falcon::protocols Falcon::core)
+target_link_libraries(aria2_style_download PRIVATE Falcon::protocols Falcon::core)
 
 # Set C++ standard
 target_compile_features(simple_download PRIVATE cxx_std_17)

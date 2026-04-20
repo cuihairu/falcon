@@ -83,8 +83,8 @@ target_link_libraries(falcon-desktop PRIVATE
     Qt6::Core
     Qt6::Widgets
     Qt6::Network
-    Falcon::core
     Falcon::protocols
+    Falcon::core
 )
 
 # 安装目标

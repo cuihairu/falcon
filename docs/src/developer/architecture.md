@@ -7,7 +7,10 @@
 ```text
 falcon/
 ├── packages/
-│   ├── libfalcon/          # 核心下载引擎与协议插件
+│   ├── libfalcon-core/     # 核心下载引擎、任务模型、事件系统
+│   ├── libfalcon-protocols/# 标准下载协议与协议相关实现
+│   ├── libfalcon-storage/  # 对象存储与远程资源浏览
+│   ├── libfalcon-drives/   # 网盘、分享链、账号态能力
 │   ├── falcon-cli/         # 命令行工具
 │   └── falcon-daemon/      # 后台服务
 ├── apps/
@@ -16,7 +19,7 @@ falcon/
 └── docs/                   # 文档站
 ```
 
-## libfalcon 核心组件
+## libfalcon-core 核心组件
 
 ### DownloadEngine
 

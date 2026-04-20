@@ -7,6 +7,7 @@
 
 #include <falcon/plugin_manager.hpp>
 #include <iostream>
+#include <memory>
 
 namespace falcon {
 
@@ -79,6 +80,7 @@ IProtocolHandler* PluginManager::getPluginByUrl(const std::string& url) const {
 
 void PluginManager::loadAllPlugins() {
     std::cout << "Loading all available plugins" << std::endl;
+
     register_builtin_protocol_handlers(*this);
 
     std::cout << "Loaded " << plugins_.size() << " plugins" << std::endl;
@@ -135,12 +137,5 @@ void PluginManager::unloadAllPlugins() {
 size_t PluginManager::getPluginCount() const {
     return plugins_.size();
 }
-
-// Weak stub: overridden by the strong definition in
-// builtin_protocol_handlers.cpp when falcon_protocols is linked.
-#if defined(__GNUC__) || defined(__clang__)
-__attribute__((weak))
-#endif
-void register_builtin_protocol_handlers(PluginManager&) {}
 
 } // namespace falcon

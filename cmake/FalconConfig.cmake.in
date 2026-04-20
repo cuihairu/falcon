@@ -4,11 +4,25 @@ include(CMakeFindDependencyMacro)
 
 # 查找依赖
 find_dependency(Threads)
-find_dependency(spdlog)
-find_dependency(nlohmann_json)
 
-if(@FALCON_ENABLE_HTTP@ OR @FALCON_ENABLE_FTP@)
+if(@FALCON_PACKAGE_NEEDS_SPDLOG@)
+    find_dependency(spdlog)
+endif()
+
+if(@FALCON_PACKAGE_NEEDS_NLOHMANN_JSON@)
+    find_dependency(nlohmann_json)
+endif()
+
+if(@FALCON_PACKAGE_NEEDS_CURL@)
     find_dependency(CURL)
+endif()
+
+if(@FALCON_PACKAGE_NEEDS_OPENSSL@)
+    find_dependency(OpenSSL)
+endif()
+
+if(@FALCON_PACKAGE_NEEDS_SQLITE3@)
+    find_dependency(SQLite3)
 endif()
 
 # 导入目标

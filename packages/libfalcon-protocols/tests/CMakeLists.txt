@@ -95,13 +95,21 @@ endif()
 
 target_link_libraries(falcon_protocols_tests
     PRIVATE
-        falcon_core
         falcon_protocols
+        falcon_core
         GTest::gtest_main
 )
 
 add_test_compile_options(falcon_protocols_tests)
 add_test_includes(falcon_protocols_tests)
+
+if(FALCON_ENABLE_HTTP)
+    target_compile_definitions(falcon_protocols_tests PRIVATE FALCON_ENABLE_HTTP)
+endif()
+
+if(FALCON_ENABLE_FTP)
+    target_compile_definitions(falcon_protocols_tests PRIVATE FALCON_ENABLE_FTP_PLUGIN)
+endif()
 
 # Pass OpenSSL availability to test code
 if(OPENSSL_FOUND AND TARGET OpenSSL::Crypto)
@@ -122,8 +130,8 @@ add_executable(falcon_http_tests
 
 target_link_libraries(falcon_http_tests
     PRIVATE
-        falcon_core
         falcon_protocols
+        falcon_core
         GTest::gtest_main
 )
 
@@ -137,6 +145,10 @@ endif()
 
 add_test_compile_options(falcon_http_tests)
 add_test_includes(falcon_http_tests)
+
+if(FALCON_ENABLE_HTTP)
+    target_compile_definitions(falcon_http_tests PRIVATE FALCON_ENABLE_HTTP)
+endif()
 
 target_include_directories(falcon_http_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../plugins/http
@@ -152,13 +164,14 @@ if(FALCON_ENABLE_FTP)
 
     target_link_libraries(falcon_ftp_tests
         PRIVATE
-            falcon_core
             falcon_protocols
+            falcon_core
             GTest::gtest_main
     )
 
     add_test_compile_options(falcon_ftp_tests)
     add_test_includes(falcon_ftp_tests)
+    target_compile_definitions(falcon_ftp_tests PRIVATE FALCON_ENABLE_FTP_PLUGIN)
 endif()
 
 # ============================================================================
@@ -170,13 +183,21 @@ add_executable(falcon_integration_tests
 
 target_link_libraries(falcon_integration_tests
     PRIVATE
-        falcon_core
         falcon_protocols
+        falcon_core
         GTest::gtest_main
 )
 
 add_test_compile_options(falcon_integration_tests)
 add_test_includes(falcon_integration_tests)
+
+if(FALCON_ENABLE_HTTP)
+    target_compile_definitions(falcon_integration_tests PRIVATE FALCON_ENABLE_HTTP)
+endif()
+
+if(FALCON_ENABLE_FTP)
+    target_compile_definitions(falcon_integration_tests PRIVATE FALCON_ENABLE_FTP_PLUGIN)
+endif()
 
 if(CURL_FOUND)
     target_link_libraries(falcon_integration_tests PRIVATE CURL::libcurl)

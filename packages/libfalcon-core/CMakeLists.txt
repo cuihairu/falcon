@@ -25,6 +25,7 @@ add_library(falcon_core
     src/task_manager.cpp
     src/thread_pool.cpp
     src/plugin_manager.cpp
+    src/builtin_protocol_handlers_stub.cpp
     src/event_dispatcher.cpp
     src/password_manager.cpp
     src/version.cpp

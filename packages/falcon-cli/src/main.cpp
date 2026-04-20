@@ -33,6 +33,8 @@
 #include <fcntl.h>
 #endif
 
+namespace term = falcon::cli::term;
+
 // 全局变量用于信号处理
 std::atomic<bool> g_interrupted{false};
 falcon::DownloadEngine* g_engine = nullptr;

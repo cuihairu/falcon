@@ -126,6 +126,8 @@ add_subdirectory(packages/libfalcon-storage)
 add_subdirectory(packages/libfalcon-drives)
 
 # 兼容性聚合 target
+# 保留给历史用法，内部应用和测试应优先按需链接各子库，
+# 以避免无关模块被隐式带入最终链接图。
 add_library(falcon INTERFACE)
 add_library(Falcon::falcon ALIAS falcon)
 target_link_libraries(falcon
@@ -202,6 +204,38 @@ install(EXPORT FalconTargets
 
 # 生成配置文件
 include(CMakePackageConfigHelpers)
+
+set(FALCON_PACKAGE_NEEDS_SPDLOG OFF)
+if(spdlog_FOUND)
+    set(FALCON_PACKAGE_NEEDS_SPDLOG ON)
+endif()
+
+set(FALCON_PACKAGE_NEEDS_NLOHMANN_JSON OFF)
+if(nlohmann_json_FOUND)
+    set(FALCON_PACKAGE_NEEDS_NLOHMANN_JSON ON)
+endif()
+
+set(FALCON_PACKAGE_NEEDS_CURL OFF)
+if(CURL_FOUND AND (
+    FALCON_ENABLE_HTTP OR
+    FALCON_ENABLE_FTP OR
+    FALCON_ENABLE_RESOURCE_BROWSER OR
+    FALCON_ENABLE_CLOUD_STORAGE OR
+    FALCON_ENABLE_RESOURCE_SEARCH
+))
+    set(FALCON_PACKAGE_NEEDS_CURL ON)
+endif()
+
+set(FALCON_PACKAGE_NEEDS_OPENSSL OFF)
+if(OPENSSL_FOUND AND TARGET OpenSSL::Crypto)
+    set(FALCON_PACKAGE_NEEDS_OPENSSL ON)
+endif()
+
+set(FALCON_PACKAGE_NEEDS_SQLITE3 OFF)
+if(SQLite3_FOUND AND FALCON_ENABLE_CONFIG_MANAGER)
+    set(FALCON_PACKAGE_NEEDS_SQLITE3 ON)
+endif()
+
 configure_package_config_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/cmake/FalconConfig.cmake.in
     ${CMAKE_CURRENT_BINARY_DIR}/FalconConfig.cmake

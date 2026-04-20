@@ -120,8 +120,8 @@ engine.register_handler_factory(&create_myproto_handler);
 如果要把插件纳入仓库构建，参考现有插件目录组织，例如：
 
 ```text
-packages/libfalcon/plugins/http/
-packages/libfalcon/plugins/ftp/
+packages/libfalcon-protocols/plugins/http/
+packages/libfalcon-protocols/plugins/ftp/
 ```
 
 最小示例：
@@ -134,7 +134,7 @@ add_library(falcon_plugin_myproto
 
 target_link_libraries(falcon_plugin_myproto
     PUBLIC
-        falcon
+        Falcon::core
 )
 ```
 

@@ -35,7 +35,8 @@ falcon-cli "https://example.com/playlist.m3u8" \
 当前公共头文件没有把 `HlsOptions` / `DashOptions` 作为稳定 API 暴露出来，因此更保守的写法是使用统一下载入口：
 
 ```cpp
-#include <falcon/falcon.hpp>
+#include <falcon/download_engine.hpp>
+#include <falcon/download_options.hpp>
 
 int main() {
     falcon::DownloadEngine engine;
