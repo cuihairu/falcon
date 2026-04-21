@@ -398,3 +398,96 @@ feature 候选：
 - ✅ 协议实现不再使用 `falcon::plugins` 作为最终命名空间
 - ✅ `core` 不再暴露对象存储和网盘客户端概念
 - ✅ CLI、Daemon、Desktop 均能按需组合依赖（仅链接 core + protocols）
+
+---
+
+## Desktop 应用开发进度
+
+### 2026-04-15 - 迅雷风格 UI 重构
+
+**已完成：**
+- ✅ 组件化拆分：TopBar、StatusBar、SideBar 独立组件
+- ✅ DownloadPage 迅雷风格布局
+- ✅ 任务列表表格视图（文件名、进度、大小、速度、状态、操作）
+- ✅ 视图模式切换（下载中/已完成/云添加）
+- ✅ 任务操作按钮状态动态更新
+- ✅ 更多选项菜单（全部开始/暂停、清除已完成、打开目录）
+
+**进行中：**
+- ⏳ CloudPage 与 libfalcon-storage 集成
+- ⏳ DiscoveryPage 搜索 API 集成
+
+**待实现：**
+- ⏳ 网格/卡片视图切换
+- ⏳ 云添加任务功能
+- ⏳ 主题切换（亮色/暗色）
+- ⏳ 系统托盘集成
+
+---
+
+## 核心功能开发进度
+
+### 2026-04-21 - S3 插件与 HTTPS 支持
+
+**已完成：**
+- ✅ S3 插件认证功能实现
+  - 从 options 中获取认证信息
+  - 实现带签名的下载
+  - 完善 S3Authenticator 静态方法
+- ✅ Daemon RPC HTTP 服务器实现
+  - 使用原生 socket 实现 HTTP 服务器
+  - 完整的 XML-RPC 参数解析
+- ✅ HTTP TLS 握手实现
+  - OpenSSL 集成
+  - SSL_write/SSL_read 支持
+  - HTTPS 请求/响应完整支持
+- ✅ Daemon RPC 与 DownloadEngine 集成
+  - GID 管理系统
+  - aria2.addUri/remove/pause/unpause 实现
+  - aria2.tellStatus/getGlobalStat 实现
+- ✅ Daemon 配置热重载
+  - 实现配置重载回调
+- ✅ HTTP 重定向处理
+  - 创建新连接跟随重定向
+- ✅ HTTP 分块下载框架
+  - 多线程分段下载基础实现
+
+### 2026-04-21 - BitTorrent 插件与桌面应用集成
+
+**已完成：**
+- ✅ BitTorrent 插件纯 C++ 实现完善
+  - 添加 base32Decode 函数（用于磁力链接）
+  - 添加 bencodeToString 函数（B编码序列化）
+  - 添加 getTrackers 函数（获取 tracker 列表）
+  - 添加 urlDecode 函数（URL 解码）
+  - 实现纯 C++ 的 BitTorrent 下载框架
+    - startDownloadThread 下载线程
+    - connectToTracker 连接 tracker
+    - findPeersViaDHT DHT 查找
+    - downloadPiece 下载 piece
+    - verifyPiece 验证 piece
+- ✅ S3Browser 资源浏览器实现
+  - 已存在于 plugins/s3/s3_browser.cpp
+  - 支持 list_directory、create_directory、remove、rename、copy 等功能
+  - libcurl 集成实现 HTTP 请求
+  - AWS 签名支持
+- ✅ CloudPage 与 StorageService 集成
+  - 创建 StorageService 桥接层
+  - 实现 connect/disconnect、list_directory、download 等功能
+  - 配置持久化支持
+  - 信号/槽机制连接 UI 与服务
+- ✅ DiscoveryPage 与 SearchService 集成
+  - 创建 SearchService 搜索服务
+  - 支持磁力链接、HTTP、网盘、FTP 资源搜索
+  - 后台线程搜索实现
+  - 搜索结果回调机制
+- ⏳ 完整的多线程分段下载
+- ⏳ BitTorrent 插件与 DHT/PEX 集成
+
+**待实现：**
+- ⏳ CloudPage 与 libfalcon-storage 的完整 C++ 绑定
+- ⏳ DiscoveryPage 与真实搜索 API 集成
+- ⏳ 网格/卡片视图切换
+- ⏳ 云添加任务功能
+- ⏳ 主题切换（亮色/暗色）
+- ⏳ 系统托盘集成

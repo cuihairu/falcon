@@ -10,6 +10,11 @@
 #include <QHeaderView>
 #include <QProgressBar>
 #include <QStyle>
+#include <QMenu>
+#include <QAction>
+#include <QDesktopServices>
+#include <QApplication>
+#include <algorithm>
 
 namespace falcon::desktop {
 
@@ -128,6 +133,11 @@ void DownloadPage::create_task_table()
     task_table_->horizontalHeader()->setStretchLastSection(false);
     task_table_->horizontalHeader()->setHighlightSections(false);
 
+    // 启用右键菜单
+    task_table_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(task_table_, &QTableWidget::customContextMenuRequested,
+            this, &DownloadPage::show_context_menu);
+
     // 设置列宽
     task_table_->setColumnWidth(0, 350);  // 文件名
     task_table_->setColumnWidth(1, 180);  // 进度
@@ -174,7 +184,58 @@ void DownloadPage::update_header_for_mode()
 
 void DownloadPage::update_action_buttons()
 {
-    // TODO: 根据选中的任务状态更新按钮状态
+    // 更新每行操作按钮的状态
+    for (int row = 0; row < task_table_->rowCount(); ++row) {
+        auto* name_item = task_table_->item(row, 0);
+        if (!name_item) {
+            continue;
+        }
+
+        const qulonglong key = name_item->data(Qt::UserRole).toULongLong();
+        auto record_it = task_records_.find(key);
+        if (record_it == task_records_.end()) {
+            continue;
+        }
+
+        const auto& task = record_it->task;
+        if (!task) {
+            continue;
+        }
+
+        // 获取操作按钮容器
+        auto* actions_widget = task_table_->cellWidget(row, 5);
+        if (!actions_widget) {
+            continue;
+        }
+
+        auto* layout = qobject_cast<QHBoxLayout*>(actions_widget->layout());
+        if (!layout) {
+            continue;
+        }
+
+        // 第一个按钮是暂停/继续按钮
+        auto* pause_btn = qobject_cast<QPushButton*>(layout->itemAt(0)->widget());
+        if (pause_btn) {
+            const auto status = task->status();
+            bool is_running = (status == falcon::TaskStatus::Downloading ||
+                              status == falcon::TaskStatus::Preparing);
+            bool is_paused = (status == falcon::TaskStatus::Paused);
+            bool can_resume = (status == falcon::TaskStatus::Paused ||
+                              status == falcon::TaskStatus::Failed);
+
+            pause_btn->setEnabled(is_running || is_paused || can_resume);
+
+            if (is_running) {
+                pause_btn->setText(tr("⏸"));
+                pause_btn->setToolTip(tr("暂停"));
+            } else if (is_paused || can_resume) {
+                pause_btn->setText(tr("▶"));
+                pause_btn->setToolTip(tr("继续"));
+            } else {
+                pause_btn->setEnabled(false);
+            }
+        }
+    }
 }
 
 falcon::DownloadTask::Ptr DownloadPage::selected_task() const
@@ -214,12 +275,63 @@ void DownloadPage::on_refresh_clicked()
 
 void DownloadPage::on_view_toggle_clicked()
 {
-    // TODO: 实现视图切换（列表/网格）
+    // 循环切换任务过滤模式
+    switch (view_mode_) {
+        case DownloadViewMode::Downloading:
+            set_view_mode(DownloadViewMode::Completed);
+            break;
+        case DownloadViewMode::Completed:
+            set_view_mode(DownloadViewMode::CloudAdd);
+            break;
+        case DownloadViewMode::CloudAdd:
+            set_view_mode(DownloadViewMode::Downloading);
+            break;
+    }
 }
 
 void DownloadPage::on_more_options_clicked()
 {
-    // TODO: 显示更多选项菜单
+    QMenu menu(this);
+
+    auto* start_all_action = menu.addAction(tr("全部开始"));
+    connect(start_all_action, &QAction::triggered, this, [this]() {
+        for (auto it = task_records_.begin(); it != task_records_.end(); ++it) {
+            const auto& task = it.value().task;
+            if (task) {
+                (void)task->resume();
+            }
+        }
+    });
+
+    auto* pause_all_action = menu.addAction(tr("全部暂停"));
+    connect(pause_all_action, &QAction::triggered, this, [this]() {
+        for (auto it = task_records_.begin(); it != task_records_.end(); ++it) {
+            const auto& task = it.value().task;
+            if (task) {
+                (void)task->pause();
+            }
+        }
+    });
+
+    menu.addSeparator();
+
+    auto* remove_finished_action = menu.addAction(tr("清除已完成"));
+    connect(remove_finished_action, &QAction::triggered, this, [this]() {
+        emit remove_finished_tasks_requested();
+    });
+
+    menu.addSeparator();
+
+    auto* open_dir_action = menu.addAction(tr("打开保存目录"));
+    connect(open_dir_action, &QAction::triggered, this, [this]() {
+        const auto task = selected_task();
+        if (task) {
+            const QString path = QString::fromStdString(task->options().output_directory);
+            QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+        }
+    });
+
+    menu.exec(more_button_->mapToGlobal(more_button_->rect().bottomLeft()));
 }
 
 void DownloadPage::on_pause_selected()
@@ -370,6 +482,17 @@ void DownloadPage::sync_task_tables(const falcon::DownloadTask::Ptr& task)
     const auto status = task->status();
     bool should_show = false;
 
+    // 云盘域名列表（用于识别云添加任务）
+    static const QStringList cloud_domains = {
+        "pan.baidu.com",
+        "pan.quark.cn",
+        "cloud.189.cn",
+        "www.alipan.com",
+        "www.aliyundrive.com",
+        "www.115.com",
+        "disk.pikpak.com"
+    };
+
     switch (view_mode_) {
         case DownloadViewMode::Downloading:
             should_show = (status == falcon::TaskStatus::Downloading ||
@@ -381,7 +504,14 @@ void DownloadPage::sync_task_tables(const falcon::DownloadTask::Ptr& task)
             should_show = (status == falcon::TaskStatus::Completed);
             break;
         case DownloadViewMode::CloudAdd:
-            should_show = false;  // TODO: 实现云添加任务过滤
+            // 显示 URL 包含云盘域名的任务
+            {
+                const QString url = QString::fromStdString(task->url());
+                should_show = std::any_of(cloud_domains.begin(), cloud_domains.end(),
+                    [&url](const QString& domain) {
+                        return url.contains(domain);
+                    });
+            }
             break;
     }
 
@@ -460,6 +590,83 @@ void DownloadPage::sync_task_tables(const falcon::DownloadTask::Ptr& task)
     actions_layout->addWidget(delete_btn);
 
     task_table_->setCellWidget(row, 5, actions_widget);
+}
+
+falcon::DownloadTask::Ptr DownloadPage::task_at_row(int row) const
+{
+    if (row < 0 || row >= task_table_->rowCount()) {
+        return nullptr;
+    }
+
+    auto* item = task_table_->item(row, 0);
+    if (!item) {
+        return nullptr;
+    }
+
+    const qulonglong key = item->data(Qt::UserRole).toULongLong();
+    auto record_it = task_records_.constFind(key);
+    if (record_it == task_records_.constEnd()) {
+        return nullptr;
+    }
+
+    return record_it->task;
+}
+
+void DownloadPage::show_context_menu(const QPoint& pos)
+{
+    const auto* item = task_table_->itemAt(pos);
+    if (!item) {
+        return;
+    }
+
+    const int row = item->row();
+    auto task = task_at_row(row);
+    if (!task) {
+        return;
+    }
+
+    QMenu menu(this);
+
+    // 根据任务状态显示不同菜单项
+    const auto status = task->status();
+
+    // 暂停/继续
+    if (status == falcon::TaskStatus::Downloading ||
+        status == falcon::TaskStatus::Preparing) {
+        auto* pause_action = menu.addAction(tr("暂停"));
+        connect(pause_action, &QAction::triggered, this, &DownloadPage::on_pause_selected);
+    } else if (status == falcon::TaskStatus::Paused ||
+               status == falcon::TaskStatus::Failed) {
+        auto* resume_action = menu.addAction(tr("继续"));
+        connect(resume_action, &QAction::triggered, this, &DownloadPage::on_resume_selected);
+    }
+
+    menu.addSeparator();
+
+    // 打开文件夹
+    auto* open_dir_action = menu.addAction(tr("打开文件夹"));
+    connect(open_dir_action, &QAction::triggered, this, [this]() {
+        const auto task = selected_task();
+        if (task) {
+            const QString path = QString::fromStdString(task->options().output_directory);
+            QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+        }
+    });
+
+    // 复制下载链接
+    auto* copy_url_action = menu.addAction(tr("复制下载链接"));
+    connect(copy_url_action, &QAction::triggered, this, [task]() {
+        QApplication::clipboard()->setText(QString::fromStdString(task->url()));
+    });
+
+    menu.addSeparator();
+
+    // 删除任务
+    auto* delete_action = menu.addAction(tr("删除任务"));
+    delete_action->setStyleSheet("color: red;");
+    connect(delete_action, &QAction::triggered, this, &DownloadPage::on_delete_selected);
+
+    menu.exec(task_table_->mapToGlobal(pos));
 }
 
 } // namespace falcon::desktop

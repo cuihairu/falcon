@@ -14,6 +14,12 @@
 #include <QComboBox>
 #include <QLabel>
 #include <QTabWidget>
+#include <QSharedPointer>
+
+namespace falcon::desktop {
+
+// 前向声明
+class SearchService;
 
 namespace falcon::desktop {
 
@@ -80,6 +86,11 @@ private slots:
     // 添加到下载队列
     void add_to_download_queue();
 
+    // SearchService 回调
+    void on_search_started(const QString& keyword);
+    void on_search_finished(const QString& keyword, int result_count);
+    void on_search_error(const QString& keyword, const QString& error);
+
 private:
     void setup_ui();
     QWidget* create_search_bar();
@@ -135,6 +146,9 @@ private:
         QString sort_by = "relevance";   // relevance, size, date, seeders
         int max_results = 50;
     } settings_;
+
+    // 搜索服务
+    QSharedPointer<SearchService> search_service_;
 };
 
 } // namespace falcon::desktop

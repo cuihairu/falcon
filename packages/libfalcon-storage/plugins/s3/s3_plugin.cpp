@@ -28,7 +28,7 @@ namespace falcon {
 // S3插件实现类
 class S3Plugin::Impl {
 public:
-    Impl() : curl_(curl_easy_init()) {
+    explicit Impl(const S3Config& config = {}) : curl_(curl_easy_init()), config_(config) {
         if (!curl_) {
             throw std::runtime_error("Failed to initialize CURL");
         }
@@ -45,8 +45,16 @@ public:
         }
     }
 
+    void set_config(const S3Config& config) {
+        config_ = config;
+    }
+
+    const S3Config& get_config() const {
+        return config_;
+    }
+
     /**
-     * 发送HTTP请求
+     * 发送HTTP请求（带S3签名）
      */
     std::string http_request(
         const std::string& method,
@@ -54,12 +62,31 @@ public:
         const std::map<std::string, std::string>& headers = {},
         const std::string& body = ""
     ) {
+        // 解析URL获取URI路径
+        std::string uri = extract_uri_from_url(url);
+        std::string host = extract_host_from_url(url);
+
+        // 构建完整的请求头
+        std::map<std::string, std::string> all_headers = headers;
+
+        // 添加必需的S3头部
+        all_headers["Host"] = host;
+
+        // 如果有认证信息，添加签名
+        if (!config_.access_key_id.empty() && !config_.secret_access_key.empty()) {
+            all_headers["x-amz-content-sha256"] = sha256_hex(body);
+            all_headers["x-amz-date"] = get_amz_date();
+
+            std::string authorization = sign_request(method, uri, all_headers, body);
+            all_headers["Authorization"] = authorization;
+        }
+
         curl_easy_setopt(curl_, CURLOPT_URL, url.c_str());
         curl_easy_setopt(curl_, CURLOPT_CUSTOMREQUEST, method.c_str());
 
         // 设置请求头
         curl_slist* header_list = nullptr;
-        for (const auto& [key, value] : headers) {
+        for (const auto& [key, value] : all_headers) {
             std::string header = key + ": " + value;
             header_list = curl_slist_append(header_list, header.c_str());
         }
@@ -96,10 +123,188 @@ public:
 
         if (response_code < 200 || response_code >= 300) {
             Logger::error("HTTP error: {}", response_code);
+            Logger::error("Response body: {}", response);
             return "";
         }
 
         return response;
+    }
+
+    /**
+     * 下载S3对象（带签名）
+     */
+    bool download_object(
+        const std::string& bucket,
+        const std::string& key,
+        const std::string& output_path
+    ) {
+        // 构建对象URL
+        std::string url = build_object_url(bucket, key);
+
+        // 发送GET请求
+        std::map<std::string, std::string> headers;
+        std::string response = http_request("GET", url, headers, "");
+
+        if (response.empty()) {
+            return false;
+        }
+
+        // 写入文件
+        FILE* file = fopen(output_path.c_str(), "wb");
+        if (!file) {
+            Logger::error("Failed to open output file: {}", output_path);
+            return false;
+        }
+
+        fwrite(response.data(), 1, response.size(), file);
+        fclose(file);
+
+        return true;
+    }
+
+    /**
+     * 获取预签名URL
+     */
+    std::string get_presigned_url(
+        const std::string& bucket,
+        const std::string& key,
+        int expires_in_seconds = 3600
+    ) {
+        if (config_.access_key_id.empty() || config_.secret_access_key.empty()) {
+            Logger::error("S3 credentials not configured");
+            return "";
+        }
+
+        std::string uri = "/" + bucket + "/" + key;
+        std::string host = build_s3_host(bucket);
+        std::string url = (config_.use_ssl ? "https://" : "http://") + host + uri;
+
+        // 构建查询参数
+        std::map<std::string, std::string> query_params;
+        query_params["X-Amz-Algorithm"] = "AWS4-HMAC-SHA256";
+        query_params["X-Amz-Credential"] = build_credential_scope();
+        query_params["X-Amz-Date"] = get_amz_date();
+        query_params["X-Amz-Expires"] = std::to_string(expires_in_seconds);
+        query_params["X-Amz-SignedHeaders"] = "host";
+
+        // 生成签名
+        std::map<std::string, std::string> headers;
+        headers["Host"] = host;
+        std::string signature = S3Authenticator::generate_presigned_url(
+            "GET", uri, query_params, headers,
+            config_.access_key_id, config_.secret_access_key,
+            config_.region, "s3", expires_in_seconds,
+            std::chrono::system_clock::now()
+        );
+
+        // 构建完整URL
+        std::string presigned_url = url + "?";
+        bool first = true;
+        for (const auto& [key, value] : query_params) {
+            if (!first) presigned_url += "&";
+            presigned_url += key + "=" + url_encode(value);
+            first = false;
+        }
+        presigned_url += "&X-Amz-Signature=" + signature;
+
+        return presigned_url;
+    }
+
+private:
+    /**
+     * 从URL提取URI路径
+     */
+    static std::string extract_uri_from_url(const std::string& url) {
+        size_t path_start = url.find('/', url.find("://"));
+        if (path_start == std::string::npos) {
+            return "/";
+        }
+        return url.substr(path_start);
+    }
+
+    /**
+     * 从URL提取主机名
+     */
+    static std::string extract_host_from_url(const std::string& url) {
+        size_t host_start = url.find("://") + 3;
+        size_t host_end = url.find('/', host_start);
+        if (host_end == std::string::npos) {
+            host_end = url.length();
+        }
+        return url.substr(host_start, host_end - host_start);
+    }
+
+    /**
+     * 构建对象URL
+     */
+    std::string build_object_url(const std::string& bucket, const std::string& key) {
+        std::string host = build_s3_host(bucket);
+        std::string uri = "/" + bucket + "/" + key;
+        return (config_.use_ssl ? "https://" : "http://") + host + uri;
+    }
+
+    /**
+     * 构建S3主机名
+     */
+    std::string build_s3_host(const std::string& bucket) const {
+        if (!config_.endpoint.empty()) {
+            return config_.endpoint;
+        }
+
+        if (config_.host_style == "virtual") {
+            return bucket + ".s3." + config_.region + ".amazonaws.com";
+        } else {
+            return "s3." + config_.region + ".amazonaws.com";
+        }
+    }
+
+    /**
+     * 构建凭证范围
+     */
+    std::string build_credential_scope() const {
+        auto now = std::chrono::system_clock::now();
+        auto time_t = std::chrono::system_clock::to_time_t(now);
+        std::tm tm = *std::gmtime(&time_t);
+
+        char date_str[9];
+        std::strftime(date_str, sizeof(date_str), "%Y%m%d", &tm);
+
+        return std::string(config_.access_key_id) + "/" + date_str + "/" +
+               config_.region + "/s3/aws4_request";
+    }
+
+    /**
+     * 获取AWS日期格式
+     */
+    static std::string get_amz_date() {
+        auto now = std::chrono::system_clock::now();
+        auto time_t = std::chrono::system_clock::to_time_t(now);
+        std::tm tm = *std::gmtime(&time_t);
+
+        char time_str[17];
+        std::strftime(time_str, sizeof(time_str), "%Y%m%dT%H%M%SZ", &tm);
+        return std::string(time_str);
+    }
+
+    /**
+     * URL编码
+     */
+    static std::string url_encode(const std::string& str) {
+        std::ostringstream encoded;
+        encoded.fill('0');
+        encoded << std::hex;
+
+        for (char c : str) {
+            if (std::isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_' || c == '.' || c == '~') {
+                encoded << c;
+            } else {
+                encoded << std::uppercase;
+                encoded << '%' << std::setw(2) << int(static_cast<unsigned char>(c));
+                encoded << std::nouppercase;
+            }
+        }
+
+        return encoded.str();
     }
 
     /**
@@ -242,18 +447,45 @@ std::shared_ptr<DownloadTask> S3Plugin::download(
     // 解析S3 URL
     auto s3_url = S3UrlParser::parse(url);
 
-    // 设置配置
-    S3Config config;
-    // TODO: 从options中获取认证信息
+    // 从options中提取认证信息（通过自定义header）
+    S3Config config = p_impl_->get_config();
+
+    // 尝试从options.headers获取S3认证信息
+    auto access_key_it = options.headers.find("X-S3-Access-Key");
+    auto secret_key_it = options.headers.find("X-S3-Secret-Key");
+    auto region_it = options.headers.find("X-S3-Region");
+    auto endpoint_it = options.headers.find("X-S3-Endpoint");
+
+    if (access_key_it != options.headers.end()) {
+        config.access_key_id = access_key_it->second;
+    }
+    if (secret_key_it != options.headers.end()) {
+        config.secret_access_key = secret_key_it->second;
+    }
+    if (region_it != options.headers.end()) {
+        config.region = region_it->second;
+    }
+    if (endpoint_it != options.headers.end()) {
+        config.endpoint = endpoint_it->second;
+    }
+
+    // 从URL解析获取bucket和region
+    if (!s3_url.bucket.empty() && config.bucket.empty()) {
+        config.bucket = s3_url.bucket;
+    }
+    if (!s3_url.region.empty() && config.region.empty()) {
+        config.region = s3_url.region;
+    }
+
     p_impl_->set_config(config);
 
     // 获取预签名URL或直接下载
     std::string download_url;
-    if (!config.access_key_id.empty()) {
-        // 使用认证信息下载
-        // TODO: 实现带签名的下载
+    if (!config.access_key_id.empty() && !config.secret_access_key.empty()) {
+        // 使用认证信息生成预签名URL
+        download_url = p_impl_->get_presigned_url(config.bucket, s3_url.key, 3600);
     } else {
-        // 尝试获取预签名URL
+        // 尝试获取预签名URL（需要先配置认证信息）
         download_url = generate_presigned_url(s3_url.key);
     }
 
@@ -378,6 +610,275 @@ std::string S3Utils::get_storage_class_name(S3StorageClass storage_class) {
         case S3StorageClass::GlacierInstantRetrieval: return "GLACIER_IR";
     }
     return "STANDARD";
+}
+
+// S3Authenticator 静态方法实现
+std::string S3Authenticator::sign_request(
+    const std::string& method,
+    const std::string& uri,
+    const std::map<std::string, std::string>& headers,
+    const std::string& payload,
+    const std::string& access_key,
+    const std::string& secret_key,
+    const std::string& region,
+    const std::string& service,
+    const std::chrono::system_clock::time_point& request_time
+) {
+    // 获取时间戳
+    auto time_t = std::chrono::system_clock::to_time_t(request_time);
+    std::tm tm = *std::gmtime(&time_t);
+
+    char time_str[30];
+    std::strftime(time_str, sizeof(time_str), "%Y%m%dT%H%M%SZ", &tm);
+
+    char date_str[9];
+    std::strftime(date_str, sizeof(date_str), "%Y%m%d", &tm);
+
+    // 构建规范请求
+    std::string canonical_request = get_canonical_request(
+        method, uri, {}, headers, payload
+    );
+
+    // 构建待签名字符串
+    std::string algorithm = "AWS4-HMAC-SHA256";
+    std::string credential_scope = std::string(date_str) + "/" + region + "/" + service + "/aws4_request";
+
+    std::string string_to_sign = algorithm + "\n" +
+                                 std::string(time_str) + "\n" +
+                                 credential_scope + "\n" +
+                                 sha256(canonical_request);
+
+    // 计算签名密钥
+    std::string k_date = hmac_sha256("AWS4" + secret_key, date_str);
+    std::string k_region = hmac_sha256(k_date, region);
+    std::string k_service = hmac_sha256(k_region, service);
+    std::string k_signing = hmac_sha256(k_service, "aws4_request");
+
+    // 计算签名
+    std::string signature = hex_encode(hmac_sha256(k_signing, string_to_sign));
+
+    // 构建授权头部
+    std::string signed_headers = get_signed_headers(headers);
+    std::string authorization = algorithm + " " +
+                              "Credential=" + access_key + "/" + credential_scope + ", " +
+                              "SignedHeaders=" + signed_headers + ", " +
+                              "Signature=" + signature;
+
+    return authorization;
+}
+
+std::string S3Authenticator::generate_presigned_url(
+    const std::string& method,
+    const std::string& uri,
+    const std::map<std::string, std::string>& query_params,
+    const std::map<std::string, std::string>& headers,
+    const std::string& access_key,
+    const std::string& secret_key,
+    const std::string& region,
+    const std::string& service,
+    int expires_in_seconds,
+    const std::chrono::system_clock::time_point& request_time
+) {
+    // 获取时间戳
+    auto time_t = std::chrono::system_clock::to_time_t(request_time);
+    std::tm tm = *std::gmtime(&time_t);
+
+    char time_str[30];
+    std::strftime(time_str, sizeof(time_str), "%Y%m%dT%H%M%SZ", &tm);
+
+    char date_str[9];
+    std::strftime(date_str, sizeof(date_str), "%Y%m%d", &tm);
+
+    // 构建查询参数
+    std::map<std::string, std::string> all_params = query_params;
+    all_params["X-Amz-Algorithm"] = "AWS4-HMAC-SHA256";
+    all_params["X-Amz-Credential"] = access_key + "/" + date_str + "/" + region + "/" + service + "/aws4_request";
+    all_params["X-Amz-Date"] = time_str;
+    all_params["X-Amz-Expires"] = std::to_string(expires_in_seconds);
+    all_params["X-Amz-SignedHeaders"] = get_signed_headers(headers);
+
+    // 构建规范请求
+    std::string canonical_query_string = get_canonical_query_string(all_params);
+    std::string canonical_request = get_canonical_request(
+        method, uri, all_params, headers, ""
+    );
+
+    // 构建待签名字符串
+    std::string algorithm = "AWS4-HMAC-SHA256";
+    std::string credential_scope = std::string(date_str) + "/" + region + "/" + service + "/aws4_request";
+
+    std::string string_to_sign = algorithm + "\n" +
+                                 std::string(time_str) + "\n" +
+                                 credential_scope + "\n" +
+                                 sha256(canonical_request);
+
+    // 计算签名密钥
+    std::string k_date = hmac_sha256("AWS4" + secret_key, date_str);
+    std::string k_region = hmac_sha256(k_date, region);
+    std::string k_service = hmac_sha256(k_region, service);
+    std::string k_signing = hmac_sha256(k_service, "aws4_request");
+
+    // 计算签名
+    std::string signature = hex_encode(hmac_sha256(k_signing, string_to_sign));
+
+    return signature;
+}
+
+std::string S3Authenticator::sha256(const std::string& data) {
+    unsigned char hash[SHA256_DIGEST_LENGTH];
+    SHA256_CTX sha256;
+    SHA256_Init(&sha256);
+    SHA256_Update(&sha256, data.c_str(), data.length());
+    SHA256_Final(hash, &sha256);
+
+    std::stringstream ss;
+    for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
+        ss << std::hex << std::setw(2) << std::setfill('0') << (int)hash[i];
+    }
+    return ss.str();
+}
+
+std::string S3Authenticator::hmac_sha256(
+    const std::string& key,
+    const std::string& data
+) {
+    unsigned char result[EVP_MAX_MD_SIZE];
+    unsigned int result_len = 0;
+
+    HMAC(EVP_sha256(), key.c_str(), static_cast<int>(key.length()),
+         (unsigned char*)data.c_str(), data.length(),
+         result, &result_len);
+
+    return std::string((char*)result, result_len);
+}
+
+std::string S3Authenticator::hex_encode(const std::vector<uint8_t>& data) {
+    std::stringstream ss;
+    for (uint8_t byte : data) {
+        ss << std::hex << std::setw(2) << std::setfill('0') << (int)byte;
+    }
+    return ss.str();
+}
+
+std::string S3Authenticator::get_canonical_request(
+    const std::string& method,
+    const std::string& uri,
+    const std::map<std::string, std::string>& query_params,
+    const std::map<std::string, std::string>& headers,
+    const std::string& payload
+) {
+    // 规范URI
+    std::string canonical_uri = uri;
+    if (canonical_uri.empty()) {
+        canonical_uri = "/";
+    }
+
+    // 规范查询字符串
+    std::string canonical_query = get_canonical_query_string(query_params);
+
+    // 规范头部
+    std::vector<std::string> header_names;
+    for (const auto& [key, value] : headers) {
+        header_names.push_back(key);
+    }
+    std::sort(header_names.begin(), header_names.end());
+
+    std::string canonical_headers;
+    for (const auto& name : header_names) {
+        canonical_headers += name + ":" + headers.at(name) + "\n";
+    }
+
+    // 签名头部
+    std::string signed_headers = get_signed_headers(headers);
+
+    // 载荷哈希
+    std::string payload_hash = sha256(payload);
+
+    // 组装规范请求
+    return method + "\n" +
+           canonical_uri + "\n" +
+           canonical_query + "\n" +
+           canonical_headers + "\n" +
+           signed_headers + "\n" +
+           payload_hash;
+}
+
+std::string S3Authenticator::get_string_to_sign(
+    const std::chrono::system_clock::time_point& request_time,
+    const std::string& region,
+    const std::string& service,
+    const std::string& canonical_request
+) {
+    // 获取时间戳
+    auto time_t = std::chrono::system_clock::to_time_t(request_time);
+    std::tm tm = *std::gmtime(&time_t);
+
+    char time_str[30];
+    std::strftime(time_str, sizeof(time_str), "%Y%m%dT%H%M%SZ", &tm);
+
+    char date_str[9];
+    std::strftime(date_str, sizeof(date_str), "%Y%m%d", &tm);
+
+    // 构建待签名字符串
+    std::string algorithm = "AWS4-HMAC-SHA256";
+    std::string credential_scope = std::string(date_str) + "/" + region + "/" + service + "/aws4_request";
+
+    return algorithm + "\n" +
+           std::string(time_str) + "\n" +
+           credential_scope + "\n" +
+           sha256(canonical_request);
+}
+
+std::string S3Authenticator::get_canonical_query_string(
+    const std::map<std::string, std::string>& params
+) {
+    std::vector<std::string> encoded_pairs;
+    for (const auto& [key, value] : params) {
+        encoded_pairs.push_back(url_encode(key) + "=" + url_encode(value));
+    }
+    std::sort(encoded_pairs.begin(), encoded_pairs.end());
+
+    std::string result;
+    for (size_t i = 0; i < encoded_pairs.size(); ++i) {
+        if (i > 0) result += "&";
+        result += encoded_pairs[i];
+    }
+    return result;
+}
+
+std::string S3Authenticator::get_signed_headers(
+    const std::map<std::string, std::string>& headers
+) {
+    std::vector<std::string> header_names;
+    for (const auto& [key, value] : headers) {
+        header_names.push_back(key);
+    }
+    std::sort(header_names.begin(), header_names.end());
+
+    std::string result;
+    for (size_t i = 0; i < header_names.size(); ++i) {
+        if (i > 0) result += ";";
+        result += header_names[i];
+    }
+    return result;
+}
+
+std::string S3Authenticator::url_encode(const std::string& str) {
+    std::ostringstream encoded;
+    encoded.fill('0');
+    encoded << std::hex;
+
+    for (char c : str) {
+        if (std::isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_' || c == '.' || c == '~') {
+            encoded << c;
+        } else {
+            encoded << std::uppercase;
+            encoded << '%' << std::setw(2) << int(static_cast<unsigned char>(c));
+            encoded << std::nouppercase;
+        }
+    }
+
+    return encoded.str();
 }
 
 } // namespace falcon

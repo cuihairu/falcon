@@ -32,6 +32,10 @@ public:
     void set_download_detection_count(int count);
     void set_download_detection_active(bool active);
 
+    // 更新下载统计信息
+    void set_download_speed(uint64_t bytes_per_second);
+    void set_task_counts(int downloading, int completed);
+
 signals:
     void downloadPlanClicked();
     void remoteDownloadClicked();
@@ -41,8 +45,13 @@ signals:
 private:
     void setup_ui();
     void update_detection_badge();
+    static QString format_speed(uint64_t bytes_per_second);
 
     QHBoxLayout* main_layout_;
+
+    // 统计信息标签
+    QLabel* speed_label_;
+    QLabel* task_count_label_;
 
     // 左侧按钮
     QPushButton* plan_button_;

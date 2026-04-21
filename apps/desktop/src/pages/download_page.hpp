@@ -67,7 +67,9 @@ private:
     void create_task_table();
     void update_header_for_mode();
     void update_action_buttons();
+    void show_context_menu(const QPoint& pos);
     falcon::DownloadTask::Ptr selected_task() const;
+    falcon::DownloadTask::Ptr task_at_row(int row) const;
 
     void refresh_engine_tasks();
     void sync_task_tables(const falcon::DownloadTask::Ptr& task);
