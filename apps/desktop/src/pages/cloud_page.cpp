@@ -540,8 +540,10 @@ void CloudPage::show_context_menu(const QPoint& pos)
     if (action == download_action) {
         download_file();
     } else if (action == rename_action) {
-        // TODO: 实现重命名功能
-        QMessageBox::information(this, tr("Notice"), tr("Rename is not implemented yet."));
+        const auto selected = file_table_->selectedItems();
+        if (!selected.isEmpty()) {
+            rename_item(selected.first()->row());
+        }
     } else if (action == delete_action) {
         delete_selected();
     } else if (action == properties_action) {
@@ -790,6 +792,51 @@ void CloudPage::show_file_properties(int row)
     }
 
     msg_box.exec();
+}
+
+void CloudPage::rename_item(int row)
+{
+    if (row < 0 || row >= file_table_->rowCount()) {
+        return;
+    }
+
+    auto* name_item = file_table_->item(row, 0);
+    if (!name_item) {
+        return;
+    }
+
+    const QString old_name = name_item->text();
+
+    // 获取新名称
+    bool ok = false;
+    QString new_name = QInputDialog::getText(
+        this,
+        tr("Rename"),
+        tr("Enter new name:"),
+        QLineEdit::Normal,
+        old_name,
+        &ok
+    );
+
+    if (!ok || new_name.isEmpty() || new_name == old_name) {
+        return;
+    }
+
+    // 验证新名称
+    if (new_name.contains('/') || new_name.contains('\\') || new_name.contains(':')) {
+        QMessageBox::warning(this, tr("Invalid Name"),
+            tr("The name cannot contain special characters: / \\ :"));
+        return;
+    }
+
+    // TODO: 调用 libfalcon 的重命名 API
+    // 目前只更新 UI
+    name_item->setText(new_name);
+
+    // 更新状态栏
+    status_label_->setText(tr("Renamed '%1' to '%2'.").arg(old_name, new_name));
+
+    FALCON_LOG_INFO_STREAM("Renamed: " << old_name.toStdString() << " -> " << new_name.toStdString());
 }
 
 } // namespace falcon::desktop

@@ -81,6 +81,9 @@ private slots:
     // 显示文件属性
     void show_file_properties(int row);
 
+    // 重命名文件/文件夹
+    void rename_item(int row);
+
 private:
     void setup_ui();
     QWidget* create_toolbar();
