@@ -14,8 +14,18 @@
 #include <mutex>
 
 namespace falcon {
+
+// 前向声明
+class DownloadEngine;
+
 namespace daemon {
 namespace rpc {
+
+// 前向声明
+class HTTPServerThread;
+
+// 前向声明
+class HTTPServerThread;
 
 /**
  * @struct XMLRPCValue
@@ -150,11 +160,38 @@ public:
      */
     bool isRunning() const { return running_; }
 
+    /**
+     * @brief 设置下载引擎引用
+     */
+    void set_download_engine(class DownloadEngine* engine) { download_engine_ = engine; }
+
 private:
     int port_;
     bool running_;
     std::map<std::string, RPCMethod> methods_;
     mutable std::mutex mutex_;
+    std::unique_ptr<HTTPServerThread> http_server_;  // HTTP 服务器线程
+    class DownloadEngine* download_engine_ = nullptr;  // 下载引擎引用
+
+    // GID 管理
+    std::unordered_map<TaskId, std::string> task_id_to_gid_;
+    std::unordered_map<std::string, TaskId> gid_to_task_id_;
+    TaskId next_gid_ = 1;
+
+    /**
+     * @brief 生成新的 GID
+     */
+    std::string generate_gid();
+
+    /**
+     * @brief TaskID 转 GID
+     */
+    std::string task_id_to_gid(TaskId id);
+
+    /**
+     * @brief GID 转 TaskID
+     */
+    TaskId gid_to_task_id(const std::string& gid);
 
     /**
      * @brief 解析 XML-RPC 请求

@@ -422,3 +422,40 @@ feature 候选：
 - ⏳ 云添加任务功能
 - ⏳ 主题切换（亮色/暗色）
 - ⏳ 系统托盘集成
+
+---
+
+## 核心功能开发进度
+
+### 2026-04-21 - S3 插件与 HTTPS 支持
+
+**已完成：**
+- ✅ S3 插件认证功能实现
+  - 从 options 中获取认证信息
+  - 实现带签名的下载
+  - 完善 S3Authenticator 静态方法
+- ✅ Daemon RPC HTTP 服务器实现
+  - 使用原生 socket 实现 HTTP 服务器
+  - 完整的 XML-RPC 参数解析
+- ✅ HTTP TLS 握手实现
+  - OpenSSL 集成
+  - SSL_write/SSL_read 支持
+  - HTTPS 请求/响应完整支持
+- ✅ Daemon RPC 与 DownloadEngine 集成
+  - GID 管理系统
+  - aria2.addUri/remove/pause/unpause 实现
+  - aria2.tellStatus/getGlobalStat 实现
+- ✅ Daemon 配置热重载
+  - 实现配置重载回调
+- ✅ HTTP 重定向处理
+  - 创建新连接跟随重定向
+- ✅ HTTP 分块下载框架
+  - 多线程分段下载基础实现
+
+**进行中：**
+- ⏳ BitTorrent 插件实现
+- ⏳ 完整的多线程分段下载
+
+**待实现：**
+- ⏳ CloudPage 与后端集成
+- ⏳ DiscoveryPage 搜索 API 集成

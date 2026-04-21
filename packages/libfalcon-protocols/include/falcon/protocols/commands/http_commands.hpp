@@ -132,6 +132,11 @@ private:
 
     std::string request_data_;
     std::size_t request_sent_ = 0;
+
+#ifdef FALCON_ENABLE_OPENSSL
+    SSL_CTX* ssl_ctx_ = nullptr;
+    SSL* ssl_conn_ = nullptr;
+#endif
 };
 
 /**
@@ -156,11 +161,17 @@ public:
      * @param socket_fd Socket 文件描述符
      * @param request HTTP 请求对象
      * @param options 下载选项
+     * @param ssl_conn SSL 连接（HTTPS 时使用）
+     * @param use_https 是否使用 HTTPS
      */
     HttpResponseCommand(TaskId task_id,
                         int socket_fd,
                         std::shared_ptr<HttpRequest> request,
-                        const DownloadOptions& options);
+                        const DownloadOptions& options,
+#ifdef FALCON_ENABLE_OPENSSL
+                        void* ssl_conn = nullptr,
+#endif
+                        bool use_https = false);
 
     ~HttpResponseCommand() override;
 
@@ -232,6 +243,12 @@ private:
     std::shared_ptr<HttpResponse> http_response_;
     const DownloadOptions& options_;  // 引用下载选项
 
+    // TLS/HTTPS 支持
+#ifdef FALCON_ENABLE_OPENSSL
+    void* ssl_conn_ = nullptr;  // SSL* 指针
+#endif
+    bool use_https_ = false;
+
     // 响应解析状态
     std::string response_buffer_;
     std::string initial_body_;
@@ -245,6 +262,12 @@ private:
     bool supports_resume_ = false;
     Bytes content_length_ = 0;
     bool accepts_range_ = false;
+
+    // TLS/HTTPS 支持
+#ifdef FALCON_ENABLE_OPENSSL
+    void* ssl_conn_ = nullptr;  // SSL* 指针
+#endif
+    bool use_https_ = false;
 };
 
 /**
