@@ -19,6 +19,29 @@
 
 namespace falcon {
 
+namespace {
+
+/**
+ * @brief 格式化字节数为人类可读格式
+ */
+std::string format_bytes(uint64_t bytes) {
+    static const char* units[] = {"B", "KB", "MB", "GB", "TB"};
+    int unit = 0;
+    double size = static_cast<double>(bytes);
+    while (size >= 1024.0 && unit < 4) {
+        size /= 1024.0;
+        ++unit;
+    }
+    if (unit == 0) {
+        return std::to_string(bytes) + " " + units[0];
+    }
+    char buffer[32];
+    snprintf(buffer, sizeof(buffer), "%.1f %s", size, units[unit]);
+    return buffer;
+}
+
+}  // namespace
+
 /**
  * @brief 下载引擎实现类
  */
@@ -232,8 +255,22 @@ public:
     }
 
     void set_global_speed_limit(BytesPerSecond bytes_per_second) {
-        global_speed_limiter_ = bytes_per_second;
-        // TODO: 通知所有任务调整速度
+        const auto old_limit = global_speed_limiter_.exchange(bytes_per_second);
+
+        // 只在值真正改变时记录日志和广播事件
+        if (old_limit != bytes_per_second) {
+            FALCON_LOG_INFO_STREAM("Global speed limit changed: "
+                << (old_limit > 0 ? format_bytes(old_limit) + "/s" : "unlimited")
+                << " -> "
+                << (bytes_per_second > 0 ? format_bytes(bytes_per_second) + "/s" : "unlimited"));
+
+            // 广播全局配置变更事件
+            event_dispatcher_.dispatch_custom(
+                "global_config_changed",
+                "{\"type\":\"speed_limit\",\"value\":" + std::to_string(bytes_per_second) + "}",
+                INVALID_TASK_ID
+            );
+        }
     }
 
     void set_max_concurrent_tasks(std::size_t max_tasks) {
