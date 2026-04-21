@@ -14,6 +14,7 @@
 #include <QAction>
 #include <QDesktopServices>
 #include <QApplication>
+#include <algorithm>
 
 namespace falcon::desktop {
 
@@ -481,6 +482,17 @@ void DownloadPage::sync_task_tables(const falcon::DownloadTask::Ptr& task)
     const auto status = task->status();
     bool should_show = false;
 
+    // 云盘域名列表（用于识别云添加任务）
+    static const QStringList cloud_domains = {
+        "pan.baidu.com",
+        "pan.quark.cn",
+        "cloud.189.cn",
+        "www.alipan.com",
+        "www.aliyundrive.com",
+        "www.115.com",
+        "disk.pikpak.com"
+    };
+
     switch (view_mode_) {
         case DownloadViewMode::Downloading:
             should_show = (status == falcon::TaskStatus::Downloading ||
@@ -492,7 +504,14 @@ void DownloadPage::sync_task_tables(const falcon::DownloadTask::Ptr& task)
             should_show = (status == falcon::TaskStatus::Completed);
             break;
         case DownloadViewMode::CloudAdd:
-            should_show = false;  // TODO: 实现云添加任务过滤
+            // 显示 URL 包含云盘域名的任务
+            {
+                const QString url = QString::fromStdString(task->url());
+                should_show = std::any_of(cloud_domains.begin(), cloud_domains.end(),
+                    [&url](const QString& domain) {
+                        return url.contains(domain);
+                    });
+            }
             break;
     }
 
