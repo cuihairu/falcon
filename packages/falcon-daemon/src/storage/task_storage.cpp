@@ -18,7 +18,7 @@
 namespace falcon::daemon {
 
 // SQL schema version
-constexpr int SCHEMA_VERSION = 1;
+[[maybe_unused]] constexpr int SCHEMA_VERSION = 1;
 
 // SQL statements
 constexpr const char* CREATE_TASKS_TABLE = R"sql(

@@ -14,11 +14,11 @@ add_library(falcon_plugin_ftp
 target_include_directories(falcon_plugin_ftp
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/../../include
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../../libfalcon-core/include
 )
 
 target_link_libraries(falcon_plugin_ftp
     PRIVATE
+        falcon_core
         CURL::libcurl
 )
 

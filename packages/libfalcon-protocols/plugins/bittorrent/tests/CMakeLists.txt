@@ -8,13 +8,9 @@ add_executable(bittorrent_plugin_test
 target_link_libraries(bittorrent_plugin_test
     PRIVATE
         falcon_plugin_bittorrent
+        falcon_core
         gtest_main
         gmock
-)
-
-target_include_directories(bittorrent_plugin_test
-    PRIVATE
-        ${CMAKE_SOURCE_DIR}/packages/libfalcon-core/include
 )
 
 include(GoogleTest)

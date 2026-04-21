@@ -219,7 +219,6 @@ private:
         int lines = static_cast<int>(task_names_.size());
         std::cout << term::move_up(lines);
 
-        int i = 0;
         for (const auto& [id, name] : task_names_) {
             std::cout << term::clear_line();
 
@@ -246,7 +245,6 @@ private:
             int pct = static_cast<int>(prog * 100);
             std::cout << "] " << term::bold() << std::setw(3) << pct << "%" << term::reset()
                       << " " << display_name << "\n";
-            ++i;
         }
         std::cout.flush();
     }
@@ -783,7 +781,7 @@ static bool interactive_control_loop(
     struct termios old_tio, new_tio;
     tcgetattr(STDIN_FILENO, &old_tio);
     new_tio = old_tio;
-    new_tio.c_lflag &= ~(ICANON | ECHO);
+    new_tio.c_lflag &= static_cast<tcflag_t>(~(ICANON | ECHO));
     tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
 #endif
 

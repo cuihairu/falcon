@@ -39,17 +39,21 @@ add_library(falcon_plugin_bittorrent
 
 target_include_directories(falcon_plugin_bittorrent
     PRIVATE
-        ${CMAKE_SOURCE_DIR}/packages/libfalcon-core/include
         ${LIBTORRENT_INCLUDE_DIRS}
 )
 
 target_link_libraries(falcon_plugin_bittorrent
     PRIVATE
+        falcon_core
         ${LIBTORRENT_LIBRARIES}
         OpenSSL::SSL
         OpenSSL::Crypto
-        spdlog::spdlog
 )
+
+if(spdlog_FOUND)
+    target_link_libraries(falcon_plugin_bittorrent PRIVATE spdlog::spdlog)
+    target_compile_definitions(falcon_plugin_bittorrent PRIVATE FALCON_USE_SPDLOG)
+endif()
 
 target_compile_features(falcon_plugin_bittorrent PRIVATE cxx_std_17)
 

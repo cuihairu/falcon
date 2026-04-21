@@ -377,13 +377,13 @@ public:
         return result;
     }
 
-    std::string get_download_url(const std::string& file_id,
-                                const CloudDownloadOptions& options = {}) override {
+    std::string get_download_url(const std::string& /*file_id*/,
+                                const CloudDownloadOptions& /*options*/ = {}) override {
         // 实际实现需要调用API获取下载链接
         return "";
     }
 
-    bool authenticate(const std::string& token) override {
+    bool authenticate(const std::string& /*token*/) override {
         return true;
     }
 
@@ -457,7 +457,7 @@ CloudExtractionResult CloudStorageManager::handle_share_link(
 
 std::string CloudStorageManager::get_direct_download_url(
     const std::string& url,
-    const CloudDownloadOptions& options) {
+    const CloudDownloadOptions& /*options*/) {
 
     auto result = handle_share_link(url);
     if (result.success && !result.files.empty()) {

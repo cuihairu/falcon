@@ -414,7 +414,14 @@ static std::optional<JsonRpcServer::HttpRequest> read_http_request(int fd) {
 static bool send_all(int fd, const std::string& data) {
     std::size_t off = 0;
     while (off < data.size()) {
-        recv_send_size_t n = ::send(fd, data.data() + off, static_cast<int>(data.size() - off), 0);
+        recv_send_size_t n = 0;
+#ifdef _WIN32
+        const auto remaining = static_cast<int>(data.size() - off);
+        n = ::send(fd, data.data() + off, remaining, 0);
+#else
+        const auto remaining = data.size() - off;
+        n = ::send(fd, data.data() + off, remaining, 0);
+#endif
         if (n <= 0) {
             return false;
         }
@@ -778,8 +785,9 @@ JsonRpcServer::HttpResponse JsonRpcServer::handle_jsonrpc(const std::string& bod
                 int start = std::max(0, offset);
                 int end = std::min<int>(static_cast<int>(waiting.size()), start + std::max(0, num));
                 for (int i = start; i < end; ++i) {
-                    if (!waiting[i]) continue;
-                    out.push_back(task_to_status_json(*waiting[i]));
+                    const auto index = static_cast<std::size_t>(i);
+                    if (!waiting[index]) continue;
+                    out.push_back(task_to_status_json(*waiting[index]));
                 }
                 return out;
             }
@@ -804,8 +812,9 @@ JsonRpcServer::HttpResponse JsonRpcServer::handle_jsonrpc(const std::string& bod
                 int start = std::max(0, offset);
                 int end = std::min<int>(static_cast<int>(stopped.size()), start + std::max(0, num));
                 for (int i = start; i < end; ++i) {
-                    if (!stopped[i]) continue;
-                    out.push_back(task_to_status_json(*stopped[i]));
+                    const auto index = static_cast<std::size_t>(i);
+                    if (!stopped[index]) continue;
+                    out.push_back(task_to_status_json(*stopped[index]));
                 }
                 return out;
             }

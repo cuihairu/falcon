@@ -14,13 +14,17 @@ add_library(falcon_plugin_http OBJECT
     http_handler.cpp
 )
 
+target_link_libraries(falcon_plugin_http
+    PRIVATE
+        falcon_core
+)
+
 target_include_directories(falcon_plugin_http
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/../../include
         ${CMAKE_CURRENT_SOURCE_DIR}/../../src
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../../libfalcon-core/include
 )
 
 # Required for OBJECT libraries used in shared libraries

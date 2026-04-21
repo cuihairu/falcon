@@ -69,7 +69,7 @@ endif()
 
 if(OPENSSL_FOUND AND TARGET OpenSSL::Crypto AND TARGET OpenSSL::SSL)
     target_link_libraries(falcon_protocols PUBLIC OpenSSL::Crypto OpenSSL::SSL)
-    target_compile_definitions(falcon_protocols PRIVATE FALCON_USE_OPENSSL)
+    target_compile_definitions(falcon_protocols PRIVATE FALCON_USE_OPENSSL FALCON_ENABLE_OPENSSL)
 endif()
 
 # ============================================================================
@@ -77,40 +77,51 @@ endif()
 # ============================================================================
 
 # HTTP/HTTPS plugin
-if(FALCON_ENABLE_HTTP)
+if(FALCON_ENABLE_HTTP AND CURL_FOUND)
     add_subdirectory(plugins/http)
     target_sources(falcon_protocols PRIVATE
         $<TARGET_OBJECTS:falcon_plugin_http>
     )
     target_compile_definitions(falcon_protocols PRIVATE FALCON_ENABLE_HTTP_PLUGIN FALCON_ENABLE_HTTP)
+elseif(FALCON_ENABLE_HTTP)
+    message(WARNING "HTTP plugin requires libcurl; disabling FALCON_ENABLE_HTTP")
+    set(FALCON_ENABLE_HTTP OFF CACHE BOOL "Enable HTTP/HTTPS plugin" FORCE)
 endif()
 
 # FTP plugin
-if(FALCON_ENABLE_FTP)
+if(FALCON_ENABLE_FTP AND CURL_FOUND)
     add_subdirectory(plugins/ftp)
     target_link_libraries(falcon_protocols PRIVATE falcon_plugin_ftp)
     target_compile_definitions(falcon_protocols PRIVATE FALCON_ENABLE_FTP_PLUGIN)
+elseif(FALCON_ENABLE_FTP)
+    message(WARNING "FTP plugin requires libcurl; disabling FALCON_ENABLE_FTP")
+    set(FALCON_ENABLE_FTP OFF CACHE BOOL "Enable FTP plugin" FORCE)
 endif()
 
 # BitTorrent plugin
-if(FALCON_ENABLE_BITTORRENT)
+if(FALCON_ENABLE_BITTORRENT AND OPENSSL_FOUND AND TARGET OpenSSL::Crypto AND TARGET OpenSSL::SSL)
     add_subdirectory(plugins/bittorrent)
     target_link_libraries(falcon_protocols PRIVATE falcon_plugin_bittorrent)
     target_compile_definitions(falcon_protocols PRIVATE FALCON_ENABLE_BT_PLUGIN)
+elseif(FALCON_ENABLE_BITTORRENT)
+    message(WARNING "BitTorrent plugin requires OpenSSL; disabling FALCON_ENABLE_BITTORRENT")
+    set(FALCON_ENABLE_BITTORRENT OFF CACHE BOOL "Enable BitTorrent plugin" FORCE)
 endif()
 
 # SFTP plugin
-if(FALCON_ENABLE_SFTP)
+if(FALCON_ENABLE_SFTP AND LIBSSH_FOUND)
     add_subdirectory(plugins/sftp)
     target_link_libraries(falcon_protocols PRIVATE falcon_plugin_sftp)
     target_compile_definitions(falcon_protocols PRIVATE FALCON_ENABLE_SFTP_PLUGIN)
+elseif(FALCON_ENABLE_SFTP)
+    message(WARNING "SFTP plugin requires libssh; disabling FALCON_ENABLE_SFTP")
+    set(FALCON_ENABLE_SFTP OFF CACHE BOOL "Enable SFTP plugin" FORCE)
 endif()
 
 # Metalink plugin
 if(FALCON_ENABLE_METALINK)
-    add_subdirectory(plugins/metalink)
-    target_link_libraries(falcon_protocols PRIVATE falcon_plugin_metalink)
-    target_compile_definitions(falcon_protocols PRIVATE FALCON_ENABLE_METALINK_PLUGIN)
+    message(WARNING "Metalink plugin is not yet migrated to the current protocol handler architecture; disabling FALCON_ENABLE_METALINK")
+    set(FALCON_ENABLE_METALINK OFF CACHE BOOL "Enable Metalink plugin" FORCE)
 endif()
 
 # Thunder protocol

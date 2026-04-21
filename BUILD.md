@@ -30,10 +30,10 @@ vcpkg install
 #### 方法二：使用系统包管理器
 ```bash
 # macOS (使用 Homebrew)
-brew install curl spdlog nlohmann-json
+brew install curl spdlog nlohmann-json googletest
 
 # Ubuntu/Debian
-sudo apt-get install libcurl4-openssl-dev libspdlog-dev nlohmann-json3-dev
+sudo apt-get install libcurl4-openssl-dev libspdlog-dev nlohmann-json3-dev libgtest-dev
 ```
 
 ### 3. 构建项目
@@ -139,6 +139,8 @@ cmake --build build --config Release
 cd build
 ctest --output-on-failure
 ```
+
+如果配置阶段提示 `GTest not found`，说明本机尚未安装本地测试依赖。当前仓库不会再自动通过 `FetchContent` 联网拉取 `googletest`，需要先按上面的系统包管理器方式安装。
 
 ## 安装
 

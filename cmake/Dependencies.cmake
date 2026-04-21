@@ -94,12 +94,20 @@ endif()
 # Google Test - Testing framework (Optional)
 # ============================================================================
 if(FALCON_BUILD_TESTS)
+    if(NOT GTest_DIR AND EXISTS "/usr/local/lib/cmake/GTest")
+        list(APPEND CMAKE_PREFIX_PATH "/usr/local")
+    endif()
+
+    if(NOT GTest_DIR AND EXISTS "/opt/homebrew/lib/cmake/GTest")
+        list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew")
+    endif()
+
     find_package(GTest QUIET)
     if(GTest_FOUND)
         include(GoogleTest)
         message(STATUS "Found GTest: tests enabled")
     else()
-        message(STATUS "GTest not found: will fetch via FetchContent")
+        message(STATUS "GTest not found: test targets that require it will be skipped")
     endif()
 endif()
 

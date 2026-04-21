@@ -29,6 +29,20 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+print_gtest_install_hint() {
+    if command -v brew >/dev/null 2>&1; then
+        print_info "可先安装本地测试依赖: brew install googletest"
+        return
+    fi
+
+    if command -v apt-get >/dev/null 2>&1; then
+        print_info "可先安装本地测试依赖: sudo apt-get install libgtest-dev"
+        return
+    fi
+
+    print_info "请先安装本地 GTest 依赖，然后重新运行此脚本。"
+}
+
 detect_jobs() {
     if command -v nproc >/dev/null 2>&1; then
         nproc
@@ -61,6 +75,18 @@ run_gtest_binary() {
     print_info "运行 $(basename "$binary")..."
     "$binary" --gtest_brief=1 --gtest_output="xml:test_results/$xml_name" \
         2>&1 | tee "test_results/$log_name"
+}
+
+cmake_target_exists() {
+    local build_dir="$1"
+    local target_name="$2"
+    local targets_file="$build_dir/CMakeFiles/TargetDirectories.txt"
+
+    if [ ! -f "$targets_file" ]; then
+        return 1
+    fi
+
+    grep -Eq "/CMakeFiles/${target_name}\\.dir/?$" "$targets_file"
 }
 
 resolve_plugin_flag() {
@@ -154,12 +180,12 @@ done
 
 print_info "开始构建 Falcon 下载器..."
 
-ENABLE_BITTORRENT=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "packages/libfalcon/plugins/bittorrent/CMakeLists.txt")
-ENABLE_THUNDER=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "packages/libfalcon/plugins/thunder/thunder_plugin.cpp")
-ENABLE_QQDL=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "packages/libfalcon/plugins/qqdl/qqdl_plugin.cpp")
-ENABLE_FLASHGET=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "packages/libfalcon/plugins/flashget/flashget_plugin.cpp")
-ENABLE_ED2K=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "packages/libfalcon/plugins/ed2k/ed2k_plugin.cpp")
-ENABLE_HLS=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "packages/libfalcon/plugins/hls/hls_plugin.cpp")
+ENABLE_BITTORRENT=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "packages/libfalcon-protocols/plugins/bittorrent/CMakeLists.txt")
+ENABLE_THUNDER=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "packages/libfalcon-protocols/plugins/thunder/thunder_plugin.cpp")
+ENABLE_QQDL=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "packages/libfalcon-protocols/plugins/qqdl/qqdl_plugin.cpp")
+ENABLE_FLASHGET=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "packages/libfalcon-protocols/plugins/flashget/flashget_plugin.cpp")
+ENABLE_ED2K=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "packages/libfalcon-protocols/plugins/ed2k/ed2k_plugin.cpp")
+ENABLE_HLS=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "packages/libfalcon-protocols/plugins/hls/hls_plugin.cpp")
 
 if [ "$ENABLE_COVERAGE" = "ON" ] && [ -d "$BUILD_DIR" ]; then
     find "$BUILD_DIR" -name '*.gcda' -delete
@@ -184,14 +210,46 @@ cmake -B $BUILD_DIR \
 
 # 编译
 print_info "编译项目..."
-cmake --build $BUILD_DIR --config $BUILD_TYPE -j"$JOBS" --target \
-    falcon \
-    falcon-cli \
-    falcon-daemon \
-    falcon_core_tests \
-    falcon_cli_tests \
-    falcon_daemon_rpc_tests \
+APP_BUILD_TARGETS=(
+    falcon
+    falcon-cli
+    falcon-daemon
+)
+
+TEST_BUILD_TARGETS=(
+    falcon_core_tests
+    falcon_split_tests
+    falcon_protocols_tests
+    falcon_http_tests
+    falcon_ftp_tests
+    falcon_integration_tests
+    falcon_storage_tests
+    falcon_drives_tests
+    falcon_cli_tests
+    falcon_daemon_rpc_tests
     falcon_daemon_storage_tests
+)
+
+AVAILABLE_BUILD_TARGETS=()
+for target_name in "${APP_BUILD_TARGETS[@]}" "${TEST_BUILD_TARGETS[@]}"; do
+    if cmake_target_exists "$BUILD_DIR" "$target_name"; then
+        AVAILABLE_BUILD_TARGETS+=("$target_name")
+    fi
+done
+
+if [ ${#AVAILABLE_BUILD_TARGETS[@]} -eq 0 ]; then
+    print_error "未发现可构建的目标，请检查 CMake 配置"
+    exit 1
+fi
+
+cmake --build $BUILD_DIR --config $BUILD_TYPE -j"$JOBS" --target "${AVAILABLE_BUILD_TARGETS[@]}"
+
+AVAILABLE_TEST_TARGETS=()
+for target_name in "${TEST_BUILD_TARGETS[@]}"; do
+    if cmake_target_exists "$BUILD_DIR" "$target_name"; then
+        AVAILABLE_TEST_TARGETS+=("$target_name")
+    fi
+done
 
 if [ "$BUILD_DESKTOP" = "ON" ]; then
     if cmake --build $BUILD_DIR --target help 2>/dev/null | grep -q '^falcon-desktop:'; then
@@ -201,6 +259,13 @@ if [ "$BUILD_DESKTOP" = "ON" ]; then
     fi
 fi
 
+if [ ${#AVAILABLE_TEST_TARGETS[@]} -eq 0 ]; then
+    print_warning "当前构建未生成任何测试目标。通常是因为本机缺少 GTest，相关测试目录已被跳过。"
+    print_gtest_install_hint
+    print_info "应用目标已完成构建，但未执行单元测试。"
+    exit 0
+fi
+
 # 运行 todo.md 中列出的测试目标
 print_info "运行测试目标..."
 echo "=========================================="
@@ -208,6 +273,13 @@ echo "          验证测试 (Verification Tests)"
 echo "=========================================="
 
 run_gtest_binary "$BUILD_DIR/bin/falcon_core_tests" "falcon_core_tests.xml" "falcon_core_tests.log"
+run_gtest_binary "$BUILD_DIR/bin/falcon_split_tests" "falcon_split_tests.xml" "falcon_split_tests.log"
+run_gtest_binary "$BUILD_DIR/bin/falcon_protocols_tests" "falcon_protocols_tests.xml" "falcon_protocols_tests.log"
+run_gtest_binary "$BUILD_DIR/bin/falcon_http_tests" "falcon_http_tests.xml" "falcon_http_tests.log"
+run_gtest_binary "$BUILD_DIR/bin/falcon_ftp_tests" "falcon_ftp_tests.xml" "falcon_ftp_tests.log"
+run_gtest_binary "$BUILD_DIR/bin/falcon_integration_tests" "falcon_integration_tests.xml" "falcon_integration_tests.log"
+run_gtest_binary "$BUILD_DIR/bin/falcon_storage_tests" "falcon_storage_tests.xml" "falcon_storage_tests.log"
+run_gtest_binary "$BUILD_DIR/bin/falcon_drives_tests" "falcon_drives_tests.xml" "falcon_drives_tests.log"
 run_gtest_binary "$BUILD_DIR/bin/falcon_cli_tests" "falcon_cli_tests.xml" "falcon_cli_tests.log"
 run_gtest_binary "$BUILD_DIR/bin/falcon_daemon_rpc_tests" "falcon_daemon_rpc_tests.xml" "falcon_daemon_rpc_tests.log"
 run_gtest_binary "$BUILD_DIR/bin/falcon_daemon_storage_tests" "falcon_daemon_storage_tests.xml" "falcon_daemon_storage_tests.log"
@@ -221,12 +293,22 @@ python3 scripts/generate_test_report.py test_results/ > test_reports/test_report
 if [ "$ENABLE_COVERAGE" = "ON" ] && command -v gcov >/dev/null 2>&1; then
     print_info "生成代码覆盖率摘要..."
     COVERAGE_REPORT="$BUILD_DIR/coverage-summary.txt"
-    gcov -b -c \
-        "$BUILD_DIR/packages/libfalcon/CMakeFiles/falcon.dir/src/download_engine.cpp.gcno" \
-        "$BUILD_DIR/packages/libfalcon/CMakeFiles/falcon.dir/src/task_manager.cpp.gcno" \
-        "$BUILD_DIR/packages/libfalcon/CMakeFiles/falcon.dir/src/download_task.cpp.gcno" \
-        "$BUILD_DIR/packages/libfalcon/CMakeFiles/falcon.dir/src/download_engine_v2.cpp.gcno" \
-        > "$COVERAGE_REPORT" 2>&1 || true
+    GCNO_FILES=()
+    while IFS= read -r gcno_file; do
+        GCNO_FILES+=("$gcno_file")
+    done < <(
+        find "$BUILD_DIR" -type f \
+            \( -name 'download_engine.cpp.gcno' \
+            -o -name 'task_manager.cpp.gcno' \
+            -o -name 'download_task.cpp.gcno' \
+            -o -name 'download_engine_v2.cpp.gcno' \)
+    )
+
+    if [ ${#GCNO_FILES[@]} -gt 0 ]; then
+        gcov -b -c "${GCNO_FILES[@]}" > "$COVERAGE_REPORT" 2>&1 || true
+    else
+        : > "$COVERAGE_REPORT"
+    fi
 
     if [ -s "$COVERAGE_REPORT" ]; then
         print_success "覆盖率摘要已生成: $COVERAGE_REPORT"

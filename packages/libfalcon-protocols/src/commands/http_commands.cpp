@@ -528,8 +528,6 @@ AbstractCommand::ExecutionResult HttpInitiateConnectionCommand::send_http_reques
                                                        options_,
 #ifdef FALCON_ENABLE_OPENSSL
                                                        ssl_conn_,
-#else
-                                                       nullptr,
 #endif
                                                        use_https_));
     return ExecutionResult::OK;
@@ -547,7 +545,7 @@ HttpResponseCommand::HttpResponseCommand(
 #ifdef FALCON_ENABLE_OPENSSL
     , void* ssl_conn
 #endif
-    , bool use_https)
+    , bool /*use_https*/)
     : AbstractCommand(task_id)
     , socket_fd_(socket_fd)
     , http_request_(std::move(request))
@@ -555,7 +553,6 @@ HttpResponseCommand::HttpResponseCommand(
 #ifdef FALCON_ENABLE_OPENSSL
     , ssl_conn_(ssl_conn)
 #endif
-    , use_https_(use_https)
 {
 }
 
@@ -773,8 +770,9 @@ bool HttpResponseCommand::determine_download_strategy(DownloadEngineV2* engine) 
 
         // 计算分段数量
         const size_t max_connections = options_.max_connections;
-        const size_t segment_size = std::max(options_.min_segment_size,
-                                             content_length_ / max_connections);
+        const Bytes computed_segment_size = content_length_ / max_connections;
+        const Bytes min_segment_size = static_cast<Bytes>(options_.min_segment_size);
+        const Bytes segment_size = std::max(min_segment_size, computed_segment_size);
 
         size_t num_segments = (content_length_ + segment_size - 1) / segment_size;
         if (num_segments > max_connections) {

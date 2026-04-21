@@ -8,13 +8,9 @@ add_executable(sftp_plugin_test
 target_link_libraries(sftp_plugin_test
     PRIVATE
         falcon_plugin_sftp
+        falcon_core
         gtest_main
         gmock
-)
-
-target_include_directories(sftp_plugin_test
-    PRIVATE
-        ${CMAKE_SOURCE_DIR}/packages/libfalcon-core/include
 )
 
 include(GoogleTest)

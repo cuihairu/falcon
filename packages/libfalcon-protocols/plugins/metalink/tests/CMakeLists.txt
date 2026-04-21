@@ -8,13 +8,9 @@ add_executable(metalink_plugin_test
 target_link_libraries(metalink_plugin_test
     PRIVATE
         falcon_plugin_metalink
+        falcon_core
         gtest_main
         gmock
-)
-
-target_include_directories(metalink_plugin_test
-    PRIVATE
-        ${CMAKE_SOURCE_DIR}/packages/libfalcon-core/include
 )
 
 include(GoogleTest)

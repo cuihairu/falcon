@@ -39,15 +39,19 @@ add_library(falcon_plugin_sftp
 
 target_include_directories(falcon_plugin_sftp
     PRIVATE
-        ${CMAKE_SOURCE_DIR}/packages/libfalcon-core/include
         ${LIBSSH_INCLUDE_DIRS}
 )
 
 target_link_libraries(falcon_plugin_sftp
     PRIVATE
+        falcon_core
         ${LIBSSH_LIBRARIES}
-        spdlog::spdlog
 )
+
+if(spdlog_FOUND)
+    target_link_libraries(falcon_plugin_sftp PRIVATE spdlog::spdlog)
+    target_compile_definitions(falcon_plugin_sftp PRIVATE FALCON_USE_SPDLOG)
+endif()
 
 target_compile_features(falcon_plugin_sftp PRIVATE cxx_std_17)
 

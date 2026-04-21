@@ -247,7 +247,6 @@ private:
 #ifdef FALCON_ENABLE_OPENSSL
     void* ssl_conn_ = nullptr;  // SSL* 指针
 #endif
-    bool use_https_ = false;
 
     // 响应解析状态
     std::string response_buffer_;
@@ -262,12 +261,6 @@ private:
     bool supports_resume_ = false;
     Bytes content_length_ = 0;
     bool accepts_range_ = false;
-
-    // TLS/HTTPS 支持
-#ifdef FALCON_ENABLE_OPENSSL
-    void* ssl_conn_ = nullptr;  // SSL* 指针
-#endif
-    bool use_https_ = false;
 };
 
 /**

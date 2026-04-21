@@ -23,6 +23,20 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
+如果本机没有预装 `GTest`，当前仓库会直接跳过各测试目录，不再自动联网拉取依赖。
+
+常见安装方式：
+
+```bash
+# macOS (Homebrew)
+brew install googletest
+
+# Ubuntu / Debian
+sudo apt-get install libgtest-dev
+```
+
+安装完成后，重新执行上面的 CMake 配置与构建命令。
+
 ## 编写测试时的接口基线
 
 当前公开接口应以这些符号为准：

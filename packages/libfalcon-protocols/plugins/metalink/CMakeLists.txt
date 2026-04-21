@@ -10,17 +10,23 @@ add_library(falcon_plugin_metalink
     metalink_plugin.cpp
 )
 
-target_include_directories(falcon_plugin_metalink
-    PRIVATE
-        ${CMAKE_SOURCE_DIR}/packages/libfalcon-core/include
-)
-
 target_link_libraries(falcon_plugin_metalink
     PRIVATE
-        OpenSSL::SSL
-        OpenSSL::Crypto
-        spdlog::spdlog
+        falcon_core
 )
+
+if(OPENSSL_FOUND AND TARGET OpenSSL::SSL AND TARGET OpenSSL::Crypto)
+    target_link_libraries(falcon_plugin_metalink
+        PRIVATE
+            OpenSSL::SSL
+            OpenSSL::Crypto
+    )
+endif()
+
+if(spdlog_FOUND)
+    target_link_libraries(falcon_plugin_metalink PRIVATE spdlog::spdlog)
+    target_compile_definitions(falcon_plugin_metalink PRIVATE FALCON_USE_SPDLOG)
+endif()
 
 target_compile_features(falcon_plugin_metalink PRIVATE cxx_std_17)
 

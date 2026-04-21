@@ -261,7 +261,7 @@ int main(int argc, char* argv[]) {
         });
 
         // Setup reload callback
-        daemon_manager.set_reload_callback([&engine, &rpc_config]() {
+        daemon_manager.set_reload_callback([&engine]() {
             FALCON_LOG_INFO_STREAM("Reloading configuration...");
             // 配置重载实现
 
