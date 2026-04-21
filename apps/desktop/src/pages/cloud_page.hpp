@@ -78,6 +78,9 @@ private slots:
     // 显示上下文菜单
     void show_context_menu(const QPoint& pos);
 
+    // 显示文件属性
+    void show_file_properties(int row);
+
 private:
     void setup_ui();
     QWidget* create_toolbar();

@@ -545,8 +545,10 @@ void CloudPage::show_context_menu(const QPoint& pos)
     } else if (action == delete_action) {
         delete_selected();
     } else if (action == properties_action) {
-        // TODO: 显示文件属性
-        QMessageBox::information(this, tr("Notice"), tr("Properties view is not implemented yet."));
+        const auto selected = file_table_->selectedItems();
+        if (!selected.isEmpty()) {
+            show_file_properties(selected.first()->row());
+        }
     }
 }
 
@@ -723,6 +725,71 @@ void CloudPage::persist_configs()
 
     settings.endArray();
     settings.endGroup();
+}
+
+void CloudPage::show_file_properties(int row)
+{
+    if (row < 0 || row >= file_table_->rowCount()) {
+        return;
+    }
+
+    // 获取文件信息
+    auto* name_item = file_table_->item(row, 0);
+    auto* size_item = file_table_->item(row, 1);
+    auto* date_item = file_table_->item(row, 2);
+    auto* type_item = file_table_->item(row, 3);
+
+    if (!name_item) {
+        return;
+    }
+
+    QString name = name_item->text();
+    QString size = size_item ? size_item->text() : "-";
+    QString date = date_item ? date_item->text() : "-";
+    QString type = type_item ? type_item->text() : "-";
+
+    // 判断是文件还是文件夹
+    bool is_folder = (type == tr("Folder"));
+
+    // 构建属性信息
+    QString info;
+    info += "<table border='0' cellpadding='2' cellspacing='0'>";
+    info += "<tr><td colspan='2'><b>" + tr("Name") + ":</b></td></tr>";
+    info += "<tr><td width='20'></td><td>" + name + "</td></tr>";
+    info += "<tr><td colspan='2'>&nbsp;</td></tr>";
+
+    info += "<tr><td colspan='2'><b>" + tr("Type") + ":</b></td></tr>";
+    info += "<tr><td width='20'></td><td>" + type + "</td></tr>";
+    info += "<tr><td colspan='2'>&nbsp;</td></tr>";
+
+    info += "<tr><td colspan='2'><b>" + tr("Size") + ":</b></td></tr>";
+    info += "<tr><td width='20'></td><td>" + (is_folder ? tr("(Folder)") : size) + "</td></tr>";
+    info += "<tr><td colspan='2'>&nbsp;</td></tr>";
+
+    info += "<tr><td colspan='2'><b>" + tr("Modified") + ":</b></td></tr>";
+    info += "<tr><td width='20'></td><td>" + date + "</td></tr>";
+    info += "<tr><td colspan='2'>&nbsp;</td></tr>";
+
+    info += "<tr><td colspan='2'><b>" + tr("Location") + ":</b></td></tr>";
+    info += "<tr><td width='20'></td><td>" + current_path_ + "</td></tr>";
+
+    info += "</table>";
+
+    // 创建对话框
+    QMessageBox msg_box(this);
+    msg_box.setWindowTitle(tr("Properties"));
+    msg_box.setText(name);
+    msg_box.setInformativeText(info);
+    msg_box.setTextFormat(Qt::RichText);
+
+    // 设置图标
+    if (is_folder) {
+        msg_box.setIcon(style()->standardIcon(QStyle::SP_DirIcon));
+    } else {
+        msg_box.setIcon(style()->standardIcon(QStyle::SP_FileIcon));
+    }
+
+    msg_box.exec();
 }
 
 } // namespace falcon::desktop
