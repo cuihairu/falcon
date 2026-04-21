@@ -13,6 +13,7 @@
 #include <QMenu>
 #include <QAction>
 #include <QDesktopServices>
+#include <QApplication>
 
 namespace falcon::desktop {
 
@@ -130,6 +131,11 @@ void DownloadPage::create_task_table()
     task_table_->verticalHeader()->setVisible(false);
     task_table_->horizontalHeader()->setStretchLastSection(false);
     task_table_->horizontalHeader()->setHighlightSections(false);
+
+    // 启用右键菜单
+    task_table_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(task_table_, &QTableWidget::customContextMenuRequested,
+            this, &DownloadPage::show_context_menu);
 
     // 设置列宽
     task_table_->setColumnWidth(0, 350);  // 文件名
@@ -565,6 +571,83 @@ void DownloadPage::sync_task_tables(const falcon::DownloadTask::Ptr& task)
     actions_layout->addWidget(delete_btn);
 
     task_table_->setCellWidget(row, 5, actions_widget);
+}
+
+falcon::DownloadTask::Ptr DownloadPage::task_at_row(int row) const
+{
+    if (row < 0 || row >= task_table_->rowCount()) {
+        return nullptr;
+    }
+
+    auto* item = task_table_->item(row, 0);
+    if (!item) {
+        return nullptr;
+    }
+
+    const qulonglong key = item->data(Qt::UserRole).toULongLong();
+    auto record_it = task_records_.constFind(key);
+    if (record_it == task_records_.constEnd()) {
+        return nullptr;
+    }
+
+    return record_it->task;
+}
+
+void DownloadPage::show_context_menu(const QPoint& pos)
+{
+    const auto* item = task_table_->itemAt(pos);
+    if (!item) {
+        return;
+    }
+
+    const int row = item->row();
+    auto task = task_at_row(row);
+    if (!task) {
+        return;
+    }
+
+    QMenu menu(this);
+
+    // 根据任务状态显示不同菜单项
+    const auto status = task->status();
+
+    // 暂停/继续
+    if (status == falcon::TaskStatus::Downloading ||
+        status == falcon::TaskStatus::Preparing) {
+        auto* pause_action = menu.addAction(tr("暂停"));
+        connect(pause_action, &QAction::triggered, this, &DownloadPage::on_pause_selected);
+    } else if (status == falcon::TaskStatus::Paused ||
+               status == falcon::TaskStatus::Failed) {
+        auto* resume_action = menu.addAction(tr("继续"));
+        connect(resume_action, &QAction::triggered, this, &DownloadPage::on_resume_selected);
+    }
+
+    menu.addSeparator();
+
+    // 打开文件夹
+    auto* open_dir_action = menu.addAction(tr("打开文件夹"));
+    connect(open_dir_action, &QAction::triggered, this, [this]() {
+        const auto task = selected_task();
+        if (task) {
+            const QString path = QString::fromStdString(task->options().output_directory);
+            QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+        }
+    });
+
+    // 复制下载链接
+    auto* copy_url_action = menu.addAction(tr("复制下载链接"));
+    connect(copy_url_action, &QAction::triggered, this, [task]() {
+        QApplication::clipboard()->setText(QString::fromStdString(task->url()));
+    });
+
+    menu.addSeparator();
+
+    // 删除任务
+    auto* delete_action = menu.addAction(tr("删除任务"));
+    delete_action->setStyleSheet("color: red;");
+    connect(delete_action, &QAction::triggered, this, &DownloadPage::on_delete_selected);
+
+    menu.exec(task_table_->mapToGlobal(pos));
 }
 
 } // namespace falcon::desktop
