@@ -86,6 +86,11 @@ private:
     void create_empty_state();
     void create_status_bar();
 
+    // 保存配置
+    void save_config();
+    void load_configs();
+    void persist_configs();
+
     // 视图切换
     void show_empty_state();
     void show_config_panel();

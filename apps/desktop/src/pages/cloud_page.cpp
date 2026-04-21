@@ -17,6 +17,7 @@
 #include <QStyle>
 #include <QFileInfo>
 #include <QDir>
+#include <QSettings>
 
 namespace falcon::desktop {
 
@@ -29,6 +30,7 @@ CloudPage::CloudPage(QWidget* parent)
     , right_panel_(nullptr)
 {
     setup_ui();
+    load_configs();  // 加载已保存的配置
 }
 
 CloudPage::~CloudPage() = default;
@@ -172,10 +174,7 @@ void CloudPage::create_storage_selector()
     // 连接信号
     connect(connect_button_, &QPushButton::clicked, this, &CloudPage::connect_to_storage);
     connect(disconnect_button_, &QPushButton::clicked, this, &CloudPage::disconnect_storage);
-    connect(save_config_button_, &QPushButton::clicked, this, [this]() {
-        // TODO: 实现保存配置功能
-        QMessageBox::information(this, tr("Notice"), tr("Save config is not implemented yet."));
-    });
+    connect(save_config_button_, &QPushButton::clicked, this, &CloudPage::save_config);
 
     // 连接状态
     connection_status_label_ = new QLabel(tr("Disconnected"), left_panel_);
@@ -630,6 +629,100 @@ void CloudPage::show_browser_panel()
     // 显示完整界面
     left_panel_->show();
     right_panel_->show();
+}
+
+void CloudPage::save_config()
+{
+    // 从输入字段获取配置
+    CloudStorageConfig config;
+    config.protocol = storage_type_combo_->currentData().toString();
+    config.endpoint = endpoint_edit_->text().trimmed();
+    config.access_key = access_key_edit_->text().trimmed();
+    config.secret_key = secret_key_edit_->text().trimmed();
+    config.region = region_edit_->text().trimmed();
+    config.bucket = bucket_edit_->text().trimmed();
+
+    // 生成配置名称（基于协议和端点）
+    const QString protocol_name = storage_type_combo_->currentText();
+    config.name = QString("%1 (%2)").arg(protocol_name, config.endpoint);
+
+    // 验证必填字段
+    if (config.endpoint.isEmpty() || config.access_key.isEmpty() || config.secret_key.isEmpty()) {
+        QMessageBox::warning(this, tr("Validation Error"),
+            tr("Please fill in the required fields (Endpoint, Access Key, Secret Key)."));
+        return;
+    }
+
+    // 检查是否已存在相同配置
+    for (const auto& saved : saved_configs_) {
+        if (saved.name == config.name && saved.endpoint == config.endpoint) {
+            QMessageBox::StandardButton reply = QMessageBox::question(this,
+                tr("Config Exists"),
+                tr("A configuration with this name already exists. Overwrite?"),
+                QMessageBox::Yes | QMessageBox::No);
+            if (reply == QMessageBox::No) {
+                return;
+            }
+            // 移除旧配置
+            saved_configs_.removeOne(saved);
+            break;
+        }
+    }
+
+    // 添加到保存列表
+    saved_configs_.append(config);
+
+    // 持久化配置
+    persist_configs();
+
+    QMessageBox::information(this, tr("Success"),
+        tr("Configuration '%1' has been saved.").arg(config.name));
+}
+
+void CloudPage::load_configs()
+{
+    QSettings settings;
+    settings.beginGroup("CloudStorage");
+    const int size = settings.beginReadArray("configs");
+
+    saved_configs_.clear();
+    for (int i = 0; i < size; ++i) {
+        settings.setArrayIndex(i);
+        CloudStorageConfig config;
+        config.name = settings.value("name").toString();
+        config.protocol = settings.value("protocol").toString();
+        config.endpoint = settings.value("endpoint").toString();
+        config.access_key = settings.value("access_key").toString();
+        config.secret_key = settings.value("secret_key").toString();
+        config.region = settings.value("region").toString();
+        config.bucket = settings.value("bucket").toString();
+        saved_configs_.append(config);
+    }
+
+    settings.endArray();
+    settings.endGroup();
+}
+
+void CloudPage::persist_configs()
+{
+    QSettings settings;
+    settings.beginGroup("CloudStorage");
+    settings.beginWriteArray("configs", saved_configs_.size());
+
+    for (int i = 0; i < saved_configs_.size(); ++i) {
+        const auto& config = saved_configs_.at(i);
+        settings.setArrayIndex(i);
+        settings.setValue("name", config.name);
+        settings.setValue("protocol", config.protocol);
+        settings.setValue("endpoint", config.endpoint);
+        settings.setValue("access_key", config.access_key);
+        settings.setValue("secret_key", config.secret_key);
+        settings.setValue("region", config.region);
+        settings.setValue("bucket", config.bucket);
+    }
+
+    settings.endArray();
+    settings.endGroup();
 }
 
 } // namespace falcon::desktop
