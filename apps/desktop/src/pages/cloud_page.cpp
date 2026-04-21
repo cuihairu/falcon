@@ -6,6 +6,7 @@
  */
 
 #include "cloud_page.hpp"
+#include "../services/storage_service.hpp"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -28,9 +29,25 @@ CloudPage::CloudPage(QWidget* parent)
     , stacked_widget_(nullptr)
     , left_panel_(nullptr)
     , right_panel_(nullptr)
-{
+    , storage_service_(new StorageService(this)) {
     setup_ui();
     load_configs();  // 加载已保存的配置
+
+    // 连接 StorageService 信号
+    connect(storage_service_.get(), &StorageService::connected,
+            this, &CloudPage::on_storage_connected);
+    connect(storage_service_.get(), &StorageService::disconnected,
+            this, &CloudPage::on_storage_disconnected);
+    connect(storage_service_.get(), &StorageService::error,
+            this, &CloudPage::on_storage_error);
+    connect(storage_service_.get(), &StorageService::directory_loaded,
+            this, &CloudPage::on_directory_loaded);
+
+    // 连接下载请求信号到主窗口（假设主窗口会处理）
+    connect(storage_service_.get(), &StorageService::download_requested,
+            this, [this](const QString& url, const QString& local_path) {
+                emit download_requested(url, local_path);
+            });
 }
 
 CloudPage::~CloudPage() = default;
@@ -305,8 +322,7 @@ void CloudPage::create_status_bar()
 
 void CloudPage::connect_to_storage()
 {
-    // TODO: 调用 libfalcon 的云存储浏览器
-    // 暂时模拟连接成功
+    // 收集配置信息
     current_config_.protocol = storage_type_combo_->currentData().toString();
     current_config_.endpoint = endpoint_edit_->text();
     current_config_.access_key = access_key_edit_->text();
@@ -314,28 +330,10 @@ void CloudPage::connect_to_storage()
     current_config_.region = region_edit_->text();
     current_config_.bucket = bucket_edit_->text();
 
-    is_connected_ = true;
-    current_path_ = "/";
-
-    // 更新UI状态
-    connect_button_->setEnabled(false);
-    disconnect_button_->setEnabled(true);
-    up_button_->setEnabled(true);
-    home_button_->setEnabled(true);
-    refresh_button_->setEnabled(true);
-    upload_button_->setEnabled(true);
-    download_button_->setEnabled(true);
-    new_folder_button_->setEnabled(true);
-    delete_button_->setEnabled(true);
-
-    connection_status_label_->setText(tr("Connected"));
-
-    // 切换到浏览器面板
-    show_browser_panel();
-
-    // 添加示例文件
-    file_table_->setRowCount(0);
-    update_file_list("/");
+    // 使用 StorageService 连接
+    if (storage_service_->connect_storage(current_config_)) {
+        status_label_->setText(tr("Connecting..."));
+    }
 }
 
 void CloudPage::disconnect_storage()
@@ -837,6 +835,100 @@ void CloudPage::rename_item(int row)
     status_label_->setText(tr("Renamed '%1' to '%2'.").arg(old_name, new_name));
 
     FALCON_LOG_INFO_STREAM("Renamed: " << old_name.toStdString() << " -> " << new_name.toStdString());
+}
+
+// ============================================================================
+// StorageService 回调实现
+// ============================================================================
+
+void CloudPage::on_storage_connected(const QString& config_name) {
+    is_connected_ = true;
+    current_path_ = "/";
+
+    // 更新UI状态
+    connect_button_->setEnabled(false);
+    disconnect_button_->setEnabled(true);
+    up_button_->setEnabled(true);
+    home_button_->setEnabled(true);
+    refresh_button_->setEnabled(true);
+    upload_button_->setEnabled(true);
+    download_button_->setEnabled(true);
+    new_folder_button_->setEnabled(true);
+    delete_button_->setEnabled(true);
+
+    connection_status_label_->setText(tr("Connected"));
+
+    // 切换到浏览器面板
+    show_browser_panel();
+
+    // 加载根目录内容
+    storage_service_->list_directory(config_name, "/", nullptr);
+}
+
+void CloudPage::on_storage_disconnected(const QString& config_name) {
+    (void)config_name;
+    is_connected_ = false;
+
+    // 更新UI状态
+    connect_button_->setEnabled(true);
+    disconnect_button_->setEnabled(false);
+    up_button_->setEnabled(false);
+    home_button_->setEnabled(false);
+    refresh_button_->setEnabled(false);
+    upload_button_->setEnabled(false);
+    download_button_->setEnabled(false);
+    new_folder_button_->setEnabled(false);
+    delete_button_->setEnabled(false);
+
+    connection_status_label_->setText(tr("Disconnected"));
+
+    file_table_->setRowCount(0);
+    current_path_edit_->clear();
+
+    // 返回空状态
+    show_empty_state();
+}
+
+void CloudPage::on_storage_error(const QString& config_name, const QString& message) {
+    (void)config_name;
+    status_label_->setText(tr("Error: %1").arg(message));
+    QMessageBox::warning(this, tr("Storage Error"), message);
+}
+
+void CloudPage::on_directory_loaded(const QString& config_name, const QString& path,
+                                     const QList<RemoteResourceInfo>& resources) {
+    (void)config_name;
+    current_path_ = path;
+    current_path_edit_->setText(path);
+
+    file_table_->setRowCount(0);
+
+    for (const auto& resource : resources) {
+        int row = file_table_->rowCount();
+        file_table_->insertRow(row);
+
+        // 名称
+        auto* name_item = new QTableWidgetItem(resource.name);
+        if (resource.type == "directory") {
+            name_item->setIcon(style()->standardIcon(QStyle::SP_DirIcon));
+        } else {
+            name_item->setIcon(style()->standardIcon(QStyle::SP_FileIcon));
+        }
+        file_table_->setItem(row, 0, name_item);
+
+        // 大小
+        QString size_str = resource.type == "directory" ? "-" : QString::number(resource.size);
+        file_table_->setItem(row, 1, new QTableWidgetItem(size_str));
+
+        // 修改时间
+        file_table_->setItem(row, 2, new QTableWidgetItem(resource.modified_time));
+
+        // 类型
+        QString type_str = resource.type == "directory" ? tr("Folder") : resource.type;
+        file_table_->setItem(row, 3, new QTableWidgetItem(type_str));
+    }
+
+    status_label_->setText(tr("%1 item(s).").arg(resources.size()));
 }
 
 } // namespace falcon::desktop

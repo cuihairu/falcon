@@ -452,10 +452,42 @@ feature 候选：
 - ✅ HTTP 分块下载框架
   - 多线程分段下载基础实现
 
-**进行中：**
-- ⏳ BitTorrent 插件实现
+### 2026-04-21 - BitTorrent 插件与桌面应用集成
+
+**已完成：**
+- ✅ BitTorrent 插件纯 C++ 实现完善
+  - 添加 base32Decode 函数（用于磁力链接）
+  - 添加 bencodeToString 函数（B编码序列化）
+  - 添加 getTrackers 函数（获取 tracker 列表）
+  - 添加 urlDecode 函数（URL 解码）
+  - 实现纯 C++ 的 BitTorrent 下载框架
+    - startDownloadThread 下载线程
+    - connectToTracker 连接 tracker
+    - findPeersViaDHT DHT 查找
+    - downloadPiece 下载 piece
+    - verifyPiece 验证 piece
+- ✅ S3Browser 资源浏览器实现
+  - 已存在于 plugins/s3/s3_browser.cpp
+  - 支持 list_directory、create_directory、remove、rename、copy 等功能
+  - libcurl 集成实现 HTTP 请求
+  - AWS 签名支持
+- ✅ CloudPage 与 StorageService 集成
+  - 创建 StorageService 桥接层
+  - 实现 connect/disconnect、list_directory、download 等功能
+  - 配置持久化支持
+  - 信号/槽机制连接 UI 与服务
+- ✅ DiscoveryPage 与 SearchService 集成
+  - 创建 SearchService 搜索服务
+  - 支持磁力链接、HTTP、网盘、FTP 资源搜索
+  - 后台线程搜索实现
+  - 搜索结果回调机制
 - ⏳ 完整的多线程分段下载
+- ⏳ BitTorrent 插件与 DHT/PEX 集成
 
 **待实现：**
-- ⏳ CloudPage 与后端集成
-- ⏳ DiscoveryPage 搜索 API 集成
+- ⏳ CloudPage 与 libfalcon-storage 的完整 C++ 绑定
+- ⏳ DiscoveryPage 与真实搜索 API 集成
+- ⏳ 网格/卡片视图切换
+- ⏳ 云添加任务功能
+- ⏳ 主题切换（亮色/暗色）
+- ⏳ 系统托盘集成

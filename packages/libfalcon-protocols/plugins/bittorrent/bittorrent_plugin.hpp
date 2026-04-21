@@ -79,6 +79,43 @@ private:
         libtorrent::session session_;
         libtorrent::torrent_handle handle_;
         libtorrent::add_torrent_params params_;
+#else
+        // 纯 C++ 实现所需的数据结构
+        struct TorrentInfo {
+            std::string name;
+            std::string infoHash;      // 20 字节 SHA1 哈希
+            uint64_t totalSize = 0;
+            uint64_t pieceLength = 0;
+            int pieceCount = 0;
+            std::vector<std::string> pieces;  // SHA1 哈希列表
+            std::vector<FileInfo> files;
+            std::vector<std::string> trackers;
+            std::string comment;
+            std::string createdBy;
+        };
+
+        struct PeerInfo {
+            std::string ip;
+            uint16_t port;
+            std::string peerId;        // 20 字节
+            bool isSeed = false;
+            uint64_t downloaded = 0;
+            uint64_t uploaded = 0;
+        };
+
+        struct PieceState {
+            std::vector<bool> havePiece;      // 已下载的 piece
+            std::vector<bool> requestedPiece; // 已请求的 piece
+            std::vector<bool> downloadingPiece; // 正在下载的 piece
+            std::vector<std::vector<uint8_t>> pieceData; // piece 数据
+        };
+
+        TorrentInfo torrentInfo_;
+        std::vector<PeerInfo> peers_;
+        PieceState pieceState_;
+        std::thread downloadThread_;
+        std::atomic<bool> running_;
+        std::atomic<bool> paused_;
 #endif
 
         std::string url_;
@@ -133,6 +170,58 @@ private:
          * @brief 处理警报
          */
         void handleAlerts();
+
+#ifndef FALCON_USE_LIBTORRENT
+        /**
+         * @brief 纯 C++ 实现：启动下载线程
+         */
+        void startDownloadThread();
+
+        /**
+         * @brief 纯 C++ 实现：连接到 tracker
+         */
+        bool connectToTracker(const std::string& trackerUrl);
+
+        /**
+         * @brief 纯 C++ 实现：DHT 查找
+         */
+        bool findPeersViaDHT();
+
+        /**
+         * @brief 纯 C++ 实现：连接到对等端
+         */
+        bool connectToPeer(const PeerInfo& peer);
+
+        /**
+         * @brief 纯 C++ 实现：下载 piece
+         */
+        bool downloadPiece(int pieceIndex);
+
+        /**
+         * @brief 纯 C++ 实现：验证 piece
+         */
+        bool verifyPiece(int pieceIndex, const std::vector<uint8_t>& data);
+
+        /**
+         * @brief 纯 C++ 实现：写入 piece 到磁盘
+         */
+        bool writePiece(int pieceIndex, const std::vector<uint8_t>& data);
+
+        /**
+         * @brief 纯 C++ 实现：读取 piece 从磁盘
+         */
+        std::vector<uint8_t> readPiece(int pieceIndex);
+
+        /**
+         * @brief 纯 C++ 实现：请求 peer 的 piece
+         */
+        bool requestPiece(const PeerInfo& peer, int pieceIndex, int begin, int length);
+
+        /**
+         * @brief 纯 C++ 实现：处理 peer 消息
+         */
+        void handlePeerMessages(const PeerInfo& peer);
+#endif
     };
 
     /**
@@ -181,6 +270,11 @@ private:
      * @brief 创建 DHT 节点 ID
      */
     std::string generateNodeId();
+
+    /**
+     * @brief URL 解码
+     */
+    std::string urlDecode(const std::string& url);
 };
 
 } // namespace protocols

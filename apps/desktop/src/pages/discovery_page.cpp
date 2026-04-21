@@ -6,6 +6,7 @@
  */
 
 #include "discovery_page.hpp"
+#include "../services/search_service.hpp"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -25,8 +26,16 @@ DiscoveryPage::DiscoveryPage(QWidget* parent)
     : QWidget(parent)
     , search_bar_(nullptr)
     , filter_bar_(nullptr)
-{
+    , search_service_(new SearchService(this)) {
     setup_ui();
+
+    // 连接 SearchService 信号
+    connect(search_service_.get(), &SearchService::search_started,
+            this, &DiscoveryPage::on_search_started);
+    connect(search_service_.get(), &SearchService::search_finished,
+            this, &DiscoveryPage::on_search_finished);
+    connect(search_service_.get(), &SearchService::search_error,
+            this, &DiscoveryPage::on_search_error);
 }
 
 DiscoveryPage::~DiscoveryPage() = default;
@@ -230,16 +239,16 @@ void DiscoveryPage::perform_search()
 
     status_label_->setText(tr("Searching..."));
 
-    // 根据搜索类型执行不同的搜索
-    if (settings_.search_type == "magnet") {
-        search_magnet_links(keyword);
-    } else if (settings_.search_type == "http") {
-        search_http_resources(keyword);
-    } else if (settings_.search_type == "cloud") {
-        search_cloud_resources(keyword);
-    } else if (settings_.search_type == "ftp") {
-        search_ftp_resources(keyword);
-    }
+    // 使用 SearchService 执行搜索
+    SearchOptions options;
+    options.search_type = settings_.search_type;
+    options.category = settings_.category;
+    options.sort_by = settings_.sort_by;
+
+    search_service_->search(keyword, options, [this](const QList<SearchResultItem>& results) {
+        current_results_ = results;
+        display_results(results);
+    });
 }
 
 void DiscoveryPage::search_magnet_links(const QString& /*keyword*/)
@@ -544,6 +553,27 @@ QString DiscoveryPage::format_number(int num) const
         return QString("%1K").arg(num / 1000.0, 0, 'f', 1);
     }
     return QString::number(num);
+}
+
+// ============================================================================
+// SearchService 回调实现
+// ============================================================================
+
+void DiscoveryPage::on_search_started(const QString& keyword) {
+    status_label_->setText(tr("Searching for: %1...").arg(keyword));
+    search_button_->setEnabled(false);
+}
+
+void DiscoveryPage::on_search_finished(const QString& keyword, int result_count) {
+    status_label_->setText(tr("Done. %1 result(s) for \"%2\".").arg(result_count).arg(keyword));
+    search_button_->setEnabled(true);
+}
+
+void DiscoveryPage::on_search_error(const QString& keyword, const QString& error) {
+    status_label_->setText(tr("Search failed: %1").arg(error));
+    QMessageBox::warning(this, tr("Search Error"),
+        tr("Failed to search for \"%1\": %2").arg(keyword, error));
+    search_button_->setEnabled(true);
 }
 
 } // namespace falcon::desktop

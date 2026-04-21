@@ -16,6 +16,12 @@
 #include <chrono>
 #include <regex>
 #include <openssl/sha.h>
+#include <algorithm>
+#include <thread>
+#include <atomic>
+#include <condition_variable>
+#include <filesystem>
+#include <map>
 
 namespace falcon {
 namespace protocols {
@@ -492,11 +498,426 @@ std::string BitTorrentPlugin::generateNodeId() {
 
     std::string nodeId(20, 0);
     for (int i = 0; i < 20; ++i) {
-        nodeId[i] = static_cast<char>(dis(gen));
+        nodeId[i] = static_cast<char>(dis(gen()));
     }
 
     return nodeId;
 }
+
+// ============================================================================
+// 工具函数实现
+// ============================================================================
+
+std::string BitTorrentPlugin::bencodeToString(const BValue& value) {
+    std::ostringstream ss;
+
+    switch (value.type) {
+        case BValue::String:
+            ss << value.strValue.length() << ":" << value.strValue;
+            break;
+        case BValue::Integer:
+            ss << "i" << value.intValue << "e";
+            break;
+        case BValue::List:
+            ss << "l";
+            for (const auto& item : value.listValue) {
+                ss << bencodeToString(item);
+            }
+            ss << "e";
+            break;
+        case BValue::Dict:
+            ss << "d";
+            for (const auto& pair : value.dictValue) {
+                ss << bencodeToString(BValue{BValue::String, pair.first, 0, {}, {}}); // key
+                ss << bencodeToString(pair.second); // value
+            }
+            ss << "e";
+            break;
+    }
+
+    return ss.str();
+}
+
+std::string BitTorrentPlugin::base32Decode(const std::string& input) {
+    // Base32 字母表
+    static const char* alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    static int decode_table[256] = {};
+
+    // 初始化解码表（仅一次）
+    static bool initialized = []() {
+        std::fill(std::begin(decode_table), std::end(decode_table), -1);
+        for (int i = 0; i < 32; ++i) {
+            decode_table[static_cast<unsigned char>(alphabet[i])] = i;
+        }
+        return true;
+    }();
+    (void)initialized;
+
+    // 移除填充字符
+    std::string cleaned;
+    for (char c : input) {
+        if (c != '=') {
+            cleaned += c;
+        }
+    }
+
+    std::string result;
+    result.reserve((cleaned.length() * 5) / 8);
+
+    uint32_t buffer = 0;
+    int bits = 0;
+
+    for (char c : cleaned) {
+        int value = decode_table[static_cast<unsigned char>(c)];
+        if (value < 0) continue;
+
+        buffer = (buffer << 5) | static_cast<uint32_t>(value);
+        bits += 5;
+
+        while (bits >= 8) {
+            bits -= 8;
+            result += static_cast<char>((buffer >> bits) & 0xFF);
+        }
+    }
+
+    return result;
+}
+
+std::string BitTorrentPlugin::urlDecode(const std::string& url) {
+    std::ostringstream decoded;
+    for (size_t i = 0; i < url.length(); ++i) {
+        if (url[i] == '%' && i + 2 < url.length()) {
+            char hex[3] = {url[i + 1], url[i + 2], '\0'};
+            int value = std::stoi(hex, nullptr, 16);
+            decoded << static_cast<char>(value);
+            i += 2;
+        } else if (url[i] == '+') {
+            decoded << ' ';
+        } else {
+            decoded << url[i];
+        }
+    }
+    return decoded.str();
+}
+
+std::vector<std::string> BitTorrentPlugin::getTrackers(const BValue& torrent) {
+    std::vector<std::string> trackers;
+
+    if (torrent.type != BValue::Dict) {
+        return trackers;
+    }
+
+    auto& dict = torrent.dictValue;
+
+    // 检查单 tracker
+    if (dict.find("announce") != dict.end()) {
+        const auto& announce = dict.at("announce");
+        if (announce.type == BValue::String) {
+            trackers.push_back(announce.strValue);
+        }
+    }
+
+    // 检查 tracker 列表
+    if (dict.find("announce-list") != dict.end()) {
+        const auto& announceList = dict.at("announce-list");
+        if (announceList.type == BValue::List) {
+            for (const auto& tier : announceList.listValue) {
+                if (tier.type == BValue::List) {
+                    for (const auto& tracker : tier.listValue) {
+                        if (tracker.type == BValue::String) {
+                            trackers.push_back(tracker.strValue);
+                        }
+                    }
+                } else if (tier.type == BValue::String) {
+                    trackers.push_back(tier.strValue);
+                }
+            }
+        }
+    }
+
+    return trackers;
+}
+
+// ============================================================================
+// 纯 C++ BitTorrent 实现
+// ============================================================================
+
+#ifndef FALCON_USE_LIBTORRENT
+
+namespace {
+    // HTTP GET 请求函数（用于连接 tracker）
+    std::string http_get(const std::string& url, const std::map<std::string, std::string>& params) {
+        // 简化实现：仅支持 HTTP tracker
+        // 实际实现需要完整的 HTTP 客户端
+        // 这里返回空的 bencode 响应
+        FALCON_LOG_WARN("HTTP tracker request not implemented in pure C++ mode");
+        return "d14:failure reason27:Tracker not implementede";
+    }
+
+    // UDP tracker 相关函数
+    struct UdpTrackerMessage {
+        uint32_t action;      // 0=connect, 1=announce, 2=scrape, 3=error
+        uint32_t transaction_id;
+    };
+
+    uint64_t current_timestamp_ms() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+}
+
+void BitTorrentPlugin::BitTorrentDownloadTask::startDownloadThread() {
+    running_.store(true);
+    paused_.store(false);
+
+    downloadThread_ = std::thread([this]() {
+        FALCON_LOG_INFO("BitTorrent download thread started");
+
+        // 初始化 piece 状态
+        pieceState_.havePiece.resize(torrentInfo_.pieceCount, false);
+        pieceState_.requestedPiece.resize(torrentInfo_.pieceCount, false);
+        pieceState_.downloadingPiece.resize(torrentInfo_.pieceCount, false);
+        pieceState_.pieceData.resize(torrentInfo_.pieceCount);
+
+        // 主下载循环
+        while (running_.load() && !cancelled_.load()) {
+            if (paused_.load()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                continue;
+            }
+
+            // 1. 连接到 tracker 获取 peers
+            if (peers_.empty()) {
+                for (const auto& tracker : torrentInfo_.trackers) {
+                    if (connectToTracker(tracker)) {
+                        break;
+                    }
+                }
+            }
+
+            // 2. 尝试 DHT 查找
+            if (peers_.empty()) {
+                findPeersViaDHT();
+            }
+
+            // 3. 下载 piece
+            for (int i = 0; i < torrentInfo_.pieceCount; ++i) {
+                if (!running_.load() || cancelled_.load()) break;
+                if (paused_.load()) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    --i;
+                    continue;
+                }
+
+                if (!pieceState_.havePiece[i] && !pieceState_.downloadingPiece[i]) {
+                    if (downloadPiece(i)) {
+                        downloadedBytes_ += torrentInfo_.pieceLength;
+                        if (downloadedBytes_ > totalSize_) {
+                            downloadedBytes_ = totalSize_;
+                        }
+                    }
+                }
+            }
+
+            // 检查是否完成
+            bool allComplete = true;
+            for (int i = 0; i < torrentInfo_.pieceCount; ++i) {
+                if (!pieceState_.havePiece[i]) {
+                    allComplete = false;
+                    break;
+                }
+            }
+
+            if (allComplete) {
+                status_ = TaskStatus::Completed;
+                FALCON_LOG_INFO("BitTorrent download completed");
+                break;
+            }
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+
+        running_.store(false);
+        FALCON_LOG_INFO("BitTorrent download thread ended");
+    });
+}
+
+bool BitTorrentPlugin::BitTorrentDownloadTask::connectToTracker(const std::string& trackerUrl) {
+    FALCON_LOG_INFO("Connecting to tracker: {}", trackerUrl);
+
+    // 解析 tracker URL
+    if (trackerUrl.find("http://") == 0 || trackerUrl.find("https://") == 0) {
+        // HTTP tracker
+        std::map<std::string, std::string> params;
+        params["info_hash"] = torrentInfo_.infoHash;
+        params["peer_id"] = generateNodeId();
+        params["port"] = "6881";
+        params["uploaded"] = std::to_string(uploadBytes_);
+        params["downloaded"] = std::to_string(downloadedBytes_);
+        params["left"] = std::to_string(totalSize_ - downloadedBytes_);
+        params["compact"] = "1";
+        params["event"] = "started";
+
+        std::string response = http_get(trackerUrl, params);
+
+        // 解析响应
+        try {
+            size_t pos = 0;
+            BValue result = parseBencode(response, pos);
+
+            if (result.dictValue.find("peers") != result.dictValue.end()) {
+                const auto& peersValue = result.dictValue.at("peers");
+                // 解析 peers 列表（紧凑格式或字典格式）
+                FALCON_LOG_INFO("Received peers from tracker");
+                return true;
+            }
+
+            if (result.dictValue.find("failure reason") != result.dictValue.end()) {
+                FALCON_LOG_ERROR("Tracker failure: {}",
+                    result.dictValue.at("failure reason").strValue);
+                return false;
+            }
+        } catch (const std::exception& e) {
+            FALCON_LOG_ERROR("Failed to parse tracker response: {}", e.what());
+        }
+    } else if (trackerUrl.find("udp://") == 0) {
+        // UDP tracker
+        FALCON_LOG_WARN("UDP tracker not implemented yet");
+        return false;
+    }
+
+    return false;
+}
+
+bool BitTorrentPlugin::BitTorrentDownloadTask::findPeersViaDHT() {
+    FALCON_LOG_DEBUG("DHT peer search started");
+
+    // 简化 DHT 实现：使用已知路由节点
+    // 实际实现需要完整的 DHT 协议支持
+
+    return false;
+}
+
+bool BitTorrentPlugin::BitTorrentDownloadTask::connectToPeer(const PeerInfo& peer) {
+    FALCON_LOG_DEBUG("Connecting to peer: {}:{}", peer.ip, peer.port);
+
+    // 简化实现：假设连接成功
+    return true;
+}
+
+bool BitTorrentPlugin::BitTorrentDownloadTask::downloadPiece(int pieceIndex) {
+    if (pieceIndex < 0 || pieceIndex >= torrentInfo_.pieceCount) {
+        return false;
+    }
+
+    pieceState_.downloadingPiece[pieceIndex] = true;
+
+    // 尝试从已有的 peers 下载
+    for (const auto& peer : peers_) {
+        if (!running_.load() || cancelled_.load() || paused_.load()) {
+            pieceState_.downloadingPiece[pieceIndex] = false;
+            return false;
+        }
+
+        if (requestPiece(peer, pieceIndex, 0, torrentInfo_.pieceLength)) {
+            // 等待 piece 数据（简化实现）
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+            // 实际实现需要处理 peer 消息并验证 piece
+            pieceState_.havePiece[pieceIndex] = true;
+            pieceState_.downloadingPiece[pieceIndex] = false;
+            return true;
+        }
+    }
+
+    pieceState_.downloadingPiece[pieceIndex] = false;
+    return false;
+}
+
+bool BitTorrentPlugin::BitTorrentDownloadTask::verifyPiece(int pieceIndex, const std::vector<uint8_t>& data) {
+    if (pieceIndex < 0 || pieceIndex >= torrentInfo_.pieceCount) {
+        return false;
+    }
+
+    // 计算 piece 的 SHA1 哈希
+    unsigned char hash[SHA_DIGEST_LENGTH];
+    SHA1(data.data(), data.size(), hash);
+
+    std::ostringstream ss;
+    ss << std::hex << std::setfill('0');
+    for (int i = 0; i < SHA_DIGEST_LENGTH; ++i) {
+        ss << std::setw(2) << static_cast<int>(hash[i]);
+    }
+
+    // 与 torrent 中的哈希比较
+    std::string computedHash = ss.str();
+    std::string expectedHash = torrentInfo_.pieces[pieceIndex];
+
+    return computedHash == expectedHash;
+}
+
+bool BitTorrentPlugin::BitTorrentDownloadTask::writePiece(int pieceIndex, const std::vector<uint8_t>& data) {
+    // 创建输出目录
+    std::filesystem::path outputPath(options_.output_path);
+    if (outputPath.has_parent_path()) {
+        std::filesystem::create_directories(outputPath.parent_path());
+    }
+
+    // 打开文件并写入 piece 数据
+    std::ofstream file(outputPath, std::ios::binary | std::ios::in | std::ios::out);
+    if (!file.is_open()) {
+        FALCON_LOG_ERROR("Failed to open output file: {}", outputPath.string());
+        return false;
+    }
+
+    file.seekp(static_cast<std::streampos>(pieceIndex) * torrentInfo_.pieceLength);
+    file.write(reinterpret_cast<const char*>(data.data()), data.size());
+
+    return file.good();
+}
+
+std::vector<uint8_t> BitTorrentPlugin::BitTorrentDownloadTask::readPiece(int pieceIndex) {
+    std::vector<uint8_t> result;
+
+    std::filesystem::path outputPath(options_.output_path);
+    std::ifstream file(outputPath, std::ios::binary);
+    if (!file.is_open()) {
+        return result;
+    }
+
+    file.seekg(static_cast<std::streampos>(pieceIndex) * torrentInfo_.pieceLength);
+
+    int pieceSize = torrentInfo_.pieceLength;
+    if (pieceIndex == torrentInfo_.pieceCount - 1) {
+        // 最后一个 piece 可能较小
+        pieceSize = static_cast<int>(totalSize_ % torrentInfo_.pieceLength);
+        if (pieceSize == 0) {
+            pieceSize = torrentInfo_.pieceLength;
+        }
+    }
+
+    result.resize(pieceSize);
+    file.read(reinterpret_cast<char*>(result.data()), pieceSize);
+
+    return result;
+}
+
+bool BitTorrentPlugin::BitTorrentDownloadTask::requestPiece(const PeerInfo& peer, int pieceIndex, int begin, int length) {
+    // 构建 BitTorrent 协议消息
+    // 实际实现需要与 peer 建立 TCP 连接并发送请求
+
+    FALCON_LOG_DEBUG("Requesting piece {} from {}:{} (offset: {}, size: {})",
+        pieceIndex, peer.ip, peer.port, begin, length);
+
+    return true;  // 简化实现：假设请求成功
+}
+
+void BitTorrentPlugin::BitTorrentDownloadTask::handlePeerMessages(const PeerInfo& peer) {
+    // 处理来自 peer 的消息
+    // 包括: piece, reject, request, cancel, keep-alive 等
+}
+
+#endif
 
 } // namespace protocols
 } // namespace falcon

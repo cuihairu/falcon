@@ -15,6 +15,12 @@
 #include <QLabel>
 #include <QSplitter>
 #include <QStackedWidget>
+#include <QSharedPointer>
+
+namespace falcon::desktop {
+
+// 前向声明
+class StorageService;
 
 namespace falcon::desktop {
 
@@ -43,6 +49,13 @@ class CloudPage : public QWidget
 public:
     explicit CloudPage(QWidget* parent = nullptr);
     ~CloudPage() override;
+
+    // 连接状态变化回调
+    void on_storage_connected(const QString& config_name);
+    void on_storage_disconnected(const QString& config_name);
+    void on_storage_error(const QString& config_name, const QString& message);
+    void on_directory_loaded(const QString& config_name, const QString& path,
+                            const QList<RemoteResourceInfo>& resources);
 
 private slots:
     // 连接到云存储
@@ -83,6 +96,10 @@ private slots:
 
     // 重命名文件/文件夹
     void rename_item(int row);
+
+signals:
+    // 下载请求信号
+    void download_requested(const QString& url, const QString& local_path);
 
 private:
     void setup_ui();
@@ -150,6 +167,9 @@ private:
 
     // 已保存的配置列表
     QList<CloudStorageConfig> saved_configs_;
+
+    // 存储服务桥接
+    QSharedPointer<StorageService> storage_service_;
 };
 
 } // namespace falcon::desktop
