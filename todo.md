@@ -414,8 +414,8 @@ feature 候选：
 - ✅ 更多选项菜单（全部开始/暂停、清除已完成、打开目录）
 
 **进行中：**
-- ⏳ CloudPage 与 libfalcon-storage 集成
-- ⏳ DiscoveryPage 搜索 API 集成
+- ✅ CloudPage 与 libfalcon-storage 集成
+- ✅ DiscoveryPage 搜索 API 集成
 
 **待实现：**
 - ✅ 网格/卡片视图切换
@@ -485,8 +485,8 @@ feature 候选：
 - ⏳ BitTorrent 插件与 DHT/PEX 集成
 
 **待实现：**
-- ⏳ CloudPage 与 libfalcon-storage 的完整 C++ 绑定
-- ⏳ DiscoveryPage 与真实搜索 API 集成
+- ✅ CloudPage 与 libfalcon-storage 的完整 C++ 绑定
+- ✅ DiscoveryPage 与真实搜索 API 集成
 - ✅ 网格/卡片视图切换
 - ✅ 主题切换（亮色/暗色）
 - ✅ 系统托盘集成
@@ -525,4 +525,22 @@ feature 候选：
   - HTTP handler 集成分段下载
   - 支持自适应分段、断点续传、慢速检测
   - 完整单元测试覆盖（641 行测试代码）
+- ✅ StorageService 与 libfalcon-storage 完整 C++ 绑定
+  - 重写 storage_service.cpp 使用真实的 libfalcon-storage API
+  - 实现类型转换（falcon::RemoteResource <-> RemoteResourceInfo）
+  - 集成 S3Browser、OSSBrowser、COSBrowser、KodoBrowser、UpyunBrowser
+  - 后台线程执行网络操作（QtConcurrent）
+  - 完整错误处理与信号通知机制
+  - 更新 CMakeLists.txt 链接 Falcon::storage
+- ✅ DiscoveryPage 真实搜索 API 集成
+  - 重写 search_service.cpp 实现真实网络请求
+  - 支持多搜索源并行查询（BT 天堂、Torrent Kitty、DHT 网络）
+  - HTML 解析提取磁力链接和资源信息
+  - 搜索结果去重和数量限制
+  - 后台线程执行搜索操作
+  - 支持取消搜索功能
+
+**待实现：**
+- ⏳ CloudPage 与 libfalcon-storage 的 UI 交互完善
+- ✅ DiscoveryPage 与真实搜索 API 集成
 

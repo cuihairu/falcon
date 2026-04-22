@@ -12,7 +12,11 @@
 #include <QList>
 #include <QVariantMap>
 #include <QSharedPointer>
+#include <QSet>
+#include <QFuture>
+#include <QDateTime>
 #include <functional>
+#include <QtConcurrent>
 
 namespace falcon::desktop {
 

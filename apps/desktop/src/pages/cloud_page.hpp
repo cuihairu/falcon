@@ -16,26 +16,12 @@
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QSharedPointer>
+#include "../services/storage_service.hpp"
 
 namespace falcon::desktop {
 
 // 前向声明
 class StorageService;
-
-namespace falcon::desktop {
-
-/**
- * @brief 云存储配置项
- */
-struct CloudStorageConfig {
-    QString name;           // 显示名称
-    QString protocol;       // 协议 (s3, oss, cos, kodo, upyun)
-    QString endpoint;       // 服务端点
-    QString access_key;     // 访问密钥ID
-    QString secret_key;     // 密钥
-    QString region;         // 区域
-    QString bucket;         // 存储桶
-};
 
 /**
  * @brief 云盘资源浏览页面

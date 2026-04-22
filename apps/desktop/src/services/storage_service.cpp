@@ -1,6 +1,6 @@
 /**
  * @file storage_service.cpp
- * @brief 云存储服务桥接层实现
+ * @brief 云存储服务桥接层实现 - 连接 Desktop UI 与 libfalcon-storage
  * @author Falcon Team
  * @date 2025-12-21
  */
@@ -13,71 +13,153 @@
 #include <QThread>
 #include <QMutexLocker>
 #include <QMutex>
+#include <QFuture>
+#include <QtConcurrent>
+#include <functional>
 
-// 由于这是 Qt 应用，我们通过 JSON-RPC 或直接调用访问 libfalcon-storage
-// 这里提供一个简化的模拟实现
+// libfalcon-storage 头文件
+#include <falcon/storage/resource_browser.hpp>
+#include <falcon/storage/s3_browser.hpp>
+#include <falcon/storage/oss_browser.hpp>
+#include <falcon/storage/cos_browser.hpp>
+#include <falcon/storage/kodo_browser.hpp>
+#include <falcon/storage/upyun_browser.hpp>
 
 namespace falcon::desktop {
 
+// ============================================================================
+// 类型转换辅助函数
+// ============================================================================
+
+namespace {
+
+/**
+ * @brief 将 libfalcon::RemoteResource 转换为 Qt::RemoteResourceInfo
+ */
+RemoteResourceInfo to_qt_resource_info(const falcon::RemoteResource& resource) {
+    RemoteResourceInfo info;
+
+    info.name = QString::fromStdString(resource.name);
+    info.path = QString::fromStdString(resource.path);
+    info.size = static_cast<qint64>(resource.size);
+
+    // 转换资源类型
+    switch (resource.type) {
+        case falcon::ResourceType::File:
+            info.type = "file";
+            break;
+        case falcon::ResourceType::Directory:
+            info.type = "directory";
+            break;
+        case falcon::ResourceType::Symlink:
+            info.type = "symlink";
+            break;
+        default:
+            info.type = "unknown";
+            break;
+    }
+
+    info.modified_time = QString::fromStdString(resource.modified_time);
+    info.mime_type = QString::fromStdString(resource.mime_type);
+    info.etag = QString::fromStdString(resource.etag);
+    info.is_hidden = !resource.name.empty() && resource.name[0] == '.';
+
+    return info;
+}
+
+/**
+ * @brief 将 Qt::CloudStorageConfig 转换为 libfalcon 连接选项
+ */
+std::map<std::string, std::string> to_connection_options(const CloudStorageConfig& config) {
+    std::map<std::string, std::string> options;
+
+    options["access_key_id"] = config.access_key.toStdString();
+    options["secret_access_key"] = config.secret_key.toStdString();
+    options["region"] = config.region.toStdString();
+    options["bucket"] = config.bucket.toStdString();
+
+    if (!config.endpoint.isEmpty()) {
+        options["endpoint"] = config.endpoint.toStdString();
+    }
+
+    return options;
+}
+
+/**
+ * @brief 创建指定协议的浏览器实例
+ */
+std::unique_ptr<falcon::IResourceBrowser> create_browser(const QString& protocol) {
+    std::string proto = protocol.toStdString();
+
+    if (proto == "s3") {
+        return std::make_unique<falcon::S3Browser>();
+    } else if (proto == "oss") {
+        return std::make_unique<falcon::OSSBrowser>();
+    } else if (proto == "cos") {
+        return std::make_unique<falcon::COSBrowser>();
+    } else if (proto == "kodo" || proto == "qiniu") {
+        return std::make_unique<falcon::KodoBrowser>();
+    } else if (proto == "upyun") {
+        return std::make_unique<falcon::UpyunBrowser>();
+    }
+
+    return nullptr;
+}
+
+} // anonymous namespace
+
+// ============================================================================
+// StorageService::Impl
+// ============================================================================
+
 struct StorageService::Impl {
+    // 配置和连接状态
     QMap<QString, CloudStorageConfig> configs;
+    QMap<QString, std::unique_ptr<falcon::IResourceBrowser>> browsers;
     QMap<QString, bool> connected;
     QMutex mutex;
-    QMap<QString, QList<RemoteResourceInfo>> cache;
 
-    // 模拟数据生成器
-    QList<RemoteResourceInfo> generate_mock_resources(const QString& path) {
-        QList<RemoteResourceInfo> resources;
+    // 当前路径缓存
+    QMap<QString, QString> current_paths;
 
-        if (path == "/" || path.isEmpty()) {
-            // 根目录
-            RemoteResourceInfo dir1;
-            dir1.name = "documents";
-            dir1.path = "/documents";
-            dir1.type = "directory";
-            dir1.size = 0;
-            dir1.modified_time = "2025-12-21 10:00:00";
-            resources.append(dir1);
+    /**
+     * @brief 获取或创建指定配置的浏览器
+     */
+    falcon::IResourceBrowser* get_browser(const QString& config_name) {
+        QMutexLocker locker(&mutex);
 
-            RemoteResourceInfo dir2;
-            dir2.name = "images";
-            dir2.path = "/images";
-            dir2.type = "directory";
-            dir2.size = 0;
-            dir2.modified_time = "2025-12-20 15:30:00";
-            resources.append(dir2);
-
-            RemoteResourceInfo file1;
-            file1.name = "readme.txt";
-            file1.path = "/readme.txt";
-            file1.type = "file";
-            file1.size = 1024;
-            file1.modified_time = "2025-12-19 09:15:00";
-            file1.mime_type = "text/plain";
-            resources.append(file1);
-        } else if (path == "/documents") {
-            RemoteResourceInfo file1;
-            file1.name = "report.pdf";
-            file1.path = "/documents/report.pdf";
-            file1.type = "file";
-            file1.size = 2048576;
-            file1.modified_time = "2025-12-18 14:20:00";
-            file1.mime_type = "application/pdf";
-            resources.append(file1);
-
-            RemoteResourceInfo file2;
-            file2.name = "notes.txt";
-            file2.path = "/documents/notes.txt";
-            file2.type = "file";
-            file2.size = 512;
-            file2.modified_time = "2025-12-17 11:45:00";
-            file2.mime_type = "text/plain";
-            resources.append(file2);
+        if (!browsers.contains(config_name)) {
+            return nullptr;
         }
 
-        return resources;
+        return browsers[config_name].get();
+    }
+
+    /**
+     * @brief 生成连接 URL
+     */
+    std::string build_connection_url(const CloudStorageConfig& config) {
+        std::string proto = config.protocol.toStdString();
+
+        if (proto == "s3") {
+            return "s3://" + config.bucket.toStdString();
+        } else if (proto == "oss") {
+            return "oss://" + config.bucket.toStdString();
+        } else if (proto == "cos") {
+            return "cos://" + config.bucket.toStdString();
+        } else if (proto == "kodo" || proto == "qiniu") {
+            return "kodo://" + config.bucket.toStdString();
+        } else if (proto == "upyun") {
+            return "upyun://" + config.bucket.toStdString();
+        }
+
+        return "";
     }
 };
+
+// ============================================================================
+// StorageService 实现
+// ============================================================================
 
 StorageService::StorageService(QObject* parent)
     : QObject(parent)
@@ -99,14 +181,60 @@ bool StorageService::connect_storage(const CloudStorageConfig& config) {
     // 保存配置
     p_impl_->configs[config.name] = config;
 
-    // 在实际实现中，这里会调用 libfalcon-storage 的 S3Browser::connect()
-    // 由于跨语言边界，我们通过以下方式之一：
-    // 1. JSON-RPC 调用 falcon-daemon
-    // 2. 直接链接 libfalcon-storage 库
-    // 3. 使用 C++/CLI 或类似的桥接技术
+    // 创建浏览器实例
+    auto browser = create_browser(config.protocol);
+    if (!browser) {
+        emit error(config.name,
+            tr("Unsupported protocol: %1").arg(config.protocol));
+        return false;
+    }
 
-    // 模拟连接成功
+    // 构建连接 URL
+    std::string url = p_impl_->build_connection_url(config);
+    if (url.empty()) {
+        emit error(config.name,
+            tr("Failed to build connection URL"));
+        return false;
+    }
+
+    // 转换连接选项
+    auto options = to_connection_options(config);
+
+    // 尝试连接（在后台线程执行）
+    bool success = false;
+    QString error_message;
+
+    QEventLoop loop;
+    QFuture<bool> future = QtConcurrent::run([&]() {
+        try {
+            return browser->connect(url, options);
+        } catch (const std::exception& e) {
+            error_message = QString::fromStdString(e.what());
+            return false;
+        }
+    });
+
+    // 等待连接完成（最多 30 秒）
+    QTimer::singleShot(30000, &loop, &QEventLoop::quit);
+    QObject::connect(&future, &QFuture<bool>::finished, &loop, &QEventLoop::quit);
+    loop.exec();
+
+    if (future.isFinished()) {
+        success = future.result();
+    }
+
+    if (!success) {
+        if (error_message.isEmpty()) {
+            error_message = tr("Connection timeout or failed");
+        }
+        emit error(config.name, error_message);
+        return false;
+    }
+
+    // 保存浏览器实例
+    p_impl_->browsers[config.name] = std::move(browser);
     p_impl_->connected[config.name] = true;
+    p_impl_->current_paths[config.name] = "/";
 
     emit connected(config.name);
     return true;
@@ -115,8 +243,22 @@ bool StorageService::connect_storage(const CloudStorageConfig& config) {
 void StorageService::disconnect_storage(const QString& config_name) {
     QMutexLocker locker(&p_impl_->mutex);
 
+    if (p_impl_->browsers.contains(config_name)) {
+        auto& browser = p_impl_->browsers[config_name];
+        if (browser) {
+            QtConcurrent::run([&]() {
+                try {
+                    browser->disconnect();
+                } catch (...) {
+                    // 忽略断开连接时的错误
+                }
+            });
+        }
+        p_impl_->browsers.remove(config_name);
+    }
+
     p_impl_->connected[config_name] = false;
-    p_impl_->cache.remove(config_name);
+    p_impl_->current_paths.remove(config_name);
 
     emit disconnected(config_name);
 }
@@ -255,69 +397,167 @@ void StorageService::remove_config(const QString& name) {
 
 void StorageService::list_directory(const QString& config_name, const QString& path,
                                    ResourceListCallback callback) {
-    // 在实际实现中，这会在后台线程中调用 libfalcon-storage
-    // 这里使用模拟数据
+    // 在后台线程执行
+    QtConcurrent::run([this, config_name, path, callback]() {
+        auto* browser = p_impl_->get_browser(config_name);
+        if (!browser) {
+            if (callback) {
+                callback({});
+            }
+            emit error(config_name, tr("Browser not connected"));
+            return;
+        }
 
-    QList<RemoteResourceInfo> resources = p_impl_->generate_mock_resources(path);
+        try {
+            // 转换路径
+            std::string std_path = path.toStdString();
 
-    // 更新缓存
-    QString cache_key = config_name + ":" + path;
-    p_impl_->cache[cache_key] = resources;
+            // 列出目录
+            falcon::ListOptions options;
+            options.show_hidden = false;
+            options.sort_by = "name";
 
-    if (callback) {
-        callback(resources);
-    }
+            std::vector<falcon::RemoteResource> resources =
+                browser->list_directory(std_path, options);
 
-    emit directory_loaded(config_name, path, resources);
+            // 转换为 Qt 类型
+            QList<RemoteResourceInfo> qt_resources;
+            qt_resources.reserve(resources.size());
+
+            for (const auto& res : resources) {
+                qt_resources.append(to_qt_resource_info(res));
+            }
+
+            // 更新当前路径
+            {
+                QMutexLocker locker(&p_impl_->mutex);
+                p_impl_->current_paths[config_name] = path;
+            }
+
+            if (callback) {
+                callback(qt_resources);
+            }
+
+            emit directory_loaded(config_name, path, qt_resources);
+
+        } catch (const std::exception& e) {
+            QString error_msg = QString::fromStdString(e.what());
+            emit error(config_name, error_msg);
+        }
+    });
 }
 
 RemoteResourceInfo StorageService::get_resource_info(const QString& config_name, const QString& path) {
-    // 在实际实现中，调用 libfalcon-storage 的 get_resource_info()
-    RemoteResourceInfo info;
-    info.name = path.mid(path.lastIndexOf('/') + 1);
-    info.path = path;
-    info.type = "file";
-    return info;
+    auto* browser = p_impl_->get_browser(config_name);
+    if (!browser) {
+        return RemoteResourceInfo();
+    }
+
+    try {
+        std::string std_path = path.toStdString();
+        falcon::RemoteResource resource = browser->get_resource_info(std_path);
+        return to_qt_resource_info(resource);
+    } catch (...) {
+        return RemoteResourceInfo();
+    }
 }
 
 bool StorageService::create_directory(const QString& config_name, const QString& path) {
-    // 在实际实现中，调用 libfalcon-storage 的 create_directory()
-    emit directory_loaded(config_name, path.left(path.lastIndexOf('/')), {});
-    return true;
+    auto* browser = p_impl_->get_browser(config_name);
+    if (!browser) {
+        return false;
+    }
+
+    try {
+        std::string std_path = path.toStdString();
+        return browser->create_directory(std_path, false);
+    } catch (...) {
+        return false;
+    }
 }
 
 bool StorageService::remove_resource(const QString& config_name, const QString& path, bool recursive) {
-    // 在实际实现中，调用 libfalcon-storage 的 remove()
-    return true;
+    auto* browser = p_impl_->get_browser(config_name);
+    if (!browser) {
+        return false;
+    }
+
+    try {
+        std::string std_path = path.toStdString();
+        return browser->remove(std_path, recursive);
+    } catch (...) {
+        return false;
+    }
 }
 
 bool StorageService::rename_resource(const QString& config_name, const QString& old_path, const QString& new_path) {
-    // 在实际实现中，调用 libfalcon-storage 的 rename()
-    return true;
+    auto* browser = p_impl_->get_browser(config_name);
+    if (!browser) {
+        return false;
+    }
+
+    try {
+        std::string std_old_path = old_path.toStdString();
+        std::string std_new_path = new_path.toStdString();
+        return browser->rename(std_old_path, std_new_path);
+    } catch (...) {
+        return false;
+    }
 }
 
 bool StorageService::copy_resource(const QString& config_name, const QString& source_path, const QString& dest_path) {
-    // 在实际实现中，调用 libfalcon-storage 的 copy()
-    return true;
+    auto* browser = p_impl_->get_browser(config_name);
+    if (!browser) {
+        return false;
+    }
+
+    try {
+        std::string std_source_path = source_path.toStdString();
+        std::string std_dest_path = dest_path.toStdString();
+        return browser->copy(std_source_path, std_dest_path);
+    } catch (...) {
+        return false;
+    }
 }
 
 QMap<QString, quint64> StorageService::get_quota_info(const QString& config_name) {
-    QMap<QString, quint64> quota;
-    quota["used"] = 1073741824;  // 1GB
-    quota["total"] = 0;           // 无限制
-    return quota;
+    auto* browser = p_impl_->get_browser(config_name);
+    if (!browser) {
+        return QMap<QString, quint64>();
+    }
+
+    try {
+        std::map<std::string, uint64_t> quota = browser->get_quota_info();
+        QMap<QString, quint64> result;
+
+        for (const auto& [key, value] : quota) {
+            result[QString::fromStdString(key)] = static_cast<quint64>(value);
+        }
+
+        return result;
+    } catch (...) {
+        return QMap<QString, quint64>();
+    }
 }
 
 void StorageService::request_download(const QString& config_name, const QString& remote_path,
-                                      const QString& local_path) {
+                                     const QString& local_path) {
     // 构建下载 URL
     CloudStorageConfig config = p_impl_->configs[config_name];
 
     QString url;
     if (config.protocol == "s3") {
-        url = QString("s3://%1/%2").arg(config.bucket, remote_path);
+        url = QString("s3://%1%2").arg(config.bucket, remote_path);
+    } else if (config.protocol == "oss") {
+        url = QString("oss://%1%2").arg(config.bucket, remote_path);
+    } else if (config.protocol == "cos") {
+        url = QString("cos://%1%2").arg(config.bucket, remote_path);
+    } else if (config.protocol == "kodo" || config.protocol == "qiniu") {
+        url = QString("kodo://%1%2").arg(config.bucket, remote_path);
+    } else if (config.protocol == "upyun") {
+        url = QString("upyun://%1%2").arg(config.bucket, remote_path);
     } else {
-        url = QString("%3://%1/%2").arg(config.bucket, remote_path, config.protocol);
+        url = QString("%1://%2%3").arg(config.protocol, config.bucket, remote_path);
     }
 
     emit download_requested(url, local_path);

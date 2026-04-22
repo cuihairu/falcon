@@ -28,6 +28,9 @@ set(SOURCES
     src/dialogs/add_download_dialog.cpp
     src/utils/url_detector.cpp
     src/utils/clipboard_monitor.cpp
+    src/utils/theme_manager.cpp
+    src/services/storage_service.cpp
+    src/services/search_service.cpp
     src/ipc/http_server.cpp
 )
 
@@ -45,6 +48,9 @@ set(HEADERS
     src/dialogs/add_download_dialog.hpp
     src/utils/url_detector.hpp
     src/utils/clipboard_monitor.hpp
+    src/utils/theme_manager.hpp
+    src/services/storage_service.hpp
+    src/services/search_service.hpp
     src/ipc/http_server.hpp
 )
 
@@ -82,8 +88,9 @@ target_link_libraries(falcon-desktop PRIVATE
     Qt6::Core
     Qt6::Widgets
     Qt6::Network
-    Falcon::protocols
     Falcon::core
+    Falcon::protocols
+    Falcon::storage
 )
 
 # 安装目标

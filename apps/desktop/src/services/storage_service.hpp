@@ -13,7 +13,10 @@
 #include <QVariantList>
 #include <QVariantMap>
 #include <QSharedPointer>
+#include <QList>
 #include <functional>
+#include <QEventLoop>
+#include <QTimer>
 
 namespace falcon::desktop {
 
