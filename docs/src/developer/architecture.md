@@ -14,10 +14,19 @@ falcon/
 │   ├── falcon-cli/         # 命令行工具
 │   └── falcon-daemon/      # 后台服务
 ├── apps/
-│   ├── desktop/            # 桌面端
-│   └── browser_extension/  # 浏览器扩展
+│   └── desktop/            # Qt6 桌面应用
 └── docs/                   # 文档站
 ```
+
+## 库依赖关系
+
+```
+falcon_protocols  →  falcon_core
+falcon_storage    →  falcon_core
+falcon_drives     →  falcon_core
+```
+
+禁止反向依赖：`core` 不依赖 `protocols/storage/drives`。
 
 ## libfalcon-core 核心组件
 

@@ -101,26 +101,39 @@ File → Settings → Build, Execution, Deployment → CMake
 ```
 falcon/
 ├── packages/
-│   ├── libfalcon/              # 核心库
-│   │   ├── include/falcon/     # 公共头文件
-│   │   ├── src/                # 实现文件
-│   │   └── plugins/            # 协议插件
-│   ├── falcon-cli/             # 命令行工具
-│   └── falcon-daemon/          # 守护进程
+│   ├── libfalcon-core/        # 核心下载引擎
+│   ├── libfalcon-protocols/   # 标准下载协议
+│   ├── libfalcon-storage/     # 对象存储与资源浏览
+│   ├── libfalcon-drives/      # 网盘与云存储
+│   ├── falcon-cli/            # 命令行工具
+│   └── falcon-daemon/         # 后台守护进程
 ├── apps/
-│   ├── desktop/                # 桌面应用
-│   └── web/                    # Web 界面
-└── docs/                       # 文档
+│   └── desktop/               # Qt6 桌面应用
+└── docs/                      # 文档
 ```
+
+### 库依赖关系
+
+```
+falcon_protocols  →  falcon_core
+falcon_storage    →  falcon_core
+falcon_drives     →  falcon_core
+```
+
+禁止反向依赖：`core` 不依赖 `protocols/storage/drives`。
 
 ### 核心组件
 
-| 组件 | 职责 |
-|------|------|
-| `DownloadEngine` | 下载引擎核心 |
-| `TaskManager` | 任务管理器 |
-| `PluginManager` | 插件管理器 |
-| `IProtocolHandler` | 协议处理器接口 |
+| 组件 | 库 | 职责 |
+|------|------|------|
+| `DownloadEngine` | core | 下载引擎核心 |
+| `TaskManager` | core | 任务管理器 |
+| `PluginManager` | core | 协议处理器管理 |
+| `IProtocolHandler` | core | 协议处理器接口 |
+| `HttpHandler` | protocols | HTTP/HTTPS 协议 |
+| `SegmentDownloader` | protocols | 多线程分段下载 |
+| `S3Browser` | storage | S3 资源浏览 |
+| `CloudStoragePlugin` | drives | 网盘云存储 |
 
 ::: tip 详细架构
 请查看 [架构设计文档](./architecture.md) 了解更多细节。
@@ -310,6 +323,77 @@ void PluginManager::load_builtin_plugins() {
 ::: tip 详细插件开发
 请查看 [插件开发文档](./plugins.md) 了解更多细节。
 :::
+
+## 桌面应用开发
+
+### 技术栈
+
+Desktop 应用使用 **Qt6** 框架开发：
+
+- **CMake**: 构建系统
+- **Qt6 Widgets**: UI 框架
+- **QSS**: 样式表（支持亮色/暗色主题）
+- **libfalcon**: 核心下载库
+
+### 目录结构
+
+```
+apps/desktop/
+├── src/
+│   ├── main.cpp               # 入口
+│   ├── main_window.{hpp,cpp}  # 主窗口
+│   ├── widgets/               # UI 组件
+│   │   ├── top_bar.hpp        # 顶部工具栏
+│   │   ├── status_bar.hpp     # 底部状态栏
+│   │   └── sidebar.hpp        # 侧边导航栏
+│   ├── pages/                 # 页面
+│   │   ├── download_page.hpp  # 下载管理
+│   │   ├── cloud_page.hpp     # 云盘管理
+│   │   ├── discovery_page.hpp # 资源发现
+│   │   └── settings_page.hpp  # 设置
+│   ├── dialogs/               # 对话框
+│   ├── services/              # 服务层
+│   │   ├── search_service.hpp # 搜索服务
+│   │   ├── storage_service.hpp # 存储服务
+│   │   └── theme_manager.hpp  # 主题管理
+│   └── utils/                 # 工具类
+│       ├── clipboard_monitor.hpp
+│       └── url_detector.hpp    # URL 检测（含云盘）
+└── CMakeLists.txt
+```
+
+### 编译 Desktop 应用
+
+```bash
+# 安装 Qt6
+# Ubuntu
+sudo apt install qt6-base-dev qt6-tools-dev
+
+# macOS
+brew install qt@6
+
+# 配置 CMake
+cmake -B build -S . \
+  -DFALCON_BUILD_DESKTOP=ON \
+  -DCMAKE_PREFIX_PATH=/path/to/Qt/6.x.x/gcc_64
+
+# 编译
+cmake --build build --target falcon-desktop
+
+# 运行
+./build/bin/falcon-desktop
+```
+
+### 主要功能
+
+| 功能 | 说明 |
+|------|------|
+| 网格/表格视图切换 | 任务列表支持卡片和表格两种显示模式 |
+| 系统托盘集成 | 关闭最小化到托盘 |
+| 主题切换 | 亮色/暗色主题，运行时切换 |
+| 云盘链接识别 | 支持百度网盘、阿里云盘、夸克等 |
+| 剪贴板监听 | 自动检测剪切板中的下载链接 |
+| IPC 服务器 | 接收浏览器扩展的下载请求 |
 
 ## 提交代码
 
