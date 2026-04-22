@@ -15,7 +15,7 @@ namespace falcon {
 
 // Forward declarations
 class TaskManager;
-class PluginManager;
+class ProtocolRegistry;
 class EventDispatcher;
 
 /// Main download engine class

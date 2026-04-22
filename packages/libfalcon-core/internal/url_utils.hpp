@@ -1,13 +1,7 @@
 #pragma once
 
-#include <falcon/protocol_handler.hpp>
-
 #include <algorithm>
-#include <memory>
-#include <mutex>
 #include <string>
-#include <unordered_map>
-#include <vector>
 
 namespace falcon {
 namespace internal {
@@ -104,86 +98,6 @@ public:
         auto scheme = extract_scheme(url);
         return !scheme.empty();
     }
-};
-
-/// Plugin manager for protocol handlers
-class PluginManager {
-public:
-    PluginManager() = default;
-    ~PluginManager() = default;
-
-    // Non-copyable
-    PluginManager(const PluginManager&) = delete;
-    PluginManager& operator=(const PluginManager&) = delete;
-
-    /// Register a protocol handler
-    void register_handler(std::unique_ptr<IProtocolHandler> handler) {
-        std::lock_guard<std::mutex> lock(mutex_);
-
-        auto schemes = handler->supported_schemes();
-        for (const auto& scheme : schemes) {
-            scheme_handlers_[scheme].push_back(handler.get());
-        }
-
-        handlers_.push_back(std::move(handler));
-        sort_handlers();
-    }
-
-    /// Find handler for URL
-    [[nodiscard]] IProtocolHandler* find_handler(const std::string& url) const {
-        std::lock_guard<std::mutex> lock(mutex_);
-
-        std::string scheme = UrlUtils::extract_scheme(url);
-        if (scheme.empty()) {
-            return nullptr;
-        }
-
-        auto it = scheme_handlers_.find(scheme);
-        if (it == scheme_handlers_.end() || it->second.empty()) {
-            return nullptr;
-        }
-
-        // Return highest priority handler that can handle the URL
-        for (auto* handler : it->second) {
-            if (handler->can_handle(url)) {
-                return handler;
-            }
-        }
-
-        return nullptr;
-    }
-
-    /// Check if URL is supported
-    [[nodiscard]] bool is_supported(const std::string& url) const {
-        return find_handler(url) != nullptr;
-    }
-
-    /// Get list of supported protocols
-    [[nodiscard]] std::vector<std::string> get_protocols() const {
-        std::lock_guard<std::mutex> lock(mutex_);
-
-        std::vector<std::string> protocols;
-        protocols.reserve(scheme_handlers_.size());
-        for (const auto& pair : scheme_handlers_) {
-            protocols.push_back(pair.first);
-        }
-        return protocols;
-    }
-
-private:
-    void sort_handlers() {
-        // Sort handlers by priority (descending)
-        for (auto& pair : scheme_handlers_) {
-            std::sort(pair.second.begin(), pair.second.end(),
-                      [](const IProtocolHandler* a, const IProtocolHandler* b) {
-                          return a->priority() > b->priority();
-                      });
-        }
-    }
-
-    mutable std::mutex mutex_;
-    std::vector<std::unique_ptr<IProtocolHandler>> handlers_;
-    std::unordered_map<std::string, std::vector<IProtocolHandler*>> scheme_handlers_;
 };
 
 }  // namespace internal

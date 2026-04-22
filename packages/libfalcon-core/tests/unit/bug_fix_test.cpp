@@ -6,7 +6,7 @@
 #include <falcon/task_manager.hpp>
 #include <falcon/download_task.hpp>
 #include <falcon/download_engine.hpp>
-#include <falcon/plugin_manager.hpp>
+#include <falcon/protocol_registry.hpp>
 #include <falcon/event_dispatcher.hpp>
 #include <falcon/exceptions.hpp>
 
@@ -32,7 +32,7 @@ protected:
 
         manager_ = std::make_unique<TaskManager>(config, event_dispatcher_.get());
         engine_ = std::make_unique<DownloadEngine>();
-        plugin_manager_ = std::make_unique<PluginManager>();
+        plugin_manager_ = std::make_unique<ProtocolRegistry>();
 
         manager_->start();
         event_dispatcher_->start();
@@ -50,7 +50,7 @@ protected:
     std::unique_ptr<EventDispatcher> event_dispatcher_;
     std::unique_ptr<TaskManager> manager_;
     std::unique_ptr<DownloadEngine> engine_;
-    std::unique_ptr<PluginManager> plugin_manager_;
+    std::unique_ptr<ProtocolRegistry> plugin_manager_;
 };
 
 // Test for TaskManager::find_task fix - should handle invalid task IDs gracefully
@@ -202,8 +202,8 @@ TEST_F(BugFixTest, DownloadEngineCheckTaskExistence) {
     EXPECT_NO_THROW(engine_->cancel_task(valid_id)) << "cancel_task should work with valid ID";
 }
 
-// Test for PluginManager nullptr dereference fix
-TEST_F(BugFixTest, PluginManagerNoNullptrDereference) {
+// Test for ProtocolRegistry nullptr dereference fix
+TEST_F(BugFixTest, ProtocolRegistryNoNullptrDereference) {
     // Test getting handlers for unregistered protocols
     auto http_handler = plugin_manager_->getPlugin("http");
     EXPECT_EQ(http_handler, nullptr) << "Should return nullptr for unregistered HTTP handler";

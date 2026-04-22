@@ -10,7 +10,7 @@
 #include <falcon/logger.hpp>
 #include <falcon/task_manager.hpp>
 #include <falcon/event_dispatcher.hpp>
-#include <falcon/plugin_manager.hpp>
+#include <falcon/protocol_registry.hpp>
 #include <algorithm>
 #include <filesystem>
 
@@ -84,7 +84,7 @@ public:
         }
 
         // 查找协议处理器
-        auto* handler = plugin_manager_.getPluginByUrl(url);
+        auto* handler = protocol_registry_.get_handler_for_url(url);
         if (!handler) {
             throw UnsupportedProtocolException("No handler for URL: " + url);
         }
@@ -226,7 +226,7 @@ public:
 
     void register_handler(std::unique_ptr<IProtocolHandler> handler) {
         if (handler) {
-            plugin_manager_.registerPlugin(std::move(handler));
+            protocol_registry_.register_handler(std::move(handler));
         }
     }
 
@@ -235,11 +235,11 @@ public:
     }
 
     std::vector<std::string> get_supported_protocols() const {
-        return plugin_manager_.getSupportedProtocols();
+        return protocol_registry_.supported_protocols();
     }
 
     bool is_url_supported(const std::string& url) const {
-        return plugin_manager_.supportsUrl(url);
+        return protocol_registry_.supports_url(url);
     }
 
     void add_listener(IEventListener* listener) {
@@ -291,15 +291,15 @@ public:
         return stats.total_tasks;
     }
 
-    void load_all_plugins() {
-        plugin_manager_.loadAllPlugins();
+    void load_all_handlers() {
+        protocol_registry_.load_builtin_handlers();
 
-        // 加载工厂函数创建的插件
+        // 加载工厂函数创建的处理器
         for (auto& factory : handler_factories_) {
             if (factory) {
                 auto handler = factory();
                 if (handler) {
-                    plugin_manager_.registerPlugin(std::move(handler));
+                    protocol_registry_.register_handler(std::move(handler));
                 }
             }
         }
@@ -307,7 +307,7 @@ public:
 
 private:
     EngineConfig config_;
-    PluginManager plugin_manager_;
+    ProtocolRegistry protocol_registry_;
     EventDispatcher event_dispatcher_;
     TaskManager task_manager_;
 
@@ -319,12 +319,12 @@ private:
 // DownloadEngine 实现
 DownloadEngine::DownloadEngine()
     : impl_(std::make_unique<Impl>(EngineConfig{})) {
-    impl_->load_all_plugins();
+    impl_->load_all_handlers();
 }
 
 DownloadEngine::DownloadEngine(const EngineConfig& config)
     : impl_(std::make_unique<Impl>(config)) {
-    impl_->load_all_plugins();
+    impl_->load_all_handlers();
 }
 
 DownloadEngine::~DownloadEngine() = default;

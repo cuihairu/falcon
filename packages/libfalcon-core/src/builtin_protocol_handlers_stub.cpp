@@ -1,4 +1,4 @@
-#include <falcon/plugin_manager.hpp>
+#include <falcon/protocol_registry.hpp>
 
 namespace falcon {
 
@@ -8,6 +8,6 @@ namespace falcon {
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((weak))
 #endif
-void register_builtin_protocol_handlers(PluginManager&) {}
+void register_builtin_protocol_handlers(ProtocolRegistry&) {}
 
 } // namespace falcon

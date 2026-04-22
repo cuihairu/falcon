@@ -1,4 +1,4 @@
-#include <falcon/plugin_manager.hpp>
+#include <falcon/protocol_registry.hpp>
 
 #if defined(FALCON_ENABLE_HTTP_PLUGIN) || defined(FALCON_ENABLE_HTTP)
 #include "../plugins/http/http_handler.hpp"
@@ -9,13 +9,13 @@
 
 namespace falcon {
 
-void register_builtin_protocol_handlers(PluginManager& manager) {
+void register_builtin_protocol_handlers(ProtocolRegistry& registry) {
 #if defined(FALCON_ENABLE_HTTP_PLUGIN) || defined(FALCON_ENABLE_HTTP)
-    manager.registerPlugin(protocols::create_http_handler());
+    registry.register_handler(protocols::create_http_handler());
 #endif
 
 #ifdef FALCON_ENABLE_FTP_PLUGIN
-    manager.registerPlugin(protocols::create_ftp_handler());
+    registry.register_handler(protocols::create_ftp_handler());
 #endif
 }
 

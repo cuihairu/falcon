@@ -5,7 +5,7 @@
 #include <falcon/download_task.hpp>
 #include <falcon/event_listener.hpp>
 #include <falcon/exceptions.hpp>
-#include <falcon/plugin_manager.hpp>
+#include <falcon/protocol_registry.hpp>
 #include <falcon/protocol_handler.hpp>
 #include <falcon/types.hpp>
 #include <falcon/version.hpp>
@@ -27,8 +27,8 @@ TEST(LibrarySplitTest, CompatibilityTargetLinksAllLibraries) {
     // successfully pulls in falcon_core, falcon_protocols, falcon_storage,
     // and falcon_drives.
     falcon::DownloadEngine engine;
-    falcon::PluginManager pm;
-    EXPECT_EQ(pm.getPluginCount(), 0u);
+    falcon::ProtocolRegistry pm;
+    EXPECT_EQ(pm.handler_count(), 0u);
 }
 
 // ---------------------------------------------------------------------------
@@ -198,16 +198,16 @@ TEST(LibrarySplitTest, EventListenerWorksAcrossSplit) {
 // ---------------------------------------------------------------------------
 
 TEST(LibrarySplitTest, LoadAllPluginsWithFullLink) {
-    falcon::PluginManager manager;
+    falcon::ProtocolRegistry manager;
     manager.loadAllPlugins();
 
     // With falcon_protocols linked, at least HTTP should be available
 #if defined(FALCON_ENABLE_HTTP) || defined(FALCON_ENABLE_HTTP_PLUGIN)
-    EXPECT_GT(manager.getPluginCount(), 0u);
+    EXPECT_GT(manager.handler_count(), 0u);
     EXPECT_NE(manager.getPlugin("http"), nullptr);
 #else
     // Without HTTP, still should not crash
-    EXPECT_EQ(manager.getPluginCount(), 0u);
+    EXPECT_EQ(manager.handler_count(), 0u);
 #endif
 }
 

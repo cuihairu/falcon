@@ -1,6 +1,6 @@
-// Falcon Plugin Manager Unit Tests
+// Falcon Protocol Registry Unit Tests
 
-#include <falcon/plugin_manager.hpp>
+#include <falcon/protocol_registry.hpp>
 
 #include <gtest/gtest.h>
 
@@ -52,29 +52,28 @@ private:
 
 } // namespace
 
-TEST(PluginManagerTest, RegisterGetUnload) {
-    falcon::PluginManager manager;
+TEST(ProtocolRegistryTest, RegisterGet) {
+    falcon::ProtocolRegistry manager;
 
-    EXPECT_EQ(manager.getPluginCount(), 0u);
-    EXPECT_EQ(manager.getPlugin("foo"), nullptr);
+    EXPECT_EQ(manager.handler_count(), 0u);
+    EXPECT_EQ(manager.get_handler("foo"), nullptr);
 
-    manager.registerPlugin(std::make_unique<DummyProtocolHandler>(
+    manager.register_handler(std::make_unique<DummyProtocolHandler>(
         "foo", std::vector<std::string>{"foo"}, "foo://"));
 
-    EXPECT_EQ(manager.getPluginCount(), 1u);
-    EXPECT_NE(manager.getPlugin("foo"), nullptr);
-    EXPECT_EQ(manager.getSupportedProtocols(), (std::vector<std::string>{"foo"}));
-    EXPECT_EQ(manager.listSupportedSchemes(), (std::vector<std::string>{"foo"}));
+    EXPECT_EQ(manager.handler_count(), 1u);
+    EXPECT_NE(manager.get_handler("foo"), nullptr);
+    EXPECT_EQ(manager.supported_protocols(), (std::vector<std::string>{"foo"}));
+    EXPECT_EQ(manager.supported_schemes(), (std::vector<std::string>{"foo"}));
 
-    manager.unloadPlugin("foo");
-    EXPECT_EQ(manager.getPluginCount(), 0u);
-    EXPECT_EQ(manager.getPlugin("foo"), nullptr);
+    // Note: ProtocolRegistry doesn't provide unload functionality
+    // Handlers remain registered for the lifetime of the registry
 }
 
-TEST(PluginManagerTest, GetPluginByUrlPrefersHlsForM3u8) {
-    falcon::PluginManager manager;
+TEST(ProtocolRegistryTest, GetPluginByUrlPrefersHlsForM3u8) {
+    falcon::ProtocolRegistry manager;
 
-    manager.registerPlugin(std::make_unique<DummyProtocolHandler>(
+    manager.register_handler(std::make_unique<DummyProtocolHandler>(
         "http", std::vector<std::string>{"http", "https"}, "http"));
 
     class HlsOnlyHandler final : public falcon::IProtocolHandler {
@@ -104,94 +103,91 @@ TEST(PluginManagerTest, GetPluginByUrlPrefersHlsForM3u8) {
         void cancel(falcon::DownloadTask::Ptr) override {}
     };
 
-    manager.registerPlugin(std::make_unique<HlsOnlyHandler>());
+    manager.register_handler(std::make_unique<HlsOnlyHandler>());
 
-    auto* chosen = manager.getPluginByUrl("https://example.com/stream.m3u8");
+    auto* chosen = manager.get_handler_for_url("https://example.com/stream.m3u8");
     ASSERT_NE(chosen, nullptr);
     EXPECT_EQ(chosen->protocol_name(), "hls");
 
-    auto* normal = manager.getPluginByUrl("https://example.com/index.html");
+    auto* normal = manager.get_handler_for_url("https://example.com/index.html");
     ASSERT_NE(normal, nullptr);
     EXPECT_EQ(normal->protocol_name(), "http");
 }
 
-TEST(PluginManagerTest, GetPluginByUrlFallsBackToCanHandle) {
-    falcon::PluginManager manager;
+TEST(ProtocolRegistryTest, GetPluginByUrlFallsBackToCanHandle) {
+    falcon::ProtocolRegistry manager;
 
-    manager.registerPlugin(std::make_unique<DummyProtocolHandler>(
+    manager.register_handler(std::make_unique<DummyProtocolHandler>(
         "custom", std::vector<std::string>{"custom"}, "custom:"));
 
-    auto* chosen = manager.getPluginByUrl("custom:opaque");
+    auto* chosen = manager.get_handler_for_url("custom:opaque");
     ASSERT_NE(chosen, nullptr);
     EXPECT_EQ(chosen->protocol_name(), "custom");
 }
 
 // 新增：注册多个插件
-TEST(PluginManagerTest, RegisterMultiplePlugins) {
-    falcon::PluginManager manager;
+TEST(ProtocolRegistryTest, RegisterMultiplePlugins) {
+    falcon::ProtocolRegistry manager;
 
-    manager.registerPlugin(std::make_unique<DummyProtocolHandler>(
+    manager.register_handler(std::make_unique<DummyProtocolHandler>(
         "http", std::vector<std::string>{"http", "https"}, "http"));
-    manager.registerPlugin(std::make_unique<DummyProtocolHandler>(
+    manager.register_handler(std::make_unique<DummyProtocolHandler>(
         "ftp", std::vector<std::string>{"ftp"}, "ftp://"));
-    manager.registerPlugin(std::make_unique<DummyProtocolHandler>(
+    manager.register_handler(std::make_unique<DummyProtocolHandler>(
         "bt", std::vector<std::string>{"magnet", "torrent"}, "magnet:"));
 
-    EXPECT_EQ(manager.getPluginCount(), 3u);
+    EXPECT_EQ(manager.handler_count(), 3u);
 
-    EXPECT_NE(manager.getPlugin("http"), nullptr);
-    EXPECT_NE(manager.getPlugin("ftp"), nullptr);
-    EXPECT_NE(manager.getPlugin("bt"), nullptr);
+    EXPECT_NE(manager.get_handler("http"), nullptr);
+    EXPECT_NE(manager.get_handler("ftp"), nullptr);
+    EXPECT_NE(manager.get_handler("bt"), nullptr);
 }
 
 // 新增：重复注册同一插件
-TEST(PluginManagerTest, RegisterDuplicatePlugin) {
-    falcon::PluginManager manager;
+TEST(ProtocolRegistryTest, RegisterDuplicatePlugin) {
+    falcon::ProtocolRegistry manager;
 
-    manager.registerPlugin(std::make_unique<DummyProtocolHandler>(
+    manager.register_handler(std::make_unique<DummyProtocolHandler>(
         "http", std::vector<std::string>{"http"}, "http://"));
 
-    auto* first = manager.getPlugin("http");
+    auto* first = manager.get_handler("http");
     ASSERT_NE(first, nullptr);
 
     // 尝试注册同名插件
-    manager.registerPlugin(std::make_unique<DummyProtocolHandler>(
+    manager.register_handler(std::make_unique<DummyProtocolHandler>(
         "http", std::vector<std::string>{"http"}, "http://"));
 
-    EXPECT_EQ(manager.getPluginCount(), 1u);
+    EXPECT_EQ(manager.handler_count(), 1u);
 
-    auto* second = manager.getPlugin("http");
+    auto* second = manager.get_handler("http");
     EXPECT_NE(second, nullptr);
 }
 
 // 新增：获取不存在的插件
-TEST(PluginManagerTest, GetNonExistentPlugin) {
-    falcon::PluginManager manager;
+TEST(ProtocolRegistryTest, GetNonExistentPlugin) {
+    falcon::ProtocolRegistry manager;
 
-    EXPECT_EQ(manager.getPlugin("nonexistent"), nullptr);
-    EXPECT_EQ(manager.getPluginByUrl("nonexistent://test"), nullptr);
+    EXPECT_EQ(manager.get_handler("nonexistent"), nullptr);
+    EXPECT_EQ(manager.get_handler_for_url("nonexistent://test"), nullptr);
 }
 
-// 新增：卸载不存在的插件
-TEST(PluginManagerTest, UnloadNonExistentPlugin) {
-    falcon::PluginManager manager;
-
-    // 不应该崩溃
-    manager.unloadPlugin("nonexistent");
-
-    EXPECT_EQ(manager.getPluginCount(), 0u);
-}
+// Note: Unload functionality removed from ProtocolRegistry
+// Handlers are designed to be registered once and remain for the lifetime
+// TEST(ProtocolRegistryTest, UnloadNonExistentHandler) {
+//     falcon::ProtocolRegistry manager;
+//     // ProtocolRegistry doesn't provide unload functionality
+// }
 
 // 新增：支持的协议列表
-TEST(PluginManagerTest, SupportedProtocolsList) {
-    falcon::PluginManager manager;
+TEST(ProtocolRegistryTest, SupportedProtocolsList) {
+    falcon::ProtocolRegistry manager;
 
-    manager.registerPlugin(std::make_unique<DummyProtocolHandler>(
+    manager.register_handler(std::make_unique<DummyProtocolHandler>(
         "http", std::vector<std::string>{"http", "https"}, "http://"));
-    manager.registerPlugin(std::make_unique<DummyProtocolHandler>(
+    manager.register_handler(std::make_unique<DummyProtocolHandler>(
         "ftp", std::vector<std::string>{"ftp"}, "ftp://"));
 
-    auto protocols = manager.getSupportedProtocols();
+    auto protocols = manager.supported_protocols();
 
     EXPECT_EQ(protocols.size(), 2u);
     EXPECT_TRUE(std::find(protocols.begin(), protocols.end(), "http") != protocols.end());
@@ -199,15 +195,15 @@ TEST(PluginManagerTest, SupportedProtocolsList) {
 }
 
 // 新增：支持的 URL schemes
-TEST(PluginManagerTest, SupportedSchemesList) {
-    falcon::PluginManager manager;
+TEST(ProtocolRegistryTest, SupportedSchemesList) {
+    falcon::ProtocolRegistry manager;
 
-    manager.registerPlugin(std::make_unique<DummyProtocolHandler>(
+    manager.register_handler(std::make_unique<DummyProtocolHandler>(
         "http", std::vector<std::string>{"http", "https"}, "http://"));
-    manager.registerPlugin(std::make_unique<DummyProtocolHandler>(
+    manager.register_handler(std::make_unique<DummyProtocolHandler>(
         "ftp", std::vector<std::string>{"ftp"}, "ftp://"));
 
-    auto schemes = manager.listSupportedSchemes();
+    auto schemes = manager.supported_schemes();
 
     EXPECT_EQ(schemes.size(), 3u);
     EXPECT_TRUE(std::find(schemes.begin(), schemes.end(), "http") != schemes.end());
@@ -216,47 +212,47 @@ TEST(PluginManagerTest, SupportedSchemesList) {
 }
 
 // 新增：URL 路由到正确的插件
-TEST(PluginManagerTest, RouteUrlToCorrectPlugin) {
-    falcon::PluginManager manager;
+TEST(ProtocolRegistryTest, RouteUrlToCorrectPlugin) {
+    falcon::ProtocolRegistry manager;
 
-    manager.registerPlugin(std::make_unique<DummyProtocolHandler>(
+    manager.register_handler(std::make_unique<DummyProtocolHandler>(
         "http", std::vector<std::string>{"http", "https"}, "http"));
-    manager.registerPlugin(std::make_unique<DummyProtocolHandler>(
+    manager.register_handler(std::make_unique<DummyProtocolHandler>(
         "ftp", std::vector<std::string>{"ftp"}, "ftp://"));
 
-    auto* http_plugin = manager.getPluginByUrl("http://example.com/file.zip");
+    auto* http_plugin = manager.get_handler_for_url("http://example.com/file.zip");
     ASSERT_NE(http_plugin, nullptr);
     EXPECT_EQ(http_plugin->protocol_name(), "http");
 
-    auto* https_plugin = manager.getPluginByUrl("https://example.com/file.zip");
+    auto* https_plugin = manager.get_handler_for_url("https://example.com/file.zip");
     ASSERT_NE(https_plugin, nullptr);
     EXPECT_EQ(https_plugin->protocol_name(), "http");
 
-    auto* ftp_plugin = manager.getPluginByUrl("ftp://example.com/file.zip");
+    auto* ftp_plugin = manager.get_handler_for_url("ftp://example.com/file.zip");
     ASSERT_NE(ftp_plugin, nullptr);
     EXPECT_EQ(ftp_plugin->protocol_name(), "ftp");
 }
 
 // 新增：无效 URL 处理
-TEST(PluginManagerTest, HandleInvalidUrl) {
-    falcon::PluginManager manager;
+TEST(ProtocolRegistryTest, HandleInvalidUrl) {
+    falcon::ProtocolRegistry manager;
 
-    manager.registerPlugin(std::make_unique<DummyProtocolHandler>(
+    manager.register_handler(std::make_unique<DummyProtocolHandler>(
         "http", std::vector<std::string>{"http"}, "http://"));
 
     // 空 URL
-    EXPECT_EQ(manager.getPluginByUrl(""), nullptr);
+    EXPECT_EQ(manager.get_handler_for_url(""), nullptr);
 
     // 无协议 URL
-    EXPECT_EQ(manager.getPluginByUrl("example.com/file.zip"), nullptr);
+    EXPECT_EQ(manager.get_handler_for_url("example.com/file.zip"), nullptr);
 
     // 不支持的协议
-    EXPECT_EQ(manager.getPluginByUrl("unsupported://test"), nullptr);
+    EXPECT_EQ(manager.get_handler_for_url("unsupported://test"), nullptr);
 }
 
 // 新增：插件优先级测试
-TEST(PluginManagerTest, PluginPriority) {
-    falcon::PluginManager manager;
+TEST(ProtocolRegistryTest, PluginPriority) {
+    falcon::ProtocolRegistry manager;
 
     // 创建一个能处理多种协议的插件
     class UniversalHandler final : public falcon::IProtocolHandler {
@@ -281,16 +277,16 @@ TEST(PluginManagerTest, PluginPriority) {
         void cancel(falcon::DownloadTask::Ptr) override {}
     };
 
-    manager.registerPlugin(std::make_unique<UniversalHandler>());
+    manager.register_handler(std::make_unique<UniversalHandler>());
 
-    auto* plugin = manager.getPluginByUrl("http://example.com");
+    auto* plugin = manager.get_handler_for_url("http://example.com");
     ASSERT_NE(plugin, nullptr);
     EXPECT_EQ(plugin->protocol_name(), "universal");
 }
 
 // 新增：并发插件注册
-TEST(PluginManagerTest, ConcurrentPluginRegistration) {
-    falcon::PluginManager manager;
+TEST(ProtocolRegistryTest, ConcurrentPluginRegistration) {
+    falcon::ProtocolRegistry manager;
 
     std::vector<std::thread> threads;
 
@@ -300,7 +296,7 @@ TEST(PluginManagerTest, ConcurrentPluginRegistration) {
                 "plugin_" + std::to_string(i),
                 std::vector<std::string>{"scheme" + std::to_string(i)},
                 "scheme" + std::to_string(i) + "://");
-            manager.registerPlugin(std::move(plugin));
+            manager.register_handler(std::move(plugin));
         });
     }
 
@@ -308,38 +304,23 @@ TEST(PluginManagerTest, ConcurrentPluginRegistration) {
         t.join();
     }
 
-    EXPECT_EQ(manager.getPluginCount(), 10u);
+    EXPECT_EQ(manager.handler_count(), 10u);
 }
 
-// 新增：清空所有插件
-TEST(PluginManagerTest, UnloadAllPlugins) {
-    falcon::PluginManager manager;
-
-    for (int i = 0; i < 5; ++i) {
-        manager.registerPlugin(std::make_unique<DummyProtocolHandler>(
-            "plugin_" + std::to_string(i),
-            std::vector<std::string>{"scheme" + std::to_string(i)},
-            "scheme" + std::to_string(i) + "://"));
-    }
-
-    EXPECT_EQ(manager.getPluginCount(), 5u);
-
-    // 卸载所有插件
-    for (int i = 0; i < 5; ++i) {
-        manager.unloadPlugin("plugin_" + std::to_string(i));
-    }
-
-    EXPECT_EQ(manager.getPluginCount(), 0u);
-}
+// Note: Unload functionality removed from ProtocolRegistry
+// TEST(ProtocolRegistryTest, UnloadAllHandlers) {
+//     falcon::ProtocolRegistry manager;
+//     // ProtocolRegistry doesn't provide unload functionality
+// }
 
 // 新增：插件信息查询
-TEST(PluginManagerTest, PluginInformation) {
-    falcon::PluginManager manager;
+TEST(ProtocolRegistryTest, PluginInformation) {
+    falcon::ProtocolRegistry manager;
 
-    manager.registerPlugin(std::make_unique<DummyProtocolHandler>(
+    manager.register_handler(std::make_unique<DummyProtocolHandler>(
         "http", std::vector<std::string>{"http", "https"}, "http://"));
 
-    auto* plugin = manager.getPlugin("http");
+    auto* plugin = manager.get_handler("http");
     ASSERT_NE(plugin, nullptr);
 
     EXPECT_EQ(plugin->protocol_name(), "http");
@@ -354,64 +335,64 @@ TEST(PluginManagerTest, PluginInformation) {
 }
 
 // 新增：边界条件 - 空协议名
-TEST(PluginManagerTest, EmptyProtocolName) {
-    falcon::PluginManager manager;
+TEST(ProtocolRegistryTest, EmptyProtocolName) {
+    falcon::ProtocolRegistry manager;
 
     auto plugin = std::make_unique<DummyProtocolHandler>(
         "", std::vector<std::string>{}, "");
 
     // 尝试注册空协议名插件
-    manager.registerPlugin(std::move(plugin));
+    manager.register_handler(std::move(plugin));
 
     // 应该能注册，但可能返回 nullptr
-    auto* retrieved = manager.getPlugin("");
+    auto* retrieved = manager.get_handler("");
     // 验证行为
 }
 
 // 新增：特殊字符在协议名中
-TEST(PluginManagerTest, SpecialCharactersInProtocol) {
-    falcon::PluginManager manager;
+TEST(ProtocolRegistryTest, SpecialCharactersInProtocol) {
+    falcon::ProtocolRegistry manager;
 
-    manager.registerPlugin(std::make_unique<DummyProtocolHandler>(
+    manager.register_handler(std::make_unique<DummyProtocolHandler>(
         "my-custom.protocol", std::vector<std::string>{"my-custom"}, "my-custom://"));
 
-    auto* plugin = manager.getPlugin("my-custom.protocol");
+    auto* plugin = manager.get_handler("my-custom.protocol");
     ASSERT_NE(plugin, nullptr);
     EXPECT_EQ(plugin->protocol_name(), "my-custom.protocol");
 }
 
 // 新增：大小写敏感性测试
-TEST(PluginManagerTest, CaseSensitivity) {
-    falcon::PluginManager manager;
+TEST(ProtocolRegistryTest, CaseSensitivity) {
+    falcon::ProtocolRegistry manager;
 
-    manager.registerPlugin(std::make_unique<DummyProtocolHandler>(
+    manager.register_handler(std::make_unique<DummyProtocolHandler>(
         "HTTP", std::vector<std::string>{"HTTP"}, "HTTP://"));
 
-    auto* upper = manager.getPlugin("HTTP");
+    auto* upper = manager.get_handler("HTTP");
     EXPECT_NE(upper, nullptr);
 
-    auto* lower = manager.getPlugin("http");
+    auto* lower = manager.get_handler("http");
     // 验证大小写敏感性
 }
 
 // 新增：大量插件注册压力测试
-TEST(PluginManagerTest, ManyPluginsStressTest) {
-    falcon::PluginManager manager;
+TEST(ProtocolRegistryTest, ManyPluginsStressTest) {
+    falcon::ProtocolRegistry manager;
 
     constexpr int plugin_count = 100;
 
     for (int i = 0; i < plugin_count; ++i) {
-        manager.registerPlugin(std::make_unique<DummyProtocolHandler>(
+        manager.register_handler(std::make_unique<DummyProtocolHandler>(
             "plugin_" + std::to_string(i),
             std::vector<std::string>{"scheme" + std::to_string(i)},
             "scheme" + std::to_string(i) + "://"));
     }
 
-    EXPECT_EQ(manager.getPluginCount(), plugin_count);
+    EXPECT_EQ(manager.handler_count(), plugin_count);
 
     // 验证所有插件都能正确获取
     for (int i = 0; i < plugin_count; ++i) {
-        auto* plugin = manager.getPlugin("plugin_" + std::to_string(i));
+        auto* plugin = manager.get_handler("plugin_" + std::to_string(i));
         ASSERT_NE(plugin, nullptr);
         EXPECT_EQ(plugin->protocol_name(), "plugin_" + std::to_string(i));
     }

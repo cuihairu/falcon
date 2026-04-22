@@ -1,13 +1,13 @@
 /**
  * @file protocols_test.cpp
- * @brief 集成测试：测试所有协议插件
+ * @brief 集成测试：测试所有协议处理器
  * @author Falcon Team
  * @date 2025-12-21
  */
 
 #include <gtest/gtest.h>
 #include <falcon/falcon.hpp>
-#include <falcon/plugin_manager.hpp>
+#include <falcon/protocol_registry.hpp>
 #include <thread>
 #include <chrono>
 
@@ -18,11 +18,10 @@ protected:
     void SetUp() override {
         engine = std::make_unique<DownloadEngine>();
 
-        // 加载所有插件
-        engine->loadAllPlugins();
+        // Note: Built-in handlers are loaded automatically by DownloadEngine constructor
 
         // 列出支持的协议
-        protocols = engine->listSupportedProtocols();
+        protocols = engine->get_supported_protocols();
     }
 
     void TearDown() override {

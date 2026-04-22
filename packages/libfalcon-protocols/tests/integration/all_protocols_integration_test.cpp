@@ -7,7 +7,7 @@
 
 #include <gtest/gtest.h>
 #include <falcon/falcon.hpp>
-#include <falcon/plugin_manager.hpp>
+#include <falcon/protocol_registry.hpp>
 #include <thread>
 #include <chrono>
 #include <vector>
@@ -23,11 +23,10 @@ protected:
         // 创建下载引擎
         engine = std::make_unique<DownloadEngine>();
 
-        // 加载所有插件
-        engine->loadAllPlugins();
+        // Note: Built-in handlers are loaded automatically by DownloadEngine constructor
 
         // 获取支持的协议列表
-        protocols = engine->listSupportedProtocols();
+        protocols = engine->get_supported_protocols();
 
         // 创建输出目录
         std::filesystem::create_directories("test_downloads");

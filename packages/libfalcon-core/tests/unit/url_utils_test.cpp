@@ -1,7 +1,7 @@
 // Falcon URL Utils Unit Tests
 // Copyright (c) 2025 Falcon Project
 
-#include "internal/plugin_manager.hpp"
+#include "internal/url_utils.hpp"
 
 #include <gtest/gtest.h>
 

@@ -1,6 +1,6 @@
 // FTP Handler Unit Tests
 
-#include <falcon/plugin_manager.hpp>
+#include <falcon/protocol_registry.hpp>
 #include <falcon/protocol_handler.hpp>
 #include <falcon/download_options.hpp>
 #include <falcon/types.hpp>
@@ -28,11 +28,11 @@ protected:
     }
 };
 
-TEST_F(FtpHandlerTest, PluginManagerLoadsFtpHandler) {
-    falcon::PluginManager pm;
-    pm.loadAllPlugins();
+TEST_F(FtpHandlerTest, ProtocolRegistryLoadsFtpHandler) {
+    falcon::ProtocolRegistry registry;
+    registry.load_builtin_handlers();
 
-    auto schemes = pm.listSupportedSchemes();
+    auto schemes = registry.supported_schemes();
     // If FTP plugin is enabled in this build, "ftp" should be listed.
     bool has_ftp = std::find(schemes.begin(), schemes.end(), "ftp") != schemes.end();
     bool has_ftps = std::find(schemes.begin(), schemes.end(), "ftps") != schemes.end();

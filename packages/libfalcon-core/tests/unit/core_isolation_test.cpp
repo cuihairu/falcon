@@ -3,19 +3,19 @@
 
 #include <falcon/download_engine.hpp>
 #include <falcon/exceptions.hpp>
-#include <falcon/plugin_manager.hpp>
+#include <falcon/protocol_registry.hpp>
 
 #include <gtest/gtest.h>
 
-TEST(CoreIsolationTest, PluginManagerWorksWithoutProtocols) {
-    falcon::PluginManager manager;
+TEST(CoreIsolationTest, ProtocolRegistryWorksWithoutProtocols) {
+    falcon::ProtocolRegistry registry;
 
-    // The weak stub makes loadAllPlugins() a no-op when falcon_protocols
+    // The weak stub makes load_builtin_handlers() a no-op when falcon_protocols
     // is not linked.
-    manager.loadAllPlugins();
+    registry.load_builtin_handlers();
 
-    EXPECT_EQ(manager.getPluginCount(), 0u);
-    EXPECT_EQ(manager.getPlugin("http"), nullptr);
+    EXPECT_EQ(registry.handler_count(), 0u);
+    EXPECT_EQ(registry.get_handler("http"), nullptr);
 }
 
 TEST(CoreIsolationTest, DownloadEngineCreatesWithoutProtocols) {
@@ -27,8 +27,8 @@ TEST(CoreIsolationTest, DownloadEngineCreatesWithoutProtocols) {
                  falcon::UnsupportedProtocolException);
 }
 
-TEST(CoreIsolationTest, PluginManagerSupportsManualRegistration) {
-    falcon::PluginManager manager;
+TEST(CoreIsolationTest, ProtocolRegistrySupportsManualRegistration) {
+    falcon::ProtocolRegistry registry;
 
     class DummyHandler final : public falcon::IProtocolHandler {
     public:
@@ -57,8 +57,8 @@ TEST(CoreIsolationTest, PluginManagerSupportsManualRegistration) {
         void cancel(falcon::DownloadTask::Ptr) override {}
     };
 
-    manager.registerPlugin(std::make_unique<DummyHandler>());
-    EXPECT_EQ(manager.getPluginCount(), 1u);
-    EXPECT_NE(manager.getPlugin("dummy"), nullptr);
-    EXPECT_TRUE(manager.supportsUrl("dummy://test"));
+    registry.register_handler(std::make_unique<DummyHandler>());
+    EXPECT_EQ(registry.handler_count(), 1u);
+    EXPECT_NE(registry.get_handler("dummy"), nullptr);
+    EXPECT_TRUE(registry.supports_url("dummy://test"));
 }

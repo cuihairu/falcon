@@ -50,7 +50,7 @@ add_executable(falcon_core_tests
     unit/task_manager_test.cpp
     unit/task_manager_persistence_test.cpp
     unit/thread_pool_test.cpp
-    unit/plugin_manager_test.cpp
+    unit/protocol_registry_test.cpp
     unit/event_dispatcher_test.cpp
     unit/download_engine_test.cpp
     unit/download_engine_api_test.cpp
