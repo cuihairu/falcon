@@ -98,12 +98,6 @@ private:
     void create_results_table();
     QWidget* create_status_bar();
 
-    // 执行不同类型的搜索
-    void search_magnet_links(const QString& keyword);
-    void search_http_resources(const QString& keyword);
-    void search_cloud_resources(const QString& keyword);
-    void search_ftp_resources(const QString& keyword);
-
     // 解析并显示搜索结果
     void display_results(const QList<SearchResultItem>& results);
     void request_configured_download_for_row(int row);
