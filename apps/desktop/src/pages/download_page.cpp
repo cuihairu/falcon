@@ -14,6 +14,8 @@
 #include <QAction>
 #include <QDesktopServices>
 #include <QApplication>
+#include <QClipboard>
+#include <QScrollArea>
 #include <algorithm>
 
 namespace falcon::desktop {
@@ -688,7 +690,6 @@ void DownloadPage::show_context_menu(const QPoint& pos)
 
     // 删除任务
     auto* delete_action = menu.addAction(tr("删除任务"));
-    delete_action->setStyleSheet("color: red;");
     connect(delete_action, &QAction::triggered, this, &DownloadPage::on_delete_selected);
 
     menu.exec(task_table_->mapToGlobal(pos));
@@ -829,7 +830,6 @@ void DownloadPage::show_grid_context_menu(const QPoint& pos)
 
     // 删除任务
     auto* delete_action = menu.addAction(tr("删除任务"));
-    delete_action->setStyleSheet("color: red;");
     connect(delete_action, &QAction::triggered, this, [this, task]() {
         emit remove_task_requested(task->id());
     });
