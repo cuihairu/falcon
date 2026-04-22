@@ -107,6 +107,7 @@ private:
 
     // 更新文件列表
     void update_file_list(const QString& path);
+    void update_file_list_with_data(const QList<RemoteResourceInfo>& resources);
 
     // 格式化文件大小
     QString format_size(uint64_t bytes) const;
@@ -148,6 +149,7 @@ private:
 
     // 当前状态
     CloudStorageConfig current_config_;
+    QString current_config_name_;  // 当前连接的配置名称
     QString current_path_;
     bool is_connected_ = false;
 

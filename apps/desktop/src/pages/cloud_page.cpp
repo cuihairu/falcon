@@ -330,6 +330,11 @@ void CloudPage::connect_to_storage()
     current_config_.region = region_edit_->text();
     current_config_.bucket = bucket_edit_->text();
 
+    // 生成配置名称
+    const QString protocol_name = storage_type_combo_->currentText();
+    current_config_.name = QString("%1 (%2)").arg(protocol_name, current_config_.endpoint);
+    current_config_name_ = current_config_.name;
+
     // 使用 StorageService 连接
     if (storage_service_->connect_storage(current_config_)) {
         status_label_->setText(tr("Connecting..."));
@@ -362,53 +367,61 @@ void CloudPage::disconnect_storage()
 
 void CloudPage::refresh_directory()
 {
-    if (!is_connected_) {
+    if (!is_connected_ || current_config_name_.isEmpty()) {
         return;
     }
 
-    // TODO: 调用 libfalcon 的 list_directory
-    update_file_list(current_path_);
+    status_label_->setText(tr("Loading..."));
+
+    // 调用 StorageService 的 list_directory
+    storage_service_->list_directory(current_config_name_, current_path_,
+        [this](const QList<RemoteResourceInfo>& resources) {
+            // 更新 UI 需要在主线程执行
+            QMetaObject::invokeMethod(this, [this, resources]() {
+                update_file_list_with_data(resources);
+            }, Qt::QueuedConnection);
+        });
 }
 
 void CloudPage::update_file_list(const QString& path)
 {
-    file_table_->setRowCount(0);
+    // 这个方法现在只更新路径，实际数据通过 list_directory 回调获取
     current_path_ = path;
     current_path_edit_->setText(path);
+    refresh_directory();
+}
 
-    // TODO: 从 libfalcon 获取实际文件列表
-    // 暂时添加示例数据
-    if (path == "/") {
-        // 添加文件夹
+void CloudPage::update_file_list_with_data(const QList<RemoteResourceInfo>& resources)
+{
+    file_table_->setRowCount(0);
+
+    for (const auto& resource : resources) {
         int row = file_table_->rowCount();
         file_table_->insertRow(row);
-        auto* documents_item = new QTableWidgetItem("documents");
-        documents_item->setIcon(style()->standardIcon(QStyle::SP_DirIcon));
-        file_table_->setItem(row, 0, documents_item);
-        file_table_->setItem(row, 1, new QTableWidgetItem("-"));
-        file_table_->setItem(row, 2, new QTableWidgetItem("2025-12-27 10:30"));
-        file_table_->setItem(row, 3, new QTableWidgetItem(tr("Folder")));
 
-        row = file_table_->rowCount();
-        file_table_->insertRow(row);
-        auto* images_item = new QTableWidgetItem("images");
-        images_item->setIcon(style()->standardIcon(QStyle::SP_DirIcon));
-        file_table_->setItem(row, 0, images_item);
-        file_table_->setItem(row, 1, new QTableWidgetItem("-"));
-        file_table_->setItem(row, 2, new QTableWidgetItem("2025-12-26 15:20"));
-        file_table_->setItem(row, 3, new QTableWidgetItem(tr("Folder")));
+        // 名称
+        auto* name_item = new QTableWidgetItem(resource.name);
+        if (resource.type == "directory") {
+            name_item->setIcon(style()->standardIcon(QStyle::SP_DirIcon));
+        } else {
+            name_item->setIcon(style()->standardIcon(QStyle::SP_FileIcon));
+        }
+        file_table_->setItem(row, 0, name_item);
 
-        row = file_table_->rowCount();
-        file_table_->insertRow(row);
-        auto* readme_item = new QTableWidgetItem("readme.txt");
-        readme_item->setIcon(style()->standardIcon(QStyle::SP_FileIcon));
-        file_table_->setItem(row, 0, readme_item);
-        file_table_->setItem(row, 1, new QTableWidgetItem("1.2 KB"));
-        file_table_->setItem(row, 2, new QTableWidgetItem("2025-12-25 09:15"));
-        file_table_->setItem(row, 3, new QTableWidgetItem(tr("Text File")));
+        // 大小
+        QString size_str = resource.type == "directory" ? "-" :
+                          (resource.size > 0 ? QString::number(resource.size) : "-");
+        file_table_->setItem(row, 1, new QTableWidgetItem(size_str));
+
+        // 修改时间
+        file_table_->setItem(row, 2, new QTableWidgetItem(resource.modified_time));
+
+        // 类型
+        QString type_str = resource.type == "directory" ? tr("Folder") : resource.type;
+        file_table_->setItem(row, 3, new QTableWidgetItem(type_str));
     }
 
-    status_label_->setText(tr("%1 item(s).").arg(file_table_->rowCount()));
+    status_label_->setText(tr("%1 item(s).").arg(resources.size()));
 }
 
 void CloudPage::enter_directory(int row)
@@ -464,46 +477,149 @@ void CloudPage::go_home()
 
 void CloudPage::download_file()
 {
-    // TODO: 调用 libfalcon 下载功能
-    QMessageBox::information(this, tr("Download"), tr("Download is not implemented yet."));
+    auto selected = file_table_->selectedItems();
+    if (selected.isEmpty()) {
+        QMessageBox::warning(this, tr("Notice"), tr("Select a file to download."));
+        return;
+    }
+
+    int row = selected.first()->row();
+    auto* name_item = file_table_->item(row, 0);
+    auto* type_item = file_table_->item(row, 3);
+
+    if (!name_item) {
+        return;
+    }
+
+    // 检查是否为文件夹
+    if (type_item && type_item->text() == tr("Folder")) {
+        QMessageBox::information(this, tr("Notice"), tr("Cannot download folder directly."));
+        return;
+    }
+
+    QString file_name = name_item->text();
+    QString remote_path = current_path_;
+    if (!remote_path.endsWith("/")) {
+        remote_path += "/";
+    }
+    remote_path += file_name;
+
+    // 选择保存位置
+    QString save_path = QFileDialog::getSaveFileName(
+        this, tr("Save File"),
+        QDir::homePath() + "/" + file_name,
+        tr("All Files (*.*)")
+    );
+
+    if (save_path.isEmpty()) {
+        return;
+    }
+
+    // 发起下载请求
+    storage_service_->request_download(current_config_name_, remote_path, save_path);
+
+    status_label_->setText(tr("Downloading: %1").arg(file_name));
 }
 
 void CloudPage::upload_file()
 {
+    if (!is_connected_ || current_config_name_.isEmpty()) {
+        QMessageBox::warning(this, tr("Notice"), tr("Not connected to any storage."));
+        return;
+    }
+
     QString file_path = QFileDialog::getOpenFileName(
         this, tr("Select a file to upload"),
         QDir::homePath(),
         tr("All Files (*.*)")
     );
 
-    if (!file_path.isEmpty()) {
-        // TODO: 调用 libfalcon 上传功能
-        QMessageBox::information(this, tr("Upload"), tr("Upload %1 is not implemented yet.").arg(QFileInfo(file_path).fileName()));
+    if (file_path.isEmpty()) {
+        return;
     }
+
+    QFileInfo file_info(file_path);
+    QString remote_path = current_path_;
+    if (!remote_path.endsWith("/")) {
+        remote_path += "/";
+    }
+    remote_path += file_info.fileName();
+
+    status_label_->setText(tr("Uploading: %1").arg(file_info.fileName()));
+
+    // 调用 StorageService 上传
+    storage_service_->upload_file(current_config_name_, file_path, remote_path,
+        [this, file_info](bool success, const QString& message) {
+            QMetaObject::invokeMethod(this, [this, success, message, file_info]() {
+                if (success) {
+                    status_label_->setText(tr("Upload completed: %1").arg(file_info.fileName()));
+                    refresh_directory();
+                } else {
+                    status_label_->setText(tr("Upload failed: %1").arg(message));
+                    QMessageBox::warning(this, tr("Upload Failed"), message);
+                }
+            }, Qt::QueuedConnection);
+        });
 }
 
 void CloudPage::delete_selected()
 {
+    if (!is_connected_ || current_config_name_.isEmpty()) {
+        return;
+    }
+
     auto selected = file_table_->selectedItems();
     if (selected.isEmpty()) {
         QMessageBox::warning(this, tr("Notice"), tr("Select items first."));
         return;
     }
 
+    int row_count = file_table_->selectedItems().size() / file_table_->columnCount();
     auto reply = QMessageBox::question(
         this, tr("Confirm Delete"),
-        tr("Delete %1 item(s)?").arg(file_table_->selectedItems().size() / file_table_->columnCount()),
+        tr("Delete %1 item(s)?").arg(row_count),
         QMessageBox::Yes | QMessageBox::No
     );
 
-    if (reply == QMessageBox::Yes) {
-        // TODO: 调用 libfalcon 删除功能
-        refresh_directory();
+    if (reply != QMessageBox::Yes) {
+        return;
     }
+
+    // 获取所有选中行的路径
+    QSet<int> rows;
+    for (auto* item : selected) {
+        rows.insert(item->row());
+    }
+
+    // 删除每个选中的项
+    for (int row : rows) {
+        auto* name_item = file_table_->item(row, 0);
+        if (!name_item) {
+            continue;
+        }
+
+        QString name = name_item->text();
+        QString remote_path = current_path_;
+        if (!remote_path.endsWith("/")) {
+            remote_path += "/";
+        }
+        remote_path += name;
+
+        if (!storage_service_->remove_resource(current_config_name_, remote_path, false)) {
+            QMessageBox::warning(this, tr("Delete Failed"),
+                tr("Failed to delete: %1").arg(name));
+        }
+    }
+
+    refresh_directory();
 }
 
 void CloudPage::create_folder()
 {
+    if (!is_connected_ || current_config_name_.isEmpty()) {
+        return;
+    }
+
     bool ok;
     QString folder_name = QInputDialog::getText(
         this, tr("New Folder"),
@@ -513,9 +629,29 @@ void CloudPage::create_folder()
         &ok
     );
 
-    if (ok && !folder_name.isEmpty()) {
-        // TODO: 调用 libfalcon 创建目录功能
+    if (!ok || folder_name.isEmpty()) {
+        return;
+    }
+
+    // 验证文件夹名称
+    if (folder_name.contains('/') || folder_name.contains('\\')) {
+        QMessageBox::warning(this, tr("Invalid Name"),
+            tr("Folder name cannot contain '/' or '\\'."));
+        return;
+    }
+
+    QString folder_path = current_path_;
+    if (!folder_path.endsWith("/")) {
+        folder_path += "/";
+    }
+    folder_path += folder_name;
+
+    if (storage_service_->create_directory(current_config_name_, folder_path)) {
+        status_label_->setText(tr("Folder created: %1").arg(folder_name));
         refresh_directory();
+    } else {
+        QMessageBox::warning(this, tr("Create Failed"),
+            tr("Failed to create folder: %1").arg(folder_name));
     }
 }
 
@@ -794,6 +930,10 @@ void CloudPage::show_file_properties(int row)
 
 void CloudPage::rename_item(int row)
 {
+    if (!is_connected_ || current_config_name_.isEmpty()) {
+        return;
+    }
+
     if (row < 0 || row >= file_table_->rowCount()) {
         return;
     }
@@ -827,14 +967,27 @@ void CloudPage::rename_item(int row)
         return;
     }
 
-    // TODO: 调用 libfalcon 的重命名 API
-    // 目前只更新 UI
-    name_item->setText(new_name);
+    // 构建旧路径和新路径
+    QString old_path = current_path_;
+    if (!old_path.endsWith("/")) {
+        old_path += "/";
+    }
+    old_path += old_name;
 
-    // 更新状态栏
-    status_label_->setText(tr("Renamed '%1' to '%2'.").arg(old_name, new_name));
+    QString new_path = current_path_;
+    if (!new_path.endsWith("/")) {
+        new_path += "/";
+    }
+    new_path += new_name;
 
-    FALCON_LOG_INFO_STREAM("Renamed: " << old_name.toStdString() << " -> " << new_name.toStdString());
+    // 调用重命名 API
+    if (storage_service_->rename_resource(current_config_name_, old_path, new_path)) {
+        status_label_->setText(tr("Renamed '%1' to '%2'.").arg(old_name, new_name));
+        refresh_directory();
+    } else {
+        QMessageBox::warning(this, tr("Rename Failed"),
+            tr("Failed to rename '%1' to '%2'.").arg(old_name, new_name));
+    }
 }
 
 // ============================================================================

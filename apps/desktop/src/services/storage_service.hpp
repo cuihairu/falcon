@@ -82,6 +82,11 @@ public:
     bool rename_resource(const QString& config_name, const QString& old_path, const QString& new_path);
     bool copy_resource(const QString& config_name, const QString& source_path, const QString& dest_path);
 
+    // 上传文件
+    using UploadCallback = std::function<void(bool success, const QString& message)>;
+    void upload_file(const QString& config_name, const QString& local_path,
+                     const QString& remote_path, UploadCallback callback);
+
     // 配额信息
     QMap<QString, quint64> get_quota_info(const QString& config_name);
 

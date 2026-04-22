@@ -539,8 +539,17 @@ feature 候选：
   - 搜索结果去重和数量限制
   - 后台线程执行搜索操作
   - 支持取消搜索功能
+- ✅ CloudPage UI 交互完善
+  - 实现刷新目录功能（调用 list_directory）
+  - 实现下载文件功能（调用 request_download）
+  - 实现上传文件功能（新增 upload_file API）
+  - 实现删除功能（调用 remove_resource）
+  - 实现新建文件夹功能（调用 create_directory）
+  - 实现重命名功能（调用 rename_resource）
+  - 添加配置名称跟踪（current_config_name_）
+  - 完善错误提示和状态反馈
 
 **待实现：**
-- ⏳ CloudPage 与 libfalcon-storage 的 UI 交互完善
+- ✅ CloudPage 与 libfalcon-storage 的 UI 交互完善
 - ✅ DiscoveryPage 与真实搜索 API 集成
 
