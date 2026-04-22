@@ -33,6 +33,8 @@ SettingsPage::SettingsPage(QWidget* parent)
     , retry_count_spin_(nullptr)
     , notifications_checkbox_(nullptr)
     , sound_notification_checkbox_(nullptr)
+    , current_theme_label_(nullptr)
+    , theme_toggle_button_(nullptr)
     , apply_button_(nullptr)
     , reset_button_(nullptr)
 {
@@ -192,6 +194,7 @@ void SettingsPage::setup_ui()
     scroll_layout->setContentsMargins(0, 0, 0, 0);
 
     // Create setting sections
+    scroll_layout->addWidget(create_appearance_section_widget());
     scroll_layout->addWidget(create_clipboard_section_widget());
     scroll_layout->addWidget(create_download_section_widget());
     scroll_layout->addWidget(create_connection_section_widget());
@@ -357,6 +360,47 @@ QLayout* SettingsPage::create_action_buttons_layout()
     layout->addWidget(apply_button_);
 
     return layout;
+}
+
+QWidget* SettingsPage::create_appearance_section_widget()
+{
+    auto* group = new QGroupBox(tr("Appearance"), this);
+
+    auto* layout = new QVBoxLayout(group);
+    layout->setSpacing(16);
+    layout->setContentsMargins(16, 20, 16, 16);
+
+    // 主题设置行
+    auto* theme_layout = new QHBoxLayout();
+    theme_layout->setSpacing(12);
+
+    auto* theme_label = new QLabel(tr("Theme:"), this);
+    theme_layout->addWidget(theme_label);
+
+    current_theme_label_ = new QLabel(tr("Light"), this);
+    theme_layout->addWidget(current_theme_label_);
+
+    theme_layout->addStretch();
+
+    theme_toggle_button_ = new QPushButton(tr("Switch to Dark"), this);
+    theme_toggle_button_->setIcon(style()->standardIcon(QStyle::SP_DialogResetButton));
+    theme_toggle_button_->setCursor(Qt::PointingHandCursor);
+    connect(theme_toggle_button_, &QPushButton::clicked, this, &SettingsPage::on_theme_button_clicked);
+    theme_layout->addWidget(theme_toggle_button_);
+
+    layout->addLayout(theme_layout);
+
+    // 说明文字
+    auto* desc_label = new QLabel(tr("Switch between light and dark themes."), this);
+    desc_label->setStyleSheet("color: #888888; font-size: 8pt;");
+    layout->addWidget(desc_label);
+
+    return group;
+}
+
+void SettingsPage::on_theme_button_clicked()
+{
+    emit theme_toggle_requested();
 }
 
 } // namespace falcon::desktop

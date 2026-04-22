@@ -16,6 +16,7 @@
 #include "dialogs/add_download_dialog.hpp"
 #include "utils/clipboard_monitor.hpp"
 #include "utils/url_detector.hpp"
+#include "utils/theme_manager.hpp"
 #include "ipc/http_server.hpp"
 
 #include <QHBoxLayout>
@@ -25,6 +26,8 @@
 #include <QInputDialog>
 #include <QMessageBox>
 #include <QSettings>
+#include <QAction>
+#include <QMenu>
 
 namespace falcon::desktop {
 
@@ -41,14 +44,27 @@ MainWindow::MainWindow(QWidget* parent)
     , settings_page_(nullptr)
     , clipboard_monitor_(nullptr)
     , ipc_server_(nullptr)
+    , system_tray_(nullptr)
+    , tray_menu_(nullptr)
+    , theme_manager_(nullptr)
     , download_engine_(nullptr)
 {
     setup_ui();
     setup_clipboard_monitor();
+    setup_system_tray();
     load_settings();
     apply_settings_to_runtime();
     setup_ipc_server();
     ensure_download_engine();
+
+    // 初始化主题管理器
+    theme_manager_ = new ThemeManager(this);
+    // 从设置加载主题
+    QSettings settings;
+    settings.beginGroup("desktop");
+    const QString theme_str = settings.value("theme", "light").toString();
+    settings.endGroup();
+    theme_manager_->set_theme(theme_str == "dark" ? ThemeType::Dark : ThemeType::Light);
 }
 
 MainWindow::~MainWindow()
@@ -310,6 +326,7 @@ void MainWindow::create_pages()
         save_settings();
         apply_settings_to_runtime();
     });
+    connect(settings_page_, &SettingsPage::theme_toggle_requested, this, &MainWindow::on_theme_toggle_requested);
 }
 
 void MainWindow::setup_clipboard_monitor()
@@ -396,6 +413,100 @@ void MainWindow::setup_ipc_server()
     ipc_server_->start(kIpcPort);
 }
 
+void MainWindow::setup_system_tray()
+{
+    // 检查系统是否支持托盘
+    if (!QSystemTrayIcon::isSystemTrayAvailable()) {
+        return;
+    }
+
+    // 创建托盘图标
+    system_tray_ = new QSystemTrayIcon(this);
+
+    // 设置托盘图标（使用内置图标或自定义图标）
+    // 这里使用标准图标作为示例，实际应该使用应用图标
+    QIcon tray_icon = style()->standardIcon(QStyle::SP_ComputerIcon);
+    system_tray_->setIcon(tray_icon);
+
+    // 创建托盘菜单
+    tray_menu_ = new QMenu(this);
+
+    auto* show_action = tray_menu_->addAction(tr("显示主窗口"));
+    connect(show_action, &QAction::triggered, this, &MainWindow::on_tray_show_clicked);
+
+    tray_menu_->addSeparator();
+
+    auto* quit_action = tray_menu_->addAction(tr("退出"));
+    connect(quit_action, &QAction::triggered, this, &MainWindow::on_tray_quit_clicked);
+
+    system_tray_->setContextMenu(tray_menu_);
+
+    // 连接托盘激活信号
+    connect(system_tray_, &QSystemTrayIcon::activated, this, &MainWindow::on_tray_activated);
+
+    // 显示托盘图标
+    system_tray_->show();
+
+    // 设置托盘提示
+    system_tray_->setToolTip(tr("Falcon 下载器"));
+}
+
+void MainWindow::on_tray_activated(QSystemTrayIcon::ActivationReason reason)
+{
+    switch (reason) {
+        case QSystemTrayIcon::Trigger:
+        case QSystemTrayIcon::DoubleClick:
+            // 单击或双击托盘图标，切换窗口可见性
+            if (isVisible()) {
+                hide();
+            } else {
+                showNormal();
+                activateWindow();
+                raise();
+            }
+            break;
+        case QSystemTrayIcon::MiddleClick:
+            // 中键点击显示主窗口
+            showNormal();
+            activateWindow();
+            raise();
+            break;
+        default:
+            break;
+    }
+}
+
+void MainWindow::on_tray_show_clicked()
+{
+    showNormal();
+    activateWindow();
+    raise();
+}
+
+void MainWindow::on_tray_quit_clicked()
+{
+    // 保存设置后退出
+    save_settings();
+    QApplication::quit();
+}
+
+void MainWindow::on_theme_toggle_requested()
+{
+    if (!theme_manager_) {
+        return;
+    }
+
+    // 切换主题
+    theme_manager_->toggle_theme();
+
+    // 保存主题设置
+    QSettings settings;
+    settings.beginGroup("desktop");
+    settings.setValue("theme", theme_manager_->current_theme() == ThemeType::Dark ? "dark" : "light");
+    settings.endGroup();
+    settings.sync();
+}
+
 void MainWindow::on_url_detected(const UrlInfo& url_info)
 {
     show_add_download_dialog(url_info, nullptr);
@@ -474,7 +585,12 @@ void MainWindow::on_maximize_requested()
 
 void MainWindow::on_close_requested()
 {
-    close();
+    // 如果系统托盘可用，最小化到托盘而不是关闭
+    if (system_tray_ && system_tray_->isVisible()) {
+        hide();
+    } else {
+        close();
+    }
 }
 
 } // namespace falcon::desktop

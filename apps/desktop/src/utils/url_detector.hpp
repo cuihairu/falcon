@@ -25,6 +25,11 @@ enum class UrlProtocol {
     QQLINK,
     FLASHGET,
     ED2K,
+    BAIDU,     // 百度网盘
+    ALIYUN,    // 阿里云盘
+    QUARK,     // 夸克网盘
+    TIANYI,    // 天翼云盘
+    Lanzou,    // 蓝奏云
     UNKNOWN
 };
 
@@ -137,6 +142,41 @@ private:
      * @return UrlInfo with ed2k details
      */
     static UrlInfo parse_ed2k_url(const QString& url);
+
+    /**
+     * @brief Parse Baidu Pan (百度网盘) link
+     * @param url Baidu Pan URL
+     * @return UrlInfo with details
+     */
+    static UrlInfo parse_baidu_url(const QString& url);
+
+    /**
+     * @brief Parse Aliyun Drive (阿里云盘) link
+     * @param url Aliyun Drive URL
+     * @return UrlInfo with details
+     */
+    static UrlInfo parse_aliyun_url(const QString& url);
+
+    /**
+     * @brief Parse Quark Drive (夸克网盘) link
+     * @param url Quark Drive URL
+     * @return UrlInfo with details
+     */
+    static UrlInfo parse_quark_url(const QString& url);
+
+    /**
+     * @brief Parse Tianyi Cloud (天翼云盘) link
+     * @param url Tianyi Cloud URL
+     * @return UrlInfo with details
+     */
+    static UrlInfo parse_tianyi_url(const QString& url);
+
+    /**
+     * @brief Parse Lanzou Cloud (蓝奏云) link
+     * @param url Lanzou Cloud URL
+     * @return UrlInfo with details
+     */
+    static UrlInfo parse_lanzou_url(const QString& url);
 
     /**
      * @brief Base64 decode

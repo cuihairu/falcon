@@ -10,6 +10,7 @@
 #include <QMainWindow>
 #include <memory>
 #include <QStackedWidget>
+#include <QSystemTrayIcon>
 
 #include <falcon/download_engine.hpp>
 
@@ -25,6 +26,7 @@ class DownloadPage;
 class SettingsPage;
 class ClipboardMonitor;
 class HttpIpcServer;
+class ThemeManager;
 struct UrlInfo;
 struct IncomingDownloadRequest;
 
@@ -50,6 +52,14 @@ private slots:
      */
     void on_url_detected(const UrlInfo& url_info);
 
+    // 系统托盘槽函数
+    void on_tray_activated(QSystemTrayIcon::ActivationReason reason);
+    void on_tray_show_clicked();
+    void on_tray_quit_clicked();
+
+    // 主题切换槽函数
+    void on_theme_toggle_requested();
+
     void on_download_requested(const IncomingDownloadRequest& request);
     void on_new_task_requested();
     void on_configured_download_requested(const QString& url);
@@ -68,6 +78,7 @@ private:
     void create_pages();
     void setup_clipboard_monitor();
     void setup_ipc_server();
+    void setup_system_tray();
     void ensure_download_engine();
     void show_add_download_dialog(UrlInfo url_info, const IncomingDownloadRequest* request_context);
     bool add_download_task(const QString& url, bool start_immediately);
@@ -96,6 +107,13 @@ private:
 
     // 浏览器扩展 IPC
     HttpIpcServer* ipc_server_;
+
+    // 系统托盘
+    QSystemTrayIcon* system_tray_;
+    QMenu* tray_menu_;
+
+    // 主题管理
+    ThemeManager* theme_manager_;
 
     // 核心下载引擎
     std::unique_ptr<falcon::DownloadEngine> download_engine_;

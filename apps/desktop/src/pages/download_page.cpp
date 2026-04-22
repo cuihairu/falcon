@@ -25,16 +25,22 @@ constexpr int kRowHeight = 56;
 DownloadPage::DownloadPage(QWidget* parent)
     : QWidget(parent)
     , view_mode_(DownloadViewMode::Downloading)
+    , display_style_(TaskDisplayStyle::Table)
     , header_layout_(nullptr)
     , status_label_(nullptr)
     , new_task_button_(nullptr)
     , refresh_button_(nullptr)
     , view_toggle_button_(nullptr)
+    , style_toggle_button_(nullptr)
     , more_button_(nullptr)
     , task_table_(nullptr)
     , pause_button_(nullptr)
     , delete_button_(nullptr)
     , refresh_timer_(nullptr)
+    , grid_container_(nullptr)
+    , grid_scroll_area_(nullptr)
+    , grid_widget_(nullptr)
+    , grid_layout_(nullptr)
 {
     setup_ui();
 
@@ -57,8 +63,14 @@ void DownloadPage::setup_ui()
 
     main_layout->addSpacing(8);
 
+    // 创建表格视图
     create_task_table();
     main_layout->addWidget(task_table_);
+
+    // 创建网格视图（初始隐藏）
+    create_task_grid();
+    main_layout->addWidget(grid_container_);
+    grid_container_->hide();
 
     // 底部推广区域（预留）
     main_layout->addStretch();
@@ -94,13 +106,21 @@ void DownloadPage::create_header_bar()
     connect(refresh_button_, &QPushButton::clicked, this, &DownloadPage::on_refresh_clicked);
     header_layout_->addWidget(refresh_button_);
 
-    // 视图切换按钮
-    view_toggle_button_ = new QPushButton(tr("▦"), this);
+    // 视图切换按钮（过滤模式）
+    view_toggle_button_ = new QPushButton(tr("📋"), this);
     view_toggle_button_->setObjectName("toolButton");
     view_toggle_button_->setFixedSize(32, 32);
-    view_toggle_button_->setToolTip(tr("切换视图"));
+    view_toggle_button_->setToolTip(tr("切换过滤模式"));
     connect(view_toggle_button_, &QPushButton::clicked, this, &DownloadPage::on_view_toggle_clicked);
     header_layout_->addWidget(view_toggle_button_);
+
+    // 显示样式切换按钮（表格/网格）
+    style_toggle_button_ = new QPushButton(tr("▦"), this);
+    style_toggle_button_->setObjectName("toolButton");
+    style_toggle_button_->setFixedSize(32, 32);
+    style_toggle_button_->setToolTip(tr("切换显示样式"));
+    connect(style_toggle_button_, &QPushButton::clicked, this, &DownloadPage::on_style_toggle_clicked);
+    header_layout_->addWidget(style_toggle_button_);
 
     // 更多选项按钮
     more_button_ = new QPushButton(tr("⋯"), this);
@@ -462,6 +482,11 @@ void DownloadPage::refresh_engine_tasks()
     }
 
     update_action_buttons();
+
+    // 如果是网格视图，刷新网格显示
+    if (display_style_ == TaskDisplayStyle::Grid) {
+        sync_task_grid();
+    }
 }
 
 void DownloadPage::sync_task_tables(const falcon::DownloadTask::Ptr& task)
@@ -667,6 +692,324 @@ void DownloadPage::show_context_menu(const QPoint& pos)
     connect(delete_action, &QAction::triggered, this, &DownloadPage::on_delete_selected);
 
     menu.exec(task_table_->mapToGlobal(pos));
+}
+
+void DownloadPage::create_task_grid()
+{
+    // 创建网格容器
+    grid_container_ = new QWidget(this);
+
+    auto* container_layout = new QVBoxLayout(grid_container_);
+    container_layout->setContentsMargins(0, 0, 0, 0);
+    container_layout->setSpacing(0);
+
+    // 创建滚动区域
+    grid_scroll_area_ = new QScrollArea(grid_container_);
+    grid_scroll_area_->setWidgetResizable(true);
+    grid_scroll_area_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    grid_scroll_area_->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    grid_scroll_area_->setObjectName("gridScrollArea");
+
+    // 创建网格内容 widget
+    grid_widget_ = new QWidget(grid_scroll_area_);
+    grid_layout_ = new QGridLayout(grid_widget_);
+    grid_layout_->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    grid_layout_->setSpacing(12);
+    grid_layout_->setContentsMargins(8, 8, 8, 8);
+
+    grid_scroll_area_->setWidget(grid_widget_);
+    container_layout->addWidget(grid_scroll_area_);
+
+    // 启用右键菜单
+    grid_widget_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(grid_widget_, &QWidget::customContextMenuRequested,
+            this, &DownloadPage::show_grid_context_menu);
+}
+
+void DownloadPage::set_display_style(TaskDisplayStyle style)
+{
+    if (display_style_ == style) {
+        return;
+    }
+
+    display_style_ = style;
+
+    // 切换视图可见性
+    if (style == TaskDisplayStyle::Table) {
+        task_table_->show();
+        grid_container_->hide();
+    } else {
+        task_table_->hide();
+        grid_container_->show();
+        refresh_display();  // 刷新网格内容
+    }
+}
+
+void DownloadPage::on_style_toggle_clicked()
+{
+    // 切换显示样式
+    switch (display_style_) {
+        case TaskDisplayStyle::Table:
+            set_display_style(TaskDisplayStyle::Grid);
+            break;
+        case TaskDisplayStyle::Grid:
+            set_display_style(TaskDisplayStyle::Table);
+            break;
+    }
+}
+
+void DownloadPage::show_grid_context_menu(const QPoint& pos)
+{
+    // 找到点击的任务卡片
+    QWidget* clicked_widget = grid_widget_->childAt(pos);
+    if (!clicked_widget) {
+        return;
+    }
+
+    // 从 widget 的 property 获取任务 ID
+    QVariant task_id_var = clicked_widget->property("taskId");
+    if (!task_id_var.isValid()) {
+        // 尝试从父 widget 获取
+        if (clicked_widget->parentWidget()) {
+            task_id_var = clicked_widget->parentWidget()->property("taskId");
+        }
+    }
+
+    if (!task_id_var.isValid()) {
+        return;
+    }
+
+    const qulonglong key = task_id_var.toULongLong();
+    auto record_it = task_records_.constFind(key);
+    if (record_it == task_records_.constEnd()) {
+        return;
+    }
+
+    const auto& task = record_it->task;
+    if (!task) {
+        return;
+    }
+
+    QMenu menu(this);
+
+    // 根据任务状态显示不同菜单项
+    const auto status = task->status();
+
+    // 暂停/继续
+    if (status == falcon::TaskStatus::Downloading ||
+        status == falcon::TaskStatus::Preparing) {
+        auto* pause_action = menu.addAction(tr("暂停"));
+        connect(pause_action, &QAction::triggered, this, [this, task]() {
+            (void)task->pause();
+        });
+    } else if (status == falcon::TaskStatus::Paused ||
+               status == falcon::TaskStatus::Failed) {
+        auto* resume_action = menu.addAction(tr("继续"));
+        connect(resume_action, &QAction::triggered, this, [this, task]() {
+            (void)task->resume();
+        });
+    }
+
+    menu.addSeparator();
+
+    // 打开文件夹
+    auto* open_dir_action = menu.addAction(tr("打开文件夹"));
+    connect(open_dir_action, &QAction::triggered, this, [task]() {
+        const QString path = QString::fromStdString(task->options().output_directory);
+        QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+    });
+
+    // 复制下载链接
+    auto* copy_url_action = menu.addAction(tr("复制下载链接"));
+    connect(copy_url_action, &QAction::triggered, this, [task]() {
+        QApplication::clipboard()->setText(QString::fromStdString(task->url()));
+    });
+
+    menu.addSeparator();
+
+    // 删除任务
+    auto* delete_action = menu.addAction(tr("删除任务"));
+    delete_action->setStyleSheet("color: red;");
+    connect(delete_action, &QAction::triggered, this, [this, task]() {
+        emit remove_task_requested(task->id());
+    });
+
+    menu.exec(grid_widget_->mapToGlobal(pos));
+}
+
+void DownloadPage::refresh_display()
+{
+    if (display_style_ == TaskDisplayStyle::Grid) {
+        sync_task_grid();
+    }
+}
+
+void DownloadPage::sync_task_grid()
+{
+    // 清空现有网格内容
+    while (grid_layout_->count() > 0) {
+        auto* item = grid_layout_->takeAt(0);
+        if (item->widget()) {
+            item->widget()->deleteLater();
+        }
+        delete item;
+    }
+
+    // 根据视图模式过滤任务
+    int column = 0;
+    int row = 0;
+    constexpr int kColumns = 3;  // 每行显示3个卡片
+
+    for (auto it = task_records_.begin(); it != task_records_.end(); ++it) {
+        const TaskRecord& record = it.value();
+        const auto& task = record.task;
+        if (!task) {
+            continue;
+        }
+
+        // 根据视图模式过滤
+        const auto status = task->status();
+        bool should_show = false;
+
+        static const QStringList cloud_domains = {
+            "pan.baidu.com", "pan.quark.cn", "cloud.189.cn",
+            "www.alipan.com", "www.aliyundrive.com", "www.115.com", "disk.pikpak.com"
+        };
+
+        switch (view_mode_) {
+            case DownloadViewMode::Downloading:
+                should_show = (status == falcon::TaskStatus::Downloading ||
+                              status == falcon::TaskStatus::Preparing ||
+                              status == falcon::TaskStatus::Paused ||
+                              status == falcon::TaskStatus::Pending);
+                break;
+            case DownloadViewMode::Completed:
+                should_show = (status == falcon::TaskStatus::Completed);
+                break;
+            case DownloadViewMode::CloudAdd:
+                {
+                    const QString url = QString::fromStdString(task->url());
+                    should_show = std::any_of(cloud_domains.begin(), cloud_domains.end(),
+                        [&url](const QString& domain) {
+                            return url.contains(domain);
+                        });
+                }
+                break;
+        }
+
+        if (!should_show) {
+            continue;
+        }
+
+        // 创建任务卡片
+        auto* card = create_task_card(record);
+        if (card) {
+            card->setProperty("taskId", QVariant::fromValue<qulonglong>(it.key()));
+            grid_layout_->addWidget(card, row, column);
+
+            ++column;
+            if (column >= kColumns) {
+                column = 0;
+                ++row;
+            }
+        }
+    }
+}
+
+QWidget* DownloadPage::create_task_card(const TaskRecord& record)
+{
+    auto* card = new QWidget(grid_widget_);
+    card->setObjectName("taskCard");
+    card->setFixedSize(280, 140);
+
+    auto* card_layout = new QVBoxLayout(card);
+    card_layout->setContentsMargins(12, 12, 12, 12);
+    card_layout->setSpacing(8);
+
+    // 文件名
+    auto* name_label = new QLabel(record.filename, card);
+    name_label->setObjectName("cardFileName");
+    name_label->setWordWrap(true);
+    name_label->setMaximumHeight(40);
+    auto name_font = name_label->font();
+    name_font.setBold(true);
+    name_font.setPointSize(10);
+    name_label->setFont(name_font);
+    card_layout->addWidget(name_label);
+
+    // 进度条
+    auto* progress_bar = new QProgressBar(card);
+    progress_bar->setObjectName("cardProgressBar");
+    progress_bar->setRange(0, 100);
+    progress_bar->setTextVisible(true);
+    progress_bar->setMaximumHeight(20);
+    if (record.task) {
+        const int pct = static_cast<int>(record.task->progress() * 100.0f);
+        progress_bar->setValue(std::max(0, std::min(100, pct)));
+    }
+    card_layout->addWidget(progress_bar);
+
+    // 信息行
+    auto* info_layout = new QHBoxLayout();
+    info_layout->setSpacing(12);
+
+    auto* size_label = new QLabel(record.size_text, card);
+    size_label->setObjectName("cardInfoLabel");
+    info_layout->addWidget(size_label);
+
+    auto* speed_label = new QLabel(card);
+    speed_label->setObjectName("cardInfoLabel");
+    if (record.task) {
+        const uint64_t speed = static_cast<uint64_t>(record.task->speed());
+        speed_label->setText(format_speed(speed));
+    }
+    info_layout->addWidget(speed_label);
+
+    auto* status_label = new QLabel(record.status_text, card);
+    status_label->setObjectName("cardInfoLabel");
+    info_layout->addWidget(status_label);
+
+    card_layout->addLayout(info_layout);
+
+    // 操作按钮
+    auto* actions_layout = new QHBoxLayout();
+    actions_layout->setSpacing(8);
+
+    auto* pause_btn = new QPushButton(card);
+    pause_btn->setObjectName("cardActionButton");
+    pause_btn->setFixedSize(60, 26);
+    const auto status = record.task ? record.task->status() : falcon::TaskStatus::Pending;
+    if (status == falcon::TaskStatus::Downloading ||
+        status == falcon::TaskStatus::Preparing) {
+        pause_btn->setText(tr("暂停"));
+        connect(pause_btn, &QPushButton::clicked, this, [this, record]() {
+            if (record.task) (void)record.task->pause();
+        });
+    } else if (status == falcon::TaskStatus::Paused ||
+               status == falcon::TaskStatus::Failed) {
+        pause_btn->setText(tr("继续"));
+        connect(pause_btn, &QPushButton::clicked, this, [this, record]() {
+            if (record.task) (void)record.task->resume();
+        });
+    } else {
+        pause_btn->setEnabled(false);
+    }
+    actions_layout->addWidget(pause_btn);
+
+    auto* delete_btn = new QPushButton(tr("删除"), card);
+    delete_btn->setObjectName("cardActionButton");
+    delete_btn->setFixedSize(60, 26);
+    connect(delete_btn, &QPushButton::clicked, this, [this, record]() {
+        if (record.task) {
+            emit remove_task_requested(record.task->id());
+        }
+    });
+    actions_layout->addWidget(delete_btn);
+
+    actions_layout->addStretch();
+    card_layout->addLayout(actions_layout);
+
+    return card;
 }
 
 } // namespace falcon::desktop

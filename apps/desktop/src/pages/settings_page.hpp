@@ -13,6 +13,7 @@
 #include <QLineEdit>
 #include <QComboBox>
 #include <QPushButton>
+#include <QLabel>
 
 namespace falcon::desktop {
 
@@ -95,6 +96,11 @@ signals:
      */
     void clipboard_monitoring_toggled(bool enabled);
 
+    /**
+     * @brief Signal emitted when theme toggle is requested
+     */
+    void theme_toggle_requested();
+
 private slots:
     /**
      * @brief Browse for default download directory
@@ -117,7 +123,10 @@ private:
     QWidget* create_download_section_widget();
     QWidget* create_connection_section_widget();
     QWidget* create_notification_section_widget();
+    QWidget* create_appearance_section_widget();
     QLayout* create_action_buttons_layout();
+
+    void on_theme_button_clicked();
 
     // Clipboard settings
     QCheckBox* clipboard_monitoring_checkbox_;
@@ -135,6 +144,10 @@ private:
     // Notification settings
     QCheckBox* notifications_checkbox_;
     QCheckBox* sound_notification_checkbox_;
+
+    // Appearance settings
+    QLabel* current_theme_label_;
+    QPushButton* theme_toggle_button_;
 
     // Action buttons
     QPushButton* apply_button_;
