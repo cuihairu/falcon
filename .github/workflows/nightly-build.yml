@@ -1,0 +1,288 @@
+name: Nightly Build
+
+on:
+  schedule:
+    # 每天 UTC 0:00 执行（北京时间 8:00）
+    - cron: '0 0 * * *'
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  build-nightly:
+    name: Nightly ${{ matrix.os_name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            os_name: linux
+            qt-version: '6.6.3'
+            qt-arch: 'gcc_64'
+            cmake-generator: 'Unix Makefiles'
+            artifact-name: 'falcon-desktop-linux'
+            binary-name: 'falcon-desktop'
+            binary-path: 'build-desktop/bin'
+            package-extension: '.tar.gz'
+          - os: macos-latest
+            os_name: macos
+            qt-version: '6.6.3'
+            qt-arch: 'clang_64'
+            cmake-generator: 'Unix Makefiles'
+            artifact-name: 'falcon-desktop-macos'
+            binary-name: 'falcon-desktop'
+            binary-path: 'build-desktop/bin'
+            package-extension: '.tar.gz'
+          - os: windows-latest
+            os_name: windows
+            qt-version: '6.6.3'
+            qt-arch: 'mingw_64'
+            cmake-generator: 'Visual Studio 17 2022'
+            artifact-name: 'falcon-desktop-windows'
+            binary-name: 'falcon-desktop.exe'
+            binary-path: 'build-desktop/bin/Release'
+            package-extension: '.zip'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 获取完整历史用于版本信息
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        timeout-minutes: 15
+        with:
+          version: ${{ matrix.qt-version }}
+          cache: true
+
+      - name: Install dependencies (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        timeout-minutes: 10
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            libgl1-mesa-dev \
+            libcurl4-openssl-dev \
+            libssl-dev \
+            libxcb-xinerama0 \
+            libxcb-cursor0 \
+            patchelf
+
+      - name: Install dependencies (macOS)
+        if: matrix.os == 'macos-latest'
+        timeout-minutes: 10
+        run: |
+          brew install cmake ninja curl create-dmg
+
+      - name: Install dependencies (Windows)
+        if: matrix.os == 'windows-latest'
+        timeout-minutes: 20
+        run: |
+          choco install cmake ninja curl -y
+          git clone https://github.com/Microsoft/vcpkg.git
+          .\vcpkg\bootstrap-vcpkg.bat
+
+      - name: Get version string
+        id: version
+        shell: bash
+        timeout-minutes: 1
+        run: |
+          # 生成版本号：nightly-YYYYMMDD-commit
+          VERSION="nightly-$(date +%Y%m%d)-$(git rev-parse --short HEAD)"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Display version: ${VERSION}"
+
+      - name: Configure CMake (Unix)
+        if: runner.os != 'Windows'
+        timeout-minutes: 10
+        run: >
+          cmake -B build-desktop
+          -G "${{ matrix.cmake-generator }}"
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_PREFIX_PATH="${Qt6_DIR}"
+          -DFALCON_BUILD_TESTS=OFF
+          -DFALCON_BUILD_CLI=ON
+          -DFALCON_BUILD_DESKTOP=ON
+          -DFALCON_BUILD_DAEMON=ON
+          -DFALCON_BUILD_EXAMPLES=OFF
+          -DFALCON_ENABLE_HTTP=ON
+          -DFALCON_ENABLE_FTP=ON
+          -DFALCON_ENABLE_BITTORRENT=ON
+          -DFALCON_ENABLE_CLOUD_STORAGE=ON
+          -DFALCON_ENABLE_RESOURCE_BROWSER=ON
+
+      - name: Configure CMake (Windows)
+        if: runner.os == 'Windows'
+        timeout-minutes: 10
+        run: >
+          cmake -B build-desktop
+          -G "${{ matrix.cmake-generator }}"
+          -DCMAKE_PREFIX_PATH="${Env:Qt6_DIR}"
+          -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake"
+          -DFALCON_BUILD_TESTS=OFF
+          -DFALCON_BUILD_CLI=ON
+          -DFALCON_BUILD_DESKTOP=ON
+          -DFALCON_BUILD_DAEMON=ON
+          -DFALCON_BUILD_EXAMPLES=OFF
+          -DFALCON_ENABLE_HTTP=ON
+          -DFALCON_ENABLE_FTP=ON
+          -DFALCON_ENABLE_BITTORRENT=ON
+          -DFALCON_ENABLE_CLOUD_STORAGE=ON
+          -DFALCON_ENABLE_RESOURCE_BROWSER=ON
+
+      - name: Build
+        timeout-minutes: 30
+        run: cmake --build build-desktop --config Release --parallel
+
+      - name: Package (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        timeout-minutes: 5
+        run: |
+          cd build-desktop/bin
+          # 创建 AppDir 结构
+          mkdir -p FalconDesktop/AppDir/usr/bin
+          mkdir -p FalconDesktop/AppDir/usr/lib
+          cp falcon-desktop FalconDesktop/AppDir/usr/bin/
+          cp falcon-cli FalconDesktop/AppDir/usr/bin/ 2>/dev/null || true
+          cp falcon-daemon FalconDesktop/AppDir/usr/bin/ 2>/dev/null || true
+
+          # 复制 Qt 库
+          ${Qt6_DIR}/bin/linuxdeploy-x86_64.AppImage \
+            --appdir FalconDesktop/AppDir \
+            --executable FalconDesktop/AppDir/usr/bin/falcon-desktop \
+            --plugin qt
+
+          # 打包
+          ${Qt6_DIR}/bin/linuxdeploy-x86_64.AppImage \
+            --appdir FalconDesktop/AppDir \
+            --output appimage
+
+          mv FalconDesktop*.AppImage ../../falcon-desktop-linux-${{ steps.version.outputs.version }}.AppImage
+
+      - name: Package (macOS)
+        if: matrix.os == 'macos-latest'
+        timeout-minutes: 5
+        run: |
+          cd build-desktop/bin
+
+          # 创建 .app 包结构
+          mkdir -p FalconDesktop.app/Contents/MacOS
+          mkdir -p FalconDesktop.app/Contents/Resources
+          mkdir -p FalconDesktop.app/Contents/Frameworks
+
+          # 复制可执行文件
+          cp falcon-desktop FalconDesktop.app/Contents/MacOS/
+
+          # 创建 Info.plist
+          cat > FalconDesktop.app/Contents/Info.plist << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleExecutable</key>
+            <string>falcon-desktop</string>
+            <key>CFBundleIdentifier</key>
+            <string>com.falcon.downloader</string>
+            <key>CFBundleName</key>
+            <string>Falcon Desktop</string>
+            <key>CFBundleVersion</key>
+            <string>${{ steps.version.outputs.version }}</string>
+            <key>CFBundleShortVersionString</key>
+            <string>${{ steps.version.outputs.version }}</string>
+            <key>NSHighResolutionCapable</key>
+            <true/>
+          </dict>
+          </plist>
+          EOF
+
+          # 复制 Qt 框架
+          macdeployqt FalconDesktop.app -always-overwrite
+
+          # 创建 DMG
+          create-dmg \
+            --volname "Falcon Desktop" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --app-drop-link 450 185 \
+            --icon FalconDesktop.app 150 185 \
+            falcon-desktop-macos-${{ steps.version.outputs.version }}.dmg \
+            FalconDesktop.app
+
+      - name: Package (Windows)
+        if: matrix.os == 'windows-latest'
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          cd build-desktop/bin/Release
+
+          # 创建发布目录
+          mkdir -p falcon-desktop
+          cp falcon-desktop.exe falcon-desktop/
+          cp falcon-cli.exe falcon-desktop/ 2>/dev/null || true
+          cp *.dll falcon-desktop/ 2>/dev/null || true
+
+          # 使用 windeployqt 部署 Qt 依赖
+          "${Qt6_DIR}\\bin\\windeployqt.exe" \
+            --release \
+            --no-translations \
+            falcon-desktop/falcon-desktop.exe
+
+          # 打包为 zip
+          7z a -tzip ../../falcon-desktop-windows-${{ steps.version.outputs.version }}.zip falcon-desktop/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        timeout-minutes: 5
+        with:
+          name: ${{ matrix.artifact-name }}-${{ steps.version.outputs.version }}
+          path: |
+            falcon-desktop-*${{ steps.version.outputs.version }}*
+          retention-days: 30
+
+      - name: Create Nightly Release
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        timeout-minutes: 10
+        with:
+          tag_name: nightly
+          name: Nightly Build (${{ steps.version.outputs.version }})
+          body: |
+            ## 🦅 Falcon Desktop Nightly Build
+
+            **版本:** ${{ steps.version.outputs.version }}
+            **构建时间:** ${{ github.event.head_commit.timestamp }}
+
+            ### 下载说明
+
+            | 平台 | 文件 | 说明 |
+            |------|------|------|
+            | Linux | `falcon-desktop-linux-*.AppImage` | 通用 AppImage，双击运行 |
+            | macOS | `falcon-desktop-macos-*.dmg` | 拖拽安装到 Applications |
+            | Windows | `falcon-desktop-windows-*.zip` | 解压后运行 falcon-desktop.exe |
+
+            ### ⚠️ 注意事项
+
+            - 这是自动构建的 **nightly 版本**，可能包含未完成的实验性功能
+            - Nightly 版本**不保证稳定性**，请谨慎使用
+            - 如需稳定版本，请等待正式 Release
+
+            ### 包含功能
+
+            - ✅ HTTP/HTTPS 多线程下载
+            - ✅ BitTorrent/Magnet 磁力链接
+            - ✅ FTP 协议支持
+            - ✅ 云盘链接识别（百度/阿里云/夸克/天翼云）
+            - ✅ 对象存储浏览（S3/OSS/COS/Kodo/Upyun）
+            - ✅ 资源搜索功能
+            - ✅ 系统托盘集成
+            - ✅ 亮色/暗色主题
+          files: |
+            falcon-desktop-*${{ steps.version.outputs.version }}*
+          draft: false
+          prerelease: true
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
