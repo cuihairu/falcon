@@ -45,7 +45,7 @@ jobs:
             package-extension: '.zip'
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0  # 获取完整历史用于版本信息
 
@@ -234,7 +234,7 @@ jobs:
           7z a -tzip ../../falcon-desktop-windows-${{ steps.version.outputs.version }}.zip falcon-desktop/
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         timeout-minutes: 5
         with:
           name: ${{ matrix.artifact-name }}-${{ steps.version.outputs.version }}
@@ -244,7 +244,7 @@ jobs:
 
       - name: Create Nightly Release
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         timeout-minutes: 10
         with:
           tag_name: nightly

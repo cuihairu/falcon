@@ -14,6 +14,9 @@
   ],
   "author": "Falcon Team",
   "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "devDependencies": {
     "@vuepress/bundler-vite": "^2.0.0-rc.15",
     "@vuepress/bundler-webpack": "^2.0.0-rc.15",

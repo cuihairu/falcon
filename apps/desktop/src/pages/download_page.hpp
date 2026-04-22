@@ -14,6 +14,7 @@
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QScrollArea>
 
 #include <falcon/download_task.hpp>
 
@@ -72,6 +73,17 @@ private slots:
     void on_delete_selected();
 
 private:
+    // TaskRecord structure (must be defined before methods that use it)
+    struct TaskRecord {
+        falcon::DownloadTask::Ptr task;
+        QString filename;
+        QString save_path;
+        QString size_text;
+        QString status_text;
+        QString error_text;
+        bool in_trash = false;
+    };
+
     void setup_ui();
     void create_header_bar();
     void create_task_table();
@@ -90,17 +102,7 @@ private:
     void sync_task_tables(const falcon::DownloadTask::Ptr& task);
 
     static QString format_bytes(uint64_t bytes);
-    static QString format_speed(uint64_t bytes_per_second);
-
-    struct TaskRecord {
-        falcon::DownloadTask::Ptr task;
-        QString filename;
-        QString save_path;
-        QString size_text;
-        QString status_text;
-        QString error_text;
-        bool in_trash = false;
-    };
+    static QString format_speed(uint64_t bytes per_second);
 
     // 当前视图模式
     DownloadViewMode view_mode_;

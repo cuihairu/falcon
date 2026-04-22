@@ -8,7 +8,7 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
 # 查找 Qt6
-find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network)
+find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network Concurrent)
 find_package(Qt6 OPTIONAL_COMPONENTS LinguistTools)
 
 # 设置输出目录
@@ -88,6 +88,7 @@ target_link_libraries(falcon-desktop PRIVATE
     Qt6::Core
     Qt6::Widgets
     Qt6::Network
+    Qt6::Concurrent
     Falcon::core
     Falcon::protocols
     Falcon::storage
