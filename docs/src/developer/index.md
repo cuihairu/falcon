@@ -128,12 +128,12 @@ falcon_drives     →  falcon_core
 |------|------|------|
 | `DownloadEngine` | core | 下载引擎核心 |
 | `TaskManager` | core | 任务管理器 |
-| `PluginManager` | core | 协议处理器管理 |
+| `ProtocolRegistry` | core | 协议处理器注册与路由 |
 | `IProtocolHandler` | core | 协议处理器接口 |
 | `HttpHandler` | protocols | HTTP/HTTPS 协议 |
 | `SegmentDownloader` | protocols | 多线程分段下载 |
 | `S3Browser` | storage | S3 资源浏览 |
-| `CloudStoragePlugin` | drives | 网盘云存储 |
+| `CloudStorageManager` | drives | 网盘与分享链相关旧抽象 |
 
 ::: tip 详细架构
 请查看 [架构设计文档](./architecture.md) 了解更多细节。
@@ -311,12 +311,11 @@ std::shared_ptr<DownloadTask> MyProtocolPlugin::download(
 }
 ```
 
-3. **注册插件**:
+3. **注册处理器**:
 
 ```cpp
-// src/plugin_manager.cpp
-void PluginManager::load_builtin_plugins() {
-    register_plugin(std::make_unique<MyProtocolPlugin>());
+falcon::DownloadEngine engine;
+engine.register_handler(std::make_unique<MyProtocolPlugin>());
 }
 ```
 

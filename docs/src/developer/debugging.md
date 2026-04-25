@@ -34,7 +34,7 @@ gdb --args ./build/bin/falcon-cli https://example.com/file.zip
 
 常用断点更适合打在当前真实接口上：
 
-```gdb
+```txt
 (gdb) break main
 (gdb) break falcon::DownloadEngine::add_task
 (gdb) break falcon::DownloadEngine::start_task
@@ -43,7 +43,7 @@ gdb --args ./build/bin/falcon-cli https://example.com/file.zip
 
 条件断点示例：
 
-```gdb
+```txt
 (gdb) break falcon::DownloadEngine::add_task if url.find("example") != std::string::npos
 ```
 
@@ -53,7 +53,7 @@ gdb --args ./build/bin/falcon-cli https://example.com/file.zip
 lldb ./build/bin/falcon-cli -- https://example.com/file.zip
 ```
 
-```lldb
+```txt
 (lldb) b main
 (lldb) b falcon::DownloadEngine::add_task
 (lldb) b falcon::DownloadEngine::start_task
@@ -129,7 +129,7 @@ engine.get_supported_protocols()
 
 如果要理解主流程，优先看这些实现：
 
-- `packages/libfalcon/src/download_engine.cpp`
-- `packages/libfalcon/src/task_manager.cpp`
-- `packages/libfalcon/src/plugin_manager.cpp`
-- `packages/libfalcon/src/event_dispatcher.cpp`
+- `packages/libfalcon-core/src/download_engine.cpp`
+- `packages/libfalcon-core/src/task_manager.cpp`
+- `packages/libfalcon-core/src/protocol_registry.cpp`
+- `packages/libfalcon-core/src/event_dispatcher.cpp`

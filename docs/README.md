@@ -1,6 +1,6 @@
 # Falcon 文档
 
-本目录使用 **VuePress 2** 构建项目文档，源码位于 `docs/src`。
+本目录使用 **VitePress** 构建项目文档，源码位于 `docs/src`。
 
 > [!WARNING]
 > `docs/src/` 是当前维护中的主文档来源。
@@ -14,53 +14,50 @@
 
 ```bash
 cd docs
-npm install
+pnpm install
 ```
 
 ### 开发模式
 
 ```bash
-npm run docs:dev
+pnpm docs:dev
 ```
 
-访问 http://localhost:8080 查看文档。
+访问终端输出中的本地地址查看文档。
 
 ### 构建文档
 
 ```bash
-npm run docs:build
+pnpm docs:build
 ```
 
-构建后的文件位于 `docs/dist/`。
+构建后的文件位于 `docs/src/.vitepress/dist/`。
 
 ## 文档结构
 
 ```
 docs/
-├── package.json              # npm 配置
+├── package.json              # pnpm / Node 配置
 ├── README.md                 # 本文件
 ├── ARCHIVE.md                # 根目录历史文档索引
-├── src/                      # VuePress 源文件
-│   ├── README.md             # 首页
-│   ├── .vuepress/            # VuePress 配置
-│   │   ├── config.ts         # 主配置
-│   │   ├── theme.ts          # 主题配置
-│   │   ├── navbar.ts         # 导航栏
-│   │   └── sidebar.ts        # 侧边栏
+├── src/                      # VitePress 源文件
+│   ├── index.md              # 首页
+│   ├── .vitepress/           # VitePress 配置
+│   │   └── config.mts        # 主配置
 │   ├── guide/                # 用户指南
-│   │   ├── README.md         # 项目介绍
+│   │   ├── index.md          # 项目介绍
 │   │   ├── getting-started.md # 快速开始
 │   │   ├── installation.md    # 安装说明
 │   │   └── usage.md          # 使用指南
 │   ├── protocols/            # 协议文档
-│   │   ├── README.md         # 协议概述
+│   │   ├── index.md          # 协议概述
 │   │   ├── http.md           # HTTP/HTTPS
 │   │   ├── ftp.md            # FTP
 │   │   ├── bittorrent.md     # BitTorrent
 │   │   ├── private.md        # 私有协议
 │   │   └── streaming.md      # HLS/DASH
 │   ├── developer/            # 开发者文档
-│   │   ├── README.md         # 开发者指南
+│   │   ├── index.md          # 开发者指南
 │   │   ├── architecture.md   # 架构设计
 │   │   ├── coding-standards.md # 编码规范
 │   │   ├── testing.md        # 测试指南
@@ -68,7 +65,7 @@ docs/
 │   │   ├── debugging.md      # 调试技巧
 │   │   └── release.md        # 发布流程
 │   ├── api/                  # API 参考
-│   │   ├── README.md         # API 概述
+│   │   ├── index.md          # API 概述
 │   │   ├── core.md           # 核心 API
 │   │   ├── plugins.md        # 插件 API
 │   │   └── events.md         # 事件 API
@@ -80,7 +77,7 @@ docs/
     └── ...
 ```
 
-## VuePress 组件
+## VitePress 组件
 
 ### 提示框
 
@@ -121,10 +118,10 @@ int main() {
 
 ```bash
 # 构建
-npm run docs:build
+pnpm docs:build
 
 # 推送到 gh-pages 分支
-cd dist
+cd src/.vitepress/dist
 git init
 git add .
 git commit -m "Deploy docs"
@@ -136,12 +133,33 @@ git push -f git@github.com:cuihairu/falcon.git master:gh-pages
 直接连接 GitHub 仓库，设置构建命令为：
 
 ```bash
-cd docs && npm install && npm run docs:build
+cd docs && pnpm install --frozen-lockfile && pnpm docs:build
 ```
 
-设置发布目录为 `docs/dist`。
+设置发布目录为 `docs/src/.vitepress/dist`。
+
+### GitHub Actions
+
+仓库已提供 GitHub Pages 部署工作流，推荐直接使用：
+
+```bash
+.github/workflows/docs-deploy.yml
+```
+
+文档校验工作流：
+
+```bash
+.github/workflows/docs-check.yml
+```
+
+默认行为：
+
+- 推送到 `main` 时自动构建并部署
+- 使用 `pnpm` 安装依赖
+- 将 `docs/src/.vitepress/dist` 上传到 GitHub Pages
+- 自动根据仓库名设置 VitePress `base`
+- 在 PR / push 中独立执行文档构建校验
 
 ## 更多信息
 
-- [VuePress 官方文档](https://v2.vuepress.vuejs.org/)
-- [默认主题文档](https://v2.vuepress.vuejs.org/reference/default-theme/)
+- [VitePress 官方文档](https://vitepress.dev/)

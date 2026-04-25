@@ -62,7 +62,7 @@ int main() {
 
 ## M3U8 示例
 
-```m3u8
+```txt
 #EXTM3U
 #EXT-X-VERSION:3
 #EXT-X-TARGETDURATION:10

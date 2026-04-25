@@ -14,16 +14,11 @@
 #include <QMutexLocker>
 #include <QMutex>
 #include <QFuture>
+#include <QElapsedTimer>
 #include <QtConcurrent>
 #include <functional>
 
-// libfalcon-storage 头文件
 #include <falcon/storage/resource_browser.hpp>
-#include <falcon/storage/s3_browser.hpp>
-#include <falcon/storage/oss_browser.hpp>
-#include <falcon/storage/cos_browser.hpp>
-#include <falcon/storage/kodo_browser.hpp>
-#include <falcon/storage/upyun_browser.hpp>
 
 namespace falcon::desktop {
 
@@ -85,27 +80,6 @@ std::map<std::string, std::string> to_connection_options(const CloudStorageConfi
     return options;
 }
 
-/**
- * @brief 创建指定协议的浏览器实例
- */
-std::unique_ptr<falcon::IResourceBrowser> create_browser(const QString& protocol) {
-    std::string proto = protocol.toStdString();
-
-    if (proto == "s3") {
-        return std::make_unique<falcon::S3Browser>();
-    } else if (proto == "oss") {
-        return std::make_unique<falcon::OSSBrowser>();
-    } else if (proto == "cos") {
-        return std::make_unique<falcon::COSBrowser>();
-    } else if (proto == "kodo" || proto == "qiniu") {
-        return std::make_unique<falcon::KodoBrowser>();
-    } else if (proto == "upyun") {
-        return std::make_unique<falcon::UpyunBrowser>();
-    }
-
-    return nullptr;
-}
-
 } // anonymous namespace
 
 // ============================================================================
@@ -115,7 +89,7 @@ std::unique_ptr<falcon::IResourceBrowser> create_browser(const QString& protocol
 struct StorageService::Impl {
     // 配置和连接状态
     QMap<QString, CloudStorageConfig> configs;
-    QMap<QString, std::unique_ptr<falcon::IResourceBrowser>> browsers;
+    std::map<QString, std::shared_ptr<falcon::IResourceBrowser>> browsers;
     QMap<QString, bool> connected;
     QMutex mutex;
 
@@ -125,14 +99,15 @@ struct StorageService::Impl {
     /**
      * @brief 获取或创建指定配置的浏览器
      */
-    falcon::IResourceBrowser* get_browser(const QString& config_name) {
+    std::shared_ptr<falcon::IResourceBrowser> get_browser(const QString& config_name) {
         QMutexLocker locker(&mutex);
 
-        if (!browsers.contains(config_name)) {
-            return nullptr;
+        auto it = browsers.find(config_name);
+        if (it == browsers.end()) {
+            return {};
         }
 
-        return browsers[config_name].get();
+        return it->second;
     }
 
     /**
@@ -163,7 +138,7 @@ struct StorageService::Impl {
 
 StorageService::StorageService(QObject* parent)
     : QObject(parent)
-    , p_impl_(std::make_shared<Impl>()) {
+    , p_impl_(QSharedPointer<Impl>::create()) {
 
     // 加载已保存的配置
     auto configs = load_configs();
@@ -176,18 +151,19 @@ StorageService::StorageService(QObject* parent)
 StorageService::~StorageService() = default;
 
 bool StorageService::connect_storage(const CloudStorageConfig& config) {
-    QMutexLocker locker(&p_impl_->mutex);
-
-    // 保存配置
-    p_impl_->configs[config.name] = config;
+    {
+        QMutexLocker locker(&p_impl_->mutex);
+        p_impl_->configs[config.name] = config;
+    }
 
     // 创建浏览器实例
-    auto browser = create_browser(config.protocol);
+    auto browser = falcon::BrowserFactory::create_browser(config.protocol.toStdString());
     if (!browser) {
         emit error(config.name,
             tr("Unsupported protocol: %1").arg(config.protocol));
         return false;
     }
+    auto shared_browser = std::shared_ptr<falcon::IResourceBrowser>(std::move(browser));
 
     // 构建连接 URL
     std::string url = p_impl_->build_connection_url(config);
@@ -205,9 +181,11 @@ bool StorageService::connect_storage(const CloudStorageConfig& config) {
     QString error_message;
 
     QEventLoop loop;
-    QFuture<bool> future = QtConcurrent::run([&]() {
+    QElapsedTimer timer;
+    timer.start();
+    QFuture<bool> future = QtConcurrent::run([shared_browser, url, options, &error_message]() {
         try {
-            return browser->connect(url, options);
+            return shared_browser->connect(url, options);
         } catch (const std::exception& e) {
             error_message = QString::fromStdString(e.what());
             return false;
@@ -215,9 +193,9 @@ bool StorageService::connect_storage(const CloudStorageConfig& config) {
     });
 
     // 等待连接完成（最多 30 秒）
-    QTimer::singleShot(30000, &loop, &QEventLoop::quit);
-    QObject::connect(&future, &QFuture<bool>::finished, &loop, &QEventLoop::quit);
-    loop.exec();
+    while (!future.isFinished() && timer.elapsed() < 30000) {
+        loop.processEvents(QEventLoop::AllEvents, 50);
+    }
 
     if (future.isFinished()) {
         success = future.result();
@@ -232,33 +210,41 @@ bool StorageService::connect_storage(const CloudStorageConfig& config) {
     }
 
     // 保存浏览器实例
-    p_impl_->browsers[config.name] = std::move(browser);
-    p_impl_->connected[config.name] = true;
-    p_impl_->current_paths[config.name] = "/";
+    {
+        QMutexLocker locker(&p_impl_->mutex);
+        p_impl_->browsers[config.name] = std::move(shared_browser);
+        p_impl_->connected[config.name] = true;
+        p_impl_->current_paths[config.name] = "/";
+    }
 
     emit connected(config.name);
     return true;
 }
 
 void StorageService::disconnect_storage(const QString& config_name) {
-    QMutexLocker locker(&p_impl_->mutex);
+    std::shared_ptr<falcon::IResourceBrowser> browser;
+    {
+        QMutexLocker locker(&p_impl_->mutex);
 
-    if (p_impl_->browsers.contains(config_name)) {
-        auto& browser = p_impl_->browsers[config_name];
-        if (browser) {
-            QtConcurrent::run([&]() {
-                try {
-                    browser->disconnect();
-                } catch (...) {
-                    // 忽略断开连接时的错误
-                }
-            });
+        auto it = p_impl_->browsers.find(config_name);
+        if (it != p_impl_->browsers.end()) {
+            browser = std::move(it->second);
+            p_impl_->browsers.erase(it);
         }
-        p_impl_->browsers.remove(config_name);
+
+        p_impl_->connected[config_name] = false;
+        p_impl_->current_paths.remove(config_name);
     }
 
-    p_impl_->connected[config_name] = false;
-    p_impl_->current_paths.remove(config_name);
+    if (browser) {
+        QtConcurrent::run([browser]() {
+            try {
+                browser->disconnect();
+            } catch (...) {
+                // 忽略断开连接时的错误
+            }
+        });
+    }
 
     emit disconnected(config_name);
 }
@@ -364,15 +350,15 @@ QList<CloudStorageConfig> StorageService::load_configs() {
 }
 
 void StorageService::remove_config(const QString& name) {
-    QMutexLocker locker(&p_impl_->mutex);
-
     // 断开连接
-    if (p_impl_->connected[name]) {
+    if (is_connected(name)) {
         disconnect_storage(name);
     }
 
-    // 从内存中移除
-    p_impl_->configs.remove(name);
+    {
+        QMutexLocker locker(&p_impl_->mutex);
+        p_impl_->configs.remove(name);
+    }
 
     // 从设置中移除
     QSettings settings;
@@ -399,7 +385,7 @@ void StorageService::list_directory(const QString& config_name, const QString& p
                                    ResourceListCallback callback) {
     // 在后台线程执行
     QtConcurrent::run([this, config_name, path, callback]() {
-        auto* browser = p_impl_->get_browser(config_name);
+        auto browser = p_impl_->get_browser(config_name);
         if (!browser) {
             if (callback) {
                 callback({});
@@ -448,7 +434,7 @@ void StorageService::list_directory(const QString& config_name, const QString& p
 }
 
 RemoteResourceInfo StorageService::get_resource_info(const QString& config_name, const QString& path) {
-    auto* browser = p_impl_->get_browser(config_name);
+    auto browser = p_impl_->get_browser(config_name);
     if (!browser) {
         return RemoteResourceInfo();
     }
@@ -463,7 +449,7 @@ RemoteResourceInfo StorageService::get_resource_info(const QString& config_name,
 }
 
 bool StorageService::create_directory(const QString& config_name, const QString& path) {
-    auto* browser = p_impl_->get_browser(config_name);
+    auto browser = p_impl_->get_browser(config_name);
     if (!browser) {
         return false;
     }
@@ -477,7 +463,7 @@ bool StorageService::create_directory(const QString& config_name, const QString&
 }
 
 bool StorageService::remove_resource(const QString& config_name, const QString& path, bool recursive) {
-    auto* browser = p_impl_->get_browser(config_name);
+    auto browser = p_impl_->get_browser(config_name);
     if (!browser) {
         return false;
     }
@@ -491,7 +477,7 @@ bool StorageService::remove_resource(const QString& config_name, const QString& 
 }
 
 bool StorageService::rename_resource(const QString& config_name, const QString& old_path, const QString& new_path) {
-    auto* browser = p_impl_->get_browser(config_name);
+    auto browser = p_impl_->get_browser(config_name);
     if (!browser) {
         return false;
     }
@@ -506,7 +492,7 @@ bool StorageService::rename_resource(const QString& config_name, const QString& 
 }
 
 bool StorageService::copy_resource(const QString& config_name, const QString& source_path, const QString& dest_path) {
-    auto* browser = p_impl_->get_browser(config_name);
+    auto browser = p_impl_->get_browser(config_name);
     if (!browser) {
         return false;
     }
@@ -521,7 +507,7 @@ bool StorageService::copy_resource(const QString& config_name, const QString& so
 }
 
 QMap<QString, quint64> StorageService::get_quota_info(const QString& config_name) {
-    auto* browser = p_impl_->get_browser(config_name);
+    auto browser = p_impl_->get_browser(config_name);
     if (!browser) {
         return QMap<QString, quint64>();
     }
@@ -567,7 +553,7 @@ void StorageService::upload_file(const QString& config_name, const QString& loca
                                  const QString& remote_path, UploadCallback callback) {
     // 在后台线程执行上传
     QtConcurrent::run([this, config_name, local_path, remote_path, callback]() {
-        auto* browser = p_impl_->get_browser(config_name);
+        auto browser = p_impl_->get_browser(config_name);
         if (!browser) {
             if (callback) {
                 QMetaObject::invokeMethod(this, [callback]() {

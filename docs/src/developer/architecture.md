@@ -37,7 +37,7 @@ falcon_drives     →  falcon_core
 - 接收下载请求
 - 管理任务生命周期
 - 管理事件监听器
-- 与 `PluginManager` 和 `TaskManager` 协作
+- 与 `ProtocolRegistry` 和 `TaskManager` 协作
 
 当前公开接口以这些方法为主：
 
@@ -75,23 +75,23 @@ bool is_url_supported(const std::string& url) const;
 
 从 `DownloadEngine` 实现来看，任务通常先通过 `add_task()` 创建，再由 `start_task()` 推进执行。
 
-### PluginManager
+### ProtocolRegistry
 
-`PluginManager` 负责：
+`ProtocolRegistry` 负责：
 
 - 注册协议处理器
 - 根据 URL 路由到合适处理器
-- 按构建开关加载内置插件
-- 卸载插件
+- 加载当前构建里可用的内置 handler
+- 提供协议与 scheme 查询
 
 公共头文件中的核心方法包括：
 
 ```cpp
-void registerPlugin(std::unique_ptr<IProtocolHandler> plugin);
-IProtocolHandler* getPlugin(const std::string& protocol) const;
-IProtocolHandler* getPluginByUrl(const std::string& url) const;
-void loadAllPlugins();
-bool supportsUrl(const std::string& url) const;
+void register_handler(std::unique_ptr<IProtocolHandler> handler);
+IProtocolHandler* get_handler(const std::string& protocol) const;
+IProtocolHandler* get_handler_for_url(const std::string& url) const;
+void load_builtin_handlers();
+bool supports_url(const std::string& url) const;
 ```
 
 ### IProtocolHandler
@@ -119,7 +119,7 @@ void cancel(DownloadTask::Ptr task);
         ↓
 DownloadEngine 校验 URL 并创建 DownloadTask
         ↓
-PluginManager 根据 URL 找到协议处理器
+ProtocolRegistry 根据 URL 找到协议处理器
         ↓
 TaskManager 接管任务并排队
         ↓

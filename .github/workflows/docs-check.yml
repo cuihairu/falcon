@@ -1,0 +1,48 @@
+name: Docs Check
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "docs/**"
+      - ".github/workflows/docs-check.yml"
+      - ".github/workflows/docs-deploy.yml"
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - "docs/**"
+      - ".github/workflows/docs-check.yml"
+      - ".github/workflows/docs-deploy.yml"
+  workflow_dispatch:
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.22.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: docs/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: docs
+        run: pnpm install --frozen-lockfile
+
+      - name: Build docs
+        working-directory: docs
+        run: pnpm docs:build

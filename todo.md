@@ -17,6 +17,112 @@
 - 各种网盘、分享链、账号态能力只放在 `drives`
 - 目录结构、CMake target、C++ namespace 三层语义保持一致
 
+补充架构原则：
+
+- 基础下载协议默认内置并随发行版集成
+- 云盘分享解析、对象存储浏览、第三方远端能力走插件化扩展
+- 主程序只依赖稳定接口，不直接硬编码具体厂商实现
+- 插件启用状态由安装结果和配置共同决定
+- 优先支持官方插件，后续再开放第三方生态
+
+---
+
+## 架构决策
+
+### A1. 基础下载协议默认内置
+
+- `http/https`
+- `ftp/ftps`
+- `magnet/bittorrent`
+- `ed2k`
+- `thunder`
+- `flashget`
+- `qqdl`
+- `hls/dash`
+
+要求：
+
+- 默认构建产物应包含常用下载协议
+- `DownloadEngine` 默认加载这些内置 handler
+- 同时保留按构建选项裁剪能力
+- 后续允许通过运行时配置禁用特定内置协议
+
+说明：
+
+- 这类能力直接服务下载引擎主路径
+- 应作为产品基础能力，而不是要求用户手动安装插件才能可用
+
+### A2. 云能力拆分为两类扩展点
+
+1. `StorageProvider`
+
+- 面向对象存储、远程文件系统、可浏览资源
+- 典型实现：`s3`、`oss`、`cos`、`kodo`、`upyun`、`webdav`、`sftp`
+
+2. `DriveResolver`
+
+- 面向分享链、提取码、账号态、直链解析
+- 典型实现：百度网盘、阿里云盘、夸克、蓝奏云、天翼云盘等
+
+要求：
+
+- 两类扩展点不能再混用同一个接口抽象
+- `StorageProvider` 负责浏览、上传、下载入口构造
+- `DriveResolver` 负责分享链接解析、目录枚举、直链获取、认证
+
+### A3. 主程序不再硬编码厂商
+
+- Desktop UI 不再手写 `S3/OSS/COS/Kodo/Upyun` 固定列表
+- `StorageService` 不再通过 `if/else` 创建具体 browser
+- URL 检测层不再把所有网盘规则散落在 UI 代码中
+- 所有可选能力由 registry / plugin manager 提供元数据
+
+### A4. 引入 SPI 风格插件系统
+
+目标：
+
+- 支持官方插件目录扫描
+- 支持通过配置启用/禁用插件
+- 支持动态库加载：Linux `.so`，macOS `.dylib`，Windows `.dll`
+
+约束：
+
+- 跨动态库边界优先使用稳定 C ABI
+- 不直接暴露脆弱的 C++ ABI 作为长期插件协议
+- 需要显式的 `plugin_api_version` 与 `falcon_version` 校验
+
+插件最小元数据需要包含：
+
+- `id`
+- `name`
+- `version`
+- `type`
+- `capabilities`
+- `supported_schemes` 或 `supported_platforms`
+- `enabled_by_default`
+- `min_falcon_version`
+
+### A5. 配置驱动启用
+
+配置系统需要支持：
+
+- 插件目录列表
+- 已启用插件 ID 列表
+- 已禁用插件 ID 列表
+- 每个插件的独立配置块
+
+示例目标：
+
+```json
+{
+  "plugins": {
+    "directories": ["./plugins", "~/.falcon/plugins"],
+    "enabled": ["falcon.protocol.http", "falcon.storage.s3"],
+    "disabled": ["falcon.drive.baidu"]
+  }
+}
+```
+
 ---
 
 ## 目标结构
@@ -63,6 +169,18 @@ packages/
 
 ## 第一阶段：边界冻结
 
+### 0. 冻结当前三类能力边界
+
+- 下载协议：进入 `ProtocolRegistry`
+- 存储浏览：进入 `StorageProviderRegistry`
+- 网盘解析：进入 `DriveResolverRegistry`
+
+验收标准：
+
+- 三类能力不再共享模糊的 “plugin” 命名
+- 每类能力都有独立接口、注册中心、配置模型
+- Desktop / CLI / Daemon 只通过 registry 查询能力
+
 ### 1. 明确 `core` 的职责
 
 - 保留下载引擎、任务模型、事件系统、调度器、插件注册接口
@@ -94,6 +212,8 @@ packages/
 - 收纳标准下载协议及可归一化的下载协议
 - 使用 `falcon::protocols::<name>` 命名空间
 - 不再继续使用 `falcon::plugins` 作为最终命名空间
+- 基础协议默认内置，不要求用户单独安装
+- 为后续动态协议插件保留统一注册入口
 
 候选迁移模块：
 
@@ -119,6 +239,8 @@ packages/
 - 收纳对象存储协议和远程资源浏览能力
 - 使用 `falcon::storage::<name>` 命名空间
 - 从 `core` 移出 `resource_browser` 及云存储浏览接口
+- 引入 `StorageProvider` 元数据和能力描述
+- 用 registry 替代 Desktop 层的硬编码 provider 列表
 
 候选迁移模块：
 
@@ -146,6 +268,30 @@ packages/
 - 收纳各种网盘、分享链、提取码、认证态、直链提取能力
 - 使用 `falcon::drives::<name>` 命名空间
 - 从 `core` 移出 `cloud_storage_plugin` 和云盘配置概念
+- 引入 `DriveResolver` 元数据、认证能力和分享链解析接口
+- UI 根据 resolver 元数据动态展示支持的平台
+
+### 4.1 审核现状并清理硬编码点
+
+需要清理的现状问题：
+
+- `ProtocolRegistry` 当前仍是编译期内置注册，不是动态 SPI
+- `builtin_protocol_handlers.cpp` 当前只显式注册了 HTTP/FTP
+- `StorageService::create_browser()` 仍硬编码具体厂商实现
+- `CloudPage` 仍硬编码固定云存储类型下拉框
+- `UrlDetector` 仍在 UI 层维护网盘识别规则
+- `IResourceBrowser` 接口能力不足，尚不能完整表达上传/直链/能力描述
+- `ICloudStoragePlugin` 与 `IResourceBrowser` 并行存在，但缺统一 registry / plugin manager
+
+当前代码进度备注（2026-04-25）：
+
+- `CloudPage` 已改为通过 `BrowserFactory::available_browsers()` 动态生成对象存储类型列表
+- `StorageService` 已改为通过 `BrowserFactory` 创建 browser，不再直接 `if/else` new 具体厂商类型
+- `BrowserFactory` 已具备基础元数据查询与工厂注册能力，但仍是进程内静态 registry，不是 SPI 插件系统
+- `ProtocolRegistry` 已补充 `describe_builtin_protocols()`，可区分“已编译进来”与“已接入自动注册”
+- `register_builtin_protocol_handlers()` 目前实际只接入了 HTTP/FTP；BT、SFTP、Thunder、ED2K、HLS 等仍未统一迁移到 `IProtocolHandler`
+- `drives` 侧仍主要是 `ICloudStoragePlugin` / `CloudStorageManager` 旧抽象，`DriveResolverRegistry` 尚未落地
+- `UrlDetector` 仍在 Desktop UI 侧硬编码网盘规则，尚未迁移到 resolver / registry 元数据驱动
 
 候选迁移模块：
 
@@ -552,4 +698,3 @@ feature 候选：
 **待实现：**
 - ✅ CloudPage 与 libfalcon-storage 的 UI 交互完善
 - ✅ DiscoveryPage 与真实搜索 API 集成
-

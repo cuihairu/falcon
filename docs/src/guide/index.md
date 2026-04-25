@@ -40,8 +40,10 @@ Falcon 当前聚焦于可组合的协议能力：
 ```
 falcon/
 ├── packages/
-│   ├── libfalcon/           # 核心下载引擎库
-│   │   └── plugins/         # 协议插件
+│   ├── libfalcon-core/      # 核心下载引擎、任务模型、事件系统
+│   ├── libfalcon-protocols/ # 标准下载协议
+│   ├── libfalcon-storage/   # 对象存储与远程资源浏览
+│   ├── libfalcon-drives/    # 网盘与分享链能力
 │   ├── falcon-cli/          # 命令行工具
 │   └── falcon-daemon/       # 后台守护进程
 ├── apps/
@@ -106,8 +108,8 @@ int main() {
 - [入门指南](getting-started.md) - 快速了解 Falcon
 - [安装说明](installation.md) - 详细的构建步骤
 - [使用指南](usage.md) - 命令行和 API 使用
-- [协议支持](../protocols/README.md) - 所有支持协议的概览
-- [开发者指南](../developer/README.md) - 贡献代码和插件开发
+- [协议支持](/protocols/) - 所有支持协议的概览
+- [开发者指南](/developer/) - 贡献代码和插件开发
 - [常见问题](../faq.md) - 常见问题解答
 
 ## 社区

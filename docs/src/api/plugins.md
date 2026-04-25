@@ -54,51 +54,48 @@ using ProtocolHandlerFactory = std::unique_ptr<IProtocolHandler> (*)();
 
 这允许你通过 `DownloadEngine::register_handler_factory()` 延迟注册协议处理器。
 
-## PluginManager
+## ProtocolRegistry
 
-`PluginManager` 是公共头文件里可见的插件管理器接口，负责注册和查询协议处理器。
+当前公共头文件里对外可见的注册与查询接口是 `ProtocolRegistry`，负责注册和查询协议处理器。
 
 ### 主要接口
 
 ```cpp
-class PluginManager {
+class ProtocolRegistry {
 public:
-    PluginManager();
-    ~PluginManager();
+    ProtocolRegistry();
+    ~ProtocolRegistry();
 
-    void registerPlugin(std::unique_ptr<IProtocolHandler> plugin);
-    IProtocolHandler* getPlugin(const std::string& protocol) const;
-    IProtocolHandler* getPluginByUrl(const std::string& url) const;
+    void register_handler(std::unique_ptr<IProtocolHandler> handler);
+    IProtocolHandler* get_handler(const std::string& protocol) const;
+    IProtocolHandler* get_handler_for_url(const std::string& url) const;
 
-    void loadAllPlugins();
-    std::vector<std::string> getSupportedProtocols() const;
-    std::vector<std::string> listSupportedSchemes() const;
-    bool supportsUrl(const std::string& url) const;
-
-    void unloadPlugin(const std::string& protocol);
-    void unloadAllPlugins();
-    size_t getPluginCount() const;
+    void load_builtin_handlers();
+    std::vector<std::string> supported_protocols() const;
+    std::vector<std::string> supported_schemes() const;
+    bool supports_url(const std::string& url) const;
+    size_t handler_count() const;
 };
 ```
 
 ### 使用示例
 
 ```cpp
-falcon::PluginManager manager;
-manager.loadAllPlugins();
+falcon::ProtocolRegistry registry;
+registry.load_builtin_handlers();
 
-for (const auto& protocol : manager.getSupportedProtocols()) {
+for (const auto& protocol : registry.supported_protocols()) {
     std::cout << protocol << std::endl;
 }
 
-if (auto* handler = manager.getPluginByUrl("https://example.com/file.zip")) {
+if (auto* handler = registry.get_handler_for_url("https://example.com/file.zip")) {
     std::cout << handler->protocol_name() << std::endl;
 }
 ```
 
 ## 与 DownloadEngine 的关系
 
-大多数业务代码不需要直接操作 `PluginManager`。通常更简单的方式是：
+大多数业务代码不需要直接操作 `ProtocolRegistry`。通常更简单的方式是：
 
 ```cpp
 falcon::DownloadEngine engine;

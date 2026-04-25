@@ -5,11 +5,14 @@
 ## 测试目录
 
 ```text
-packages/libfalcon/tests/
+packages/libfalcon-core/tests/
+packages/libfalcon-protocols/tests/
+packages/libfalcon-storage/tests/
+packages/libfalcon-drives/tests/
 packages/falcon-daemon/tests/
 ```
 
-`libfalcon` 下目前包含：
+这些库下目前主要包含：
 
 - `unit/`
 - `integration/`

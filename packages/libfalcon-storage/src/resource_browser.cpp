@@ -6,14 +6,79 @@
  */
 
 #include <falcon/storage/resource_browser.hpp>
+#include <falcon/storage/s3_browser.hpp>
+#ifdef FALCON_ENABLE_CRYPTO_STORAGE_BROWSERS
+#include <falcon/storage/oss_browser.hpp>
+#include <falcon/storage/cos_browser.hpp>
+#include <falcon/storage/kodo_browser.hpp>
+#include <falcon/storage/upyun_browser.hpp>
+#endif
 #include <falcon/logger.hpp>
 #include <algorithm>
 #include <functional>
 #include <iomanip>
 #include <sstream>
 #include <ctime>
+#include <mutex>
+#include <unordered_map>
+#include <utility>
 
 namespace falcon {
+
+namespace {
+
+struct BrowserRegistration {
+    BrowserFactory::BrowserInfo info;
+    BrowserFactory::Factory factory;
+};
+
+std::unordered_map<std::string, BrowserRegistration>& browser_registry() {
+    static std::unordered_map<std::string, BrowserRegistration> registry;
+    return registry;
+}
+
+std::mutex& browser_registry_mutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+void register_default_browsers() {
+    static std::once_flag once;
+    std::call_once(once, []() {
+#ifdef FALCON_ENABLE_RESOURCE_BROWSER
+        BrowserFactory::register_browser(
+            {"s3", "Amazon S3", "Amazon Simple Storage Service"},
+            [] { return std::make_unique<S3Browser>(); });
+#ifdef FALCON_ENABLE_CRYPTO_STORAGE_BROWSERS
+        BrowserFactory::register_browser(
+            {"oss", "Alibaba OSS", "Alibaba Cloud Object Storage Service"},
+            [] { return std::make_unique<OSSBrowser>(); });
+        BrowserFactory::register_browser(
+            {"cos", "Tencent COS", "Tencent Cloud Object Storage"},
+            [] { return std::make_unique<COSBrowser>(); });
+        BrowserFactory::register_browser(
+            {"kodo", "Qiniu Kodo", "Qiniu Cloud Object Storage"},
+            [] { return std::make_unique<KodoBrowser>(); });
+        BrowserFactory::register_browser(
+            {"qiniu", "Qiniu Kodo", "Alias for Qiniu Kodo"},
+            [] { return std::make_unique<KodoBrowser>(); });
+        BrowserFactory::register_browser(
+            {"upyun", "Upyun USS", "Upyun Cloud Storage"},
+            [] { return std::make_unique<UpyunBrowser>(); });
+#endif
+#endif
+    });
+}
+
+std::string protocol_from_url(const std::string& url) {
+    const auto pos = url.find("://");
+    if (pos == std::string::npos) {
+        return {};
+    }
+    return url.substr(0, pos);
+}
+
+} // namespace
 
 // FilePermissions 实现
 std::string FilePermissions::to_string() const {
@@ -273,6 +338,57 @@ std::string BrowserFormatter::format_custom(
     }
 
     return oss.str();
+}
+
+std::vector<BrowserFactory::BrowserInfo> BrowserFactory::available_browsers() {
+    register_default_browsers();
+
+    std::lock_guard<std::mutex> lock(browser_registry_mutex());
+    std::vector<BrowserInfo> result;
+    result.reserve(browser_registry().size());
+    for (const auto& [_, registration] : browser_registry()) {
+        result.push_back(registration.info);
+    }
+
+    std::sort(result.begin(), result.end(),
+              [](const BrowserInfo& lhs, const BrowserInfo& rhs) {
+                  return lhs.protocol < rhs.protocol;
+              });
+    return result;
+}
+
+bool BrowserFactory::is_supported(const std::string& protocol) {
+    register_default_browsers();
+    std::lock_guard<std::mutex> lock(browser_registry_mutex());
+    return browser_registry().find(protocol) != browser_registry().end();
+}
+
+std::unique_ptr<IResourceBrowser> BrowserFactory::create_browser(const std::string& protocol) {
+    register_default_browsers();
+
+    std::lock_guard<std::mutex> lock(browser_registry_mutex());
+    auto it = browser_registry().find(protocol);
+    if (it == browser_registry().end() || !it->second.factory) {
+        return nullptr;
+    }
+    return it->second.factory();
+}
+
+std::unique_ptr<IResourceBrowser> BrowserFactory::create_from_url(const std::string& url) {
+    return create_browser(protocol_from_url(url));
+}
+
+void BrowserFactory::register_browser(BrowserInfo info, Factory factory) {
+    if (info.protocol.empty() || !factory) {
+        return;
+    }
+
+    const auto protocol = info.protocol;
+    std::lock_guard<std::mutex> lock(browser_registry_mutex());
+    browser_registry()[protocol] = BrowserRegistration{
+        std::move(info),
+        std::move(factory)
+    };
 }
 
 } // namespace falcon

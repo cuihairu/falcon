@@ -267,8 +267,8 @@ private:
     /// 任务管理器，负责所有任务的生命周期管理
     std::unique_ptr<TaskManager> task_manager_;
 
-    /// 插件管理器，负责协议处理器的加载和注册
-    std::unique_ptr<PluginManager> plugin_manager_;
+    /// 协议注册中心，负责协议处理器的加载和路由
+    ProtocolRegistry protocol_registry_;
 
     /// 事件分发器，处理回调分发
     EventDispatcher event_dispatcher_;

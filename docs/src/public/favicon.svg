@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Falcon">
+  <defs>
+    <linearGradient id="falconGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3c8772" />
+      <stop offset="100%" stop-color="#28564a" />
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="56" fill="url(#falconGradient)" />
+  <path
+    d="M61 154c30-44 66-69 124-74-17 9-30 19-39 31 16 2 31 8 49 20-26 1-45 7-59 19-8 7-15 17-22 30-8-12-20-20-37-22 16-6 31-8 45-5-14-8-34-8-61 1z"
+    fill="#fff"
+  />
+</svg>

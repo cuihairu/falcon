@@ -1,19 +1,21 @@
 ---
-home: true
-title: Falcon 下载器
-heroText: Falcon 下载器
-tagline: 现代化、跨平台的 C++ 下载解决方案
-actions:
-  - text: 快速开始
-    link: /guide/getting-started.html
-    type: primary
-  - text: 项目介绍
-    link: /guide/README.html
-    type: secondary
+layout: home
+
+hero:
+  name: Falcon 下载器
+  text: 现代化、跨平台的 C++ 下载解决方案
+  tagline: 面向 CLI、Daemon、桌面端和可扩展协议栈的下载能力集合
+  actions:
+    - theme: brand
+      text: 快速开始
+      link: /guide/getting-started
+    - theme: alt
+      text: 项目介绍
+      link: /guide/
 
 features:
   - title: 多协议支持
-    details: 已集成 HTTP/HTTPS、FTP 等核心协议，并为 BitTorrent、ED2K、迅雷、QQ 旋风、快车、HLS/DASH 等协议保留了插件实现。
+    details: 当前默认启用 HTTP/HTTPS、FTP，并为 BitTorrent、ED2K、迅雷、QQ 旋风、快车、HLS/DASH 等协议保留了可选实现与后续迁移入口。
   - title: 高性能
     details: 基于 C++17 事件驱动架构，支持多线程分块下载、断点续传和可配置并发控制。
   - title: 多入口形态
@@ -24,8 +26,6 @@ features:
     details: 提供 libfalcon 核心库，可在其他 C++ 项目中复用下载能力。
   - title: 开源许可
     details: 基于 Apache 2.0 许可证发布。
-
-footer: Apache-2.0 Licensed | Copyright © 2025-present Falcon Team
 ---
 
 ## 快速预览
@@ -87,7 +87,10 @@ int main() {
 ```
 falcon/
 ├── packages/
-│   ├── libfalcon/           # 核心下载引擎库
+│   ├── libfalcon-core/      # 核心下载引擎、任务模型、事件系统
+│   ├── libfalcon-protocols/ # 标准下载协议
+│   ├── libfalcon-storage/   # 对象存储与资源浏览
+│   ├── libfalcon-drives/    # 网盘与分享链能力
 │   ├── falcon-cli/          # 命令行工具
 │   └── falcon-daemon/       # 后台守护进程
 ├── apps/
@@ -102,19 +105,19 @@ falcon/
 |------|------|------|
 | HTTP/HTTPS | 已启用 | 断点续传、分块下载 |
 | FTP/FTPS | 已启用 | 主动/被动模式 |
-| BitTorrent | 可选插件 | 代码库内有插件实现，默认构建为关闭 |
-| ED2K | 可选插件 | 代码库内有插件实现，默认构建为关闭 |
-| 迅雷 | 可选插件 | 代码库内有插件实现，默认构建为关闭 |
-| QQ旋风 | 可选插件 | 代码库内有插件实现，默认构建为关闭 |
-| 快车 | 可选插件 | 代码库内有插件实现，默认构建为关闭 |
-| HLS/DASH | 可选插件 | 代码库内有插件实现，默认构建为关闭 |
+| BitTorrent | 可选实现 | 代码库内有实现，当前未统一接入默认自动注册 |
+| ED2K | 可选实现 | 代码库内有实现，默认构建通常关闭 |
+| 迅雷 | 可选实现 | 代码库内有实现，默认构建通常关闭 |
+| QQ旋风 | 可选实现 | 代码库内有实现，默认构建通常关闭 |
+| 快车 | 可选实现 | 代码库内有实现，默认构建通常关闭 |
+| HLS/DASH | 可选实现 | 代码库内有实现，默认构建通常关闭 |
 
 ## 贡献
 
 欢迎贡献代码、报告问题或提出建议！
 
 - [GitHub Issues](https://github.com/cuihairu/falcon/issues)
-- [贡献指南](/developer/README.html)
+- [贡献指南](/developer/)
 
 ## 许可证
 

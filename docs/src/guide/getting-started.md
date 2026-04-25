@@ -156,7 +156,7 @@ falcon-cli -i urls.txt -j 3
 
 - [安装说明](installation.md) - 详细的构建和依赖说明
 - [使用指南](usage.md) - 深入了解命令行选项和 C++ API
-- [协议支持](../protocols/README.md) - 了解所有支持的下载协议
+- [协议支持](/protocols/) - 了解所有支持的下载协议
 
 ## 获取帮助
 

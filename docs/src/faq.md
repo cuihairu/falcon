@@ -33,7 +33,7 @@ sudo apt install libspdlog-dev nlohmann-json3-dev \
 
 ### Q: 如何查看支持的协议？
 
-A: 目前建议直接查看 [协议支持](./protocols/README.md) 文档，或在构建时确认对应 `FALCON_ENABLE_*` CMake 选项是否开启。
+A: 目前建议直接查看 [协议支持](/protocols/) 文档，或在构建时确认对应 `FALCON_ENABLE_*` CMake 选项是否开启。
 
 ## 使用问题
 
@@ -90,7 +90,7 @@ A: Falcon 支持：
 - 快车 (flashget://)
 - HLS/DASH
 
-详见 [协议支持](./protocols/README.md)。
+详见 [协议支持](/protocols/)。
 
 ### Q: 如何下载迅雷链接？
 
@@ -209,7 +209,7 @@ A: 检查：
 
 ### Q: 如何贡献代码？
 
-A: 请查看 [开发者指南](./developer/README.md)。
+A: 请查看 [开发者指南](/developer/)。
 
 ### Q: 如何开发新插件？
 
@@ -236,7 +236,7 @@ A: 是的，基于 Apache 2.0 许可证开源。
 
 ### Q: Falcon 与 aria2 相比如何？
 
-A: 请查看 [功能对比](./developer/README.md)。
+A: 请查看 [开发者指南](/developer/)。
 
 ### Q: 如何获取帮助？
 
