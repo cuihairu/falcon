@@ -32,6 +32,17 @@ struct CloudStorageConfig {
     QString region;
     QString bucket;
     bool is_connected = false;
+
+    bool operator==(const CloudStorageConfig& other) const {
+        return name == other.name &&
+               protocol == other.protocol &&
+               endpoint == other.endpoint &&
+               access_key == other.access_key &&
+               secret_key == other.secret_key &&
+               region == other.region &&
+               bucket == other.bucket &&
+               is_connected == other.is_connected;
+    }
 };
 
 /**

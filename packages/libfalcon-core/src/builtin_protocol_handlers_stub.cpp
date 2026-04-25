@@ -10,4 +10,11 @@ __attribute__((weak))
 #endif
 void register_builtin_protocol_handlers(ProtocolRegistry&) {}
 
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((weak))
+#endif
+std::vector<BuiltinProtocolInfo> describe_builtin_protocols() {
+    return {};
+}
+
 } // namespace falcon

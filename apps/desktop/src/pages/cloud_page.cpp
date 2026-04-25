@@ -7,6 +7,7 @@
 
 #include "cloud_page.hpp"
 #include "../services/storage_service.hpp"
+#include <falcon/storage/resource_browser.hpp>
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -116,11 +117,11 @@ void CloudPage::create_storage_selector()
     auto* type_layout = new QHBoxLayout();
     auto* type_label = new QLabel(tr("Type:"), left_panel_);
     storage_type_combo_ = new QComboBox(left_panel_);
-    storage_type_combo_->addItem(tr("Amazon S3"), "s3");
-    storage_type_combo_->addItem(tr("Alibaba OSS"), "oss");
-    storage_type_combo_->addItem(tr("Tencent COS"), "cos");
-    storage_type_combo_->addItem(tr("Qiniu Kodo"), "kodo");
-    storage_type_combo_->addItem(tr("Upyun"), "upyun");
+    for (const auto& browser : falcon::BrowserFactory::available_browsers()) {
+        storage_type_combo_->addItem(
+            QString::fromStdString(browser.display_name),
+            QString::fromStdString(browser.protocol));
+    }
     type_layout->addWidget(type_label);
     type_layout->addWidget(storage_type_combo_);
     layout->addLayout(type_layout);
@@ -920,9 +921,9 @@ void CloudPage::show_file_properties(int row)
 
     // 设置图标
     if (is_folder) {
-        msg_box.setIcon(style()->standardIcon(QStyle::SP_DirIcon));
+        msg_box.setIconPixmap(style()->standardIcon(QStyle::SP_DirIcon).pixmap(48, 48));
     } else {
-        msg_box.setIcon(style()->standardIcon(QStyle::SP_FileIcon));
+        msg_box.setIconPixmap(style()->standardIcon(QStyle::SP_FileIcon).pixmap(48, 48));
     }
 
     msg_box.exec();

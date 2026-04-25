@@ -95,6 +95,43 @@ TEST(ResourceBrowserName, GetBrowserNames) {
     EXPECT_EQ(s3.get_name(), "S3");
 }
 
+TEST(BrowserFactoryTest, AvailableBrowsersExposeMetadata) {
+    const auto browsers = falcon::BrowserFactory::available_browsers();
+    ASSERT_FALSE(browsers.empty());
+
+    const auto s3_it = std::find_if(
+        browsers.begin(), browsers.end(),
+        [](const falcon::BrowserFactory::BrowserInfo& info) {
+            return info.protocol == "s3";
+        });
+    ASSERT_NE(s3_it, browsers.end());
+    EXPECT_EQ(s3_it->display_name, "Amazon S3");
+    EXPECT_FALSE(s3_it->description.empty());
+}
+
+TEST(BrowserFactoryTest, SupportsKnownProtocols) {
+    EXPECT_TRUE(falcon::BrowserFactory::is_supported("s3"));
+    EXPECT_FALSE(falcon::BrowserFactory::is_supported("unknown"));
+}
+
+TEST(BrowserFactoryTest, CreateBrowserByProtocol) {
+    auto s3 = falcon::BrowserFactory::create_browser("s3");
+    ASSERT_NE(s3, nullptr);
+    EXPECT_EQ(s3->get_name(), "S3");
+
+    auto unknown = falcon::BrowserFactory::create_browser("unknown");
+    EXPECT_EQ(unknown, nullptr);
+}
+
+TEST(BrowserFactoryTest, CreateBrowserFromUrl) {
+    auto s3 = falcon::BrowserFactory::create_from_url("s3://example-bucket/path/file.txt");
+    ASSERT_NE(s3, nullptr);
+    EXPECT_EQ(s3->get_name(), "S3");
+
+    auto invalid = falcon::BrowserFactory::create_from_url("not-a-url");
+    EXPECT_EQ(invalid, nullptr);
+}
+
 //==============================================================================
 // 支持的协议测试
 //==============================================================================
@@ -108,10 +145,8 @@ TEST(SupportedProtocols, FTPBrowserProtocols) {
 
     // 检查是否包含 ftp
     bool has_ftp = false;
-    bool has_ftps = false;
     for (const auto& proto : protocols) {
         if (proto == "ftp") has_ftp = true;
-        if (proto == "ftps") has_ftps = true;
     }
     EXPECT_TRUE(has_ftp);
 }

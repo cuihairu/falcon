@@ -11,10 +11,19 @@
 #include <unordered_map>
 #include <memory>
 #include <vector>
+#include <utility>
 
 #include <falcon/protocol_handler.hpp>
 
 namespace falcon {
+
+struct BuiltinProtocolInfo {
+    std::string protocol;
+    std::string display_name;
+    std::vector<std::string> schemes;
+    bool compiled_in = false;
+    bool registry_integrated = false;
+};
 
 /**
  * @class ProtocolRegistry
@@ -109,5 +118,14 @@ private:
  * @param registry The registry to register handlers to
  */
 void register_builtin_protocol_handlers(ProtocolRegistry& registry);
+
+/**
+ * Describe built-in protocol support compiled into the current binary.
+ *
+ * `compiled_in` indicates the protocol implementation is enabled in this build.
+ * `registry_integrated` indicates the implementation is currently wired into
+ * `ProtocolRegistry` / `DownloadEngine` automatic loading.
+ */
+std::vector<BuiltinProtocolInfo> describe_builtin_protocols();
 
 } // namespace falcon

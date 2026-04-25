@@ -12,6 +12,7 @@
 #include <memory>
 #include <map>
 #include <chrono>
+#include <functional>
 
 namespace falcon {
 
@@ -301,6 +302,24 @@ public:
  */
 class BrowserFactory {
 public:
+    struct BrowserInfo {
+        std::string protocol;
+        std::string display_name;
+        std::string description;
+    };
+
+    using Factory = std::function<std::unique_ptr<IResourceBrowser>()>;
+
+    /**
+     * @brief 获取可创建的浏览器元数据
+     */
+    static std::vector<BrowserInfo> available_browsers();
+
+    /**
+     * @brief 检查协议是否支持
+     */
+    static bool is_supported(const std::string& protocol);
+
     /**
      * @brief 创建浏览器实例
      */
@@ -314,8 +333,7 @@ public:
     /**
      * @brief 注册浏览器类型
      */
-    template<typename T>
-    static void register_browser(const std::string& protocol);
+    static void register_browser(BrowserInfo info, Factory factory);
 };
 
 /**

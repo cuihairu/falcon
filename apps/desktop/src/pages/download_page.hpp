@@ -102,7 +102,7 @@ private:
     void sync_task_tables(const falcon::DownloadTask::Ptr& task);
 
     static QString format_bytes(uint64_t bytes);
-    static QString format_speed(uint64_t bytes per_second);
+    static QString format_speed(uint64_t bytes_per_second);
 
     // 当前视图模式
     DownloadViewMode view_mode_;

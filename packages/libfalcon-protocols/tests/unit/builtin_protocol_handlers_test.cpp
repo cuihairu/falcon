@@ -9,6 +9,38 @@
 #include <string>
 #include <vector>
 
+TEST(BuiltinProtocolHandlersTest, BuiltinProtocolDescriptionReflectsRegistryIntegration) {
+    const auto protocols = falcon::describe_builtin_protocols();
+    EXPECT_FALSE(protocols.empty());
+
+    const auto find_protocol = [&](const std::string& name) {
+        return std::find_if(protocols.begin(), protocols.end(),
+                            [&](const falcon::BuiltinProtocolInfo& info) {
+                                return info.protocol == name;
+                            });
+    };
+
+    const auto http_it = find_protocol("http");
+    ASSERT_NE(http_it, protocols.end());
+#if defined(FALCON_ENABLE_HTTP) || defined(FALCON_ENABLE_HTTP_PLUGIN)
+    EXPECT_TRUE(http_it->compiled_in);
+    EXPECT_TRUE(http_it->registry_integrated);
+#else
+    EXPECT_FALSE(http_it->compiled_in);
+    EXPECT_FALSE(http_it->registry_integrated);
+#endif
+
+    const auto bt_it = find_protocol("bittorrent");
+    ASSERT_NE(bt_it, protocols.end());
+#ifdef FALCON_ENABLE_BT_PLUGIN
+    EXPECT_TRUE(bt_it->compiled_in);
+    EXPECT_FALSE(bt_it->registry_integrated);
+#else
+    EXPECT_FALSE(bt_it->compiled_in);
+    EXPECT_FALSE(bt_it->registry_integrated);
+#endif
+}
+
 TEST(BuiltinProtocolHandlersTest, LoadBuiltinHandlersRegistersHttpWhenEnabled) {
 #if defined(FALCON_ENABLE_HTTP) || defined(FALCON_ENABLE_HTTP_PLUGIN)
     falcon::ProtocolRegistry registry;
@@ -58,8 +90,8 @@ TEST(BuiltinProtocolHandlersTest, CanHandleHttpUrl) {
     falcon::ProtocolRegistry manager;
     manager.load_builtin_handlers();
 
-    EXPECT_TRUE(manager.supportsUrl("http://example.com/file.zip"));
-    EXPECT_TRUE(manager.supportsUrl("https://example.com/file.zip"));
+    EXPECT_TRUE(manager.supports_url("http://example.com/file.zip"));
+    EXPECT_TRUE(manager.supports_url("https://example.com/file.zip"));
 #else
     GTEST_SKIP() << "HTTP plugin not enabled";
 #endif
@@ -70,12 +102,12 @@ TEST(BuiltinProtocolHandlersTest, GetPluginByUrlRoutesCorrectly) {
     falcon::ProtocolRegistry manager;
     manager.load_builtin_handlers();
 
-    auto* handler = manager.get_handlerByUrl("http://example.com/file.zip");
+    auto* handler = manager.get_handler_for_url("http://example.com/file.zip");
     ASSERT_NE(handler, nullptr);
     EXPECT_EQ(handler->protocol_name(), "http");
 
     auto* https_handler =
-        manager.get_handlerByUrl("https://example.com/file.zip");
+        manager.get_handler_for_url("https://example.com/file.zip");
     ASSERT_NE(https_handler, nullptr);
     EXPECT_EQ(https_handler->protocol_name(), "http");
 #else

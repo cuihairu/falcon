@@ -79,6 +79,11 @@ signals:
 private:
     struct Impl;
     QSharedPointer<Impl> p_impl_;
+
+    QList<SearchResultItem> search_magnet_sync(const QString& keyword, const SearchOptions& options);
+    QList<SearchResultItem> search_http_sync(const QString& keyword, const SearchOptions& options);
+    QList<SearchResultItem> search_cloud_sync(const QString& keyword, const SearchOptions& options);
+    QList<SearchResultItem> search_ftp_sync(const QString& keyword, const SearchOptions& options);
 };
 
 } // namespace falcon::desktop

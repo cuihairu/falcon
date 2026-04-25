@@ -149,7 +149,7 @@ struct SearchService::Impl {
             return QByteArray();
         }
 
-        QNetworkRequest request(QUrl(url));
+        QNetworkRequest request{QUrl(url)};
         request.setHeader(QNetworkRequest::UserAgentHeader, USER_AGENT);
 
         QNetworkReply* reply = network_manager->get(request);
@@ -239,7 +239,12 @@ struct SearchService::Impl {
         QRegularExpression magnet_re("magnet:\\?xt=urn:btih:[a-fA-F0-9]{40}[^\"'<>\\s]*");
         QRegularExpression size_re("([\\d.]+\\s*[KMGT]?B)",
                                    QRegularExpression::CaseInsensitiveOption);
-        QRegularExpression seed_re(\"作?(\\d+)\\s*种\", QRegularExpression::CaseInsensitiveOption);
+        QRegularExpression seed_re("(\\d+)\\s*(seed|seeder|种)",
+                                   QRegularExpression::CaseInsensitiveOption);
+
+        Q_UNUSED(magnet_re);
+        Q_UNUSED(size_re);
+        Q_UNUSED(seed_re);
 
         // 简化解析 - 实际需要根据网站结构调整
         QStringList magnets = extract_magnet_links(html);
@@ -329,7 +334,7 @@ struct SearchService::Impl {
 
 SearchService::SearchService(QObject* parent)
     : QObject(parent)
-    , p_impl_(std::make_shared<Impl>()) {
+    , p_impl_(QSharedPointer<Impl>::create()) {
     p_impl_->network_manager = new QNetworkAccessManager(this);
 }
 
@@ -341,7 +346,7 @@ void SearchService::search(const QString& keyword, const SearchOptions& options,
     p_impl_->cancelled = false;
     p_impl_->current_search_id = keyword + ":" + QString::number(QDateTime::currentMSecsSinceEpoch());
 
-    Qt::Concurrent::run([this, keyword, options, callback]() {
+    QtConcurrent::run([this, keyword, options, callback]() {
         QList<SearchResultItem> results;
 
         // 根据搜索类型调用不同的搜索方法
@@ -374,7 +379,7 @@ void SearchService::search(const QString& keyword, const SearchOptions& options,
 }
 
 void SearchService::search_magnet(const QString& keyword, const SearchOptions& options, SearchCallback callback) {
-    Qt::Concurrent::run([this, keyword, options, callback]() {
+    QtConcurrent::run([this, keyword, options, callback]() {
         auto results = search_magnet_sync(keyword, options);
         if (callback && !p_impl_->cancelled) {
             callback(results);
@@ -383,7 +388,7 @@ void SearchService::search_magnet(const QString& keyword, const SearchOptions& o
 }
 
 void SearchService::search_http(const QString& keyword, const SearchOptions& options, SearchCallback callback) {
-    Qt::Concurrent::run([this, keyword, options, callback]() {
+    QtConcurrent::run([this, keyword, options, callback]() {
         auto results = search_http_sync(keyword, options);
         if (callback && !p_impl_->cancelled) {
             callback(results);
@@ -392,7 +397,7 @@ void SearchService::search_http(const QString& keyword, const SearchOptions& opt
 }
 
 void SearchService::search_cloud(const QString& keyword, const SearchOptions& options, SearchCallback callback) {
-    Qt::Concurrent::run([this, keyword, options, callback]() {
+    QtConcurrent::run([this, keyword, options, callback]() {
         auto results = search_cloud_sync(keyword, options);
         if (callback && !p_impl_->cancelled) {
             callback(results);
@@ -401,7 +406,7 @@ void SearchService::search_cloud(const QString& keyword, const SearchOptions& op
 }
 
 void SearchService::search_ftp(const QString& keyword, const SearchOptions& options, SearchCallback callback) {
-    Qt::Concurrent::run([this, keyword, options, callback]() {
+    QtConcurrent::run([this, keyword, options, callback]() {
         auto results = search_ftp_sync(keyword, options);
         if (callback && !p_impl_->cancelled) {
             callback(results);

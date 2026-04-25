@@ -16,26 +16,9 @@
 #include <QTabWidget>
 #include <QSharedPointer>
 
-namespace falcon::desktop {
-
-// 前向声明
-class SearchService;
+#include "../services/search_service.hpp"
 
 namespace falcon::desktop {
-
-/**
- * @brief 搜索结果项
- */
-struct SearchResultItem {
-    QString title;          // 标题
-    QString url;            // 下载链接
-    QString size;           // 文件大小
-    QString source;         // 来源
-    QString type;           // 文件类型
-    QString date;           // 发布日期
-    int seeders;            // 种子数（BT专用）
-    int leechers;           // 下载数（BT专用）
-};
 
 /**
  * @brief 发现页面 - 资源搜索与发现

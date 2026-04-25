@@ -114,9 +114,9 @@ TEST(StorageIsolationTest, RemoteResourceDirectory) {
     EXPECT_FALSE(res.is_file());
 }
 
-// NOTE: ResourceBrowserManager tests are omitted because register_browser(),
-// get_supported_protocols(), and browse() are not yet implemented in
-// resource_browser.cpp. They will be added when the implementation lands.
+// NOTE: BrowserFactory coverage lives in resource_browsers_test.cpp.
+// ResourceBrowserManager integration coverage can be added separately when
+// higher-level browsing behavior is exercised with test doubles.
 
 // ---------------------------------------------------------------------------
 // 4. BrowserFormatter works standalone

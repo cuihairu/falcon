@@ -66,6 +66,7 @@ if(FALCON_ENABLE_RESOURCE_BROWSER)
                 plugins/upyun/upyun_browser.cpp
             )
             target_link_libraries(falcon_storage PUBLIC OpenSSL::Crypto)
+            target_compile_definitions(falcon_storage PRIVATE FALCON_ENABLE_CRYPTO_STORAGE_BROWSERS)
         else()
             message(STATUS "OpenSSL not found: OSS/COS/Kodo/Upyun browsers will not be built")
         endif()
