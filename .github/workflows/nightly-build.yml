@@ -350,9 +350,37 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
+  create-nightly-release:
+    name: Create Nightly Release
+    runs-on: ubuntu-latest
+    needs: build-nightly
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Get version string
+        id: version
+        run: |
+          DISPLAY_VERSION="nightly-$(date +%Y%m%d)-$(git rev-parse --short HEAD)"
+          echo "display_version=${DISPLAY_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "version=nightly" >> "$GITHUB_OUTPUT"
+
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: falcon-desktop-*
+          path: .
+          merge-multiple: true
+
+      - name: List downloaded files
+        run: ls -la
+
       - name: Clean old Nightly Release assets
-        # 只在 Linux 任务中执行，避免多任务冲突
-        if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && matrix.os == 'ubuntu-latest'
         run: |
           # 删除 nightly tag 的所有旧 assets
           gh release view nightly --json assets --jq '.assets[].name' | \
@@ -360,20 +388,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download all platform artifacts
-        # 只在 Linux 任务中下载所有 artifacts，用于创建 release
-        if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && matrix.os == 'ubuntu-latest'
-        uses: actions/download-artifact@v4
-        with:
-          pattern: falcon-desktop-*
-          path: .
-          merge-multiple: true
-
       - name: Create Nightly Release
-        # 只在 Linux 任务中创建 release，避免多任务冲突
-        if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && matrix.os == 'ubuntu-latest'
         uses: softprops/action-gh-release@v3
-        timeout-minutes: 10
         with:
           tag_name: nightly
           name: Nightly Build (${{ steps.version.outputs.version }})
