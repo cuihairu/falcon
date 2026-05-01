@@ -333,7 +333,12 @@ jobs:
             falcon-desktop\falcon-desktop.exe
 
           # 打包为 zip
-          7z a -tzip ..\..\falcon-desktop-windows-${{ steps.version.outputs.version }}.zip falcon-desktop\
+          $zipName = "falcon-desktop-windows-${{ steps.version.outputs.version }}.zip"
+          7z a -tzip ..\..\$zipName falcon-desktop\
+
+          # 验证文件已创建（回到根目录检查）
+          cd ../../
+          Get-ChildItem -Filter "falcon-desktop-windows-*.zip" | Select-Object Name, FullName
 
       - name: Upload artifact
         uses: actions/upload-artifact@v6
