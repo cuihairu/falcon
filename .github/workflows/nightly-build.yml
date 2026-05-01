@@ -90,12 +90,18 @@ jobs:
       - name: Install dependencies (Windows)
         if: matrix.os == 'windows-latest'
         timeout-minutes: 20
+        shell: pwsh
         run: |
           choco install cmake ninja curl -y
-          git clone https://github.com/Microsoft/vcpkg.git
-          cd vcpkg
+
+          # 克隆 vcpkg 到不同目录以避免 manifest 模式
+          git clone https://github.com/Microsoft/vcpkg.git C:\vcpkg
+          cd C:\vcpkg
           .\bootstrap-vcpkg.bat
           .\vcpkg install curl:x64-windows
+
+          # 设置环境变量
+          echo "VCPKG_INSTALLATION_ROOT=C:\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Get version string
         id: version
@@ -157,9 +163,40 @@ jobs:
           # 创建 AppDir 结构
           mkdir -p FalconDesktop/AppDir/usr/bin
           mkdir -p FalconDesktop/AppDir/usr/lib
+          mkdir -p FalconDesktop/AppDir/usr/share/applications
+          mkdir -p FalconDesktop/AppDir/usr/share/icons/hicolor/256x256/apps
+
           cp falcon-desktop FalconDesktop/AppDir/usr/bin/
           cp falcon-cli FalconDesktop/AppDir/usr/bin/ 2>/dev/null || true
           cp falcon-daemon FalconDesktop/AppDir/usr/bin/ 2>/dev/null || true
+
+          # 创建 .desktop 文件
+          cat > FalconDesktop/AppDir/falcon-desktop.desktop << 'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=Falcon Desktop
+          Comment=Modern download manager
+          Exec=falcon-desktop
+          Icon=falcon-desktop
+          Categories=Network;FileTransfer;
+          EOF
+          ln -sf usr/share/applications/falcon-desktop.desktop FalconDesktop/AppDir/
+
+          # 创建 AppRun
+          cat > FalconDesktop/AppDir/AppRun << 'EOF'
+          #!/bin/bash
+          SELF=$(readlink -f "$0")
+          HERE=${SELF%/*}
+          export LD_LIBRARY_PATH="${HERE}/usr/lib/:${LD_LIBRARY_PATH}"
+          export PATH="${HERE}/usr/bin/:${PATH}"
+          exec "${HERE}/usr/bin/falcon-desktop" "$@"
+          EOF
+          chmod +x FalconDesktop/AppDir/AppRun
+
+          # 创建占位图标
+          touch FalconDesktop/AppDir/usr/share/icons/hicolor/256x256/apps/falcon-desktop.png
+          ln -sf usr/share/icons/hicolor/256x256/apps/falcon-desktop.png FalconDesktop/AppDir/.DirIcon
+          ln -sf usr/share/icons/hicolor/256x256/apps/falcon-desktop.png FalconDesktop/AppDir/falcon-desktop.png
 
           # 使用 linuxdeploy 打包（使用全局安装的版本）
           /usr/local/bin/linuxdeploy-x86_64.AppImage \
