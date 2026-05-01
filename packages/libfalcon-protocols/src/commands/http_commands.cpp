@@ -164,6 +164,7 @@ bool HttpInitiateConnectionCommand::execute(DownloadEngineV2* engine) {
 
                 connection_state_ = HttpConnectionState::CONNECTED;
 
+#ifdef FALCON_ENABLE_OPENSSL
                 // 如果是 HTTPS，执行 TLS 握手
                 if (use_https_) {
                     if (!setup_tls()) {
@@ -173,6 +174,15 @@ bool HttpInitiateConnectionCommand::execute(DownloadEngineV2* engine) {
                         return handle_result(ExecutionResult::ERROR_OCCURRED);
                     }
                 }
+#else
+                // 如果没有 OpenSSL，HTTPS 不可用
+                if (use_https_) {
+                    FALCON_LOG_ERROR_STREAM("HTTPS 支持需要启用 OpenSSL");
+                    close_socket_fd(socket_fd_);
+                    socket_fd_ = -1;
+                    return handle_result(ExecutionResult::ERROR_OCCURRED);
+                }
+#endif
 
                 return handle_result(send_http_request(engine));
 
@@ -199,6 +209,7 @@ bool HttpInitiateConnectionCommand::execute(DownloadEngineV2* engine) {
 
                 connection_state_ = HttpConnectionState::CONNECTED;
 
+#ifdef FALCON_ENABLE_OPENSSL
                 // 如果是 HTTPS，执行 TLS 握手
                 if (use_https_) {
                     if (!setup_tls()) {
@@ -208,6 +219,15 @@ bool HttpInitiateConnectionCommand::execute(DownloadEngineV2* engine) {
                         return handle_result(ExecutionResult::ERROR_OCCURRED);
                     }
                 }
+#else
+                // 如果没有 OpenSSL，HTTPS 不可用
+                if (use_https_) {
+                    FALCON_LOG_ERROR_STREAM("HTTPS 支持需要启用 OpenSSL");
+                    close_socket_fd(socket_fd_);
+                    socket_fd_ = -1;
+                    return handle_result(ExecutionResult::ERROR_OCCURRED);
+                }
+#endif
 
                 return handle_result(send_http_request(engine));
 

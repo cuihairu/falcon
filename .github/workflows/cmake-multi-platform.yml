@@ -166,8 +166,7 @@ jobs:
       - name: Test
         timeout-minutes: 15
         working-directory: ${{ github.workspace }}/build-coverage
-        run: ctest --build-config Debug --output-on-failure --timeout 120 || true
-        continue-on-error: true
+        run: ctest --build-config Debug --output-on-failure --timeout 120 --verbose
 
       - name: Generate coverage (gcovr)
         timeout-minutes: 5
