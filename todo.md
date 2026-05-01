@@ -698,3 +698,21 @@ feature 候选：
 **待实现：**
 - ✅ CloudPage 与 libfalcon-storage 的 UI 交互完善
 - ✅ DiscoveryPage 与真实搜索 API 集成
+
+---
+
+## CI/CD 修复
+
+### 2026-04-30 - GitHub Actions Nightly Build 修复
+
+**问题：**
+- macOS: DMG 文件在 `build-desktop/bin/` 创建，但上传时在根目录查找
+- Linux: `${Qt6_DIR}/bin/linuxdeploy-x86_64.AppImage` 不存在
+- Windows: vcpkg 缺少 curl 依赖
+
+**已完成：**
+- ✅ macOS DMG 输出路径改为 `../../falcon-desktop-macos-${VERSION}.dmg`
+- ✅ Linux: 添加 linuxdeploy 和 linuxdeploy-plugin-qt 安装步骤
+- ✅ Linux: 修改打包步骤使用全局安装的 linuxdeploy
+- ✅ Windows: 添加 `.\vcpkg\vcpkg install curl:x64-windows`
+- ✅ Windows: 更新 Package 步骤正确复制 vcpkg DLL

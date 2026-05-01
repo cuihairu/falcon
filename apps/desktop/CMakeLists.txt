@@ -7,6 +7,14 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
+# macOS 特定设置
+if(APPLE)
+  set(CMAKE_OSX_DEPLOYMENT_TARGET "10.15" CACHE STRING "Minimum macOS version" FORCE)
+  set(CMAKE_MACOSX_BUNDLE TRUE)
+  set(CMAKE_MACOSX_BUNDLE_GUI_TYPE "FBND")
+  set(MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in)
+endif()
+
 # 查找 Qt6
 find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network Concurrent)
 find_package(Qt6 OPTIONAL_COMPONENTS LinguistTools)

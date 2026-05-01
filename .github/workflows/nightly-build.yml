@@ -18,7 +18,7 @@ jobs:
         include:
           - os: ubuntu-latest
             os_name: linux
-            qt-version: '6.6.3'
+            qt-version: '6.8.0'
             qt-arch: 'gcc_64'
             cmake-generator: 'Unix Makefiles'
             artifact-name: 'falcon-desktop-linux'
@@ -27,7 +27,7 @@ jobs:
             package-extension: '.tar.gz'
           - os: macos-latest
             os_name: macos
-            qt-version: '6.6.3'
+            qt-version: '6.8.0'
             qt-arch: 'clang_64'
             cmake-generator: 'Unix Makefiles'
             artifact-name: 'falcon-desktop-macos'
@@ -36,7 +36,7 @@ jobs:
             package-extension: '.tar.gz'
           - os: windows-latest
             os_name: windows
-            qt-version: '6.6.3'
+            qt-version: '6.8.0'
             qt-arch: 'mingw_64'
             cmake-generator: 'Visual Studio 17 2022'
             artifact-name: 'falcon-desktop-windows'
@@ -239,11 +239,33 @@ jobs:
             <string>com.falcon.downloader</string>
             <key>CFBundleName</key>
             <string>Falcon Desktop</string>
+            <key>CFBundleDisplayName</key>
+            <string>Falcon Desktop</string>
             <key>CFBundleVersion</key>
-            <string>${{ steps.version.outputs.version }}</string>
+            <string>0.1.0</string>
             <key>CFBundleShortVersionString</key>
-            <string>${{ steps.version.outputs.version }}</string>
+            <string>0.1.0</string>
+            <key>CFBundlePackageType</key>
+            <string>APPL</string>
+            <key>CFBundleSignature</key>
+            <string>????</string>
+            <key>CFBundleInfoDictionaryVersion</key>
+            <string>6.0</string>
+            <key>LSMinimumSystemVersion</key>
+            <string>10.15</string>
+            <key>LSMinimumOSVersion</key>
+            <string>10.15</string>
             <key>NSHighResolutionCapable</key>
+            <true/>
+            <key>NSSupportsAutomaticTermination</key>
+            <true/>
+            <key>NSSupportsSuddenTermination</key>
+            <true/>
+            <key>NSPrincipalClass</key>
+            <string>NSApplication</string>
+            <key>NSAppleScriptEnabled</key>
+            <false/>
+            <key>CFBundleAllowMixedLocalizations</key>
             <true/>
           </dict>
           </plist>
@@ -251,6 +273,13 @@ jobs:
 
           # 复制 Qt 框架
           macdeployqt FalconDesktop.app -always-overwrite
+
+          # 修复库路径权限
+          chmod -R 755 FalconDesktop.app
+          find FalconDesktop.app -name "*.dylib" -exec chmod 644 {} \;
+
+          # 临时代码签名（ad-hoc 签名，允许本地运行）
+          codesign --force --deep --sign - FalconDesktop.app 2>/dev/null || true
 
           # 创建 DMG
           DMG_NAME="falcon-desktop-macos-${{ steps.version.outputs.version }}.dmg"
@@ -283,7 +312,8 @@ jobs:
           Copy-Item "C:\vcpkg\installed\x64-windows\bin\*.dll" falcon-desktop/ -ErrorAction SilentlyContinue
 
           # 使用 windeployqt 部署 Qt 依赖
-          & "$Env:Qt6_DIR\bin\windeployqt.exe" `
+          $windeployqt = Join-Path $Env:Qt6_DIR "bin\windeployqt.exe"
+          & $windeployqt `
             --release `
             --no-translations `
             --no-system-d3d-compiler `
