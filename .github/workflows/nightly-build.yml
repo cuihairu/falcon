@@ -26,11 +26,20 @@ jobs:
             binary-path: 'build-desktop/bin'
             package-extension: '.tar.gz'
           - os: macos-13
-            os_name: macos
+            os_name: macos-intel
             qt-version: '6.8.0'
             qt-arch: 'clang_64'
             cmake-generator: 'Unix Makefiles'
-            artifact-name: 'falcon-desktop-macos'
+            artifact-name: 'falcon-desktop-macos-intel'
+            binary-name: 'falcon-desktop'
+            binary-path: 'build-desktop/bin'
+            package-extension: '.tar.gz'
+          - os: macos-latest
+            os_name: macos-apple-silicon
+            qt-version: '6.8.0'
+            qt-arch: 'clang_64'
+            cmake-generator: 'Unix Makefiles'
+            artifact-name: 'falcon-desktop-macos-apple-silicon'
             binary-name: 'falcon-desktop'
             binary-path: 'build-desktop/bin'
             package-extension: '.tar.gz'
@@ -216,7 +225,7 @@ jobs:
           mv *.AppImage ../../falcon-desktop-linux-${{ steps.version.outputs.version }}.AppImage || mv FalconDesktop*.AppImage ../../falcon-desktop-linux-${{ steps.version.outputs.version }}.AppImage || true
 
       - name: Package (macOS)
-        if: matrix.os == 'macos-latest'
+        if: startsWith(matrix.os, 'macos-')
         timeout-minutes: 5
         run: |
           cd build-desktop/bin
@@ -301,8 +310,13 @@ jobs:
           # 验证签名
           codesign -vvv "$APP_BUNDLE" 2>&1 | head -10 || true
 
-          # 创建 DMG
-          DMG_NAME="falcon-desktop-macos-${{ steps.version.outputs.version }}.dmg"
+          # 创建 DMG（根据架构使用不同文件名）
+          if [ "${{ matrix.os }}" == "macos-13" ]; then
+            ARCH_SUFFIX="intel"
+          else
+            ARCH_SUFFIX="apple-silicon"
+          fi
+          DMG_NAME="falcon-desktop-macos-${ARCH_SUFFIX}-nightly.dmg"
           create-dmg \
             --volname "Falcon Desktop" \
             --window-pos 200 120 \
