@@ -16,7 +16,7 @@ class HTTPDownloadBenchmark : public ::testing::Test {
 protected:
     void SetUp() override {
         engine = std::make_unique<DownloadEngine>();
-        engine->loadAllPlugins();
+        // Plugins are auto-loaded by DownloadEngine constructor
 
         // 创建输出目录
         std::filesystem::create_directories("benchmark_downloads");

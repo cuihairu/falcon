@@ -102,15 +102,11 @@ target_link_libraries(falcon-desktop PRIVATE
     Falcon::storage
 )
 
-# 安装目标
-install(TARGETS falcon-desktop
-    RUNTIME DESTINATION bin
-    LIBRARY DESTINATION lib
-    ARCHIVE DESTINATION lib
-)
-
-install(FILES
-    ${CMAKE_CURRENT_BINARY_DIR}/falcon_desktop_zh_CN.qm
-    DESTINATION bin/i18n
-    OPTIONAL
-)
+# 安装目标（macOS 使用手动打包，跳过 install）
+if(NOT APPLE)
+  install(TARGETS falcon-desktop
+      RUNTIME DESTINATION bin
+      LIBRARY DESTINATION lib
+      ARCHIVE DESTINATION lib
+  )
+endif()

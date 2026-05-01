@@ -205,13 +205,13 @@ TEST_F(BugFixTest, DownloadEngineCheckTaskExistence) {
 // Test for ProtocolRegistry nullptr dereference fix
 TEST_F(BugFixTest, ProtocolRegistryNoNullptrDereference) {
     // Test getting handlers for unregistered protocols
-    auto http_handler = plugin_manager_->getPlugin("http");
+    auto http_handler = plugin_manager_->get_handler("http");
     EXPECT_EQ(http_handler, nullptr) << "Should return nullptr for unregistered HTTP handler";
 
-    auto ftp_handler = plugin_manager_->getPlugin("ftp");
+    auto ftp_handler = plugin_manager_->get_handler("ftp");
     EXPECT_EQ(ftp_handler, nullptr) << "Should return nullptr for unregistered FTP handler";
 
-    auto invalid_handler = plugin_manager_->getPlugin("invalid_protocol");
+    auto invalid_handler = plugin_manager_->get_handler("invalid_protocol");
     EXPECT_EQ(invalid_handler, nullptr) << "Should return nullptr for invalid protocol";
 }
 

@@ -361,7 +361,7 @@ class ProtocolsCompatibilityTest : public ::testing::Test {
 protected:
     void SetUp() override {
         engine = std::make_unique<DownloadEngine>();
-        engine->loadAllPlugins();
+        // Plugins are auto-loaded by DownloadEngine constructor
     }
 
     void TearDown() override {
@@ -443,7 +443,7 @@ class PerformanceTest : public ::testing::Test {
 protected:
     void SetUp() override {
         engine = std::make_unique<DownloadEngine>();
-        engine->loadAllPlugins();
+        // Plugins are auto-loaded by DownloadEngine constructor
     }
 
     void TearDown() override {
@@ -493,7 +493,7 @@ class StressTest : public ::testing::Test {
 protected:
     void SetUp() override {
         engine = std::make_unique<DownloadEngine>();
-        engine->loadAllPlugins();
+        // Plugins are auto-loaded by DownloadEngine constructor
     }
 
     void TearDown() override {

@@ -199,12 +199,12 @@ TEST(LibrarySplitTest, EventListenerWorksAcrossSplit) {
 
 TEST(LibrarySplitTest, LoadAllPluginsWithFullLink) {
     falcon::ProtocolRegistry manager;
-    manager.loadAllPlugins();
+    manager.load_builtin_handlers();
 
     // With falcon_protocols linked, at least HTTP should be available
 #if defined(FALCON_ENABLE_HTTP) || defined(FALCON_ENABLE_HTTP_PLUGIN)
     EXPECT_GT(manager.handler_count(), 0u);
-    EXPECT_NE(manager.getPlugin("http"), nullptr);
+    EXPECT_NE(manager.get_handler("http"), nullptr);
 #else
     // Without HTTP, still should not crash
     EXPECT_EQ(manager.handler_count(), 0u);
