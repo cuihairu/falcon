@@ -332,12 +332,12 @@ jobs:
             --no-system-d3d-compiler `
             falcon-desktop\falcon-desktop.exe
 
-          # 打包为 zip
+          # 打包为 zip（向上三级到根目录：bin/Release -> bin -> build-desktop -> root）
           $zipName = "falcon-desktop-windows-${{ steps.version.outputs.version }}.zip"
-          7z a -tzip ..\..\$zipName falcon-desktop\
+          7z a -tzip ..\..\..\$zipName falcon-desktop\
 
           # 验证文件已创建（回到根目录检查）
-          cd ../../
+          cd ../../../
           Get-ChildItem -Filter "falcon-desktop-windows-*.zip" | Select-Object Name, FullName
 
       - name: Upload artifact
