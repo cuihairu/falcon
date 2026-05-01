@@ -139,7 +139,7 @@ jobs:
           cmake -B build-desktop
           -G "${{ matrix.cmake-generator }}"
           -DCMAKE_PREFIX_PATH="${Env:Qt6_DIR}"
-          -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake"
+          -DCMAKE_TOOLCHAIN_FILE="C:/vcpkg/scripts/buildsystems/vcpkg.cmake"
           -DFALCON_BUILD_TESTS=OFF
           -DFALCON_BUILD_CLI=ON
           -DFALCON_BUILD_DESKTOP=ON
@@ -171,7 +171,7 @@ jobs:
           cp falcon-daemon FalconDesktop/AppDir/usr/bin/ 2>/dev/null || true
 
           # 创建 .desktop 文件
-          cat > FalconDesktop/AppDir/falcon-desktop.desktop << 'EOF'
+          cat > FalconDesktop/AppDir/usr/share/applications/falcon-desktop.desktop << 'EOF'
           [Desktop Entry]
           Type=Application
           Name=Falcon Desktop
@@ -180,7 +180,7 @@ jobs:
           Icon=falcon-desktop
           Categories=Network;FileTransfer;
           EOF
-          ln -sf usr/share/applications/falcon-desktop.desktop FalconDesktop/AppDir/
+          ln -sf usr/share/applications/falcon-desktop.desktop FalconDesktop/AppDir/falcon-desktop.desktop
 
           # 创建 AppRun
           cat > FalconDesktop/AppDir/AppRun << 'EOF'
