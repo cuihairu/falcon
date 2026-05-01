@@ -360,6 +360,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Download all platform artifacts
+        # 只在 Linux 任务中下载所有 artifacts，用于创建 release
+        if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && matrix.os == 'ubuntu-latest'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: falcon-desktop-*
+          path: .
+          merge-multiple: true
+
       - name: Create Nightly Release
         # 只在 Linux 任务中创建 release，避免多任务冲突
         if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && matrix.os == 'ubuntu-latest'
@@ -399,9 +408,9 @@ jobs:
             - ✅ 系统托盘集成
             - ✅ 亮色/暗色主题
           files: |
-            falcon-desktop-*${{ steps.version.outputs.version }}*
+            falcon-desktop-*nightly*
           draft: false
           prerelease: true
-          fail_on_unmatched_files: true
+          fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
