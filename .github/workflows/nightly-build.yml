@@ -302,7 +302,7 @@ jobs:
           codesign -vvv "$APP_BUNDLE" 2>&1 | head -10 || true
 
           # 创建 DMG
-          DMG_NAME="falcon-desktop-macos-nightly.dmg"
+          DMG_NAME="falcon-desktop-macos-arm64-nightly.dmg"
           create-dmg \
             --volname "Falcon Desktop" \
             --window-pos 200 120 \
