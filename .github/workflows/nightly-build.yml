@@ -25,7 +25,7 @@ jobs:
             binary-name: 'falcon-desktop'
             binary-path: 'build-desktop/bin'
             package-extension: '.tar.gz'
-          - os: macos-latest
+          - os: macos-13
             os_name: macos
             qt-version: '6.8.0'
             qt-arch: 'clang_64'
