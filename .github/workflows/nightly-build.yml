@@ -270,27 +270,27 @@ jobs:
       - name: Package (Windows)
         if: matrix.os == 'windows-latest'
         timeout-minutes: 10
-        shell: bash
+        shell: pwsh
         run: |
           cd build-desktop/bin/Release
 
           # 创建发布目录
-          mkdir -p falcon-desktop
-          cp falcon-desktop.exe falcon-desktop/
-          cp falcon-cli.exe falcon-desktop/ 2>/dev/null || true
+          New-Item -ItemType Directory -Force -Path falcon-desktop
+          Copy-Item falcon-desktop.exe falcon-desktop/
+          Copy-Item falcon-cli.exe falcon-desktop/ -ErrorAction SilentlyContinue
 
           # 复制 vcpkg DLL
-          cp "${VCPKG_INSTALLATION_ROOT}/installed/x64-windows/bin/"*.dll falcon-desktop/ 2>/dev/null || true
+          Copy-Item "C:\vcpkg\installed\x64-windows\bin\*.dll" falcon-desktop/ -ErrorAction SilentlyContinue
 
           # 使用 windeployqt 部署 Qt 依赖
-          "${Qt6_DIR}\\bin\\windeployqt.exe" \
-            --release \
-            --no-translations \
-            --no-system-d3d-compiler \
-            falcon-desktop/falcon-desktop.exe
+          & "$Env:Qt6_DIR\bin\windeployqt.exe" `
+            --release `
+            --no-translations `
+            --no-system-d3d-compiler `
+            falcon-desktop\falcon-desktop.exe
 
           # 打包为 zip
-          7z a -tzip ../../falcon-desktop-windows-${{ steps.version.outputs.version }}.zip falcon-desktop/
+          7z a -tzip ..\..\falcon-desktop-windows-${{ steps.version.outputs.version }}.zip falcon-desktop\
 
       - name: Upload artifact
         uses: actions/upload-artifact@v6
