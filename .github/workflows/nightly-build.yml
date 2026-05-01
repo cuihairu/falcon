@@ -219,26 +219,20 @@ jobs:
         run: |
           cd build-desktop/bin
 
-          # 清理旧的 .app 目录（如果存在）
-          rm -rf FalconDesktop.app falcon-desktop.app
+          # CMake MACOSX_BUNDLE 创建了 falcon-desktop.app，直接使用它
+          if [ -d "falcon-desktop.app" ]; then
+            echo "Using CMake-generated .app bundle"
+            APP_BUNDLE="falcon-desktop.app"
+          elif [ -f "falcon-desktop" ]; then
+            echo "Creating .app from binary"
+            # 如果是普通可执行文件，创建 .app 结构
+            mkdir -p FalconDesktop.app/Contents/MacOS
+            mkdir -p FalconDesktop.app/Contents/Resources
+            mkdir -p FalconDesktop.app/Contents/Frameworks
+            cp falcon-desktop FalconDesktop.app/Contents/MacOS/
 
-          # 检查可执行文件是否存在
-          ls -la
-          if [ ! -f falcon-desktop ]; then
-            echo "ERROR: falcon-desktop not found!"
-            exit 1
-          fi
-
-          # 创建 .app 包结构
-          mkdir -p FalconDesktop.app/Contents/MacOS
-          mkdir -p FalconDesktop.app/Contents/Resources
-          mkdir -p FalconDesktop.app/Contents/Frameworks
-
-          # 复制可执行文件
-          cp falcon-desktop FalconDesktop.app/Contents/MacOS/
-
-          # 创建 Info.plist
-          cat > FalconDesktop.app/Contents/Info.plist << 'EOF'
+            # 创建 Info.plist
+            cat > FalconDesktop.app/Contents/Info.plist << 'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
@@ -280,16 +274,22 @@ jobs:
           </dict>
           </plist>
           EOF
+            APP_BUNDLE="FalconDesktop.app"
+          else
+            echo "ERROR: Neither falcon-desktop.app nor falcon-desktop found!"
+            ls -la
+            exit 1
+          fi
 
           # 复制 Qt 框架
-          macdeployqt FalconDesktop.app -always-overwrite
+          macdeployqt "$APP_BUNDLE" -always-overwrite
 
           # 修复库路径权限
-          chmod -R 755 FalconDesktop.app
-          find FalconDesktop.app -name "*.dylib" -exec chmod 644 {} \;
+          chmod -R 755 "$APP_BUNDLE"
+          find "$APP_BUNDLE" -name "*.dylib" -exec chmod 644 {} \;
 
           # 临时代码签名（ad-hoc 签名，允许本地运行）
-          codesign --force --deep --sign - FalconDesktop.app 2>/dev/null || true
+          codesign --force --deep --sign - "$APP_BUNDLE" 2>/dev/null || true
 
           # 创建 DMG
           DMG_NAME="falcon-desktop-macos-${{ steps.version.outputs.version }}.dmg"
@@ -299,9 +299,9 @@ jobs:
             --window-size 600 400 \
             --icon-size 100 \
             --app-drop-link 450 185 \
-            --icon FalconDesktop.app 150 185 \
+            --icon "$APP_BUNDLE" 150 185 \
             "$DMG_NAME" \
-            FalconDesktop.app
+            "$APP_BUNDLE"
 
           # 移动 DMG 到根目录以便上传
           mv "$DMG_NAME" ../../
@@ -340,8 +340,8 @@ jobs:
           name: ${{ matrix.artifact-name }}-${{ steps.version.outputs.version }}
           path: |
             falcon-desktop-*${{ steps.version.outputs.version }}*
-            build-desktop/falcon-desktop-*${{ steps.version.outputs.version }}*
           retention-days: 30
+          if-no-files-found: error
 
       - name: Create Nightly Release
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -381,7 +381,7 @@ jobs:
             - ✅ 系统托盘集成
             - ✅ 亮色/暗色主题
           files: |
-            ${{ matrix.os == 'windows-latest' && 'build-desktop/falcon-desktop-windows-*' || 'falcon-desktop-*' }}*${{ steps.version.outputs.version }}*
+            falcon-desktop-*${{ steps.version.outputs.version }}*
           draft: false
           prerelease: true
           fail_on_unmatched_files: true
