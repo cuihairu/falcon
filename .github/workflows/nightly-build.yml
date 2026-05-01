@@ -108,10 +108,12 @@ jobs:
         shell: bash
         timeout-minutes: 1
         run: |
-          # 生成版本号：nightly-YYYYMMDD-commit
-          VERSION="nightly-$(date +%Y%m%d)-$(git rev-parse --short HEAD)"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Display version: ${VERSION}"
+          # 用于显示的版本号
+          DISPLAY_VERSION="nightly-$(date +%Y%m%d)-$(git rev-parse --short HEAD)"
+          echo "display_version=${DISPLAY_VERSION}" >> "$GITHUB_OUTPUT"
+          # 固定的文件名版本号（用于覆盖）
+          echo "version=nightly" >> "$GITHUB_OUTPUT"
+          echo "Display version: ${DISPLAY_VERSION}"
 
       - name: Configure CMake (Unix)
         if: runner.os != 'Windows'
@@ -343,6 +345,15 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
+      - name: Clean old Nightly Release assets
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: |
+          # 删除 nightly tag 的所有旧 assets
+          gh release view nightly --json assets --jq '.assets[].name' | \
+            xargs -I {} gh release delete-asset nightly {} || true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Create Nightly Release
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v3
@@ -353,7 +364,7 @@ jobs:
           body: |
             ## 🦅 Falcon Desktop Nightly Build
 
-            **版本:** ${{ steps.version.outputs.version }}
+            **版本:** ${{ steps.version.outputs.display_version }}
             **构建时间:** ${{ github.event.head_commit.timestamp }}
 
             ### 下载说明
