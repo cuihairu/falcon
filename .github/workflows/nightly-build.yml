@@ -381,8 +381,7 @@ jobs:
             - ✅ 系统托盘集成
             - ✅ 亮色/暗色主题
           files: |
-            falcon-desktop-*${{ steps.version.outputs.version }}*
-            build-desktop/falcon-desktop-*${{ steps.version.outputs.version }}*
+            ${{ matrix.os == 'windows-latest' && 'build-desktop/falcon-desktop-windows-*' || 'falcon-desktop-*' }}*${{ steps.version.outputs.version }}*
           draft: false
           prerelease: true
           fail_on_unmatched_files: true
