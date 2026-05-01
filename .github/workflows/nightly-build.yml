@@ -25,11 +25,12 @@ jobs:
             binary-name: 'falcon-desktop'
             binary-path: 'build-desktop/bin'
             package-extension: '.tar.gz'
-          - os: macos-13
+          - os: macos-15
             os_name: macos-intel
             qt-version: '6.8.0'
             qt-arch: 'clang_64'
             cmake-generator: 'Unix Makefiles'
+            cmake-args: '-DCMAKE_OSX_ARCHITECTURES=x86_64'
             artifact-name: 'falcon-desktop-macos-intel'
             binary-name: 'falcon-desktop'
             binary-path: 'build-desktop/bin'
@@ -39,6 +40,7 @@ jobs:
             qt-version: '6.8.0'
             qt-arch: 'clang_64'
             cmake-generator: 'Unix Makefiles'
+            cmake-args: '-DCMAKE_OSX_ARCHITECTURES=arm64'
             artifact-name: 'falcon-desktop-macos-apple-silicon'
             binary-name: 'falcon-desktop'
             binary-path: 'build-desktop/bin'
@@ -132,6 +134,7 @@ jobs:
           -G "${{ matrix.cmake-generator }}"
           -DCMAKE_BUILD_TYPE=Release
           -DCMAKE_PREFIX_PATH="${Qt6_DIR}"
+          ${{ matrix.cmake-args }}
           -DFALCON_BUILD_TESTS=OFF
           -DFALCON_BUILD_CLI=ON
           -DFALCON_BUILD_DESKTOP=ON
@@ -311,7 +314,7 @@ jobs:
           codesign -vvv "$APP_BUNDLE" 2>&1 | head -10 || true
 
           # 创建 DMG（根据架构使用不同文件名）
-          if [ "${{ matrix.os }}" == "macos-13" ]; then
+          if [ "${{ matrix.os }}" == "macos-15" ]; then
             ARCH_SUFFIX="intel"
           else
             ARCH_SUFFIX="apple-silicon"
