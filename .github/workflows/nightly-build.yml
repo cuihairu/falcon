@@ -219,6 +219,9 @@ jobs:
         run: |
           cd build-desktop/bin
 
+          # 清理旧的 .app 目录（如果存在）
+          rm -rf FalconDesktop.app falcon-desktop.app
+
           # 检查可执行文件是否存在
           ls -la
           if [ ! -f falcon-desktop ]; then
@@ -337,6 +340,7 @@ jobs:
           name: ${{ matrix.artifact-name }}-${{ steps.version.outputs.version }}
           path: |
             falcon-desktop-*${{ steps.version.outputs.version }}*
+            build-desktop/falcon-desktop-*${{ steps.version.outputs.version }}*
           retention-days: 30
 
       - name: Create Nightly Release
@@ -378,6 +382,7 @@ jobs:
             - ✅ 亮色/暗色主题
           files: |
             falcon-desktop-*${{ steps.version.outputs.version }}*
+            build-desktop/falcon-desktop-*${{ steps.version.outputs.version }}*
           draft: false
           prerelease: true
           fail_on_unmatched_files: true
