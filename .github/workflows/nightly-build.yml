@@ -351,7 +351,8 @@ jobs:
           if-no-files-found: error
 
       - name: Clean old Nightly Release assets
-        if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && runner.os != 'Windows'
+        # 只在 Linux 任务中执行，避免多任务冲突
+        if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && matrix.os == 'ubuntu-latest'
         run: |
           # 删除 nightly tag 的所有旧 assets
           gh release view nightly --json assets --jq '.assets[].name' | \
@@ -360,7 +361,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create Nightly Release
-        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        # 只在 Linux 任务中创建 release，避免多任务冲突
+        if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && matrix.os == 'ubuntu-latest'
         uses: softprops/action-gh-release@v3
         timeout-minutes: 10
         with:
