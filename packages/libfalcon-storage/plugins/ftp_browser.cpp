@@ -11,9 +11,9 @@
 // Use spdlog for logging if available
 #ifdef FALCON_USE_SPDLOG
 #include <spdlog/spdlog.h>
-#define LOG_ERROR(msg, ...) spdlog::error(msg, __VA_ARGS__)
-#define LOG_WARN(msg, ...) spdlog::warn(msg, __VA_ARGS__)
-#define LOG_INFO(msg, ...) spdlog::info(msg, __VA_ARGS__)
+#define LOG_ERROR(msg, ...) spdlog::error(msg, ##__VA_ARGS__)
+#define LOG_WARN(msg, ...) spdlog::warn(msg, ##__VA_ARGS__)
+#define LOG_INFO(msg, ...) spdlog::info(msg, ##__VA_ARGS__)
 #else
 // Fallback to simple logger
 #include <iostream>

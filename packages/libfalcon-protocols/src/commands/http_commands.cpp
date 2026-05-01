@@ -332,8 +332,8 @@ bool HttpInitiateConnectionCommand::connect_socket() {
     return true;
 }
 
-bool HttpInitiateConnectionCommand::setup_tls() {
 #ifdef FALCON_ENABLE_OPENSSL
+bool HttpInitiateConnectionCommand::setup_tls() {
     // 初始化 SSL 连接
     if (!ssl_ctx_) {
         // 创建 SSL_CTX
@@ -434,13 +434,16 @@ bool HttpInitiateConnectionCommand::setup_tls() {
     FALCON_LOG_INFO_STREAM("TLS 握手成功，使用加密套件: " << (cipher ? cipher : "unknown"));
 
     return true;
+}
+#endif
 
-#else
-    // 未编译 OpenSSL 支持
+// 当未定义 FALCON_ENABLE_OPENSSL 时，提供存根实现
+#ifndef FALCON_ENABLE_OPENSSL
+bool HttpInitiateConnectionCommand::setup_tls() {
     FALCON_LOG_ERROR_STREAM("HTTPS 支持需要 OpenSSL");
     return false;
-#endif
 }
+#endif
 
 bool HttpInitiateConnectionCommand::prepare_http_request() {
     http_request_ = std::make_shared<HttpRequest>();

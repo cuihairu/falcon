@@ -112,7 +112,9 @@ private:
     bool resolve_host(const std::string& host, std::string& ip);
     bool create_socket();
     bool connect_socket();
+#ifdef FALCON_ENABLE_OPENSSL
     bool setup_tls();
+#endif
     bool prepare_http_request();
     ExecutionResult send_http_request(DownloadEngineV2* engine);
 
