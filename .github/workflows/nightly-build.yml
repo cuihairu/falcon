@@ -209,7 +209,9 @@ jobs:
             --appdir FalconDesktop/AppDir \
             --output appimage
 
-          mv FalconDesktop*.AppImage ../../falcon-desktop-linux-${{ steps.version.outputs.version }}.AppImage
+          # 查找并移动生成的 AppImage
+          ls -la *.AppImage 2>/dev/null || ls -la FalconDesktop*.AppImage 2>/dev/null || true
+          mv *.AppImage ../../falcon-desktop-linux-${{ steps.version.outputs.version }}.AppImage || mv FalconDesktop*.AppImage ../../falcon-desktop-linux-${{ steps.version.outputs.version }}.AppImage || true
 
       - name: Package (macOS)
         if: matrix.os == 'macos-latest'
