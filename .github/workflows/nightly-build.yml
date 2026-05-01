@@ -58,7 +58,7 @@ jobs:
 
       - name: Install dependencies (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
-        timeout-minutes: 10
+        timeout-minutes: 15
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -68,7 +68,18 @@ jobs:
             libssl-dev \
             libxcb-xinerama0 \
             libxcb-cursor0 \
-            patchelf
+            patchelf \
+            wget
+
+          # 安装 linuxdeploy
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage
+          sudo mv linuxdeploy-x86_64.AppImage /usr/local/bin/
+
+          # 安装 linuxdeploy-plugin-qt
+          wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          chmod +x linuxdeploy-plugin-qt-x86_64.AppImage
+          sudo mv linuxdeploy-plugin-qt-x86_64.AppImage /usr/local/bin/
 
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos-latest'
@@ -82,7 +93,9 @@ jobs:
         run: |
           choco install cmake ninja curl -y
           git clone https://github.com/Microsoft/vcpkg.git
-          .\vcpkg\bootstrap-vcpkg.bat
+          cd vcpkg
+          .\bootstrap-vcpkg.bat
+          .\vcpkg install curl:x64-windows
 
       - name: Get version string
         id: version
@@ -148,14 +161,14 @@ jobs:
           cp falcon-cli FalconDesktop/AppDir/usr/bin/ 2>/dev/null || true
           cp falcon-daemon FalconDesktop/AppDir/usr/bin/ 2>/dev/null || true
 
-          # 复制 Qt 库
-          ${Qt6_DIR}/bin/linuxdeploy-x86_64.AppImage \
+          # 使用 linuxdeploy 打包（使用全局安装的版本）
+          /usr/local/bin/linuxdeploy-x86_64.AppImage \
             --appdir FalconDesktop/AppDir \
             --executable FalconDesktop/AppDir/usr/bin/falcon-desktop \
             --plugin qt
 
-          # 打包
-          ${Qt6_DIR}/bin/linuxdeploy-x86_64.AppImage \
+          # 打包为 AppImage
+          /usr/local/bin/linuxdeploy-x86_64.AppImage \
             --appdir FalconDesktop/AppDir \
             --output appimage
 
@@ -201,6 +214,7 @@ jobs:
           macdeployqt FalconDesktop.app -always-overwrite
 
           # 创建 DMG
+          DMG_NAME="falcon-desktop-macos-${{ steps.version.outputs.version }}.dmg"
           create-dmg \
             --volname "Falcon Desktop" \
             --window-pos 200 120 \
@@ -208,8 +222,11 @@ jobs:
             --icon-size 100 \
             --app-drop-link 450 185 \
             --icon FalconDesktop.app 150 185 \
-            falcon-desktop-macos-${{ steps.version.outputs.version }}.dmg \
+            "$DMG_NAME" \
             FalconDesktop.app
+
+          # 移动 DMG 到根目录以便上传
+          mv "$DMG_NAME" ../../
 
       - name: Package (Windows)
         if: matrix.os == 'windows-latest'
@@ -222,12 +239,15 @@ jobs:
           mkdir -p falcon-desktop
           cp falcon-desktop.exe falcon-desktop/
           cp falcon-cli.exe falcon-desktop/ 2>/dev/null || true
-          cp *.dll falcon-desktop/ 2>/dev/null || true
+
+          # 复制 vcpkg DLL
+          cp "${VCPKG_INSTALLATION_ROOT}/installed/x64-windows/bin/"*.dll falcon-desktop/ 2>/dev/null || true
 
           # 使用 windeployqt 部署 Qt 依赖
           "${Qt6_DIR}\\bin\\windeployqt.exe" \
             --release \
             --no-translations \
+            --no-system-d3d-compiler \
             falcon-desktop/falcon-desktop.exe
 
           # 打包为 zip
