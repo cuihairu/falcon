@@ -351,7 +351,7 @@ jobs:
           if-no-files-found: error
 
       - name: Clean old Nightly Release assets
-        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && runner.os != 'Windows'
         run: |
           # 删除 nightly tag 的所有旧 assets
           gh release view nightly --json assets --jq '.assets[].name' | \
