@@ -128,12 +128,20 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+        with:
+          submodules: false
+
+      - name: Setup vcpkg
+        run: |
+          git clone https://github.com/Microsoft/vcpkg.git
+          ./vcpkg/bootstrap-vcpkg.sh
 
       - name: Install dependencies (Ubuntu)
-        timeout-minutes: 5
+        timeout-minutes: 10
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build libcurl4-openssl-dev libssl-dev gcovr nlohmann-json3-dev
+          sudo apt-get install -y cmake ninja-build gcovr
+          ./vcpkg/vcpkg install --triplet x64-linux
 
       - name: Configure CMake
         timeout-minutes: 5
@@ -142,17 +150,13 @@ jobs:
           -DCMAKE_CXX_COMPILER=g++
           -DCMAKE_C_COMPILER=gcc
           -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
           -DFALCON_BUILD_TESTS=ON
           -DFALCON_BUILD_CLI=OFF
           -DFALCON_BUILD_DESKTOP=OFF
           -DFALCON_BUILD_DAEMON=OFF
           -DFALCON_BUILD_EXAMPLES=OFF
           -DFALCON_ENABLE_COVERAGE=ON
-          -DFALCON_ENABLE_HTTP=ON
-          -DFALCON_ENABLE_FTP=ON
-          -DFALCON_ENABLE_CLOUD_STORAGE=ON
-          -DFALCON_ENABLE_RESOURCE_SEARCH=ON
-          -DFALCON_ENABLE_RESOURCE_BROWSER=ON
           -S ${{ github.workspace }}
 
       - name: Build
