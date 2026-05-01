@@ -219,6 +219,13 @@ jobs:
         run: |
           cd build-desktop/bin
 
+          # 检查可执行文件是否存在
+          ls -la
+          if [ ! -f falcon-desktop ]; then
+            echo "ERROR: falcon-desktop not found!"
+            exit 1
+          fi
+
           # 创建 .app 包结构
           mkdir -p FalconDesktop.app/Contents/MacOS
           mkdir -p FalconDesktop.app/Contents/Resources
@@ -312,7 +319,8 @@ jobs:
           Copy-Item "C:\vcpkg\installed\x64-windows\bin\*.dll" falcon-desktop/ -ErrorAction SilentlyContinue
 
           # 使用 windeployqt 部署 Qt 依赖
-          $windeployqt = Join-Path $Env:Qt6_DIR "bin\windeployqt.exe"
+          $qtDir = if ($Env:Qt6_DIR) { $Env:Qt6_DIR } else { $Env:QT_ROOT_DIR }
+          $windeployqt = Join-Path $qtDir "bin\windeployqt.exe"
           & $windeployqt `
             --release `
             --no-translations `
