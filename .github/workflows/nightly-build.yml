@@ -258,9 +258,9 @@ jobs:
             <key>CFBundleInfoDictionaryVersion</key>
             <string>6.0</string>
             <key>LSMinimumSystemVersion</key>
-            <string>10.15</string>
+            <string>11.0</string>
             <key>LSMinimumOSVersion</key>
-            <string>10.15</string>
+            <string>11.0</string>
             <key>NSHighResolutionCapable</key>
             <true/>
             <key>NSSupportsAutomaticTermination</key>
@@ -290,8 +290,16 @@ jobs:
           chmod -R 755 "$APP_BUNDLE"
           find "$APP_BUNDLE" -name "*.dylib" -exec chmod 644 {} \;
 
-          # 临时代码签名（ad-hoc 签名，允许本地运行）
-          codesign --force --deep --sign - "$APP_BUNDLE" 2>/dev/null || true
+          # 先签名所有动态库和框架
+          find "$APP_BUNDLE" -name "*.dylib" -exec codesign --force --deep --sign - {} \; 2>/dev/null || true
+          find "$APP_BUNDLE" -name "*.framework" -exec codesign --force --deep --sign - {} \; 2>/dev/null || true
+
+          # 硬签名应用程序
+          codesign --force --deep --sign - --entitlements - <<< '<plist version="1.0"><dict><key>com.apple.security.get-task-allow</key><true/></dict></plist>' "$APP_BUNDLE" 2>/dev/null || \
+          codesign --force --deep --sign - "$APP_BUNDLE"
+
+          # 验证签名
+          codesign -vvv "$APP_BUNDLE" 2>&1 | head -10 || true
 
           # 创建 DMG
           DMG_NAME="falcon-desktop-macos-${{ steps.version.outputs.version }}.dmg"
