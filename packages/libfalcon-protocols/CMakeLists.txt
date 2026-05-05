@@ -70,12 +70,17 @@ endif()
 # Support both OpenSSL_FOUND (modern) and OPENSSL_FOUND (legacy)
 # When using vcpkg, the targets may not be available during the if() check
 # but will be available when target_link_libraries is called
+message(STATUS "OpenSSL_FOUND: ${OpenSSL_FOUND}, OPENSSL_FOUND: ${OPENSSL_FOUND}")
 if(OpenSSL_FOUND)
+    message(STATUS "Using OpenSSL_FOUND branch")
     target_link_libraries(falcon_protocols PUBLIC OpenSSL::Crypto OpenSSL::SSL)
     target_compile_definitions(falcon_protocols PRIVATE FALCON_USE_OPENSSL FALCON_ENABLE_OPENSSL)
 elseif(OPENSSL_FOUND)
+    message(STATUS "Using OPENSSL_FOUND branch")
     target_link_libraries(falcon_protocols PUBLIC OpenSSL::Crypto OpenSSL::SSL)
     target_compile_definitions(falcon_protocols PRIVATE FALCON_USE_OPENSSL FALCON_ENABLE_OPENSSL)
+else()
+    message(STATUS "OpenSSL not found, TLS support will be disabled")
 endif()
 
 # ============================================================================

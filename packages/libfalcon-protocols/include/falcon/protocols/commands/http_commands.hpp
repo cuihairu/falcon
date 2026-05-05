@@ -20,6 +20,10 @@
 #include <map>
 #include <fstream>
 
+#ifdef FALCON_ENABLE_OPENSSL
+#include <openssl/ssl.h>
+#endif
+
 namespace falcon {
 
 // 前向声明
