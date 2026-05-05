@@ -15,6 +15,12 @@ if(APPLE)
   set(MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in)
 endif()
 
+# Windows 特定设置
+if(WIN32)
+  # GUI 应用（无控制台窗口）
+  set(WIN32_EXECUTABLE TRUE)
+endif()
+
 # 查找 Qt6
 find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network Concurrent)
 find_package(Qt6 OPTIONAL_COMPONENTS LinguistTools)
@@ -72,6 +78,11 @@ set(RESOURCES
     resources.qrc
 )
 
+# Windows 资源文件（图标、版本信息）
+if(WIN32 AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows/app.rc")
+  list(APPEND SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows/app.rc")
+endif()
+
 # 添加资源到可执行文件
 qt_add_resources(falcon-desktop ${RESOURCES})
 
@@ -109,4 +120,24 @@ if(NOT APPLE)
       LIBRARY DESTINATION lib
       ARCHIVE DESTINATION lib
   )
+
+  # Windows: 安装时复制 vcpkg DLL 到输出目录
+  if(WIN32)
+    # 使用 vcpkg 的 applocal 脚本复制运行时 DLL
+    include(GNUInstallDirs)
+    install(CODE "
+      execute_process(COMMAND \"\${CMAKE_COMMAND}\" -E env \
+        \"VCPKG_APPLOCAL_DEPS_INSTALL=1\" \
+        \"\${CMAKE_COMMAND}\" --install . --config Debug --component falcon-desktop \
+        WORKING_DIRECTORY \${CMAKE_BINARY_DIR})
+    " OPTIONAL)
+
+    # 或者直接复制 vcpkg 的 bin 目录内容
+    if(DEFINED VCPKG_INSTALLED_DIR)
+      install(DIRECTORY \${VCPKG_INSTALLED_DIR}/x64-windows/bin/
+          DESTINATION bin
+          FILES_MATCHING PATTERN \"*.dll\"
+      )
+    endif()
+  endif()
 endif()

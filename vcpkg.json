@@ -18,5 +18,19 @@
       "version>=": "1.12.0"
     }
   ],
-  "builtin-baseline": "f5cbc726b123896eef77f5acc1b9047a28a0731e"
+  "features": {
+    "desktop": {
+      "description": "Build desktop GUI application",
+      "dependencies": [
+        {
+          "name": "qtbase",
+          "features": [
+            "widgets",
+            "network"
+          ]
+        }
+      ]
+    }
+  },
+  "builtin-baseline": "cf9b6f1a47898a888f9e86e346a9adfa68357380"
 }
