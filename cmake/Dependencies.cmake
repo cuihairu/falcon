@@ -41,6 +41,15 @@ if(FALCON_ENABLE_HTTP OR FALCON_ENABLE_FTP)
     endif()
 endif()
 
+# OpenSSL - TLS/SSL support (Optional, for HTTPS)
+# ============================================================================
+find_package(OpenSSL QUIET)
+if(OpenSSL_FOUND)
+    message(STATUS "Found OpenSSL: TLS support enabled")
+else()
+    message(STATUS "OpenSSL not found: TLS support disabled")
+endif()
+
 # ============================================================================
 # libtorrent-rasterbar - BitTorrent support (Optional)
 # ============================================================================
