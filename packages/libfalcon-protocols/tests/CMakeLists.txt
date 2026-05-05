@@ -106,8 +106,10 @@ if(FALCON_ENABLE_FTP)
 endif()
 
 # Pass OpenSSL availability to test code
-if(OPENSSL_FOUND AND TARGET OpenSSL::Crypto)
-    target_compile_definitions(falcon_protocols_tests PRIVATE FALCON_HAS_OPENSSL)
+if(OpenSSL_FOUND)
+    target_compile_definitions(falcon_protocols_tests PRIVATE FALCON_ENABLE_OPENSSL)
+elseif(OPENSSL_FOUND)
+    target_compile_definitions(falcon_protocols_tests PRIVATE FALCON_ENABLE_OPENSSL)
 endif()
 
 # Protocols tests may need storage headers (cloud_url_protocols.hpp)
@@ -142,6 +144,13 @@ add_test_includes(falcon_http_tests)
 
 if(FALCON_ENABLE_HTTP)
     target_compile_definitions(falcon_http_tests PRIVATE FALCON_ENABLE_HTTP)
+endif()
+
+# Pass OpenSSL availability to test code
+if(OpenSSL_FOUND)
+    target_compile_definitions(falcon_http_tests PRIVATE FALCON_ENABLE_OPENSSL)
+elseif(OPENSSL_FOUND)
+    target_compile_definitions(falcon_http_tests PRIVATE FALCON_ENABLE_OPENSSL)
 endif()
 
 target_include_directories(falcon_http_tests PRIVATE
@@ -196,6 +205,13 @@ endif()
 if(CURL_FOUND)
     target_link_libraries(falcon_integration_tests PRIVATE CURL::libcurl)
     target_compile_definitions(falcon_integration_tests PRIVATE FALCON_TEST_CURL_AVAILABLE)
+endif()
+
+# Pass OpenSSL availability to test code
+if(OpenSSL_FOUND)
+    target_compile_definitions(falcon_integration_tests PRIVATE FALCON_ENABLE_OPENSSL)
+elseif(OPENSSL_FOUND)
+    target_compile_definitions(falcon_integration_tests PRIVATE FALCON_ENABLE_OPENSSL)
 endif()
 
 # ============================================================================
