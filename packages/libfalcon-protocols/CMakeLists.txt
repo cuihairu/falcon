@@ -68,10 +68,12 @@ if(CURL_FOUND)
 endif()
 
 # Support both OpenSSL_FOUND (modern) and OPENSSL_FOUND (legacy)
-if(OpenSSL_FOUND AND TARGET OpenSSL::Crypto AND TARGET OpenSSL::SSL)
+# When using vcpkg, the targets may not be available during the if() check
+# but will be available when target_link_libraries is called
+if(OpenSSL_FOUND)
     target_link_libraries(falcon_protocols PUBLIC OpenSSL::Crypto OpenSSL::SSL)
     target_compile_definitions(falcon_protocols PRIVATE FALCON_USE_OPENSSL FALCON_ENABLE_OPENSSL)
-elseif(OPENSSL_FOUND AND TARGET OpenSSL::Crypto AND TARGET OpenSSL::SSL)
+elseif(OPENSSL_FOUND)
     target_link_libraries(falcon_protocols PUBLIC OpenSSL::Crypto OpenSSL::SSL)
     target_compile_definitions(falcon_protocols PRIVATE FALCON_USE_OPENSSL FALCON_ENABLE_OPENSSL)
 endif()
