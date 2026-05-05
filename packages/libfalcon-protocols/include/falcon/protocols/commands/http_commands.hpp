@@ -248,6 +248,7 @@ private:
     const DownloadOptions& options_;  // 引用下载选项
 
     // TLS/HTTPS 支持
+    bool use_https_ = false;
 #ifdef FALCON_ENABLE_OPENSSL
     void* ssl_conn_ = nullptr;  // SSL* 指针
 #endif

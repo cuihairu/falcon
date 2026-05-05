@@ -386,9 +386,6 @@ bool HttpInitiateConnectionCommand::setup_tls() {
         if (!SSL_CTX_set_default_verify_paths(ssl_ctx_)) {
             FALCON_LOG_WARN_STREAM("无法加载默认 CA 证书，继续使用系统证书");
         }
-
-        // 设置 SNI (Server Name Indication)
-        SSL_CTX_set_tlsext_host_name(ssl_ctx_, host_.c_str());
     }
 
     // 创建 SSL 连接
@@ -568,11 +565,12 @@ HttpResponseCommand::HttpResponseCommand(
 #ifdef FALCON_ENABLE_OPENSSL
     , void* ssl_conn
 #endif
-    , bool /*use_https*/)
+    , bool use_https)
     : AbstractCommand(task_id)
     , socket_fd_(socket_fd)
     , http_request_(std::move(request))
     , options_(options)
+    , use_https_(use_https)
 #ifdef FALCON_ENABLE_OPENSSL
     , ssl_conn_(ssl_conn)
 #endif
