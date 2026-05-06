@@ -49,15 +49,7 @@ MainWindow::MainWindow(QWidget* parent)
     , theme_manager_(nullptr)
     , download_engine_(nullptr)
 {
-    setup_ui();
-    setup_clipboard_monitor();
-    setup_system_tray();
-    load_settings();
-    apply_settings_to_runtime();
-    setup_ipc_server();
-    ensure_download_engine();
-
-    // 初始化主题管理器
+    // 初始化主题管理器（必须在 setup_ui 之前）
     theme_manager_ = new ThemeManager(this);
     // 从设置加载主题
     QSettings settings;
@@ -65,6 +57,14 @@ MainWindow::MainWindow(QWidget* parent)
     const QString theme_str = settings.value("theme", "light").toString();
     settings.endGroup();
     theme_manager_->set_theme(theme_str == "dark" ? ThemeType::Dark : ThemeType::Light);
+
+    setup_ui();
+    setup_clipboard_monitor();
+    setup_system_tray();
+    load_settings();
+    apply_settings_to_runtime();
+    setup_ipc_server();
+    ensure_download_engine();
 }
 
 MainWindow::~MainWindow()
@@ -79,9 +79,8 @@ MainWindow::~MainWindow()
 
 void MainWindow::setup_ui()
 {
-    // 启用自定义标题栏
+    // 启用自定义标题栏（无边框窗口）
     setWindowFlags(Qt::WindowType::FramelessWindowHint);
-    setAttribute(Qt::WA_TranslucentBackground);
 
     resize(1200, 800);
 
