@@ -7,7 +7,7 @@
 
 #pragma once
 
-#include "../base_protocol_plugin.hpp"
+#include <falcon/protocol_handler.hpp>
 #include <string>
 #include <vector>
 #include <memory>
@@ -34,7 +34,7 @@ namespace protocols {
  * 支持 .torrent 文件和 magnet:// 链接下载
  * 基于自定义实现或 libtorrent 库
  */
-class BitTorrentPlugin : public BaseProtocolPlugin {
+class BitTorrentPlugin : public IProtocolHandler {
 public:
     /**
      * @brief 构造函数

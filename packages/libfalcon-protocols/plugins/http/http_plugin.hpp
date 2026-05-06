@@ -23,7 +23,7 @@ namespace protocols {
  * 基于 libcurl 实现的 HTTP/HTTPS 下载插件
  * 支持断点续传、分块下载、速度控制等功能
  */
-class HttpPlugin : public BaseProtocolPlugin {
+class HttpPlugin : public IProtocolHandler {
 public:
     /**
      * @brief 构造函数

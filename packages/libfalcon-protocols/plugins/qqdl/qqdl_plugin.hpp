@@ -7,7 +7,7 @@
 
 #pragma once
 
-#include "../base_protocol_plugin.hpp"
+#include <falcon/protocol_handler.hpp>
 #include <string>
 #include <vector>
 #include <memory>
@@ -22,7 +22,7 @@ namespace protocols {
  * 支持 qqlink:// 格式的链接解析和下载
  * QQ旋风链接是对原始 URL 经过特定编码和加密后的结果
  */
-class QQDLPlugin : public BaseProtocolPlugin {
+class QQDLPlugin : public IProtocolHandler {
 public:
     /**
      * @brief 构造函数

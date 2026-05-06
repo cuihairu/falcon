@@ -7,7 +7,7 @@
 
 #pragma once
 
-#include "../base_protocol_plugin.hpp"
+#include <falcon/protocol_handler.hpp>
 #include <string>
 #include <vector>
 #include <memory>
@@ -23,7 +23,7 @@ namespace protocols {
  * 支持 ed2k:// 格式的链接解析和下载
  * ED2K 是 eDonkey2000 网络使用的协议，也被称为电驴协议
  */
-class ED2KPlugin : public BaseProtocolPlugin {
+class ED2KPlugin : public IProtocolHandler {
 public:
     /**
      * @brief 构造函数

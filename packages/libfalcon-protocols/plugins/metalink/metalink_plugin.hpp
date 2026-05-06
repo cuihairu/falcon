@@ -7,7 +7,7 @@
 
 #pragma once
 
-#include "../base_protocol_plugin.hpp"
+#include <falcon/protocol_handler.hpp>
 #include <string>
 #include <vector>
 #include <memory>
@@ -48,7 +48,7 @@ struct MetalinkFile {
  * 支持 Metalink v4 文件格式
  * 提供多源下载、镜像选择、校验和验证功能
  */
-class MetalinkPlugin : public BaseProtocolPlugin {
+class MetalinkPlugin : public IProtocolHandler {
 public:
     /**
      * @brief 构造函数

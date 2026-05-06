@@ -7,7 +7,7 @@
 
 #pragma once
 
-#include "../base_protocol_plugin.hpp"
+#include <falcon/protocol_handler.hpp>
 #include <string>
 #include <vector>
 #include <memory>
@@ -22,7 +22,7 @@ namespace protocols {
  * 支持 flashget:// 格式的链接解析和下载
  * FlashGet 链接通常包含 URL 和引用站点信息
  */
-class FlashGetPlugin : public BaseProtocolPlugin {
+class FlashGetPlugin : public IProtocolHandler {
 public:
     /**
      * @brief 构造函数

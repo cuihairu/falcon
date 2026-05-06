@@ -7,7 +7,7 @@
 
 #pragma once
 
-#include "../base_protocol_plugin.hpp"
+#include <falcon/protocol_handler.hpp>
 #include <string>
 #include <vector>
 #include <memory>
@@ -22,7 +22,7 @@ namespace protocols {
  * 支持 thunder:// 和 thunderxl:// 格式的链接解析和下载
  * 迅雷链接是对原始 URL 经过 Base64 编码和特定算法处理后的结果
  */
-class ThunderPlugin : public BaseProtocolPlugin {
+class ThunderPlugin : public IProtocolHandler {
 public:
     /**
      * @brief 构造函数

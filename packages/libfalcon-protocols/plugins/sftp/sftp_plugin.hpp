@@ -7,7 +7,7 @@
 
 #pragma once
 
-#include "../base_protocol_plugin.hpp"
+#include <falcon/protocol_handler.hpp>
 #include <string>
 #include <vector>
 #include <memory>
@@ -28,7 +28,7 @@ namespace protocols {
  * 支持 SFTP (SSH File Transfer Protocol) 下载
  * 基于 libssh 库实现
  */
-class SFTPPlugin : public BaseProtocolPlugin {
+class SFTPPlugin : public IProtocolHandler {
 public:
     /**
      * @brief 构造函数

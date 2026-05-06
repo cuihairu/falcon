@@ -7,7 +7,7 @@
 
 #pragma once
 
-#include "../base_protocol_plugin.hpp"
+#include <falcon/protocol_handler.hpp>
 #include <string>
 #include <vector>
 #include <memory>
@@ -22,7 +22,7 @@ namespace protocols {
  *
  * 支持 HLS (.m3u8) 和 DASH (.mpd) 流媒体下载
  */
-class HLSPlugin : public BaseProtocolPlugin {
+class HLSPlugin : public IProtocolHandler {
 public:
     /**
      * @brief 构造函数
