@@ -75,6 +75,11 @@ QMainWindow {
     background-color: #f5f5f5;
 }
 
+/* 中心部件（用于无边框透明窗口的背景） */
+#centralWidget {
+    background-color: #f5f5f5;
+}
+
 /* 标题栏 */
 #topBar {
     background-color: #ffffff;
@@ -504,6 +509,11 @@ QWidget {
 
 /* 主窗口 */
 QMainWindow {
+    background-color: #121212;
+}
+
+/* 中心部件（用于无边框透明窗口的背景） */
+#centralWidget {
     background-color: #121212;
 }
 

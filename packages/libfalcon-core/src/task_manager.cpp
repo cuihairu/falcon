@@ -747,6 +747,11 @@ private:
 
                 if (!running_) break;
 
+                // 超时返回时队列可能为空，再次检查
+                if (task_queue_.empty()) {
+                    continue;
+                }
+
                 // 获取任务
                 item = task_queue_.top();
                 task_queue_.pop();

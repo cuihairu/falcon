@@ -10,15 +10,30 @@ set(CMAKE_AUTOUIC ON)
 # macOS 特定设置
 if(APPLE)
   set(CMAKE_OSX_DEPLOYMENT_TARGET "10.15" CACHE STRING "Minimum macOS version" FORCE)
-  set(CMAKE_MACOSX_BUNDLE TRUE)
-  set(CMAKE_MACOSX_BUNDLE_GUI_TYPE "FBND")
-  set(MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in)
+  # 打包脚本会手动创建 .app，这里禁用自动创建
+  # set(CMAKE_MACOSX_BUNDLE TRUE)
+  # set(CMAKE_MACOSX_BUNDLE_GUI_TYPE "FBND")
+  # set(MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in)
 endif()
 
 # Windows 特定设置
 if(WIN32)
   # GUI 应用（无控制台窗口）
   set(WIN32_EXECUTABLE TRUE)
+endif()
+
+# 修复 vcpkg freetype BZip2 依赖问题
+# freetype 引用了 BZip2::BZip2 但 vcpkg bzip2 没有提供该目标
+# 必须在 find_package(Qt6) 之前设置，因为 Qt6 依赖 harfbuzz -> freetype -> bzip2
+if(NOT TARGET BZip2::BZip2)
+  if(EXISTS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib/libbz2.a")
+    # 手动创建 BZip2::BZip2 目标
+    add_library(BZip2::BZip2 STATIC IMPORTED GLOBAL)
+    set_target_properties(BZip2::BZip2 PROPERTIES
+      IMPORTED_LOCATION "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib/libbz2.a"
+      INTERFACE_INCLUDE_DIRECTORIES "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include"
+    )
+  endif()
 endif()
 
 # 查找 Qt6

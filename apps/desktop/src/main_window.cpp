@@ -85,8 +85,9 @@ void MainWindow::setup_ui()
 
     resize(1200, 800);
 
-    // 创建中心部件
+    // 创建中心部件（设置不透明背景，否则窗口会透明）
     auto* central_widget = new QWidget(this);
+    central_widget->setObjectName("centralWidget");  // 用于 QSS 样式
     setCentralWidget(central_widget);
 
     // 主布局（垂直：顶部栏 + 内容区域 + 状态栏）
