@@ -6,6 +6,9 @@
 #ifdef FALCON_ENABLE_FTP_PLUGIN
 #include "../plugins/ftp/ftp_handler.hpp"
 #endif
+#ifdef FALCON_ENABLE_BT_PLUGIN
+#include "../plugins/bittorrent/bittorrent_plugin.hpp"
+#endif
 
 namespace falcon {
 
@@ -76,6 +79,10 @@ void register_builtin_protocol_handlers(ProtocolRegistry& registry) {
 
 #ifdef FALCON_ENABLE_FTP_PLUGIN
     registry.register_handler(protocols::create_ftp_handler());
+#endif
+
+#ifdef FALCON_ENABLE_BT_PLUGIN
+    registry.register_handler(protocols::create_bittorrent_handler());
 #endif
 }
 

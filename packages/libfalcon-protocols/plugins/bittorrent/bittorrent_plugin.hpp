@@ -12,6 +12,10 @@
 #include <vector>
 #include <memory>
 #include <map>
+#include <thread>
+#include <mutex>
+#include <atomic>
+#include <condition_variable>
 
 // 如果使用 libtorrent
 #ifdef FALCON_USE_LIBTORRENT
@@ -28,201 +32,115 @@ namespace falcon {
 namespace protocols {
 
 /**
- * @class BitTorrentPlugin
+ * @class BitTorrentHandler
  * @brief BitTorrent/Magnet 协议处理器
  *
  * 支持 .torrent 文件和 magnet:// 链接下载
  * 基于自定义实现或 libtorrent 库
  */
-class BitTorrentPlugin : public IProtocolHandler {
+class BitTorrentHandler : public IProtocolHandler {
 public:
     /**
      * @brief 构造函数
      */
-    BitTorrentPlugin();
+    BitTorrentHandler();
 
     /**
      * @brief 析构函数
      */
-    virtual ~BitTorrentPlugin();
+    ~BitTorrentHandler() override;
 
-    // ProtocolPlugin 接口实现
-    std::string getProtocolName() const override { return "bittorrent"; }
-    std::vector<std::string> getSupportedSchemes() const override;
-    bool canHandle(const std::string& url) const override;
-    std::unique_ptr<IDownloadTask> createTask(const std::string& url,
-                                            const DownloadOptions& options) override;
+    // Non-copyable
+    BitTorrentHandler(const BitTorrentHandler&) = delete;
+    BitTorrentHandler& operator=(const BitTorrentHandler&) = delete;
+
+    // IProtocolHandler 接口实现
+    [[nodiscard]] std::string protocol_name() const override { return "bittorrent"; }
+
+    [[nodiscard]] std::vector<std::string> supported_schemes() const override;
+
+    [[nodiscard]] bool can_handle(const std::string& url) const override;
+
+    [[nodiscard]] FileInfo get_file_info(const std::string& url,
+                                         const DownloadOptions& options) override;
+
+    void download(DownloadTask::Ptr task, IEventListener* listener) override;
+
+    void pause(DownloadTask::Ptr task) override;
+
+    void resume(DownloadTask::Ptr task, IEventListener* listener) override;
+
+    void cancel(DownloadTask::Ptr task) override;
+
+    [[nodiscard]] bool supports_resume() const override { return true; }
+
+    [[nodiscard]] int priority() const override { return 50; }
 
 private:
-    /**
-     * @brief BitTorrent 下载任务
-     */
-    class BitTorrentDownloadTask : public IDownloadTask {
-    public:
-        BitTorrentDownloadTask(const std::string& url, const DownloadOptions& options);
-        virtual ~BitTorrentDownloadTask();
-
-        // IDownloadTask 接口实现
-        void start() override;
-        void pause() override;
-        void resume() override;
-        void cancel() override;
-        TaskStatus getStatus() const override;
-        float getProgress() const override;
-        uint64_t getTotalBytes() const override;
-        uint64_t getDownloadedBytes() const override;
-        uint64_t getSpeed() const override;
-        std::string getErrorMessage() const override;
-
-    private:
 #ifdef FALCON_USE_LIBTORRENT
-        libtorrent::session session_;
-        libtorrent::torrent_handle handle_;
-        libtorrent::add_torrent_params params_;
+    libtorrent::session session_;
 #else
-        // 纯 C++ 实现所需的数据结构
-        struct TorrentInfo {
-            std::string name;
-            std::string infoHash;      // 20 字节 SHA1 哈希
-            uint64_t totalSize = 0;
-            uint64_t pieceLength = 0;
-            int pieceCount = 0;
-            std::vector<std::string> pieces;  // SHA1 哈希列表
-            std::vector<FileInfo> files;
-            std::vector<std::string> trackers;
-            std::string comment;
-            std::string createdBy;
-        };
+    // 纯 C++ 实现所需的数据结构
+    struct TorrentInfo {
+        std::string name;
+        std::string infoHash;      // 20 字节 SHA1 哈希
+        uint64_t totalSize = 0;
+        uint64_t pieceLength = 0;
+        int pieceCount = 0;
+        std::vector<std::string> pieces;  // SHA1 哈希列表
+        std::vector<TorrentFileInfo> files;
+        std::vector<std::string> trackers;
+        std::string comment;
+        std::string createdBy;
+    };
 
-        struct PeerInfo {
-            std::string ip;
-            uint16_t port;
-            std::string peerId;        // 20 字节
-            bool isSeed = false;
-            uint64_t downloaded = 0;
-            uint64_t uploaded = 0;
-        };
+    struct TorrentFileInfo {
+        std::string name;
+        uint64_t size;
+        std::string path;
+    };
 
-        struct PieceState {
-            std::vector<bool> havePiece;      // 已下载的 piece
-            std::vector<bool> requestedPiece; // 已请求的 piece
-            std::vector<bool> downloadingPiece; // 正在下载的 piece
-            std::vector<std::vector<uint8_t>> pieceData; // piece 数据
-        };
+    struct PeerInfo {
+        std::string ip;
+        uint16_t port;
+        std::string peerId;        // 20 字节
+        bool isSeed = false;
+        uint64_t downloaded = 0;
+        uint64_t uploaded = 0;
+    };
 
-        TorrentInfo torrentInfo_;
-        std::vector<PeerInfo> peers_;
-        PieceState pieceState_;
-        std::thread downloadThread_;
-        std::atomic<bool> running_;
-        std::atomic<bool> paused_;
-#endif
+    struct PieceState {
+        std::vector<bool> havePiece;      // 已下载的 piece
+        std::vector<bool> requestedPiece; // 已请求的 piece
+        std::vector<bool> downloadingPiece; // 正在下载的 piece
+        std::vector<std::vector<uint8_t>> pieceData; // piece 数据
+    };
 
-        std::string url_;
-        DownloadOptions options_;
-        TaskStatus status_;
-        std::string errorMessage_;
+    struct TaskContext {
+        std::string url;
+        DownloadTask::Ptr task;
+        IEventListener* listener = nullptr;
+        TorrentInfo torrentInfo;
+        std::vector<PeerInfo> peers;
+        PieceState pieceState;
+        std::thread downloadThread;
+        std::atomic<bool> running{false};
+        std::atomic<bool> paused{false};
+        std::atomic<bool> cancelled{false};
+        std::mutex mutex;
+        std::condition_variable cv;
 
         // 统计信息
-        uint64_t totalSize_;
-        uint64_t downloadedBytes_;
-        uint64_t uploadBytes_;
-        uint64_t downloadSpeed_;
-        uint64_t uploadSpeed_;
-
-        // 文件信息
-        struct FileInfo {
-            std::string name;
-            uint64_t size;
-            std::string path;
-        };
-        std::vector<FileInfo> files_;
-
-        // 线程安全
-        mutable std::mutex mutex_;
-
-        /**
-         * @brief 解析 torrent 文件
-         */
-        bool parseTorrentFile(const std::string& filePath);
-
-        /**
-         * @brief 解析 magnet 链接
-         */
-        bool parseMagnetUri(const std::string& magnetUri);
-
-        /**
-         * @brief 更新下载统计
-         */
-        void updateStats();
-
-        /**
-         * @brief 选择要下载的文件
-         */
-        void selectFiles();
-
-        /**
-         * @brief 设置下载优先级
-         */
-        void setFilePriorities();
-
-        /**
-         * @brief 处理警报
-         */
-        void handleAlerts();
-
-#ifndef FALCON_USE_LIBTORRENT
-        /**
-         * @brief 纯 C++ 实现：启动下载线程
-         */
-        void startDownloadThread();
-
-        /**
-         * @brief 纯 C++ 实现：连接到 tracker
-         */
-        bool connectToTracker(const std::string& trackerUrl);
-
-        /**
-         * @brief 纯 C++ 实现：DHT 查找
-         */
-        bool findPeersViaDHT();
-
-        /**
-         * @brief 纯 C++ 实现：连接到对等端
-         */
-        bool connectToPeer(const PeerInfo& peer);
-
-        /**
-         * @brief 纯 C++ 实现：下载 piece
-         */
-        bool downloadPiece(int pieceIndex);
-
-        /**
-         * @brief 纯 C++ 实现：验证 piece
-         */
-        bool verifyPiece(int pieceIndex, const std::vector<uint8_t>& data);
-
-        /**
-         * @brief 纯 C++ 实现：写入 piece 到磁盘
-         */
-        bool writePiece(int pieceIndex, const std::vector<uint8_t>& data);
-
-        /**
-         * @brief 纯 C++ 实现：读取 piece 从磁盘
-         */
-        std::vector<uint8_t> readPiece(int pieceIndex);
-
-        /**
-         * @brief 纯 C++ 实现：请求 peer 的 piece
-         */
-        bool requestPiece(const PeerInfo& peer, int pieceIndex, int begin, int length);
-
-        /**
-         * @brief 纯 C++ 实现：处理 peer 消息
-         */
-        void handlePeerMessages(const PeerInfo& peer);
-#endif
+        uint64_t totalSize = 0;
+        uint64_t downloadedBytes = 0;
+        uint64_t uploadBytes = 0;
+        uint64_t downloadSpeed = 0;
+        uint64_t uploadSpeed = 0;
     };
+
+    std::map<TaskId, std::unique_ptr<TaskContext>> activeTasks_;
+    std::mutex tasksMutex_;
+#endif
 
     /**
      * @brief 解析 B 编码数据
@@ -276,6 +194,9 @@ private:
      */
     std::string urlDecode(const std::string& url);
 };
+
+/// Factory function to create BitTorrent handler
+std::unique_ptr<IProtocolHandler> create_bittorrent_handler();
 
 } // namespace protocols
 } // namespace falcon
