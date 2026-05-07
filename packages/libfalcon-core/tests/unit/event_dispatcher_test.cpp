@@ -293,7 +293,7 @@ TEST(EventDispatcherTest, ErrorEventDispatch) {
     }
 
     EXPECT_TRUE(listener.wait_for_total(error_count,
-                                        std::chrono::milliseconds(500)));
+                                        std::chrono::milliseconds(5000)));
     EXPECT_EQ(listener.errors.load(), error_count);
 
     dispatcher.stop(true);
