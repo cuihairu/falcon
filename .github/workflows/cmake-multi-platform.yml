@@ -94,7 +94,7 @@ jobs:
 
       - name: Configure CMake (Windows)
         if: matrix.os == 'windows-latest'
-        timeout-minutes: 5
+        timeout-minutes: 15
         run: >
           cmake -B ${{ steps.strings.outputs.build-output-dir }}
           -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
