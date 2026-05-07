@@ -37,8 +37,17 @@ TEST_F(FtpHandlerTest, ProtocolRegistryLoadsFtpHandler) {
     bool has_ftp = std::find(schemes.begin(), schemes.end(), "ftp") != schemes.end();
     bool has_ftps = std::find(schemes.begin(), schemes.end(), "ftps") != schemes.end();
 
-    // 至少应该有一个 FTP 相关的协议
-    EXPECT_TRUE(has_ftp || has_ftps);
+#ifdef FALCON_ENABLE_FTP_PLUGIN
+    // 当 FTP 插件已启用时，至少应该有一个 FTP 相关的协议
+    EXPECT_TRUE(has_ftp || has_ftps) << "FTP plugin is enabled but neither ftp nor ftps scheme is registered";
+#else
+    // 当 FTP 插件未启用时（例如缺少 libcurl），不应该有 ftp/ftps
+    if (has_ftp || has_ftps) {
+        GTEST_SKIP() << "FTP plugin not enabled in this build (requires libcurl), but ftp/ftps schemes are registered. Skipping.";
+    } else {
+        GTEST_SKIP() << "FTP plugin not enabled in this build (requires libcurl). Skipping.";
+    }
+#endif
 }
 
 //==============================================================================
