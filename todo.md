@@ -627,8 +627,8 @@ feature 候选：
   - 支持磁力链接、HTTP、网盘、FTP 资源搜索
   - 后台线程搜索实现
   - 搜索结果回调机制
-- ⏳ 完整的多线程分段下载
-- ⏳ BitTorrent 插件与 DHT/PEX 集成
+- ✅ 完整的多线程分段下载（SegmentDownloader 737 行，多线程并行）
+- ⏳ BitTorrent 插件与 DHT/PEX 集成（需要完整 libtorrent 集成）
 
 **待实现：**
 - ✅ CloudPage 与 libfalcon-storage 的完整 C++ 绑定
