@@ -6,54 +6,144 @@
  */
 
 #include "qqdl_plugin.hpp"
-#include <falcon/http_plugin.hpp>
 #include <falcon/logger.hpp>
 #include <falcon/exceptions.hpp>
+#include <falcon/protocol_registry.hpp>
 #include <regex>
 #include <sstream>
-#include <openssl/md5.h>
 #include <iomanip>
+#include <chrono>
+
+#ifndef OPENSSL_IS_BORINGSSL
+#include <openssl/bio.h>
+#include <openssl/evp.h>
+#else
+#include <boringssl/bio.h>
+#include <boringssl/evp.h>
+#endif
 
 namespace falcon {
 namespace protocols {
 
-QQDLPlugin::QQDLPlugin() {
-    FALCON_LOG_INFO("QQDL plugin initialized");
+//==============================================================================
+// QQDLHandler 实现
+//==============================================================================
+
+QQDLHandler::QQDLHandler() {
+    FALCON_LOG_INFO("QQDL handler initialized");
 }
 
-std::vector<std::string> QQDLPlugin::getSupportedSchemes() const {
+QQDLHandler::~QQDLHandler() {
+    std::lock_guard<std::mutex> lock(tasksMutex_);
+    for (auto& pair : activeTasks_) {
+        if (pair.second->running.load()) {
+            pair.second->cancelled.store(true);
+            pair.second->running.store(false);
+            if (pair.second->downloadThread.joinable()) {
+                pair.second->downloadThread.join();
+            }
+        }
+    }
+    activeTasks_.clear();
+}
+
+std::vector<std::string> QQDLHandler::supported_schemes() const {
     return {"qqlink", "qqdl"};
 }
 
-bool QQDLPlugin::canHandle(const std::string& url) const {
+bool QQDLHandler::can_handle(const std::string& url) const {
     return url.find("qqlink://") == 0 || url.find("qqdl://") == 0;
 }
 
-std::unique_ptr<IDownloadTask> QQDLPlugin::createTask(const std::string& url,
-                                                     const DownloadOptions& options) {
-    FALCON_LOG_DEBUG("Creating QQDL task for: {}", url);
+FileInfo QQDLHandler::get_file_info(const std::string& url,
+                                    const DownloadOptions& options) {
+    FileInfo info;
+    info.url = url;
+    info.supports_resume = true;
 
-    // 解析QQ旋风链接
-    std::string originalUrl;
     try {
-        originalUrl = parseQQUrl(url);
+        std::string originalUrl = parseQQUrl(url);
+        info.filename = "download";
+        info.total_size = 0;
     } catch (const std::exception& e) {
         FALCON_LOG_ERROR("Failed to parse QQDL URL: {}", e.what());
         throw InvalidURLException("Invalid QQDL URL: " + url);
     }
 
-    FALCON_LOG_DEBUG("Resolved QQDL URL to: {}", originalUrl);
-
-    // 创建 HTTP 任务来下载原始链接
-    auto httpPlugin = std::make_unique<HttpPlugin>();
-    if (!httpPlugin->canHandle(originalUrl)) {
-        throw UnsupportedProtocolException("Resolved URL not supported: " + originalUrl);
-    }
-
-    return httpPlugin->createTask(originalUrl, options);
+    return info;
 }
 
-std::string QQDLPlugin::parseQQUrl(const std::string& qqUrl) {
+void QQDLHandler::download(DownloadTask::Ptr task, IEventListener* listener) {
+    try {
+        std::string originalUrl = parseQQUrl(task->url());
+
+        FALCON_LOG_INFO("Starting QQDL download, resolved to: {}", originalUrl);
+
+        auto ctx = std::make_shared<TaskContext>();
+        ctx->task = task;
+        ctx->listener = listener;
+        ctx->decodedUrl = originalUrl;
+        ctx->running.store(true);
+        ctx->downloadedBytes = 0;
+
+        {
+            std::lock_guard<std::mutex> lock(tasksMutex_);
+            activeTasks_[task->id()] = ctx;
+        }
+
+        ctx->downloadThread = std::thread([this, ctx]() {
+            downloadThreadMain(ctx);
+        });
+
+        task->mark_started();
+
+    } catch (const std::exception& e) {
+        FALCON_LOG_ERROR("Failed to start QQDL download: {}", e.what());
+        task->set_error(e.what());
+        throw;
+    }
+}
+
+void QQDLHandler::pause(DownloadTask::Ptr task) {
+    std::lock_guard<std::mutex> lock(tasksMutex_);
+    auto it = activeTasks_.find(task->id());
+    if (it != activeTasks_.end()) {
+        it->second->paused.store(true);
+        FALCON_LOG_DEBUG("QQDL download paused: {}", task->id());
+    }
+}
+
+void QQDLHandler::resume(DownloadTask::Ptr task, IEventListener* listener) {
+    std::lock_guard<std::mutex> lock(tasksMutex_);
+    auto it = activeTasks_.find(task->id());
+    if (it != activeTasks_.end()) {
+        it->second->paused.store(false);
+        it->second->listener = listener;
+        FALCON_LOG_DEBUG("QQDL download resumed: {}", task->id());
+    }
+}
+
+void QQDLHandler::cancel(DownloadTask::Ptr task) {
+    std::lock_guard<std::mutex> lock(tasksMutex_);
+    auto it = activeTasks_.find(task->id());
+    if (it != activeTasks_.end()) {
+        it->second->cancelled.store(true);
+        it->second->running.store(false);
+
+        if (it->second->downloadThread.joinable()) {
+            it->second->downloadThread.join();
+        }
+
+        activeTasks_.erase(it);
+        FALCON_LOG_INFO("QQDL download cancelled: {}", task->id());
+    }
+}
+
+//==============================================================================
+// 私有方法实现
+//==============================================================================
+
+std::string QQDLHandler::parseQQUrl(const std::string& qqUrl) {
     std::regex qqRegex(R"(^(qqlink|qqdl)://(.+)$)");
     std::smatch match;
 
@@ -65,7 +155,7 @@ std::string QQDLPlugin::parseQQUrl(const std::string& qqUrl) {
     return decodeQQUrl(encoded);
 }
 
-std::string QQDLPlugin::decodeQQUrl(const std::string& encoded) {
+std::string QQDLHandler::decodeQQUrl(const std::string& encoded) {
     // QQ旋风链接通常有以下几种格式：
     // 1. qqlink://[Base64编码的URL]
     // 2. qqlink://[GID]|[文件信息]
@@ -75,19 +165,17 @@ std::string QQDLPlugin::decodeQQUrl(const std::string& encoded) {
     if (encoded.find('|') != std::string::npos) {
         // GID格式解析
         std::istringstream iss(encoded);
-        std::string gid;
         std::string fileInfo;
 
-        std::getline(iss, gid, '|');
+        // 跳过GID，获取文件信息
+        std::getline(iss, fileInfo, '|');
         std::getline(iss, fileInfo);
 
-        if (!isValidGid(gid)) {
-            throw InvalidURLException("Invalid GID format");
-        }
-
-        // 解析文件信息
-        DownloadInfo info = parseDownloadInfo(fileInfo);
-        return info.url;
+        // 简化处理：假设第一个字段是URL
+        std::istringstream fis(fileInfo);
+        std::string url;
+        std::getline(fis, url, '|');
+        return url;
     } else {
         // Base64编码格式
         try {
@@ -99,9 +187,15 @@ std::string QQDLPlugin::decodeQQUrl(const std::string& encoded) {
                 return decoded;
             }
 
-            // 可能需要进一步解析
-            DownloadInfo info = parseDownloadInfo(decoded);
-            return info.url;
+            // 可能包含多个字段，取第一个作为URL
+            std::istringstream iss(decoded);
+            std::string url;
+            std::getline(iss, url, '|');
+            if (url.find("://") != std::string::npos) {
+                return url;
+            }
+
+            throw InvalidURLException("Cannot extract URL from decoded data");
 
         } catch (const std::exception& e) {
             throw InvalidURLException("Failed to decode QQDL URL: " + std::string(e.what()));
@@ -109,60 +203,7 @@ std::string QQDLPlugin::decodeQQUrl(const std::string& encoded) {
     }
 }
 
-bool QQDLPlugin::isValidGid(const std::string& gid) {
-    // QQ旋风的GID通常是32位的十六进制字符串
-    if (gid.length() != 32) {
-        return false;
-    }
-
-    return std::all_of(gid.begin(), gid.end(), [](char c) {
-        return std::isxdigit(c);
-    });
-}
-
-QQDLPlugin::DownloadInfo QQDLPlugin::parseDownloadInfo(const std::string& info) {
-    DownloadInfo result;
-
-    // QQ旋风可能使用特殊格式存储下载信息
-    // 例如：URL|filename|filesize|cid
-    std::istringstream iss(info);
-    std::string token;
-
-    std::vector<std::string> tokens;
-    while (std::getline(iss, token, '|')) {
-        tokens.push_back(token);
-    }
-
-    if (tokens.empty()) {
-        throw InvalidURLException("Empty download info");
-    }
-
-    // 第一个token通常是URL
-    result.url = tokens[0];
-
-    // 解析其他信息
-    for (size_t i = 1; i < tokens.size(); ++i) {
-        if (i == 1 && !tokens[i].empty()) {
-            result.filename = tokens[i];
-        } else if (i == 2 && !tokens[i].empty()) {
-            result.filesize = tokens[i];
-        } else if (i == 3 && !tokens[i].empty()) {
-            result.cid = tokens[i];
-        }
-    }
-
-    // 如果URL看起来不像标准URL，可能是需要转换的格式
-    if (result.url.find("://") == std::string::npos) {
-        // 可能需要进行特殊解析
-        throw UnsupportedProtocolException("Complex QQDL format requires additional parsing");
-    }
-
-    return result;
-}
-
-// Base64解码辅助函数
-std::string QQDLPlugin::base64_decode(const std::string& encoded) {
-    // 与 Thunder 插件相同的实现
+std::string QQDLHandler::base64_decode(const std::string& encoded) {
     size_t len = encoded.size();
     size_t padding = 0;
 
@@ -177,13 +218,13 @@ std::string QQDLPlugin::base64_decode(const std::string& encoded) {
     std::string decoded;
     decoded.resize(decoded_len);
 
-    BIO* bio = BIO_new_mem_buf(encoded.c_str(), -1);
+    BIO* bio = BIO_new_mem_buf(encoded.c_str(), static_cast<int>(encoded.size()));
     BIO* b64 = BIO_new(BIO_f_base64());
 
     BIO_set_flags(b64, BIO_FLAGS_BASE64_NO_NL);
     bio = BIO_push(b64, bio);
 
-    int actual_len = BIO_read(bio, &decoded[0], encoded.size());
+    int actual_len = BIO_read(bio, &decoded[0], static_cast<int>(encoded.size()));
 
     BIO_free_all(bio);
 
@@ -193,6 +234,87 @@ std::string QQDLPlugin::base64_decode(const std::string& encoded) {
 
     decoded.resize(actual_len);
     return decoded;
+}
+
+void QQDLHandler::downloadThreadMain(std::shared_ptr<TaskContext> ctx) {
+    FALCON_LOG_DEBUG("QQDL download thread started for: {}", ctx->decodedUrl);
+
+    // 委托给实际协议处理器下载
+    delegateDownload(ctx);
+
+    // 清理
+    {
+        std::lock_guard<std::mutex> lock(tasksMutex_);
+        activeTasks_.erase(ctx->task->id());
+    }
+
+    FALCON_LOG_DEBUG("QQDL download thread ended");
+}
+
+void QQDLHandler::delegateDownload(std::shared_ptr<TaskContext> ctx) {
+    std::lock_guard<std::mutex> lock(registryMutex_);
+
+    if (!registry_) {
+        FALCON_LOG_ERROR("ProtocolRegistry not set for QQDL handler");
+        ctx->task->set_error("ProtocolRegistry not available");
+        return;
+    }
+
+    auto* targetHandler = registry_->get_handler_for_url(ctx->decodedUrl);
+    if (!targetHandler) {
+        FALCON_LOG_ERROR("No handler found for decoded URL: {}", ctx->decodedUrl);
+        ctx->task->set_error("No handler for decoded URL: " + ctx->decodedUrl);
+        return;
+    }
+
+    FALCON_LOG_INFO("Delegating QQDL download to {} handler for: {}",
+                   targetHandler->protocol_name(), ctx->decodedUrl);
+
+    // 通知开始下载
+    if (ctx->listener) {
+        ctx->listener->on_progress(ctx->task->id(), 0, 0);
+    }
+
+    try {
+        // 使用目标处理器进行下载
+        targetHandler->download(ctx->task, ctx->listener);
+
+        // 等待下载完成
+        int waitCount = 0;
+        while (ctx->running.load() && !ctx->cancelled.load() && waitCount < 60000) {
+            auto status = ctx->task->status();
+            if (status == TaskStatus::Completed || status == TaskStatus::Failed ||
+                status == TaskStatus::Cancelled) {
+                break;
+            }
+
+            if (ctx->paused.load()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                continue;
+            }
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            ++waitCount;
+
+            // 定期通知进度
+            if (waitCount % 10 == 0 && ctx->listener) {
+                ctx->listener->on_progress(ctx->task->id(),
+                                          ctx->task->downloaded_bytes(),
+                                          ctx->task->total_size());
+            }
+        }
+    } catch (const std::exception& e) {
+        FALCON_LOG_ERROR("Delegated download failed: {}", e.what());
+        ctx->task->set_error(e.what());
+    }
+}
+
+//==============================================================================
+// Factory function
+//==============================================================================
+
+std::unique_ptr<IProtocolHandler> create_qqdl_handler() {
+    return std::make_unique<QQDLHandler>();
 }
 
 } // namespace protocols

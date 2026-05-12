@@ -17,6 +17,10 @@
 #include <atomic>
 #include <condition_variable>
 
+// DHT 和 PEX 支持
+#include "dht_node.hpp"
+#include "pex_protocol.hpp"
+
 // 如果使用 libtorrent
 #ifdef FALCON_USE_LIBTORRENT
 #include <libtorrent/session.hpp>
@@ -76,9 +80,46 @@ public:
 
     [[nodiscard]] int priority() const override { return 50; }
 
+    /**
+     * @brief 启动 DHT 客户端
+     */
+    void startDht(uint16_t port = 6881);
+
+    /**
+     * @brief 停止 DHT 客户端
+     */
+    void stopDht();
+
+    /**
+     * @brief 检查 DHT 是否已启动
+     */
+    bool isDhtRunning() const { return dhtClient_ != nullptr; }
+
+    /**
+     * @brief 启用/禁用 PEX
+     */
+    void setPexEnabled(bool enabled) { pexEnabled_ = enabled; }
+
+    /**
+     * @brief 检查 PEX 是否启用
+     */
+    bool isPexEnabled() const { return pexEnabled_; }
+
+    /**
+     * @brief 获取指定 info_hash 的 PEX 处理器
+     */
+    PexExtensionHandler* getPexHandler(const std::string& infoHash);
+
+    /**
+     * @brief 移除 PEX 处理器
+     */
+    void removePexHandler(const std::string& infoHash);
+
 private:
 #ifdef FALCON_USE_LIBTORRENT
     libtorrent::session session_;
+    std::map<TaskId, libtorrent::torrent_handle> torrentHandles_;
+    std::mutex handlesMutex_;
 #else
     // 纯 C++ 实现所需的数据结构
     struct TorrentInfo {
@@ -140,6 +181,16 @@ private:
 
     std::map<TaskId, std::unique_ptr<TaskContext>> activeTasks_;
     std::mutex tasksMutex_;
+
+    // DHT 客户端
+    std::unique_ptr<DhtClient> dhtClient_;
+    std::atomic<bool> dhtEnabled_{true};
+    uint16_t dhtPort_{6881};
+
+    // PEX 支持
+    std::map<std::string, std::unique_ptr<PexExtensionHandler>> pexHandlers_;
+    std::mutex pexHandlersMutex_;
+    std::atomic<bool> pexEnabled_{true};
 #endif
 
     /**

@@ -169,12 +169,11 @@ public:
         }
 
         // 解析响应
-        // TODO: 实现 response_format 支持
-        // if (config_.response_format == "json") {
-        //     results = parse_json_response(response);
-        // } else {
+        if (config_.response_format == "json") {
+            results = parse_json_response(response);
+        } else {
             results = parse_html_response(response);
-        // }
+        }
 
         // 应用过滤
         results = filter_results(results, query);
@@ -221,47 +220,31 @@ public:
 
 protected:
     virtual std::string build_search_url(const SearchQuery& query) {
-        std::string url = config_.base_url + config_.search_path;
+        std::string url;
+
+        // 如果配置了 path_pattern，使用路径模式
+        if (!config_.path_pattern.empty()) {
+            std::string pattern = config_.path_pattern;
+
+            // 获取查询首字母
+            std::string query_letter = query.keyword.empty() ? "all" :
+                                     std::string(1, static_cast<char>(std::tolower(query.keyword[0])));
+            std::string first_char = std::isalpha(query_letter[0]) ? "1" : "0";
+
+            // 替换路径模式中的占位符
+            pattern = replace_all(pattern, "{query}", query.keyword);
+            pattern = replace_all(pattern, "{query_letter}", query_letter);
+            pattern = replace_all(pattern, "{first_char}", first_char);
+            pattern = replace_all(pattern, "{page}", std::to_string(query.page));
+            pattern = replace_all(pattern, "{encoded_query}", url_encode(query.keyword));
+
+            url = config_.base_url + pattern;
+        } else {
+            url = config_.base_url + config_.search_path;
+        }
 
         // 添加查询参数
         bool first_param = url.find('?') == std::string::npos;
-
-        // 特殊处理MagnetDL的路径模式
-        // TODO: 实现 path_pattern 支持
-        // if (config_.path_pattern.find("{query_letter}") != std::string::npos) {
-        //     std::string pattern = config_.path_pattern;
-        //     std::string query_letter = query.keyword.empty() ? "all" :
-        //                              std::string(1, static_cast<char>(std::tolower(query.keyword[0])));
-        //     std::string first_char = std::isalpha(query_letter[0]) ? "1" : "0";
-        //
-        //     replace_all(pattern, "{first_char}", first_char);
-        //     replace_all(pattern, "{query_letter}", query_letter);
-        //     replace_all(pattern, "{page}", std::to_string(query.page));
-        //
-        //     url = config_.base_url + pattern;
-        //
-        //     // 添加关键词作为参数
-        //     if (!query.keyword.empty()) {
-        //         url += "?s=" + url_encode(query.keyword);
-        //     }
-        // } else {
-        //     // 构建查询参数
-        //     std::string query_str;
-        //     for (const auto& [key, value] : config_.params) {
-        //         if (!query_str.empty()) query_str += "&";
-        //
-        //         std::string param_value = value;
-        //         if (value.empty() && key == "search" || key == "q" || key == "keyword") {
-        //             param_value = query.keyword;
-        //         }
-        //
-        //         query_str += key + "=" + url_encode(param_value);
-        //     }
-        //
-        //     if (!query_str.empty()) {
-        //         url += (first_param ? "?" : "&") + query_str;
-        //     }
-        // }
 
         // 构建查询参数
         std::string query_str;
@@ -404,6 +387,75 @@ private:
         return result;
     }
 
+    std::vector<SearchResult> parse_json_response(const std::string& json_str) {
+        std::vector<SearchResult> results;
+
+        try {
+            nlohmann::json j = nlohmann::json::parse(json_str);
+
+            // 尝试解析标准格式：{ "results": [...] }
+            if (j.contains("results") && j["results"].is_array()) {
+                for (const auto& item : j["results"]) {
+                    SearchResult result;
+                    if (item.contains("title")) result.title = item["title"].get<std::string>();
+                    if (item.contains("url")) result.url = item["url"].get<std::string>();
+                    if (item.contains("magnet")) result.url = item["magnet"].get<std::string>();
+                    if (item.contains("hash")) result.hash = item["hash"].get<std::string>();
+                    if (item.contains("size")) result.size = item["size"].get<uint64_t>();
+                    if (item.contains("seeds")) result.seeds = item["seeds"].get<int>();
+                    if (item.contains("leeches")) result.leeches = item["leeches"].get<int>();
+                    if (item.contains("type")) result.type = item["type"].get<std::string>();
+                    if (item.contains("source")) result.source = item["source"].get<std::string>();
+
+                    if (!result.title.empty() && !result.url.empty()) {
+                        results.push_back(result);
+                    }
+                }
+            }
+            // 尝试解析数组格式：[...]
+            else if (j.is_array()) {
+                for (const auto& item : j) {
+                    SearchResult result;
+                    if (item.contains("title")) result.title = item["title"].get<std::string>();
+                    if (item.contains("url")) result.url = item["url"].get<std::string>();
+                    if (item.contains("magnet")) result.url = item["magnet"].get<std::string>();
+                    if (item.contains("hash")) result.hash = item["hash"].get<std::string>();
+                    if (item.contains("size")) result.size = item["size"].get<uint64_t>();
+                    if (item.contains("seeds")) result.seeds = item["seeds"].get<int>();
+                    if (item.contains("leeches")) result.leeches = item["leeches"].get<int>();
+                    if (item.contains("type")) result.type = item["type"].get<std::string>();
+                    if (item.contains("source")) result.source = item["source"].get<std::string>();
+
+                    if (!result.title.empty() && !result.url.empty()) {
+                        results.push_back(result);
+                    }
+                }
+            }
+            // 尝试解析单个对象格式
+            else if (j.contains("title") && j.contains("url")) {
+                SearchResult result;
+                result.title = j["title"].get<std::string>();
+                result.url = j["url"].get<std::string>();
+                if (j.contains("hash")) result.hash = j["hash"].get<std::string>();
+                if (j.contains("size")) result.size = j["size"].get<uint64_t>();
+                if (j.contains("seeds")) result.seeds = j["seeds"].get<int>();
+                if (j.contains("leeches")) result.leeches = j["leeches"].get<int>();
+                if (j.contains("type")) result.type = j["type"].get<std::string>();
+                if (j.contains("source")) result.source = j["source"].get<std::string>();
+
+                if (!result.title.empty() && !result.url.empty()) {
+                    results.push_back(result);
+                }
+            }
+        } catch (const nlohmann::json::parse_error& e) {
+            FALCON_LOG_ERROR_STREAM("JSON解析失败: " << e.what());
+        } catch (const std::exception& e) {
+            FALCON_LOG_ERROR_STREAM("JSON处理失败: " << e.what());
+        }
+
+        return results;
+    }
+
     SearchResult parse_magnet_link(const std::string& magnet_url) {
         SearchResult result;
         result.url = magnet_url;
@@ -458,6 +510,16 @@ private:
         }
 
         return escaped.str();
+    }
+
+    // 辅助函数：字符串替换
+    static std::string replace_all(std::string str, const std::string& from, const std::string& to) {
+        size_t start_pos = 0;
+        while ((start_pos = str.find(from, start_pos)) != std::string::npos) {
+            str.replace(start_pos, from.length(), to);
+            start_pos += to.length();
+        }
+        return str;
     }
 
     std::string url_decode(const std::string& str) {
@@ -578,20 +640,22 @@ public:
                         }
                     }
 
-                    // TODO: 添加 response_format, selectors, path_pattern 成员
-                    // if (engine.contains("response_format")) {
-                    //     engine_config.response_format = engine["response_format"].get<std::string>();
-                    // }
-                    //
-                    // if (engine.contains("selectors")) {
-                    //     for (auto& [key, value] : engine["selectors"].items()) {
-                    //         engine_config.selectors[key] = value.get<std::string>();
-                    //     }
-                    // }
-                    //
-                    // if (engine.contains("path_pattern")) {
-                    //     engine_config.path_pattern = engine["path_pattern"].get<std::string>();
-                    // }
+                    // 解析 response_format
+                    if (engine.contains("response_format")) {
+                        engine_config.response_format = engine["response_format"].get<std::string>();
+                    }
+
+                    // 解析 selectors
+                    if (engine.contains("selectors")) {
+                        for (auto& [key, value] : engine["selectors"].items()) {
+                            engine_config.selectors[key] = value.get<std::string>();
+                        }
+                    }
+
+                    // 解析 path_pattern
+                    if (engine.contains("path_pattern")) {
+                        engine_config.path_pattern = engine["path_pattern"].get<std::string>();
+                    }
 
                     engine_configs_[engine_config.name] = engine_config;
 

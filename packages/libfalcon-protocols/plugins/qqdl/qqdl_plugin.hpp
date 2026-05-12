@@ -8,82 +8,119 @@
 #pragma once
 
 #include <falcon/protocol_handler.hpp>
+#include <falcon/protocol_handler_extension.hpp>
 #include <string>
 #include <vector>
 #include <memory>
+#include <map>
+#include <thread>
+#include <mutex>
+#include <atomic>
 
 namespace falcon {
+
+// Forward declaration
+class ProtocolRegistry;
+
 namespace protocols {
 
 /**
- * @class QQDLPlugin
+ * @class QQDLHandler
  * @brief QQ旋风 QQDL 协议处理器
  *
  * 支持 qqlink:// 格式的链接解析和下载
  * QQ旋风链接是对原始 URL 经过特定编码和加密后的结果
  */
-class QQDLPlugin : public IProtocolHandler {
+class QQDLHandler : public IProtocolHandler, public IProtocolHandlerExtension {
 public:
     /**
      * @brief 构造函数
      */
-    QQDLPlugin();
+    QQDLHandler();
 
     /**
      * @brief 析构函数
      */
-    virtual ~QQDLPlugin() = default;
+    ~QQDLHandler() override;
 
-    // ProtocolPlugin 接口实现
-    std::string getProtocolName() const override { return "qqdl"; }
-    std::vector<std::string> getSupportedSchemes() const override;
-    bool canHandle(const std::string& url) const override;
-    std::unique_ptr<IDownloadTask> createTask(const std::string& url,
-                                            const DownloadOptions& options) override;
+    // Non-copyable
+    QQDLHandler(const QQDLHandler&) = delete;
+    QQDLHandler& operator=(const QQDLHandler&) = delete;
+
+    // IProtocolHandler 接口实现
+    [[nodiscard]] std::string protocol_name() const override { return "qqdl"; }
+
+    [[nodiscard]] std::vector<std::string> supported_schemes() const override;
+
+    [[nodiscard]] bool can_handle(const std::string& url) const override;
+
+    [[nodiscard]] FileInfo get_file_info(const std::string& url,
+                                         const DownloadOptions& options) override;
+
+    void download(DownloadTask::Ptr task, IEventListener* listener) override;
+
+    void pause(DownloadTask::Ptr task) override;
+
+    void resume(DownloadTask::Ptr task, IEventListener* listener) override;
+
+    void cancel(DownloadTask::Ptr task) override;
+
+    [[nodiscard]] bool supports_resume() const override { return true; }
+
+    [[nodiscard]] int priority() const override { return 35; }
+
+    // IProtocolHandlerExtension 接口实现
+    void set_protocol_registry(ProtocolRegistry* registry) override {
+        registry_ = registry;
+    }
 
 private:
     /**
+     * @brief 任务上下文
+     */
+    struct TaskContext {
+        DownloadTask::Ptr task;
+        IEventListener* listener = nullptr;
+        std::string decodedUrl;
+        std::atomic<bool> running{false};
+        std::atomic<bool> paused{false};
+        std::atomic<bool> cancelled{false};
+        std::thread downloadThread;
+        std::mutex mutex;
+        uint64_t downloadedBytes = 0;
+    };
+
+    /**
      * @brief 解析QQ旋风链接
-     * @param qqUrl QQ旋风链接（qqlink://）
-     * @return 解析后的原始 URL
      */
     std::string parseQQUrl(const std::string& qqUrl);
 
     /**
      * @brief 解码QQ旋风链接
-     * @param encoded 编码部分
-     * @return 原始 URL
      */
     std::string decodeQQUrl(const std::string& encoded);
 
     /**
-     * @brief 验证GID（QQ旋风的群组ID）
-     * @param gid 群组ID
-     * @return 是否有效
+     * @brief 下载线程主函数
      */
-    bool isValidGid(const std::string& gid);
+    void downloadThreadMain(std::shared_ptr<TaskContext> ctx);
 
     /**
-     * @brief 解析快速链接格式
-     * @param url 原始链接
-     * @return 解析后的下载信息
+     * @brief 委托给实际协议处理器下载
      */
-    struct DownloadInfo {
-        std::string url;
-        std::string filename;
-        std::string filesize;
-        std::string cid;
-    };
+    void delegateDownload(std::shared_ptr<TaskContext> ctx);
 
-    DownloadInfo parseDownloadInfo(const std::string& url);
+    // 活动任务管理
+    std::map<TaskId, std::shared_ptr<TaskContext>> activeTasks_;
+    std::mutex tasksMutex_;
 
-  /**
-   * @brief Base64解码
-   * @param encoded 编码字符串
-   * @return 解码后的字符串
-   */
-  std::string base64_decode(const std::string& encoded);
+    // ProtocolRegistry 用于委托下载
+    ProtocolRegistry* registry_ = nullptr;
+    std::mutex registryMutex_;
 };
+
+/// Factory function to create QQDL handler
+std::unique_ptr<IProtocolHandler> create_qqdl_handler();
 
 } // namespace protocols
 } // namespace falcon

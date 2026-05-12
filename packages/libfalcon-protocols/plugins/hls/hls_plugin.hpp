@@ -8,192 +8,165 @@
 #pragma once
 
 #include <falcon/protocol_handler.hpp>
+#include <falcon/protocol_handler_extension.hpp>
 #include <string>
 #include <vector>
 #include <memory>
 #include <map>
+#include <thread>
+#include <mutex>
+#include <atomic>
+#include <condition_variable>
+#include <queue>
 
 namespace falcon {
+
+// Forward declaration
+class ProtocolRegistry;
+
 namespace protocols {
 
 /**
- * @class HLSPlugin
+ * @class HLSHandler
  * @brief HLS 和 DASH 流媒体协议处理器
  *
  * 支持 HLS (.m3u8) 和 DASH (.mpd) 流媒体下载
  */
-class HLSPlugin : public IProtocolHandler {
+class HLSHandler : public IProtocolHandler, public IProtocolHandlerExtension {
 public:
     /**
      * @brief 构造函数
      */
-    HLSPlugin();
+    HLSHandler();
 
     /**
      * @brief 析构函数
      */
-    virtual ~HLSPlugin() = default;
+    ~HLSHandler() override;
 
-    // ProtocolPlugin 接口实现
-    std::string getProtocolName() const override { return "hls"; }
-    std::vector<std::string> getSupportedSchemes() const override;
-    bool canHandle(const std::string& url) const override;
-    std::unique_ptr<IDownloadTask> createTask(const std::string& url,
-                                            const DownloadOptions& options) override;
+    // Non-copyable
+    HLSHandler(const HLSHandler&) = delete;
+    HLSHandler& operator=(const HLSHandler&) = delete;
+
+    // IProtocolHandler 接口实现
+    [[nodiscard]] std::string protocol_name() const override { return "hls"; }
+
+    [[nodiscard]] std::vector<std::string> supported_schemes() const override;
+
+    [[nodiscard]] bool can_handle(const std::string& url) const override;
+
+    [[nodiscard]] FileInfo get_file_info(const std::string& url,
+                                         const DownloadOptions& options) override;
+
+    void download(DownloadTask::Ptr task, IEventListener* listener) override;
+
+    void pause(DownloadTask::Ptr task) override;
+
+    void resume(DownloadTask::Ptr task, IEventListener* listener) override;
+
+    void cancel(DownloadTask::Ptr task) override;
+
+    [[nodiscard]] bool supports_resume() const override { return true; }
+
+    [[nodiscard]] bool supports_segments() const override { return true; }
+
+    [[nodiscard]] int priority() const override { return 45; }
+
+    // IProtocolHandlerExtension 接口实现
+    void set_protocol_registry(ProtocolRegistry* registry) override {
+        registry_ = registry;
+    }
 
 private:
     /**
      * @brief 媒体段信息
      */
     struct MediaSegment {
-        std::string url;           // 段URL
-        double duration;           // 时长（秒）
-        std::string title;         // 标题（可选）
-        uint64_t size;            // 文件大小（可选）
-        std::map<std::string, std::string> attributes;  // 其他属性
+        std::string url;
+        double duration = 0;
+        std::string title;
+        uint64_t size = 0;
     };
 
     /**
-     * @brief 播放列表信息
+     * @brief 任务上下文
      */
-    struct PlaylistInfo {
-        bool isLive;              // 是否为直播流
-        double targetDuration;     // 目标段时长
-        uint32_t version;          // 版本号
-        std::vector<MediaSegment> segments;  // 媒体段列表
-        std::map<std::string, std::string> variants;  // 变体流
-    };
-
-    /**
-     * @brief DASH表现信息
-     */
-    struct DASHRepresentation {
-        std::string id;            // 表现ID
-        std::string mimeType;      // MIME类型
-        std::string codecs;        // 编码格式
-        uint32_t width;            // 宽度（视频）
-        uint32_t height;           // 高度（视频）
-        uint32_t bandwidth;        // 带宽
-        std::vector<MediaSegment> segments;  // 媒体段列表
-    };
-
-    /**
-     * @brief DASH适配信息
-     */
-    struct DASHAdaptation {
-        std::string id;            // 适配ID
-        std::string mimeType;      // MIME类型
-        std::vector<DASHRepresentation> representations;  // 表现列表
+    struct TaskContext {
+        DownloadTask::Ptr task;
+        IEventListener* listener = nullptr;
+        std::vector<MediaSegment> segments;
+        std::atomic<bool> running{false};
+        std::atomic<bool> paused{false};
+        std::atomic<bool> cancelled{false};
+        std::thread downloadThread;
+        std::mutex mutex;
+        uint64_t downloadedBytes = 0;
+        uint64_t totalSize = 0;
     };
 
     /**
      * @brief 解析HLS M3U8播放列表
-     * @param m3u8Content M3U8内容
-     * @param baseUrl 基础URL
-     * @return 播放列表信息
      */
-    PlaylistInfo parseM3U8(const std::string& m3u8Content, const std::string& baseUrl);
-
-    /**
-     * @brief 解析DASH MPD清单
-     * @param mpdContent MPD内容
-     * @param baseUrl 基础URL
-     * @return 适配信息列表
-     */
-    std::vector<DASHAdaptation> parseMPD(const std::string& mpdContent, const std::string& baseUrl);
-
-    /**
-     * @brief 解析EXT-X-STREAM-INF标签
-     * @param attributes 属性字符串
-     * @return 属性映射
-     */
-    std::map<std::string, std::string> parseStreamInf(const std::string& attributes);
+    std::vector<MediaSegment> parseM3U8(const std::string& m3u8Content,
+                                        const std::string& baseUrl);
 
     /**
      * @brief 解析EXTINF标签
-     * @param extinf EXTINF标签内容
-     * @return 时长和标题
      */
     std::pair<double, std::string> parseExtInf(const std::string& extinf);
 
     /**
-     * @brief 解析加密信息
-     * @param line EXT-X-KEY行
-     * @return 加密信息
+     * @brief 解析相对URL
      */
-    struct EncryptionInfo {
-        std::string method;        // 加密方法
-        std::string uri;           // 密钥URI
-        std::string iv;            // 初始化向量
-        std::string keyFormat;     // 密钥格式
-    };
-    EncryptionInfo parseEncryption(const std::string& line);
+    std::string resolveUrl(const std::string& url, const std::string& baseUrl);
 
     /**
-     * @brief 下载并解析主播放列表
-     * @param masterUrl 主播放列表URL
-     * @return 播放列表URL列表
+     * @brief 下载线程主函数
      */
-    std::vector<std::string> downloadMasterPlaylist(const std::string& masterUrl);
+    void downloadThreadMain(std::shared_ptr<TaskContext> ctx);
 
     /**
-     * @brief 选择最佳质量流
-     * @param streams 流列表
-     * @param options 下载选项
-     * @return 选中的流URL
+     * @brief 检查是否为HLS流
      */
-    std::string selectBestQuality(const std::vector<std::string>& streams,
-                                 const DownloadOptions& options);
+    bool isHLSStream(const std::string& url) const;
 
     /**
-     * @brief 创建批量下载任务
-     * @param segments 媒体段列表
-     * @param outputDir 输出目录
-     * @param options 下载选项
-     * @return 批量任务
+     * @brief 检查是否为DASH流
      */
-    std::unique_ptr<IDownloadTask> createBatchTask(const std::vector<MediaSegment>& segments,
-                                                  const std::string& outputDir,
-                                                  const DownloadOptions& options);
+    bool isDASHStream(const std::string& url) const;
 
     /**
-     * @brief 合并媒体段
-     * @param segmentFiles 段文件列表
-     * @param outputFile 输出文件
-     * @return 是否成功
+     * @brief 下载 M3U8 播放列表内容
+     */
+    std::string downloadM3U8(const std::string& url);
+
+    /**
+     * @brief 下载单个媒体段
+     */
+    std::vector<uint8_t> downloadSegment(const std::string& url);
+
+    /**
+     * @brief 合并所有段到最终文件
      */
     bool mergeSegments(const std::vector<std::string>& segmentFiles,
                       const std::string& outputFile);
 
     /**
-     * @brief 解析相对URL
-     * @param url 相对URL
-     * @param baseUrl 基础URL
-     * @return 绝对URL
+     * @brief 下载所有段的主逻辑
      */
-    std::string resolveUrl(const std::string& url, const std::string& baseUrl);
+    void downloadAllSegments(std::shared_ptr<TaskContext> ctx);
 
-    /**
-     * @brief 检查是否为HLS流
-     * @param url URL
-     * @return 是否为HLS
-     */
-    bool isHLSStream(const std::string& url);
+    // 活动任务管理
+    std::map<TaskId, std::shared_ptr<TaskContext>> activeTasks_;
+    std::mutex tasksMutex_;
 
-    /**
-     * @brief 检查是否为DASH流
-     * @param url URL
-     * @return 是否为DASH
-     */
-    bool isDASHStream(const std::string& url);
-
-    /**
-     * @brief 获取流类型
-     * @param url URL
-     * @return 流类型（"hls", "dash", "unknown"）
-     */
-    std::string getStreamType(const std::string& url);
+    // ProtocolRegistry 用于下载播放列表和段
+    ProtocolRegistry* registry_ = nullptr;
+    std::mutex registryMutex_;
 };
+
+/// Factory function to create HLS handler
+std::unique_ptr<IProtocolHandler> create_hls_handler();
 
 } // namespace protocols
 } // namespace falcon

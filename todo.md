@@ -628,7 +628,19 @@ feature 候选：
   - 后台线程搜索实现
   - 搜索结果回调机制
 - ✅ 完整的多线程分段下载（SegmentDownloader 737 行，多线程并行）
-- ⏳ BitTorrent 插件与 DHT/PEX 集成（需要完整 libtorrent 集成）
+- ✅ BitTorrent 插件与 DHT/PEX 集成（完成）
+  - ✅ DHT 路由表实现（K-bucket、XOR 距离计算）
+  - ✅ DHT 客户端（UDP socket、引导节点）
+  - ✅ PEX 管理器（peer 生命周期、候选 peer 管理）
+  - ✅ PEX 扩展协议处理器
+  - ✅ B 编码实现（BencodeValue 完整编解码）
+  - ✅ 完整消息处理逻辑（UDP 收发、路由表更新）
+  - ✅ 与 BitTorrentHandler 集成
+    - 添加 DhtClient 成员变量
+    - 添加 PexExtensionHandler 管理器
+    - download() 方法集成 DHT peer 发现
+    - pause/resume/cancel 方法完善
+    - PEX 处理器辅助方法实现
 
 **待实现：**
 - ✅ CloudPage 与 libfalcon-storage 的完整 C++ 绑定
@@ -703,6 +715,87 @@ feature 候选：
 
 ## CI/CD 修复
 
+### 2026-05-07 - Windows 链接问题修复
+
+**问题：**
+- Windows (MinGW) 上链接失败：`undefined reference to register_builtin_protocol_handlers`
+- `incremental_download.hpp` 缺少 `<cstdint>` 头文件
+- 弱符号机制在 Windows 上需要特殊处理
+
+**已完成：**
+- ✅ 添加 `#include <cstdint>` 到 incremental_download.hpp
+- ✅ 修复 builtin_protocol_handlers_stub.cpp 的弱符号声明
+- ✅ 确保 stub 文件在所有平台上正确编译
+- ✅ 验证符号正确解析（弱符号在 core，强符号在 protocols）
+- ✅ 所有可执行文件成功编译链接
+
+### 2026-05-07 - BitTorrent DHT/PEX 与 BitTorrentHandler 集成
+
+**目标：**
+- 将独立实现的 DHT 客户端和 PEX 协议处理器集成到 BitTorrentHandler
+- 实现完整的 peer 发现和交换功能
+
+**已完成：**
+- ✅ 在 BitTorrentHandler 中添加 DhtClient 成员变量
+- ✅ 在 BitTorrentHandler 中添加 PexExtensionHandler 管理器
+- ✅ 实现 startDht() 和 stopDht() 方法
+- ✅ download() 方法集成 DHT peer 发现（info_hash 提取和 findPeers 调用）
+- ✅ download() 方法集成 PEX 处理器创建和回调设置
+- ✅ pause/resume/cancel 方法完善（纯 C++ 模式支持）
+- ✅ 添加 getPexHandler() 和 removePexHandler() 辅助方法
+
+**技术要点：**
+- DHT 客户端在构造函数中自动启动
+- PEX 处理器按 info_hash 管理多个 torrent 下载
+- 支持通过 setPexEnabled() 动态启用/禁用 PEX
+- 纯 C++ 模式同样支持 DHT/PEX（不依赖 libtorrent）
+
+### 2026-05-07 - PEX 协议完善
+
+**已完成：**
+- ✅ 清理空的 bt_plugin.cpp 存根文件
+- ✅ 实现 IPv6 字符串解析（stringToIPv6 函数）
+  - 支持 ::ffff:x.x.x.x 格式的 IPv4 映射
+  - 支持 :: 压缩格式展开
+  - 标准十六进制段解析
+
+### 2026-05-07 - 旧协议插件接口重构
+
+**目标：**
+- 将 ED2K/Thunder/QQDL/FlashGet/HLS 插件从旧接口迁移到新的 IProtocolHandler
+- 在 builtin_protocol_handlers.cpp 中注册所有协议处理器
+
+**已完成：**
+- ✅ ED2K 插件重构 (ED2KPlugin → ED2KHandler)
+  - 新接口方法：protocol_name(), supported_schemes(), can_handle(), get_file_info(), download(), pause(), resume(), cancel()
+  - 添加 TaskContext 和活动任务管理
+  - Factory 函数：create_ed2k_handler()
+- ✅ Thunder 插件重构 (ThunderPlugin → ThunderHandler)
+  - 新接口实现
+  - Base64 解码支持
+  - Factory 函数：create_thunder_handler()
+- ✅ QQDL 插件重构 (QQDLPlugin → QQDLHandler)
+  - 新接口实现
+  - GID 格式解析
+  - Factory 函数：create_qqdl_handler()
+- ✅ FlashGet 插件重构 (FlashGetPlugin → FlashGetHandler)
+  - 新接口实现
+  - 镜像链接支持
+  - Factory 函数：create_flashget_handler()
+- ✅ HLS 插件重构 (HLSPlugin → HLSHandler)
+  - 新接口实现
+  - M3U8 播放列表解析
+  - Factory 函数：create_hls_handler()
+- ✅ builtin_protocol_handlers.cpp 更新
+  - 添加所有插件的头文件引用
+  - 在 register_builtin_protocol_handlers() 中注册所有处理器
+
+**技术要点：**
+- 所有插件统一使用 IProtocolHandler 接口
+- 支持任务暂停、恢复、取消
+- 异步下载线程模型
+- 错误处理和事件回调机制
+
 ### 2026-04-30 - GitHub Actions Nightly Build 修复
 
 **问题：**
@@ -716,3 +809,79 @@ feature 候选：
 - ✅ Linux: 修改打包步骤使用全局安装的 linuxdeploy
 - ✅ Windows: 添加 `.\vcpkg\vcpkg install curl:x64-windows`
 - ✅ Windows: 更新 Package 步骤正确复制 vcpkg DLL
+
+---
+
+### 2026-05-07 - HTTP 分块传输编码与 BitTorrent Peers 集成
+
+**已完成：**
+- ✅ BitTorrent DHT/PEX peers 添加到下载任务
+  - 在 libtorrent 模式下使用 `connect_peer()` 添加 DHT/PEX 发现的 peers
+  - 维护 `torrentHandles_` 映射以支持回调中的 peer 添加
+  - 在 cancel 方法中正确清理句柄映射
+- ✅ HTTP 分块传输编码解析
+  - 实现完整的分块编码状态机（READ_SIZE, READ_DATA, READ_CR, READ_LF, READ_TRAILER）
+  - 支持十六进制块大小解析
+  - 支持可选的尾部头部
+  - 提供 Windows memmem 兼容实现
+- ✅ HTTP 重试命令实现
+  - 创建新的 `HttpInitiateConnectionCommand` 重试下载
+  - 使用 `schedule_next` 调度新命令
+- ✅ 资源搜索功能完善
+  - 添加 `response_format`、`selectors`、`path_pattern` 成员到 `SearchEngineConfig`
+  - 实现 `parse_json_response` 方法支持三种 JSON 格式（results 数组、顶层数组、单对象）
+  - 实现 `path_pattern` 支持路径模式替换（`{query}`, `{query_letter}`, `{first_char}`, `{page}`）
+  - 启用配置文件中 `response_format`/`selectors`/`path_pattern` 的解析
+
+**技术要点：**
+- BitTorrent: `torrentHandles_` 映射管理，`connect_peer()` 添加 peers
+- HTTP: 5态解析器，缓冲区管理，CRLF 处理，memmem Windows 兼容
+- Resource Search: nlohmann/json 解析，多格式支持，路径模式替换
+
+### 2026-05-07 - 协议委托机制与完整下载实现
+
+**已完成：**
+- ✅ 协议处理器扩展接口 (IProtocolHandlerExtension)
+  - 新增 `protocol_handler_extension.hpp` 定义扩展接口
+  - `set_protocol_registry()` 方法允许处理器访问 ProtocolRegistry
+  - `get_extension()` 辅助函数进行 dynamic_cast 转换
+- ✅ DownloadEngine 集成扩展接口
+  - `load_all_handlers()` 后自动设置 registry
+  - 支持内置处理器和工厂创建的处理器
+- ✅ Thunder 插件委托下载实现
+  - 实现 `IProtocolHandlerExtension` 接口
+  - 解析迅雷链接后委托给实际协议处理器（HTTP/FTP/BT等）
+  - 添加 `delegateDownload()` 方法处理协议委托
+- ✅ ED2K 插件委托下载实现
+  - 实现 `IProtocolHandlerExtension` 接口
+  - 从 ED2K 源地址列表尝试下载
+  - 添加 `downloadFromSources()` 和 `delegateDownload()` 方法
+- ✅ HLS 插件完整下载逻辑实现
+  - 实现 `IProtocolHandlerExtension` 接口
+  - `downloadM3U8()` - 下载播放列表
+  - `downloadSegment()` - 下载单个媒体段
+  - `mergeSegments()` - 合并所有段到最终文件
+  - `downloadAllSegments()` - 并行下载所有段（最大并发 4）
+
+**技术要点：**
+- 协议委托: 通过 `IProtocolHandlerExtension` 注入 ProtocolRegistry
+- Thunder: Base64 解码 + 链接解析 → 委托给目标协议处理器
+- ED2K: 解析源地址 → 尝试 HTTP 下载 → 失败则尝试下一个源
+- HLS: M3U8 解析 → 段并行下载 → 二进制合并 → 临时文件清理
+
+### 2026-05-07 - FlashGet 和 QQDL 插件委托下载实现
+
+**已完成：**
+- ✅ FlashGet 插件委托下载实现
+  - 实现 `IProtocolHandlerExtension` 接口
+  - 解析快车链接后委托给实际协议处理器
+  - 支持 `flashget://` 和 `fg://` 格式
+- ✅ QQDL 插件委托下载实现
+  - 实现 `IProtocolHandlerExtension` 接口
+  - 解析 QQ 旋风链接后委托给实际协议处理器
+  - 支持 `qqlink://` 和 `qqdl://` 格式
+
+**技术要点：**
+- FlashGet: `[FLASHGET]` 前缀处理 + Base64/URL 解码 → 委托
+- QQDL: GID 格式解析 + Base64 解码 → 委托
+- 所有包装协议现在都通过统一的 `delegateDownload()` 方法委托

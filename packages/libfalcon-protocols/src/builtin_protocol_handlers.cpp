@@ -9,6 +9,21 @@
 #ifdef FALCON_ENABLE_BT_PLUGIN
 #include "../plugins/bittorrent/bittorrent_plugin.hpp"
 #endif
+#ifdef FALCON_ENABLE_ED2K_PLUGIN
+#include "../plugins/ed2k/ed2k_plugin.hpp"
+#endif
+#ifdef FALCON_ENABLE_THUNDER_PLUGIN
+#include "../plugins/thunder/thunder_plugin.hpp"
+#endif
+#ifdef FALCON_ENABLE_QQDL_PLUGIN
+#include "../plugins/qqdl/qqdl_plugin.hpp"
+#endif
+#ifdef FALCON_ENABLE_FLASHGET_PLUGIN
+#include "../plugins/flashget/flashget_plugin.hpp"
+#endif
+#ifdef FALCON_ENABLE_HLS_PLUGIN
+#include "../plugins/hls/hls_plugin.hpp"
+#endif
 
 namespace falcon {
 
@@ -83,6 +98,26 @@ void register_builtin_protocol_handlers(ProtocolRegistry& registry) {
 
 #ifdef FALCON_ENABLE_BT_PLUGIN
     registry.register_handler(protocols::create_bittorrent_handler());
+#endif
+
+#ifdef FALCON_ENABLE_ED2K_PLUGIN
+    registry.register_handler(protocols::create_ed2k_handler());
+#endif
+
+#ifdef FALCON_ENABLE_THUNDER_PLUGIN
+    registry.register_handler(protocols::create_thunder_handler());
+#endif
+
+#ifdef FALCON_ENABLE_QQDL_PLUGIN
+    registry.register_handler(protocols::create_qqdl_handler());
+#endif
+
+#ifdef FALCON_ENABLE_FLASHGET_PLUGIN
+    registry.register_handler(protocols::create_flashget_handler());
+#endif
+
+#ifdef FALCON_ENABLE_HLS_PLUGIN
+    registry.register_handler(protocols::create_hls_handler());
 #endif
 }
 

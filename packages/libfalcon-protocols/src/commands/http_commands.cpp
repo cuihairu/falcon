@@ -51,6 +51,30 @@ typedef SSIZE_T ssize_t;
 namespace falcon {
 
 namespace {
+
+// memmem 不是标准 C/C++，Windows 没有，提供简单实现
+static const void* memmem_alt(const void* haystack, size_t haystack_len,
+                              const void* needle, size_t needle_len) {
+    if (needle_len == 0) return haystack;
+    if (haystack_len < needle_len) return nullptr;
+
+    const char* haystack_str = static_cast<const char*>(haystack);
+    const char* needle_str = static_cast<const char*>(needle);
+
+    for (size_t i = 0; i <= haystack_len - needle_len; ++i) {
+        if (std::memcmp(haystack_str + i, needle_str, needle_len) == 0) {
+            return haystack_str + i;
+        }
+    }
+    return nullptr;
+}
+
+// 平台适配
+#ifdef _WIN32
+#define memmem(haystack, haystack_len, needle, needle_len) \
+    memmem_alt(haystack, haystack_len, needle, needle_len)
+#endif
+
 void close_socket_fd(int fd) {
     if (fd < 0) return;
 #ifdef _WIN32
@@ -1032,7 +1056,7 @@ AbstractCommand::ExecutionResult HttpDownloadCommand::receive_data(DownloadEngin
         }
 
         if (chunked_encoding_) {
-            if (!handle_chunked_encoding()) {
+            if (!handle_chunked_encoding(buffer, static_cast<std::size_t>(n), engine)) {
                 return ExecutionResult::ERROR_OCCURRED;
             }
         } else {
@@ -1081,8 +1105,129 @@ bool HttpDownloadCommand::write_to_segment(const char* data,
     return true;
 }
 
-bool HttpDownloadCommand::handle_chunked_encoding() {
-    // TODO: 实现分块传输编码解析
+bool HttpDownloadCommand::handle_chunked_encoding(const char* data, std::size_t size, DownloadEngineV2* engine) {
+    // 将新数据追加到缓冲区
+    chunk_buffer_.append(data, size);
+
+    const char* ptr = chunk_buffer_.data();
+    std::size_t remaining = chunk_buffer_.size();
+
+    while (remaining > 0) {
+        switch (chunk_state_) {
+            case ChunkParseState::READ_SIZE: {
+                // 查找 CRLF 表示块大小结束
+                const char* crlf = static_cast<const char*>(
+                    memchr(ptr, '\r', remaining));
+
+                if (!crlf) {
+                    // 尚未收到完整的块大小行
+                    chunk_size_str_.append(ptr, remaining);
+                    chunk_buffer_.clear();
+                    return true;
+                }
+
+                // 检查是否有 LF
+                std::size_t crlf_offset = crlf - ptr;
+                if (crlf_offset + 1 >= remaining || crlf[1] != '\n') {
+                    chunk_size_str_.append(ptr, crlf_offset + 1);
+                    ptr += crlf_offset + 1;
+                    remaining -= crlf_offset + 1;
+                    continue;
+                }
+
+                // 解析块大小
+                chunk_size_str_.append(ptr, crlf_offset);
+                try {
+                    chunk_remaining_ = std::stoul(chunk_size_str_, nullptr, 16);
+                } catch (const std::exception&) {
+                    FALCON_LOG_ERROR_STREAM("无效的分块大小: " << chunk_size_str_);
+                    return false;
+                }
+
+                ptr += crlf_offset + 2;  // 跳过 CRLF
+                remaining -= crlf_offset + 2;
+                chunk_size_str_.clear();
+
+                if (chunk_remaining_ == 0) {
+                    // 最后一个块，进入读取尾部状态
+                    chunk_state_ = ChunkParseState::READ_TRAILER;
+                    chunk_end_ = true;
+                } else {
+                    chunk_state_ = ChunkParseState::READ_DATA;
+                }
+                break;
+            }
+
+            case ChunkParseState::READ_DATA: {
+                std::size_t to_write = std::min(remaining, chunk_remaining_);
+
+                if (!write_to_segment(ptr, to_write, engine)) {
+                    return false;
+                }
+
+                ptr += to_write;
+                remaining -= to_write;
+                chunk_remaining_ -= to_write;
+
+                if (chunk_remaining_ == 0) {
+                    chunk_state_ = ChunkParseState::READ_CR;
+                }
+                break;
+            }
+
+            case ChunkParseState::READ_CR: {
+                if (*ptr == '\r') {
+                    ptr++;
+                    remaining--;
+                    chunk_state_ = ChunkParseState::READ_LF;
+                } else {
+                    FALCON_LOG_ERROR_STREAM("分块编码: 期望 CR 但得到: " << *ptr);
+                    return false;
+                }
+                break;
+            }
+
+            case ChunkParseState::READ_LF: {
+                if (*ptr == '\n') {
+                    ptr++;
+                    remaining--;
+                    chunk_state_ = ChunkParseState::READ_SIZE;
+                } else {
+                    FALCON_LOG_ERROR_STREAM("分块编码: 期望 LF 但得到: " << *ptr);
+                    return false;
+                }
+                break;
+            }
+
+            case ChunkParseState::READ_TRAILER: {
+                // 读取可选的尾部头部，直到连续的 CRLF
+                const char* double_crlf = static_cast<const char*>(
+                    memmem(ptr, remaining, "\r\n\r\n", 4));
+
+                if (!double_crlf) {
+                    // 检查是否有单个 CRLF（表示尾部结束）
+                    const char* crlf = static_cast<const char*>(
+                        memchr(ptr, '\r', remaining));
+                    if (crlf && crlf + 1 < ptr + remaining && crlf[1] == '\n') {
+                        // 找到 CRLF，分块编码完成
+                        download_complete_ = true;
+                        chunk_buffer_.clear();
+                        return true;
+                    }
+                    // 尚未收到完整的尾部
+                    chunk_buffer_.clear();
+                    return true;
+                }
+
+                // 分块编码完成
+                download_complete_ = true;
+                chunk_buffer_.clear();
+                return true;
+            }
+        }
+    }
+
+    chunk_buffer_.clear();
     return true;
 }
 
@@ -1126,7 +1271,7 @@ HttpRetryCommand::HttpRetryCommand(
 {
 }
 
-bool HttpRetryCommand::execute(DownloadEngineV2* /*engine*/) {
+bool HttpRetryCommand::execute(DownloadEngineV2* engine) {
     if (!should_retry()) {
         FALCON_LOG_ERROR_STREAM("达到最大重试次数: " << max_retries_);
         return handle_result(ExecutionResult::ERROR_OCCURRED);
@@ -1137,10 +1282,12 @@ bool HttpRetryCommand::execute(DownloadEngineV2* /*engine*/) {
     // 等待一段时间后重试
     std::this_thread::sleep_for(retry_wait_);
 
-    // TODO: 创建新的连接命令
-    // auto next_cmd = CommandFactory::create_http_init_command(
-    //     get_task_id(), url_, options_);
-    // schedule_next(engine, std::move(next_cmd));
+    if (engine) {
+        // 创建新的连接命令重试下载
+        auto next_cmd = std::make_unique<HttpInitiateConnectionCommand>(
+            get_task_id(), url_, options_);
+        schedule_next(engine, std::move(next_cmd));
+    }
 
     return handle_result(ExecutionResult::OK);
 }

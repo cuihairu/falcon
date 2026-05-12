@@ -46,6 +46,28 @@
 - 定义模块化设计方案
 - 建立编码规范与开发指引
 
+### 2026-05-07 - 协议处理器扩展接口与委托机制
+- 新增 `IProtocolHandlerExtension` 扩展接口
+- 支持协议处理器访问 `ProtocolRegistry` 实现协议委托
+- Thunder/FlashGet/QQDL 插件实现委托下载：解析链接后委托给实际协议处理器
+- ED2K 插件实现多源下载委托：遍历源地址列表尝试下载
+
+### 2026-05-07 - BitTorrent DHT/PEX 集成与 HTTP 分块传输
+- BitTorrent 插件集成 DHT 客户端和 PEX 扩展协议
+  - DHT 路由表（K-bucket）、XOR 距离计算、UDP 通信
+  - PEX 管理：peer 生命周期、候选 peer 管理、消息协议处理
+  - 与 libtorrent 模式集成：通过 `connect_peer()` 添加 DHT/PEX 发现的 peers
+- HTTP 分块传输编码（Chunked Transfer Encoding）解析
+  - 完整状态机：READ_SIZE → READ_DATA → READ_CR → READ_LF → READ_TRAILER
+  - Windows memmem 兼容实现
+- 资源搜索功能完善：JSON 响应解析、路径模式替换、多格式支持
+
+### 2026-05-12 - 协议插件重构完成
+- 所有私有协议插件（ED2K/Thunder/QQDL/FlashGet/HLS）迁移到 `IProtocolHandler` 接口
+- 统一任务管理：TaskContext、活动任务跟踪、异步下载线程模型
+- 完整支持任务暂停、恢复、取消操作
+- HLS 插件实现完整 M3U8 下载逻辑：播放列表解析 → 段并行下载 → 二进制合并
+
 ---
 
 ## 项目愿景
@@ -198,7 +220,8 @@ graph TD
 | 依赖 | 用途 | 版本要求 |
 |------|------|---------|
 | libcurl | HTTP/FTP 协议支持 | 7.68+ |
-| libtorrent-rasterbar | BitTorrent 协议 | 2.0+ |
+| OpenSSL | HTTPS/TLS 支持 | 1.1+ |
+| libtorrent-rasterbar | BitTorrent 协议（可选） | 2.0+ |
 | spdlog | 日志库 | 1.9+ |
 | CLI11 | 命令行解析 | 2.3+ |
 | nlohmann/json | JSON 配置解析 | 3.10+ |
@@ -387,8 +410,14 @@ DownloadTask* start_download(const std::string& url,
 新增协议插件时，请遵循以下步骤：
 1. 在 `packages/libfalcon-protocols/plugins/<protocol_name>/` 创建目录
 2. 实现 `IProtocolHandler` 接口（定义在 `packages/libfalcon-core/include/falcon/protocol_handler.hpp`）
-3. 在插件目录下创建 `CLAUDE.md` 记录协议特性、依赖库、测试方法
-4. 在 `packages/libfalcon-protocols/CMakeLists.txt` 中添加编译选项（可选编译该插件）
+3. 如需访问其他协议处理器（如包装协议委托下载），实现 `IProtocolHandlerExtension` 接口
+4. 在插件目录下创建 `CLAUDE.md` 记录协议特性、依赖库、测试方法
+5. 在 `packages/libfalcon-protocols/CMakeLists.txt` 中添加编译选项（可选编译该插件）
+
+**协议委托机制**：
+- 包装协议（thunder://、flashget://、qqlink://）应实现 `IProtocolHandlerExtension`
+- 通过 `set_protocol_registry()` 获取 `ProtocolRegistry` 引用
+- 使用 `delegateDownload()` 将解析后的真实 URL 委托给对应协议处理器
 
 ---
 
@@ -414,6 +443,7 @@ falcon/                              # 项目根目录
 │   │   │   ├── download_engine.hpp
 │   │   │   ├── task_manager.hpp
 │   │   │   ├── protocol_handler.hpp
+│   │   │   ├── protocol_handler_extension.hpp  # 协议扩展接口
 │   │   │   ├── event_dispatcher.hpp
 │   │   │   ├── exceptions.hpp
 │   │   │   └── version.hpp
@@ -427,7 +457,10 @@ falcon/                              # 项目根目录
 │   │   ├── plugins/                 # 协议插件
 │   │   │   ├── http/                # HTTP/HTTPS (libcurl)
 │   │   │   ├── ftp/                 # FTP
-│   │   │   ├── bittorrent/          # BitTorrent/Magnet (libtorrent)
+│   │   │   ├── bittorrent/          # BitTorrent/Magnet
+│   │   │   │   ├── bencode.cpp/hpp  # B 编码实现
+│   │   │   │   ├── dht_node.cpp/hpp # DHT 路由节点
+│   │   │   │   └── pex_protocol.cpp/hpp  # PEX 扩展协议
 │   │   │   ├── thunder/             # 迅雷协议
 │   │   │   ├── ed2k/                # ED2K 电驴
 │   │   │   ├── hls/                 # HLS/DASH 流媒体
@@ -554,66 +587,71 @@ Daemon 配置文件（`/etc/falcon/daemon.json` 或 `~/.config/falcon/daemon.jso
 
 ## 下一步开发计划
 
-### 第一阶段（MVP - libfalcon + CLI）
+### ✅ 第一阶段（已完成）
 1. **核心库架构**
-   - 实现任务管理器（TaskManager）
-   - 实现下载引擎核心（DownloadEngine）
-   - 实现插件系统框架（PluginManager）
-   - 定义公共接口（IProtocolHandler）
+   - ✅ 任务管理器（TaskManager）
+   - ✅ 下载引擎核心（DownloadEngine）
+   - ✅ 插件系统框架（ProtocolRegistry）
+   - ✅ 公共接口（IProtocolHandler）
+   - ✅ 协议扩展接口（IProtocolHandlerExtension）
 
 2. **HTTP/HTTPS 插件**
-   - 基于 libcurl 实现
-   - 支持断点续传、分块下载
+   - ✅ 基于 libcurl 实现
+   - ✅ 支持断点续传、分块下载
+   - ✅ HTTPS/TLS 支持（OpenSSL）
+   - ✅ HTTP 分块传输编码解析
 
-3. **CLI 工具**
-   - 命令行参数解析（CLI11）
-   - 进度条显示
-   - 基础日志输出
+3. **协议支持**
+   - ✅ HTTP/HTTPS
+   - ✅ FTP/FTPS
+   - ✅ BitTorrent/Magnet（含 DHT/PEX）
+   - ✅ ED2K（电驴）
+   - ✅ Thunder（迅雷）
+   - ✅ FlashGet（快车）
+   - ✅ QQDL（QQ 旋风）
+   - ✅ HLS/DASH 流媒体
 
-4. **测试与文档**
-   - 单元测试覆盖率 ≥ 60%
-   - API 文档（Doxygen）
-   - 用户指南（Markdown）
+4. **高级下载特性**
+   - ✅ 多线程分块下载（SegmentDownloader）
+   - ✅ 协议委托机制
+   - ✅ 任务暂停/恢复/取消
 
-### 第二阶段（协议扩展 + Daemon）
-1. **新增协议插件**
-   - FTP 插件
-   - BitTorrent/Magnet 插件
+### 🔄 第二阶段（进行中）
+1. **Daemon 服务**
+   - ✅ HTTP RPC 服务器
+   - ✅ aria2 兼容 API（addUri/remove/tellStatus/getGlobalStat）
+   - ✅ 任务持久化（规划中）
+   - 🔄 RESTful API 完善
 
-2. **高级下载特性**
-   - 多线程分块下载
-   - 智能速度控制
-   - 任务优先级队列
+2. **桌面应用（Qt6）**
+   - ✅ 迅雷风格 UI
+   - ✅ 任务列表（表格/网格视图）
+   - ✅ 系统托盘集成
+   - ✅ 主题切换（亮色/暗色）
+   - ✅ 云存储浏览（S3/OSS/COS）
+   - ✅ 资源搜索集成
+   - 🔄 与 Daemon 通信完善
 
-3. **Daemon 服务**
-   - gRPC 或 REST 接口
-   - 任务持久化（SQLite）
-   - 远程任务管理
+3. **测试与文档**
+   - 🔄 单元测试覆盖率提升
+   - 🔄 集成测试补充
+   - ✅ API 文档更新
 
-4. **完善测试**
-   - 集成测试
-   - 性能测试与优化
-
-### 第三阶段（高级特性 + GUI/Web）
+### 📋 第三阶段（规划中）
 1. **更多协议支持**
-   - ED2K（电驴）
-   - HLS/DASH 流媒体
-   - 网盘 API（需 OAuth2）
+   - 🔄 网盘直链解析（百度/阿里云盘/夸克等）
+   - 📋 WebDAV 协议
+   - 📋 SFTP 协议
 
-2. **桌面应用**
-   - 技术选型（Qt/Tauri/Electron）
-   - 与 Daemon 通信
-   - 原生系统集成
+2. **完善桌面应用**
+   - 📋 设置页面完善
+   - 📋 下载规则管理
+   - 📋 任务调度功能
 
-3. **Web 管理界面**
-   - 前端框架（React/Vue）
-   - RESTful API 设计
-   - 用户认证与权限
-
-4. **发布 1.0 正式版本**
-   - 完整文档
-   - 多平台安装包
-   - 社区建设
+3. **发布准备**
+   - 📋 多平台安装包
+   - 📋 用户手册
+   - 📋 性能优化
 
 ---
 

@@ -354,7 +354,7 @@ public:
 private:
     ExecutionResult receive_data(DownloadEngineV2* engine);
     bool write_to_segment(const char* data, std::size_t size, DownloadEngineV2* engine);
-    bool handle_chunked_encoding();
+    bool handle_chunked_encoding(const char* data, std::size_t size, DownloadEngineV2* engine);
     void update_progress();
     bool check_completion();
 
@@ -376,8 +376,18 @@ private:
 
     // 分块传输编码状态
     bool chunked_encoding_ = false;
-    [[maybe_unused]] std::size_t chunk_remaining_ = 0;
-    [[maybe_unused]] bool chunk_end_ = false;
+    std::size_t chunk_remaining_ = 0;  // 当前块剩余字节数
+    bool chunk_end_ = false;           // 是否到达块结束标记
+    std::string chunk_buffer_;         // 分块编码解析缓冲区
+    enum class ChunkParseState {
+        READ_SIZE,      // 读取块大小
+        READ_DATA,      // 读取块数据
+        READ_CR,        // 读取数据后的 CR
+        READ_LF,        // 读取数据后的 LF
+        READ_TRAILER    // 读取尾部（可选的头部）
+    };
+    ChunkParseState chunk_state_ = ChunkParseState::READ_SIZE;
+    std::string chunk_size_str_;      // 存储块大小字符串
 
     // 进度计算
     std::chrono::steady_clock::time_point last_update_;

@@ -35,11 +35,15 @@ endif()
 
 add_library(falcon_plugin_bittorrent
     bittorrent_plugin.cpp
+    dht_node.cpp
+    pex_protocol.cpp
+    bencode.cpp
 )
 
 target_include_directories(falcon_plugin_bittorrent
     PRIVATE
         ${LIBTORRENT_INCLUDE_DIRS}
+        ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 target_link_libraries(falcon_plugin_bittorrent

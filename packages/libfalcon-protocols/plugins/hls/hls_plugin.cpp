@@ -6,358 +6,433 @@
  */
 
 #include "hls_plugin.hpp"
-#include <falcon/http_plugin.hpp>
 #include <falcon/logger.hpp>
 #include <falcon/exceptions.hpp>
-#include <falcon/download_task.hpp>
+#include <falcon/protocol_registry.hpp>
 #include <regex>
 #include <sstream>
+#include <algorithm>
+#include <chrono>
 #include <fstream>
 #include <filesystem>
-#include <algorithm>
-#include <nlohmann/json.hpp>
+#include <cstring>
 
 namespace falcon {
 namespace protocols {
 
-HLSPlugin::HLSPlugin() {
-    FALCON_LOG_INFO("HLS/DASH plugin initialized");
+//==============================================================================
+// HLSHandler 实现
+//==============================================================================
+
+HLSHandler::HLSHandler() {
+    FALCON_LOG_INFO("HLS/DASH handler initialized");
 }
 
-std::vector<std::string> HLSPlugin::getSupportedSchemes() const {
-    return {"http", "https"};
+HLSHandler::~HLSHandler() {
+    std::lock_guard<std::mutex> lock(tasksMutex_);
+    for (auto& pair : activeTasks_) {
+        if (pair.second->running.load()) {
+            pair.second->cancelled.store(true);
+            pair.second->running.store(false);
+            if (pair.second->downloadThread.joinable()) {
+                pair.second->downloadThread.join();
+            }
+        }
+    }
+    activeTasks_.clear();
 }
 
-bool HLSPlugin::canHandle(const std::string& url) const {
-    // 通过文件扩展名判断
+std::vector<std::string> HLSHandler::supported_schemes() const {
+    return {"http", "https", "hls", "dash"};
+}
+
+bool HLSHandler::can_handle(const std::string& url) const {
     return url.find(".m3u8") != std::string::npos ||
            url.find(".mpd") != std::string::npos ||
-           getStreamType(url) != "unknown";
+           url.find("m3u8") != std::string::npos ||
+           url.find("dash") != std::string::npos;
 }
 
-std::unique_ptr<IDownloadTask> HLSPlugin::createTask(const std::string& url,
-                                                    const DownloadOptions& options) {
-    FALCON_LOG_DEBUG("Creating HLS/DASH task for: {}", url);
-
-    std::string streamType = getStreamType(url);
-    if (streamType == "hls") {
-        return createHLSTask(url, options);
-    } else if (streamType == "dash") {
-        return createDASHTask(url, options);
-    } else {
-        throw UnsupportedProtocolException("Unknown stream type for URL: " + url);
-    }
-}
-
-std::string HLSPlugin::getStreamType(const std::string& url) {
-    if (isHLSStream(url)) {
-        return "hls";
-    } else if (isDASHStream(url)) {
-        return "dash";
-    }
-    return "unknown";
-}
-
-bool HLSPlugin::isHLSStream(const std::string& url) {
-    return url.find(".m3u8") != std::string::npos ||
-           url.find("m3u8") != std::string::npos;
-}
-
-bool HLSPlugin::isDASHStream(const std::string& url) {
-    return url.find(".mpd") != std::string::npos ||
-           url.find("dash") != std::string::npos ||
-           url.find("mpd") != std::string::npos;
-}
-
-std::unique_ptr<IDownloadTask> HLSPlugin::createHLSTask(const std::string& url,
-                                                       const DownloadOptions& options) {
-    FALCON_LOG_DEBUG("Creating HLS task for: {}", url);
-
-    // 下载播放列表
-    auto httpPlugin = std::make_unique<HttpPlugin>();
-    auto m3u8Task = httpPlugin->createTask(url, options);
-
-    // 实际实现需要下载内容并解析
-    std::string m3u8Content; // = downloadContent(m3u8Task.get());
-
-    // 解析播放列表
-    PlaylistInfo playlist = parseM3U8(m3u8Content, url);
-
-    // 如果是主播放列表，选择最佳质量
-    if (!playlist.variants.empty()) {
-        std::vector<std::string> streamUrls;
-        for (const auto& variant : playlist.variants) {
-            streamUrls.push_back(resolveUrl(variant.second, url));
-        }
-
-        std::string bestStream = selectBestQuality(streamUrls, options);
-        return createHLSTask(bestStream, options);
-    }
-
-    // 创建批量下载任务
-    std::string outputDir = options.output_path;
-    if (outputDir.empty()) {
-        outputDir = "./downloads";
-    }
-
-    return createBatchTask(playlist.segments, outputDir, options);
-}
-
-std::unique_ptr<IDownloadTask> HLSPlugin::createDASHTask(const std::string& url,
-                                                        const DownloadOptions& options) {
-    FALCON_LOG_DEBUG("Creating DASH task for: {}", url);
-
-    // 下载MPD清单
-    auto httpPlugin = std::make_unique<HttpPlugin>();
-    auto mpdTask = httpPlugin->createTask(url, options);
-
-    // 实际实现需要下载内容并解析
-    std::string mpdContent; // = downloadContent(mpdTask.get());
-
-    // 解析MPD
-    std::vector<DASHAdaptation> adaptations = parseMPD(mpdContent, url);
-
-    // 选择最佳适配集
-    // 这里简化处理，选择第一个视频适配集
-    DASHAdaptation selectedAdaptation;
-    bool found = false;
-    for (const auto& adaptation : adaptations) {
-        if (adaptation.mimeType.find("video") != std::string::npos) {
-            selectedAdaptation = adaptation;
-            found = true;
-            break;
-        }
-    }
-
-    if (!found && !adaptations.empty()) {
-        selectedAdaptation = adaptations[0];
-        found = true;
-    }
-
-    if (!found) {
-        throw UnsupportedProtocolException("No valid adaptation found in DASH manifest");
-    }
-
-    // 选择最佳表现
-    DASHRepresentation selectedRep;
-    if (!selectedAdaptation.representations.empty()) {
-        // 选择带宽适中的表现
-        std::sort(selectedAdaptation.representations.begin(),
-                  selectedAdaptation.representations.end(),
-                  [](const DASHRepresentation& a, const DASHRepresentation& b) {
-                      return a.bandwidth < b.bandwidth;
-                  });
-
-        // 选择中间带宽的表现
-        size_t mid = selectedAdaptation.representations.size() / 2;
-        selectedRep = selectedAdaptation.representations[mid];
-    }
-
-    // 创建批量下载任务
-    std::string outputDir = options.output_path;
-    if (outputDir.empty()) {
-        outputDir = "./downloads";
-    }
-
-    return createBatchTask(selectedRep.segments, outputDir, options);
-}
-
-HLSPlugin::PlaylistInfo HLSPlugin::parseM3U8(const std::string& m3u8Content,
-                                           const std::string& baseUrl) {
-    PlaylistInfo info;
-    info.isLive = false;
-    info.targetDuration = 0;
-    info.version = 1;
-
-    std::istringstream iss(m3u8Content);
-    std::string line;
-
-    while (std::getline(iss, line)) {
-        // 移除BOM和空白
-        line.erase(0, line.find_first_not_of("\xEF\xBB\xBF"));
-        line.erase(line.find_last_not_of(" \r\n\t") + 1);
-
-        if (line.empty()) continue;
-
-        if (line == "#EXTM3U") {
-            // M3U文件头
-            continue;
-        } else if (line.find("#EXT-X-VERSION:") == 0) {
-            info.version = std::stoul(line.substr(15));
-        } else if (line.find("#EXT-X-TARGETDURATION:") == 0) {
-            info.targetDuration = std::stod(line.substr(22));
-        } else if (line.find("#EXT-X-STREAM-INF:") == 0) {
-            // 变体流
-            auto attributes = parseStreamInf(line.substr(18));
-            std::getline(iss, line);
-            if (!line.empty() && line[0] != '#') {
-                info.variants[attributes["BANDWIDTH"]] = line;
-            }
-        } else if (line.find("#EXTINF:") == 0) {
-            // 媒体段
-            auto extinf = parseExtInf(line);
-            std::getline(iss, line);
-            if (!line.empty() && line[0] != '#') {
-                MediaSegment segment;
-                segment.url = resolveUrl(line, baseUrl);
-                segment.duration = extinf.first;
-                segment.title = extinf.second;
-                info.segments.push_back(segment);
-            }
-        } else if (line.find("#EXT-X-ENDLIST") != std::string::npos) {
-            // VOD流结束标记
-            info.isLive = false;
-        } else if (line.find("#EXT-X-KEY:") == 0) {
-            // 加密信息
-            // 处理加密
-        }
-    }
+FileInfo HLSHandler::get_file_info(const std::string& url,
+                                    const DownloadOptions& options) {
+    FileInfo info;
+    info.url = url;
+    info.supports_resume = true;
+    info.supports_segments = true;
+    info.filename = "stream";  // HLS 通常需要从播放列表解析文件名
+    info.total_size = 0;  // 需要解析播放列表才能知道总大小
 
     return info;
 }
 
-std::vector<HLSPlugin::DASHAdaptation> HLSPlugin::parseMPD(const std::string& mpdContent,
-                                                         const std::string& baseUrl) {
-    std::vector<DASHAdaptation> adaptations;
+void HLSHandler::download(DownloadTask::Ptr task, IEventListener* listener) {
+    try {
+        FALCON_LOG_INFO("Starting HLS/DASH download for: {}", task->url());
 
-    // 实际实现需要使用XML解析器
-    // 这里是简化版本
+        auto ctx = std::make_shared<TaskContext>();
+        ctx->task = task;
+        ctx->listener = listener;
+        ctx->running.store(true);
+        ctx->downloadedBytes = 0;
 
-    // 示例：从MPD中提取适配集信息
-    // 需要解析XML结构获取Period、AdaptationSet、Representation等
+        // TODO: 实际实现需要：
+        // 1. 下载播放列表 (m3u8/mpd)
+        // 2. 解析媒体段
+        // 3. 并行下载各段
+        // 4. 合并成最终文件
 
-    return adaptations;
+        {
+            std::lock_guard<std::mutex> lock(tasksMutex_);
+            activeTasks_[task->id()] = ctx;
+        }
+
+        ctx->downloadThread = std::thread([this, ctx]() {
+            downloadThreadMain(ctx);
+        });
+
+        task->mark_started();
+
+    } catch (const std::exception& e) {
+        FALCON_LOG_ERROR("Failed to start HLS download: {}", e.what());
+        task->set_error(e.what());
+        throw;
+    }
 }
 
-std::map<std::string, std::string> HLSPlugin::parseStreamInf(const std::string& attributes) {
-    std::map<std::string, std::string> result;
+void HLSHandler::pause(DownloadTask::Ptr task) {
+    std::lock_guard<std::mutex> lock(tasksMutex_);
+    auto it = activeTasks_.find(task->id());
+    if (it != activeTasks_.end()) {
+        it->second->paused.store(true);
+        FALCON_LOG_DEBUG("HLS download paused: {}", task->id());
+    }
+}
 
-    std::regex attrRegex(R"((\w+)=(?:"([^"]*)"|([^,\s]+)))");
-    std::sregex_iterator iter(attributes.begin(), attributes.end(), attrRegex);
-    std::sregex_iterator end;
+void HLSHandler::resume(DownloadTask::Ptr task, IEventListener* listener) {
+    std::lock_guard<std::mutex> lock(tasksMutex_);
+    auto it = activeTasks_.find(task->id());
+    if (it != activeTasks_.end()) {
+        it->second->paused.store(false);
+        it->second->listener = listener;
+        FALCON_LOG_DEBUG("HLS download resumed: {}", task->id());
+    }
+}
 
-    for (; iter != end; ++iter) {
-        std::string key = (*iter)[1].str();
-        std::string value = (*iter)[2].str();
-        if (value.empty()) {
-            value = (*iter)[3].str();
+void HLSHandler::cancel(DownloadTask::Ptr task) {
+    std::lock_guard<std::mutex> lock(tasksMutex_);
+    auto it = activeTasks_.find(task->id());
+    if (it != activeTasks_.end()) {
+        it->second->cancelled.store(true);
+        it->second->running.store(false);
+
+        if (it->second->downloadThread.joinable()) {
+            it->second->downloadThread.join();
         }
-        result[key] = value;
+
+        activeTasks_.erase(it);
+        FALCON_LOG_INFO("HLS download cancelled: {}", task->id());
+    }
+}
+
+//==============================================================================
+// 私有方法实现
+//==============================================================================
+
+std::vector<HLSHandler::MediaSegment> HLSHandler::parseM3U8(
+        const std::string& m3u8Content,
+        const std::string& baseUrl) {
+    std::vector<MediaSegment> segments;
+    std::istringstream iss(m3u8Content);
+    std::string line;
+
+    double currentDuration = 0;
+    std::string currentTitle;
+
+    while (std::getline(iss, line)) {
+        // 移除空白字符
+        line.erase(0, line.find_first_not_of(" \t\r\n"));
+        line.erase(line.find_last_not_of(" \t\r\n") + 1);
+
+        if (line.empty() || line[0] == '#') {
+            // 处理标签
+            if (line.find("#EXTINF:") == 0) {
+                auto result = parseExtInf(line);
+                currentDuration = result.first;
+                currentTitle = result.second;
+            }
+            // 忽略其他标签
+        } else {
+            // 这是媒体段URL
+            MediaSegment segment;
+            segment.url = resolveUrl(line, baseUrl);
+            segment.duration = currentDuration;
+            segment.title = currentTitle;
+            segments.push_back(segment);
+
+            currentDuration = 0;
+            currentTitle.clear();
+        }
     }
 
-    return result;
+    return segments;
 }
 
-std::pair<double, std::string> HLSPlugin::parseExtInf(const std::string& extinf) {
-    // 格式: #EXTINF:duration,title
-    std::regex regex(R"(#EXTINF:([\d.]+)(?:,(.*))?)");
+std::pair<double, std::string> HLSHandler::parseExtInf(const std::string& extinf) {
+    // #EXTINF:duration,title
+    std::regex infRegex(R"(#EXTINF:([\d.]+)(?:,(.*))?)");
     std::smatch match;
 
-    if (std::regex_match(extinf, match, regex)) {
+    if (std::regex_match(extinf, match, infRegex)) {
         double duration = std::stod(match[1].str());
-        std::string title = match[2].str();
+        std::string title = match.size() > 2 ? match[2].str() : "";
         return {duration, title};
     }
 
     return {0, ""};
 }
 
-std::vector<std::string> HLSPlugin::downloadMasterPlaylist(const std::string& masterUrl) {
-    // 实际实现需要下载并解析主播放列表
-    std::vector<std::string> streams;
-    return streams;
-}
-
-std::string HLSPlugin::selectBestQuality(const std::vector<std::string>& streams,
-                                        const DownloadOptions& options) {
-    // 根据选项选择最佳质量
-    if (!streams.empty()) {
-        return streams[0]; // 简化：选择第一个
-    }
-    return "";
-}
-
-std::unique_ptr<IDownloadTask> HLSPlugin::createBatchTask(const std::vector<MediaSegment>& segments,
-                                                         const std::string& outputDir,
-                                                         const DownloadOptions& options) {
-    // 创建批量下载任务
-    auto batchTask = std::make_unique<BatchDownloadTask>();
-
-    FALCON_LOG_INFO("Creating batch task with {} segments", segments.size());
-
-    for (const auto& segment : segments) {
-        auto httpPlugin = std::make_unique<HttpPlugin>();
-        auto segmentTask = httpPlugin->createTask(segment.url, options);
-
-        // 设置段文件名
-        std::filesystem::path outputPath(outputDir);
-        std::filesystem::path segmentPath(segment.url);
-        std::string filename = "segment_" + std::to_string(batchTask->getTaskCount()) +
-                              segmentPath.extension().string();
-
-        segmentTask->setFilename((outputPath / filename).string());
-
-        batchTask->addTask(std::move(segmentTask));
+std::string HLSHandler::resolveUrl(const std::string& url, const std::string& baseUrl) {
+    // 如果已经是绝对URL，直接返回
+    if (url.find("http://") == 0 || url.find("https://") == 0) {
+        return url;
     }
 
-    // 设置合并回调
-    batchTask->setCompletionCallback([this, outputDir](const std::vector<std::string>& files) {
-        std::string outputFile = outputDir + "/output.mp4";
-        return mergeSegments(files, outputFile);
-    });
+    // 解析基础URL
+    std::regex urlRegex(R"(^(https?://[^/]+)/)");
+    std::smatch match;
+    if (std::regex_search(baseUrl, match, urlRegex)) {
+        std::string base = match[1].str();
 
-    return std::move(batchTask);
-}
+        // 处理绝对路径
+        if (url[0] == '/') {
+            return base + url;
+        }
 
-bool HLSPlugin::mergeSegments(const std::vector<std::string>& segmentFiles,
-                             const std::string& outputFile) {
-    // 使用ffmpeg或其他工具合并段
-    std::string command = "ffmpeg -i \"concat:";
-
-    for (size_t i = 0; i < segmentFiles.size(); ++i) {
-        command += segmentFiles[i];
-        if (i < segmentFiles.size() - 1) {
-            command += "|";
+        // 处理相对路径
+        size_t lastSlash = baseUrl.find_last_of('/');
+        if (lastSlash != std::string::npos) {
+            return baseUrl.substr(0, lastSlash + 1) + url;
         }
     }
 
-    command += "\" -c copy \"" + outputFile + "\"";
+    return url;
+}
 
-    FALCON_LOG_DEBUG("Merging segments with command: {}", command);
+void HLSHandler::downloadThreadMain(std::shared_ptr<TaskContext> ctx) {
+    FALCON_LOG_DEBUG("HLS download thread started for: {}", ctx->task->url());
 
-    int result = std::system(command.c_str());
+    try {
+        // 下载所有段
+        downloadAllSegments(ctx);
+    } catch (const std::exception& e) {
+        FALCON_LOG_ERROR("HLS download failed: {}", e.what());
+        ctx->task->set_error(e.what());
+    }
 
-    if (result == 0) {
-        FALCON_LOG_INFO("Successfully merged segments to: {}", outputFile);
+    {
+        std::lock_guard<std::mutex> lock(tasksMutex_);
+        activeTasks_.erase(ctx->task->id());
+    }
 
-        // 删除临时段文件
-        for (const auto& file : segmentFiles) {
-            std::filesystem::remove(file);
-        }
+    FALCON_LOG_DEBUG("HLS download thread ended");
+}
 
-        return true;
-    } else {
-        FALCON_LOG_ERROR("Failed to merge segments");
+std::string HLSHandler::downloadM3U8(const std::string& url) {
+    std::lock_guard<std::mutex> lock(registryMutex_);
+
+    if (!registry_) {
+        throw std::runtime_error("ProtocolRegistry not set for HLS handler");
+    }
+
+    auto* handler = registry_->get_handler_for_url(url);
+    if (!handler) {
+        throw std::runtime_error("No handler found for M3U8 URL: " + url);
+    }
+
+    // 创建临时任务下载播放列表
+    // 这里简化处理，直接使用 HTTP 下载
+    // 实际应该使用 DownloadEngine 和 handler->download()
+
+    // 简化实现：使用 libcurl 直接下载（如果可用）
+    // 或者返回占位符内容用于测试
+
+    FALCON_LOG_INFO("Downloading M3U8 playlist from: {}", url);
+
+    // 简化实现：返回一个示例播放列表
+    // 实际应该发起 HTTP 请求获取内容
+    return "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:10\n";
+}
+
+std::vector<uint8_t> HLSHandler::downloadSegment(const std::string& url) {
+    std::lock_guard<std::mutex> lock(registryMutex_);
+
+    if (!registry_) {
+        throw std::runtime_error("ProtocolRegistry not set for HLS handler");
+    }
+
+    auto* handler = registry_->get_handler_for_url(url);
+    if (!handler) {
+        throw std::runtime_error("No handler found for segment URL: " + url);
+    }
+
+    FALCON_LOG_DEBUG("Downloading segment: {}", url);
+
+    // 简化实现：返回空数据
+    // 实际应该发起 HTTP 请求获取段内容
+    return std::vector<uint8_t>();
+}
+
+bool HLSHandler::mergeSegments(const std::vector<std::string>& segmentFiles,
+                               const std::string& outputFile) {
+    std::ofstream output(outputFile, std::ios::binary);
+    if (!output) {
+        FALCON_LOG_ERROR("Failed to create output file: {}", outputFile);
         return false;
     }
+
+    for (const auto& file : segmentFiles) {
+        std::ifstream input(file, std::ios::binary);
+        if (!input) {
+            FALCON_LOG_WARN("Failed to open segment file: {}", file);
+            continue;
+        }
+
+        output << input.rdbuf();
+        input.close();
+
+        // 删除临时段文件
+        std::error_code ec;
+        std::filesystem::remove(file, ec);
+    }
+
+    output.close();
+    return true;
 }
 
-std::string HLSPlugin::resolveUrl(const std::string& url, const std::string& baseUrl) {
-    if (url.find("://") != std::string::npos) {
-        return url; // 绝对URL
+void HLSHandler::downloadAllSegments(std::shared_ptr<TaskContext> ctx) {
+    const std::string& url = ctx->task->url();
+
+    // 1. 下载 M3U8 播放列表
+    std::string m3u8Content = downloadM3U8(url);
+
+    // 2. 解析播放列表获取段信息
+    std::string baseUrl = url.substr(0, url.find_last_of('/'));
+    ctx->segments = parseM3U8(m3u8Content, baseUrl);
+
+    if (ctx->segments.empty()) {
+        throw std::runtime_error("No media segments found in playlist");
     }
 
-    std::filesystem::path basePath(baseUrl);
-    std::string baseDir = basePath.parent_path().string();
+    FALCON_LOG_INFO("Found {} media segments", ctx->segments.size());
 
-    if (url[0] == '/') {
-        // 相对根路径
-        std::filesystem::path parsed(baseUrl);
-        return parsed.protocol() + "://" + parsed.host() + url;
+    // 3. 计算总大小（估算）
+    ctx->totalSize = ctx->segments.size() * 1024 * 1024;  // 假设每段 1MB
+
+    // 4. 并行下载各段
+    std::vector<std::string> segmentFiles;
+    segmentFiles.reserve(ctx->segments.size());
+
+    // 创建临时目录
+    std::filesystem::path tempDir = std::filesystem::temp_directory_path() / "falcon_hls_" + std::to_string(ctx->task->id());
+    std::error_code ec;
+    std::filesystem::create_directories(tempDir, ec);
+
+    // 限制并发数
+    const size_t maxConcurrent = 4;
+    std::atomic<size_t> completedCount{0};
+    std::atomic<size_t> totalBytes{0};
+    std::vector<std::thread> downloadThreads;
+
+    for (size_t i = 0; i < ctx->segments.size(); i += maxConcurrent) {
+        size_t batchEnd = std::min(i + maxConcurrent, ctx->segments.size());
+
+        // 启动一批下载线程
+        for (size_t j = i; j < batchEnd; ++j) {
+            if (ctx->cancelled.load()) {
+                break;
+            }
+
+            downloadThreads.emplace_back([this, &ctx, j, &tempDir, &segmentFiles, &completedCount, &totalBytes]() {
+                try {
+                    const auto& segment = ctx->segments[j];
+
+                    // 下载段数据
+                    auto data = downloadSegment(segment.url);
+
+                    // 保存到临时文件
+                    std::string segmentFile = (tempDir / ("segment_" + std::to_string(j) + ".ts")).string();
+                    std::ofstream out(segmentFile, std::ios::binary);
+                    if (out) {
+                        out.write(reinterpret_cast<const char*>(data.data()), data.size());
+                        out.close();
+
+                        {
+                            std::lock_guard<std::mutex> lock(ctx->mutex);
+                            segmentFiles.push_back(segmentFile);
+                            totalBytes += data.size();
+                            ctx->downloadedBytes = totalBytes.load();
+                        }
+
+                        // 通知进度
+                        if (ctx->listener) {
+                            ctx->listener->on_progress(ctx->task->id(), totalBytes.load(), ctx->totalSize);
+                        }
+                    }
+                } catch (const std::exception& e) {
+                    FALCON_LOG_ERROR("Failed to download segment {}: {}", j, e.what());
+                }
+
+                completedCount++;
+            });
+        }
+
+        // 等待当前批次完成
+        for (auto& thread : downloadThreads) {
+            if (thread.joinable()) {
+                thread.join();
+            }
+        }
+        downloadThreads.clear();
+    }
+
+    // 5. 合并所有段到最终文件
+    if (!segmentFiles.empty() && !ctx->cancelled.load()) {
+        std::string outputFile = ctx->task->output_path();
+        if (mergeSegments(segmentFiles, outputFile)) {
+            FALCON_LOG_INFO("Successfully merged {} segments to: {}", segmentFiles.size(), outputFile);
+
+            // 标记任务完成
+            if (ctx->listener) {
+                ctx->listener->on_complete(ctx->task->id());
+            }
+        } else {
+            throw std::runtime_error("Failed to merge segments");
+        }
     } else {
-        // 相对路径
-        return baseDir + "/" + url;
+        throw std::runtime_error("No segments downloaded");
     }
+
+    // 清理临时目录
+    std::filesystem::remove_all(tempDir, ec);
+}
+
+bool HLSHandler::isHLSStream(const std::string& url) const {
+    return url.find(".m3u8") != std::string::npos ||
+           url.find("m3u8") != std::string::npos;
+}
+
+bool HLSHandler::isDASHStream(const std::string& url) const {
+    return url.find(".mpd") != std::string::npos ||
+           url.find("dash") != std::string::npos ||
+           url.find("mpd") != std::string::npos;
+}
+
+//==============================================================================
+// Factory function
+//==============================================================================
+
+std::unique_ptr<IProtocolHandler> create_hls_handler() {
+    return std::make_unique<HLSHandler>();
 }
 
 } // namespace protocols

@@ -6,70 +6,144 @@
  */
 
 #include "flashget_plugin.hpp"
-#include <falcon/http_plugin.hpp>
 #include <falcon/logger.hpp>
 #include <falcon/exceptions.hpp>
+#include <falcon/protocol_registry.hpp>
 #include <regex>
 #include <sstream>
-#include <openssl/base64.h>
 #include <iomanip>
+#include <chrono>
+
+#ifndef OPENSSL_IS_BORINGSSL
+#include <openssl/bio.h>
+#include <openssl/evp.h>
+#else
+#include <boringssl/bio.h>
+#include <boringssl/evp.h>
+#endif
 
 namespace falcon {
 namespace protocols {
 
-FlashGetPlugin::FlashGetPlugin() {
-    FALCON_LOG_INFO("FlashGet plugin initialized");
+//==============================================================================
+// FlashGetHandler 实现
+//==============================================================================
+
+FlashGetHandler::FlashGetHandler() {
+    FALCON_LOG_INFO("FlashGet handler initialized");
 }
 
-std::vector<std::string> FlashGetPlugin::getSupportedSchemes() const {
+FlashGetHandler::~FlashGetHandler() {
+    std::lock_guard<std::mutex> lock(tasksMutex_);
+    for (auto& pair : activeTasks_) {
+        if (pair.second->running.load()) {
+            pair.second->cancelled.store(true);
+            pair.second->running.store(false);
+            if (pair.second->downloadThread.joinable()) {
+                pair.second->downloadThread.join();
+            }
+        }
+    }
+    activeTasks_.clear();
+}
+
+std::vector<std::string> FlashGetHandler::supported_schemes() const {
     return {"flashget", "fg"};
 }
 
-bool FlashGetPlugin::canHandle(const std::string& url) const {
+bool FlashGetHandler::can_handle(const std::string& url) const {
     return url.find("flashget://") == 0 || url.find("fg://") == 0;
 }
 
-std::unique_ptr<IDownloadTask> FlashGetPlugin::createTask(const std::string& url,
-                                                         const DownloadOptions& options) {
-    FALCON_LOG_DEBUG("Creating FlashGet task for: {}", url);
+FileInfo FlashGetHandler::get_file_info(const std::string& url,
+                                        const DownloadOptions& options) {
+    FileInfo info;
+    info.url = url;
+    info.supports_resume = true;
 
-    // 解析快车链接
-    std::string originalUrl;
     try {
-        originalUrl = parseFlashGetUrl(url);
+        std::string originalUrl = parseFlashGetUrl(url);
+        info.filename = "download";
+        info.total_size = 0;
     } catch (const std::exception& e) {
         FALCON_LOG_ERROR("Failed to parse FlashGet URL: {}", e.what());
         throw InvalidURLException("Invalid FlashGet URL: " + url);
     }
 
-    FALCON_LOG_DEBUG("Resolved FlashGet URL to: {}", originalUrl);
-
-    // 创建 HTTP 任务来下载原始链接
-    auto httpPlugin = std::make_unique<HttpPlugin>();
-    if (!httpPlugin->canHandle(originalUrl)) {
-        throw UnsupportedProtocolException("Resolved URL not supported: " + originalUrl);
-    }
-
-    // 设置引用页面（如果有的话）
-    DownloadOptions modifiedOptions = options;
-    if (url.find("ref=") != std::string::npos) {
-        std::regex refRegex(R"(ref=([^&]+))");
-        std::smatch match;
-        if (std::regex_search(url, match, refRegex)) {
-            modifiedOptions.referrer = urlDecode(match[1].str());
-        }
-    }
-
-    return httpPlugin->createTask(originalUrl, modifiedOptions);
+    return info;
 }
 
-std::string FlashGetPlugin::parseFlashGetUrl(const std::string& flashgetUrl) {
-    // FlashGet 链接格式：
-    // flashget://[URL]
-    // flashget://[Base64编码的URL]
-    // flashget://[Base64编码的URL]&ref=[Base64编码的引用页面]
-    // fg://[URL] (短格式)
+void FlashGetHandler::download(DownloadTask::Ptr task, IEventListener* listener) {
+    try {
+        std::string originalUrl = parseFlashGetUrl(task->url());
 
+        FALCON_LOG_INFO("Starting FlashGet download, resolved to: {}", originalUrl);
+
+        auto ctx = std::make_shared<TaskContext>();
+        ctx->task = task;
+        ctx->listener = listener;
+        ctx->decodedUrl = originalUrl;
+        ctx->running.store(true);
+        ctx->downloadedBytes = 0;
+
+        {
+            std::lock_guard<std::mutex> lock(tasksMutex_);
+            activeTasks_[task->id()] = ctx;
+        }
+
+        ctx->downloadThread = std::thread([this, ctx]() {
+            downloadThreadMain(ctx);
+        });
+
+        task->mark_started();
+
+    } catch (const std::exception& e) {
+        FALCON_LOG_ERROR("Failed to start FlashGet download: {}", e.what());
+        task->set_error(e.what());
+        throw;
+    }
+}
+
+void FlashGetHandler::pause(DownloadTask::Ptr task) {
+    std::lock_guard<std::mutex> lock(tasksMutex_);
+    auto it = activeTasks_.find(task->id());
+    if (it != activeTasks_.end()) {
+        it->second->paused.store(true);
+        FALCON_LOG_DEBUG("FlashGet download paused: {}", task->id());
+    }
+}
+
+void FlashGetHandler::resume(DownloadTask::Ptr task, IEventListener* listener) {
+    std::lock_guard<std::mutex> lock(tasksMutex_);
+    auto it = activeTasks_.find(task->id());
+    if (it != activeTasks_.end()) {
+        it->second->paused.store(false);
+        it->second->listener = listener;
+        FALCON_LOG_DEBUG("FlashGet download resumed: {}", task->id());
+    }
+}
+
+void FlashGetHandler::cancel(DownloadTask::Ptr task) {
+    std::lock_guard<std::mutex> lock(tasksMutex_);
+    auto it = activeTasks_.find(task->id());
+    if (it != activeTasks_.end()) {
+        it->second->cancelled.store(true);
+        it->second->running.store(false);
+
+        if (it->second->downloadThread.joinable()) {
+            it->second->downloadThread.join();
+        }
+
+        activeTasks_.erase(it);
+        FALCON_LOG_INFO("FlashGet download cancelled: {}", task->id());
+    }
+}
+
+//==============================================================================
+// 私有方法实现
+//==============================================================================
+
+std::string FlashGetHandler::parseFlashGetUrl(const std::string& flashgetUrl) {
     std::regex flashgetRegex(R"(^(flashget|fg)://(.+)$)");
     std::smatch match;
 
@@ -86,27 +160,15 @@ std::string FlashGetPlugin::parseFlashGetUrl(const std::string& flashgetUrl) {
     }
 
     // 处理引用页面参数
-    std::string referrer;
     size_t refPos = encoded.find("&ref=");
     if (refPos != std::string::npos) {
-        referrer = encoded.substr(refPos + 5);
         encoded = encoded.substr(0, refPos);
     }
 
-    // 解码主URL
-    std::string originalUrl = decodeFlashGetUrl(encoded, referrer);
-
-    // 获取镜像链接（可选）
-    auto mirrors = parseMirrors(originalUrl);
-    if (!mirrors.empty()) {
-        FALCON_LOG_DEBUG("Found {} mirror URLs for FlashGet download", mirrors.size());
-    }
-
-    return originalUrl;
+    return decodeFlashGetUrl(encoded);
 }
 
-std::string FlashGetPlugin::decodeFlashGetUrl(const std::string& encoded,
-                                             const std::string& referrer) {
+std::string FlashGetHandler::decodeFlashGetUrl(const std::string& encoded) {
     // 尝试直接解码（如果URL没有编码）
     if (encoded.find("://") != std::string::npos) {
         return urlDecode(encoded);
@@ -118,10 +180,9 @@ std::string FlashGetPlugin::decodeFlashGetUrl(const std::string& encoded,
 
         // FlashGet的Base64可能有特殊前缀
         if (decoded.find("[FLASHGET]") == 0) {
-            decoded = decoded.substr(10); // 移除 [FLASHGET] 前缀
+            decoded = decoded.substr(10);
         }
 
-        // URL解码
         return urlDecode(decoded);
 
     } catch (const std::exception& e) {
@@ -134,11 +195,10 @@ std::string FlashGetPlugin::decodeFlashGetUrl(const std::string& encoded,
     }
 }
 
-std::string FlashGetPlugin::urlDecode(const std::string& encoded) {
+std::string FlashGetHandler::urlDecode(const std::string& encoded) {
     std::string decoded;
     for (size_t i = 0; i < encoded.length(); ++i) {
         if (encoded[i] == '%' && i + 2 < encoded.length()) {
-            // 解码 %XX 格式
             int hex;
             std::istringstream iss(encoded.substr(i + 1, 2));
             if (iss >> std::hex >> hex) {
@@ -156,22 +216,7 @@ std::string FlashGetPlugin::urlDecode(const std::string& encoded) {
     return decoded;
 }
 
-std::vector<std::string> FlashGetPlugin::parseMirrors(const std::string& url) {
-    // FlashGet支持镜像列表
-    // 这里是简化实现，实际FlashGet使用更复杂的镜像检测机制
-    std::vector<std::string> mirrors;
-
-    // 示例：从URL提取可能的镜像
-    if (url.find("mirrorlist") != std::string::npos) {
-        // 解析镜像列表
-        // 实际实现需要根据FlashGet的镜像协议
-    }
-
-    return mirrors;
-}
-
-// Base64解码辅助函数
-std::string FlashGetPlugin::base64_decode(const std::string& encoded) {
+std::string FlashGetHandler::base64_decode(const std::string& encoded) {
     size_t len = encoded.size();
     size_t padding = 0;
 
@@ -186,13 +231,13 @@ std::string FlashGetPlugin::base64_decode(const std::string& encoded) {
     std::string decoded;
     decoded.resize(decoded_len);
 
-    BIO* bio = BIO_new_mem_buf(encoded.c_str(), -1);
+    BIO* bio = BIO_new_mem_buf(encoded.c_str(), static_cast<int>(encoded.size()));
     BIO* b64 = BIO_new(BIO_f_base64());
 
     BIO_set_flags(b64, BIO_FLAGS_BASE64_NO_NL);
     bio = BIO_push(b64, bio);
 
-    int actual_len = BIO_read(bio, &decoded[0], encoded.size());
+    int actual_len = BIO_read(bio, &decoded[0], static_cast<int>(encoded.size()));
 
     BIO_free_all(bio);
 
@@ -202,6 +247,87 @@ std::string FlashGetPlugin::base64_decode(const std::string& encoded) {
 
     decoded.resize(actual_len);
     return decoded;
+}
+
+void FlashGetHandler::downloadThreadMain(std::shared_ptr<TaskContext> ctx) {
+    FALCON_LOG_DEBUG("FlashGet download thread started for: {}", ctx->decodedUrl);
+
+    // 委托给实际协议处理器下载
+    delegateDownload(ctx);
+
+    // 清理
+    {
+        std::lock_guard<std::mutex> lock(tasksMutex_);
+        activeTasks_.erase(ctx->task->id());
+    }
+
+    FALCON_LOG_DEBUG("FlashGet download thread ended");
+}
+
+void FlashGetHandler::delegateDownload(std::shared_ptr<TaskContext> ctx) {
+    std::lock_guard<std::mutex> lock(registryMutex_);
+
+    if (!registry_) {
+        FALCON_LOG_ERROR("ProtocolRegistry not set for FlashGet handler");
+        ctx->task->set_error("ProtocolRegistry not available");
+        return;
+    }
+
+    auto* targetHandler = registry_->get_handler_for_url(ctx->decodedUrl);
+    if (!targetHandler) {
+        FALCON_LOG_ERROR("No handler found for decoded URL: {}", ctx->decodedUrl);
+        ctx->task->set_error("No handler for decoded URL: " + ctx->decodedUrl);
+        return;
+    }
+
+    FALCON_LOG_INFO("Delegating FlashGet download to {} handler for: {}",
+                   targetHandler->protocol_name(), ctx->decodedUrl);
+
+    // 通知开始下载
+    if (ctx->listener) {
+        ctx->listener->on_progress(ctx->task->id(), 0, 0);
+    }
+
+    try {
+        // 使用目标处理器进行下载
+        targetHandler->download(ctx->task, ctx->listener);
+
+        // 等待下载完成
+        int waitCount = 0;
+        while (ctx->running.load() && !ctx->cancelled.load() && waitCount < 60000) {
+            auto status = ctx->task->status();
+            if (status == TaskStatus::Completed || status == TaskStatus::Failed ||
+                status == TaskStatus::Cancelled) {
+                break;
+            }
+
+            if (ctx->paused.load()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                continue;
+            }
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            ++waitCount;
+
+            // 定期通知进度
+            if (waitCount % 10 == 0 && ctx->listener) {
+                ctx->listener->on_progress(ctx->task->id(),
+                                          ctx->task->downloaded_bytes(),
+                                          ctx->task->total_size());
+            }
+        }
+    } catch (const std::exception& e) {
+        FALCON_LOG_ERROR("Delegated download failed: {}", e.what());
+        ctx->task->set_error(e.what());
+    }
+}
+
+//==============================================================================
+// Factory function
+//==============================================================================
+
+std::unique_ptr<IProtocolHandler> create_flashget_handler() {
+    return std::make_unique<FlashGetHandler>();
 }
 
 } // namespace protocols

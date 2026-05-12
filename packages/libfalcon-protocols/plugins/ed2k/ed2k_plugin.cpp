@@ -8,48 +8,143 @@
 #include "ed2k_plugin.hpp"
 #include <falcon/logger.hpp>
 #include <falcon/exceptions.hpp>
-#include <falcon/download_task.hpp>
+#include <falcon/protocol_registry.hpp>
 #include <regex>
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
 #include <cstring>
+#include <chrono>
 
 namespace falcon {
 namespace protocols {
 
-ED2KPlugin::ED2KPlugin() {
-    FALCON_LOG_INFO("ED2K plugin initialized");
+//==============================================================================
+// ED2KHandler 实现
+//==============================================================================
+
+ED2KHandler::ED2KHandler() {
+    FALCON_LOG_INFO("ED2K handler initialized");
 }
 
-std::vector<std::string> ED2KPlugin::getSupportedSchemes() const {
+ED2KHandler::~ED2KHandler() {
+    // 停止所有活动任务
+    std::lock_guard<std::mutex> lock(tasksMutex_);
+    for (auto& pair : activeTasks_) {
+        if (pair.second->running.load()) {
+            pair.second->cancelled.store(true);
+            pair.second->running.store(false);
+            if (pair.second->downloadThread.joinable()) {
+                pair.second->downloadThread.join();
+            }
+        }
+    }
+    activeTasks_.clear();
+}
+
+std::vector<std::string> ED2KHandler::supported_schemes() const {
     return {"ed2k"};
 }
 
-bool ED2KPlugin::canHandle(const std::string& url) const {
+bool ED2KHandler::can_handle(const std::string& url) const {
     return url.find("ed2k://") == 0;
 }
 
-std::unique_ptr<IDownloadTask> ED2KPlugin::createTask(const std::string& url,
-                                                      const DownloadOptions& options) {
-    FALCON_LOG_DEBUG("Creating ED2K task for: {}", url);
+FileInfo ED2KHandler::get_file_info(const std::string& url,
+                                    const DownloadOptions& options) {
+    FileInfo info;
+    info.url = url;
+    info.supports_resume = true;
 
-    // 解析ED2K链接
-    ED2KFileInfo fileInfo;
     try {
-        fileInfo = parseED2KUrl(url);
+        ED2KFileInfo fileInfo = parseED2KUrl(url);
+        info.filename = fileInfo.filename;
+        info.total_size = fileInfo.filesize;
     } catch (const std::exception& e) {
         FALCON_LOG_ERROR("Failed to parse ED2K URL: {}", e.what());
         throw InvalidURLException("Invalid ED2K URL: " + url);
     }
 
-    FALCON_LOG_DEBUG("ED2K file: {} ({} bytes)", fileInfo.filename, fileInfo.filesize);
-
-    // 创建下载任务
-    return createDownloadTask(fileInfo, options);
+    return info;
 }
 
-ED2KPlugin::ED2KFileInfo ED2KPlugin::parseED2KUrl(const std::string& ed2kUrl) {
+void ED2KHandler::download(DownloadTask::Ptr task, IEventListener* listener) {
+    try {
+        // 解析 ED2K 链接
+        ED2KFileInfo fileInfo = parseED2KUrl(task->url());
+
+        FALCON_LOG_INFO("Starting ED2K download: {} ({} bytes)",
+                       fileInfo.filename, fileInfo.filesize);
+
+        // 创建任务上下文
+        auto ctx = std::make_shared<TaskContext>();
+        ctx->task = task;
+        ctx->listener = listener;
+        ctx->fileInfo = std::move(fileInfo);
+        ctx->running.store(true);
+        ctx->downloadedBytes = 0;
+
+        // 保存任务上下文
+        {
+            std::lock_guard<std::mutex> lock(tasksMutex_);
+            activeTasks_[task->id()] = ctx;
+        }
+
+        // 启动下载线程
+        ctx->downloadThread = std::thread([this, ctx]() {
+            downloadThreadMain(ctx);
+        });
+
+        // 标记任务开始
+        task->mark_started();
+
+    } catch (const std::exception& e) {
+        FALCON_LOG_ERROR("Failed to start ED2K download: {}", e.what());
+        task->set_error(e.what());
+        throw;
+    }
+}
+
+void ED2KHandler::pause(DownloadTask::Ptr task) {
+    std::lock_guard<std::mutex> lock(tasksMutex_);
+    auto it = activeTasks_.find(task->id());
+    if (it != activeTasks_.end()) {
+        it->second->paused.store(true);
+        FALCON_LOG_DEBUG("ED2K download paused: {}", task->id());
+    }
+}
+
+void ED2KHandler::resume(DownloadTask::Ptr task, IEventListener* listener) {
+    std::lock_guard<std::mutex> lock(tasksMutex_);
+    auto it = activeTasks_.find(task->id());
+    if (it != activeTasks_.end()) {
+        it->second->paused.store(false);
+        it->second->listener = listener;
+        FALCON_LOG_DEBUG("ED2K download resumed: {}", task->id());
+    }
+}
+
+void ED2KHandler::cancel(DownloadTask::Ptr task) {
+    std::lock_guard<std::mutex> lock(tasksMutex_);
+    auto it = activeTasks_.find(task->id());
+    if (it != activeTasks_.end()) {
+        it->second->cancelled.store(true);
+        it->second->running.store(false);
+
+        if (it->second->downloadThread.joinable()) {
+            it->second->downloadThread.join();
+        }
+
+        activeTasks_.erase(it);
+        FALCON_LOG_INFO("ED2K download cancelled: {}", task->id());
+    }
+}
+
+//==============================================================================
+// 私有方法实现
+//==============================================================================
+
+ED2KHandler::ED2KFileInfo ED2KHandler::parseED2KUrl(const std::string& ed2kUrl) {
     std::regex ed2kRegex(R"(^ed2k://(\w+)\|(.+))");
     std::smatch match;
 
@@ -77,7 +172,7 @@ ED2KPlugin::ED2KFileInfo ED2KPlugin::parseED2KUrl(const std::string& ed2kUrl) {
     }
 }
 
-ED2KPlugin::ED2KFileInfo ED2KPlugin::parseFileLink(const std::vector<std::string>& params) {
+ED2KHandler::ED2KFileInfo ED2KHandler::parseFileLink(const std::vector<std::string>& params) {
     if (params.size() < 4) {
         throw InvalidURLException("Insufficient ED2K file link parameters");
     }
@@ -121,7 +216,7 @@ ED2KPlugin::ED2KFileInfo ED2KPlugin::parseFileLink(const std::vector<std::string
     return info;
 }
 
-ED2KPlugin::ServerInfo ED2KPlugin::parseServerLink(const std::vector<std::string>& params) {
+ED2KHandler::ServerInfo ED2KHandler::parseServerLink(const std::vector<std::string>& params) {
     ServerInfo info;
 
     if (params.size() < 2) {
@@ -149,7 +244,7 @@ ED2KPlugin::ServerInfo ED2KPlugin::parseServerLink(const std::vector<std::string
     return info;
 }
 
-std::string ED2KPlugin::urlDecode(const std::string& encoded) {
+std::string ED2KHandler::urlDecode(const std::string& encoded) {
     std::string decoded;
     for (size_t i = 0; i < encoded.length(); ++i) {
         if (encoded[i] == '%' && i + 2 < encoded.length()) {
@@ -171,7 +266,7 @@ std::string ED2KPlugin::urlDecode(const std::string& encoded) {
     return decoded;
 }
 
-std::array<uint8_t, 16> ED2KPlugin::parseMD4Hash(const std::string& hashStr) {
+std::array<uint8_t, 16> ED2KHandler::parseMD4Hash(const std::string& hashStr) {
     if (hashStr.length() != 32) {
         throw InvalidURLException("Invalid ED2K hash length");
     }
@@ -189,7 +284,7 @@ std::array<uint8_t, 16> ED2KPlugin::parseMD4Hash(const std::string& hashStr) {
     return hash;
 }
 
-std::vector<std::string> ED2KPlugin::parseSources(const std::string& sourcesStr) {
+std::vector<std::string> ED2KHandler::parseSources(const std::string& sourcesStr) {
     std::vector<std::string> sources;
 
     // ED2K源格式：host:port|host:port|...
@@ -215,63 +310,11 @@ std::vector<std::string> ED2KPlugin::parseSources(const std::string& sourcesStr)
     return sources;
 }
 
-void* ED2KPlugin::connectToNetwork(const std::vector<ServerInfo>& servers) {
-    // 实际实现需要连接到ED2K网络
-    // 这里是简化实现
-    FALCON_LOG_DEBUG("Connecting to ED2K network with {} servers", servers.size());
-
-    // 返回连接句柄（实际实现中应该是网络连接对象）
-    return nullptr;
-}
-
-std::vector<std::string> ED2KPlugin::searchSources(const ED2KFileInfo& fileInfo) {
-    // 实际实现需要搜索ED2K网络中的源
-    FALCON_LOG_DEBUG("Searching for sources of file: {}", fileInfo.filename);
-
-    std::vector<std::string> allSources = fileInfo.sources;
-
-    // 如果已有源，添加到列表
-    if (!allSources.empty()) {
-        FALCON_LOG_DEBUG("Found {} direct sources", allSources.size());
-    }
-
-    // 搜索更多源（实际实现需要网络搜索）
-    // 这里只是示例
-
-    return allSources;
-}
-
-std::unique_ptr<IDownloadTask> ED2KPlugin::createDownloadTask(const ED2KFileInfo& fileInfo,
-                                                             const DownloadOptions& options) {
-    // 创建下载任务
-    auto task = std::make_unique<DownloadTask>();
-
-    // 设置任务信息
-    task->setUrl("ed2k://file|" + urlEncode(fileInfo.filename) + "|" +
-                 std::to_string(fileInfo.filesize) + "|" +
-                 hashToString(fileInfo.hash));
-
-    task->setFilename(fileInfo.filename);
-    task->setFileSize(fileInfo.filesize);
-
-    // ED2K下载需要特殊的处理逻辑
-    // 这里简化为使用多个HTTP源（如果有的话）
-    auto sources = searchSources(fileInfo);
-
-    if (!sources.empty()) {
-        FALCON_LOG_INFO("Using {} sources for ED2K download", sources.size());
-        // 实际实现中需要创建ED2K专用的下载逻辑
-    } else {
-        FALCON_LOG_WARN("No sources found for ED2K download, will search network");
-    }
-
-    return std::move(task);
-}
-
-std::string ED2KPlugin::urlEncode(const std::string& str) {
+std::string ED2KHandler::urlEncode(const std::string& str) {
     std::string encoded;
     for (char c : str) {
-        if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+        if (std::isalnum(static_cast<unsigned char>(c)) ||
+            c == '-' || c == '_' || c == '.' || c == '~') {
             encoded += c;
         } else {
             encoded += '%';
@@ -282,13 +325,132 @@ std::string ED2KPlugin::urlEncode(const std::string& str) {
     return encoded;
 }
 
-std::string ED2KPlugin::hashToString(const std::array<uint8_t, 16>& hash) {
+std::string ED2KHandler::hashToString(const std::array<uint8_t, 16>& hash) {
     std::ostringstream oss;
     oss << std::hex << std::setfill('0');
     for (uint8_t byte : hash) {
         oss << std::setw(2) << static_cast<int>(byte);
     }
     return oss.str();
+}
+
+void ED2KHandler::downloadThreadMain(std::shared_ptr<TaskContext> ctx) {
+    FALCON_LOG_DEBUG("ED2K download thread started for: {}", ctx->fileInfo.filename);
+
+    auto& fileInfo = ctx->fileInfo;
+
+    // 通知开始下载
+    if (ctx->listener) {
+        ctx->listener->on_progress(ctx->task->id(),
+                                   ctx->downloadedBytes,
+                                   fileInfo.filesize);
+    }
+
+    // 尝试从源地址下载
+    if (!fileInfo.sources.empty()) {
+        downloadFromSources(ctx);
+    } else {
+        FALCON_LOG_WARN("ED2K link has no source addresses, attempting direct download if URL available");
+
+        // 如果 ED2K 链接中包含 HTTP 源，尝试直接下载
+        // 否则提示用户需要源地址
+        FALCON_LOG_ERROR("ED2K download requires source addresses or eDonkey network connection");
+        ctx->task->set_error("No source addresses available in ED2K link");
+    }
+
+    // 清理
+    {
+        std::lock_guard<std::mutex> lock(tasksMutex_);
+        activeTasks_.erase(ctx->task->id());
+    }
+
+    FALCON_LOG_DEBUG("ED2K download thread ended for: {}", fileInfo.filename);
+}
+
+void ED2KHandler::downloadFromSources(std::shared_ptr<TaskContext> ctx) {
+    auto& fileInfo = ctx->fileInfo;
+
+    FALCON_LOG_INFO("Attempting to download from {} ED2K sources", fileInfo.sources.size());
+
+    // 尝试从每个源下载
+    for (const auto& source : fileInfo.sources) {
+        if (ctx->cancelled.load()) {
+            break;
+        }
+
+        // ED2K 源格式通常是 host:port
+        // 需要构造 HTTP URL（这需要知道服务器的 HTTP 端口配置）
+        // 简化实现：假设源服务器提供 HTTP 访问
+        std::string httpUrl = "http://" + source + "/get/" + hashToString(fileInfo.hash);
+
+        FALCON_LOG_DEBUG("Trying source: {}", httpUrl);
+
+        delegateDownload(ctx, httpUrl);
+
+        // 检查是否成功
+        if (ctx->task->status() == TaskStatus::Completed) {
+            FALCON_LOG_INFO("Successfully downloaded from source: {}", source);
+            break;
+        }
+    }
+}
+
+void ED2KHandler::delegateDownload(std::shared_ptr<TaskContext> ctx, const std::string& url) {
+    std::lock_guard<std::mutex> lock(registryMutex_);
+
+    if (!registry_) {
+        FALCON_LOG_ERROR("ProtocolRegistry not set for ED2K handler");
+        return;
+    }
+
+    auto* targetHandler = registry_->get_handler_for_url(url);
+    if (!targetHandler) {
+        FALCON_LOG_ERROR("No handler found for URL: {}", url);
+        return;
+    }
+
+    FALCON_LOG_INFO("Delegating ED2K download to {} handler for: {}",
+                   targetHandler->protocol_name(), url);
+
+    try {
+        // 使用目标处理器进行下载
+        targetHandler->download(ctx->task, ctx->listener);
+
+        // 等待下载完成
+        int waitCount = 0;
+        while (ctx->running.load() && !ctx->cancelled.load() && waitCount < 30000) {
+            auto status = ctx->task->status();
+            if (status == TaskStatus::Completed || status == TaskStatus::Failed ||
+                status == TaskStatus::Cancelled) {
+                break;
+            }
+
+            if (ctx->paused.load()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                continue;
+            }
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            ++waitCount;
+
+            // 定期通知进度
+            if (waitCount % 10 == 0 && ctx->listener) {
+                ctx->listener->on_progress(ctx->task->id(),
+                                          ctx->task->downloaded_bytes(),
+                                          ctx->task->total_size());
+            }
+        }
+    } catch (const std::exception& e) {
+        FALCON_LOG_ERROR("Delegated download failed: {}", e.what());
+    }
+}
+
+//==============================================================================
+// Factory function
+//==============================================================================
+
+std::unique_ptr<IProtocolHandler> create_ed2k_handler() {
+    return std::make_unique<ED2KHandler>();
 }
 
 } // namespace protocols

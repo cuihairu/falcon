@@ -11,6 +11,7 @@
 #include <falcon/task_manager.hpp>
 #include <falcon/event_dispatcher.hpp>
 #include <falcon/protocol_registry.hpp>
+#include <falcon/protocol_handler_extension.hpp>
 #include <algorithm>
 #include <filesystem>
 
@@ -294,14 +295,37 @@ public:
     void load_all_handlers() {
         protocol_registry_.load_builtin_handlers();
 
+        // 为已注册的处理器设置 registry
+        setup_handler_registry(&protocol_registry_);
+
         // 加载工厂函数创建的处理器
         for (auto& factory : handler_factories_) {
             if (factory) {
                 auto handler = factory();
                 if (handler) {
+                    // 在注册前设置 registry
+                    setup_handler_registry(handler.get(), &protocol_registry_);
                     protocol_registry_.register_handler(std::move(handler));
                 }
             }
+        }
+    }
+
+    void setup_handler_registry(IProtocolHandler* handler, ProtocolRegistry* registry) {
+        if (!handler || !registry) return;
+
+        // 检查是否支持扩展接口
+        if (auto* ext = get_extension(handler)) {
+            ext->set_protocol_registry(registry);
+        }
+    }
+
+    void setup_handler_registry(ProtocolRegistry* registry) {
+        // 遍历所有已注册的处理器并设置 registry
+        auto protocols = registry->supported_protocols();
+        for (const auto& protocol : protocols) {
+            auto* handler = registry->get_handler(protocol);
+            setup_handler_registry(handler, registry);
         }
     }
 

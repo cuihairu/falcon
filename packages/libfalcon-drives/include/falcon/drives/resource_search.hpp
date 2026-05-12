@@ -62,6 +62,11 @@ struct SearchEngineConfig {
     int delay_ms = 1000;         // 请求延迟（毫秒）
     bool enabled = true;         // 是否启用
     double weight = 1.0;         // 权重（用于结果排序）
+
+    // 新增：响应格式支持
+    std::string response_format = "html";  // html, json, xml
+    std::map<std::string, std::string> selectors;  // CSS选择器（用于HTML解析）
+    std::string path_pattern;    // 路径模式（如：/{query_letter}/{page}）
 };
 
 /**
