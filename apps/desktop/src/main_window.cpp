@@ -148,6 +148,9 @@ void MainWindow::ensure_download_engine()
         return;
     }
     download_engine_ = std::make_unique<falcon::DownloadEngine>();
+
+    // 注册事件监听器
+    download_engine_->add_listener(this);
 }
 
 void MainWindow::show_add_download_dialog(UrlInfo url_info, const IncomingDownloadRequest* request_context)
@@ -373,6 +376,8 @@ void MainWindow::load_settings()
         settings.value("task_speed_limit_kb", 0).toInt());
     settings_page_->set_global_speed_limit(
         settings.value("global_speed_limit_kb", 0).toInt());
+    settings_page_->set_action_when_completed(
+        settings.value("action_when_completed", 0).toInt());
     settings_page_->set_notifications_enabled(
         settings.value("notifications_enabled", true).toBool());
     settings_page_->set_sound_notifications_enabled(
@@ -398,6 +403,7 @@ void MainWindow::save_settings() const
     settings.setValue("retry_count", settings_page_->get_retry_count());
     settings.setValue("task_speed_limit_kb", settings_page_->get_task_speed_limit());
     settings.setValue("global_speed_limit_kb", settings_page_->get_global_speed_limit());
+    settings.setValue("action_when_completed", settings_page_->get_action_when_completed());
     settings.setValue("notifications_enabled", settings_page_->is_notifications_enabled());
     settings.setValue("sound_notifications_enabled", settings_page_->is_sound_notifications_enabled());
     settings.endGroup();
@@ -610,6 +616,83 @@ void MainWindow::on_close_requested()
     } else {
         close();
     }
+}
+
+//==============================================================================
+// IEventListener Implementation
+//==============================================================================
+
+void MainWindow::on_status_changed(falcon::TaskId task_id, falcon::TaskStatus old_status,
+                                   falcon::TaskStatus new_status)
+{
+    (void)task_id;
+    (void)old_status;
+    (void)new_status;
+    // Status changes are handled by DownloadPage's refresh timer
+}
+
+void MainWindow::on_progress(const falcon::ProgressInfo& info)
+{
+    (void)info;
+    // Progress updates are handled by DownloadPage's refresh timer
+}
+
+void MainWindow::on_error(falcon::TaskId task_id, const std::string& error_message)
+{
+    (void)task_id;
+    (void)error_message;
+    // TODO: Show error notification
+}
+
+void MainWindow::on_completed(falcon::TaskId task_id, const std::string& output_path)
+{
+    (void)task_id;
+
+    if (!settings_page_) {
+        return;
+    }
+
+    const int action = settings_page_->get_action_when_completed();
+
+    switch (action) {
+        case 0:  // Do nothing
+            break;
+
+        case 1:  // Open file
+        {
+            const QString path = QString::fromStdString(output_path);
+            QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+            break;
+        }
+
+        case 2:  // Open folder
+        {
+            const QFileInfo file_info(QString::fromStdString(output_path));
+            const QString dir_path = file_info.absolutePath();
+            QDesktopServices::openUrl(QUrl::fromLocalFile(dir_path));
+            break;
+        }
+
+        case 3:  // Show notification only
+        {
+            if (system_tray_ && settings_page_->is_notifications_enabled()) {
+                system_tray_->showMessage(
+                    tr("Download Completed"),
+                    tr("A download has finished successfully."),
+                    QSystemTrayIcon::Information,
+                    3000
+                );
+            }
+            break;
+        }
+    }
+}
+
+void MainWindow::on_file_info(falcon::TaskId task_id, const falcon::FileInfo& info)
+{
+    (void)task_id;
+    (void)info;
+    // File info updates are handled by DownloadPage
 }
 
 } // namespace falcon::desktop

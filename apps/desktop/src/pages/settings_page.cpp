@@ -33,6 +33,7 @@ SettingsPage::SettingsPage(QWidget* parent)
     , retry_count_spin_(nullptr)
     , task_speed_limit_spin_(nullptr)
     , global_speed_limit_spin_(nullptr)
+    , completion_action_combo_(nullptr)
     , notifications_checkbox_(nullptr)
     , sound_notification_checkbox_(nullptr)
     , current_theme_label_(nullptr)
@@ -92,6 +93,18 @@ void SettingsPage::set_global_speed_limit(int kb_per_sec)
     global_speed_limit_spin_->setValue(kb_per_sec);
 }
 
+void SettingsPage::set_open_file_when_completed(bool enabled)
+{
+    set_action_when_completed(enabled ? 1 : 0);
+}
+
+void SettingsPage::set_action_when_completed(int action)
+{
+    if (completion_action_combo_) {
+        completion_action_combo_->setCurrentIndex(action);
+    }
+}
+
 bool SettingsPage::is_clipboard_monitoring_enabled() const
 {
     return clipboard_monitoring_checkbox_->isChecked();
@@ -147,6 +160,16 @@ int SettingsPage::get_global_speed_limit() const
     return global_speed_limit_spin_->value();
 }
 
+bool SettingsPage::is_open_file_when_completed() const
+{
+    return completion_action_combo_ ? completion_action_combo_->currentIndex() == 1 : false;
+}
+
+int SettingsPage::get_action_when_completed() const
+{
+    return completion_action_combo_ ? completion_action_combo_->currentIndex() : 0;
+}
+
 //==============================================================================
 // Private Slots
 //==============================================================================
@@ -178,6 +201,9 @@ void SettingsPage::reset_to_defaults()
     // Speed limit settings (0 = unlimited)
     task_speed_limit_spin_->setValue(0);
     global_speed_limit_spin_->setValue(0);
+
+    // Completion action settings (0 = do nothing)
+    completion_action_combo_->setCurrentIndex(0);
 
     // Connection settings
     default_connections_spin_->setValue(4);
@@ -224,6 +250,7 @@ void SettingsPage::setup_ui()
     scroll_layout->addWidget(create_clipboard_section_widget());
     scroll_layout->addWidget(create_download_section_widget());
     scroll_layout->addWidget(create_speed_limit_section_widget());
+    scroll_layout->addWidget(create_completion_action_section_widget());
     scroll_layout->addWidget(create_connection_section_widget());
     scroll_layout->addWidget(create_notification_section_widget());
 
@@ -367,6 +394,44 @@ QWidget* SettingsPage::create_speed_limit_section_widget()
     desc_label->setWordWrap(true);
     desc_label->setStyleSheet("color: #888888; font-size: 8pt;");
     layout->addRow("", desc_label);
+
+    return group;
+}
+
+QWidget* SettingsPage::create_completion_action_section_widget()
+{
+    auto* group = new QGroupBox(tr("When Download Completes"), this);
+
+    auto* layout = QVBoxLayout(group);
+    layout->setSpacing(16);
+    layout->setContentsMargins(16, 20, 16, 16);
+
+    // Action selection
+    auto* action_layout = new QHBoxLayout();
+    action_layout->setSpacing(12);
+
+    auto* action_label = new QLabel(tr("Action:"), this);
+    action_layout->addWidget(action_label);
+
+    completion_action_combo_ = new QComboBox(this);
+    completion_action_combo_->addItem(tr("Do nothing"));
+    completion_action_combo_->addItem(tr("Open file"));
+    completion_action_combo_->addItem(tr("Open folder"));
+    completion_action_combo_->addItem(tr("Show notification only"));
+    action_layout->addWidget(completion_action_combo_);
+
+    action_layout->addStretch();
+    layout->addLayout(action_layout);
+
+    // 说明文字
+    auto* desc_label = new QLabel(
+        tr("Choose what happens when a download completes. "
+           "For multiple files, only the notification will be shown."),
+        this
+    );
+    desc_label->setWordWrap(true);
+    desc_label->setStyleSheet("color: #888888; font-size: 8pt;");
+    layout->addWidget(desc_label);
 
     return group;
 }

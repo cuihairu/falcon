@@ -13,6 +13,7 @@
 #include <QSystemTrayIcon>
 
 #include <falcon/download_engine.hpp>
+#include <falcon/event_listener.hpp>
 
 namespace falcon::desktop {
 
@@ -35,7 +36,7 @@ struct IncomingDownloadRequest;
  *
  * 包含可收放的侧边导航栏和内容区域
  */
-class MainWindow : public QMainWindow
+class MainWindow : public QMainWindow, public falcon::IEventListener
 {
     Q_OBJECT
 
@@ -69,6 +70,14 @@ private slots:
     void on_minimize_requested();
     void on_maximize_requested();
     void on_close_requested();
+
+    // IEventListener implementation
+    void on_status_changed(falcon::TaskId task_id, falcon::TaskStatus old_status,
+                           falcon::TaskStatus new_status) override;
+    void on_progress(const falcon::ProgressInfo& info) override;
+    void on_error(falcon::TaskId task_id, const std::string& error_message) override;
+    void on_completed(falcon::TaskId task_id, const std::string& output_path) override;
+    void on_file_info(falcon::TaskId task_id, const falcon::FileInfo& info) override;
 
 private:
     void setup_ui();

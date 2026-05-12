@@ -43,6 +43,8 @@ public:
     void set_sound_notifications_enabled(bool enabled);
     void set_task_speed_limit(int kb_per_sec);
     void set_global_speed_limit(int kb_per_sec);
+    void set_open_file_when_completed(bool enabled);
+    void set_action_when_completed(int action);
 
     /**
      * @brief Get clipboard monitoring enabled state
@@ -98,6 +100,18 @@ public:
      */
     int get_global_speed_limit() const;
 
+    /**
+     * @brief Get whether to open file when download completes
+     * @return true if should open file
+     */
+    bool is_open_file_when_completed() const;
+
+    /**
+     * @brief Get action to perform when download completes
+     * @return Action index (0=none, 1=open file, 2=open folder, 3=notify only)
+     */
+    int get_action_when_completed() const;
+
 signals:
     /**
      * @brief Signal emitted when settings are changed
@@ -136,6 +150,7 @@ private:
     QWidget* create_clipboard_section_widget();
     QWidget* create_download_section_widget();
     QWidget* create_speed_limit_section_widget();
+    QWidget* create_completion_action_section_widget();
     QWidget* create_connection_section_widget();
     QWidget* create_notification_section_widget();
     QWidget* create_appearance_section_widget();
@@ -159,6 +174,9 @@ private:
     // Speed limit settings
     QSpinBox* task_speed_limit_spin_;
     QSpinBox* global_speed_limit_spin_;
+
+    // Completion action settings
+    QComboBox* completion_action_combo_;
 
     // Notification settings
     QCheckBox* notifications_checkbox_;
