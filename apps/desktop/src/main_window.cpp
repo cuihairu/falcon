@@ -183,6 +183,12 @@ void MainWindow::show_add_download_dialog(UrlInfo url_info, const IncomingDownlo
     options.user_agent = dialog.get_user_agent().toStdString();
     options.referer = dialog.get_referrer().toStdString();
 
+    // 应用任务速度限制（KB/s -> bytes/s）
+    if (settings_page_) {
+        const int task_limit_kb = settings_page_->get_task_speed_limit();
+        options.speed_limit = static_cast<std::size_t>(task_limit_kb * 1024);
+    }
+
     const QString cookies = dialog.get_cookies();
     if (!cookies.isEmpty()) {
         options.headers["Cookie"] = cookies.toStdString();
@@ -218,6 +224,9 @@ bool MainWindow::add_download_task(const QString& url, bool start_immediately)
     if (settings_page_) {
         options.max_connections = static_cast<std::size_t>(settings_page_->get_default_connections());
         options.output_directory = settings_page_->get_default_download_dir().toStdString();
+        // 应用任务速度限制（KB/s -> bytes/s）
+        const int task_limit_kb = settings_page_->get_task_speed_limit();
+        options.speed_limit = static_cast<std::size_t>(task_limit_kb * 1024);
     }
 
     auto task = download_engine_->add_task(url.toStdString(), options);
@@ -360,6 +369,10 @@ void MainWindow::load_settings()
         settings.value("max_concurrent_downloads", 3).toInt());
     settings_page_->set_default_connections(
         settings.value("default_connections", 4).toInt());
+    settings_page_->set_task_speed_limit(
+        settings.value("task_speed_limit_kb", 0).toInt());
+    settings_page_->set_global_speed_limit(
+        settings.value("global_speed_limit_kb", 0).toInt());
     settings_page_->set_notifications_enabled(
         settings.value("notifications_enabled", true).toBool());
     settings_page_->set_sound_notifications_enabled(
@@ -383,6 +396,8 @@ void MainWindow::save_settings() const
     settings.setValue("default_connections", settings_page_->get_default_connections());
     settings.setValue("connection_timeout_seconds", settings_page_->get_connection_timeout());
     settings.setValue("retry_count", settings_page_->get_retry_count());
+    settings.setValue("task_speed_limit_kb", settings_page_->get_task_speed_limit());
+    settings.setValue("global_speed_limit_kb", settings_page_->get_global_speed_limit());
     settings.setValue("notifications_enabled", settings_page_->is_notifications_enabled());
     settings.setValue("sound_notifications_enabled", settings_page_->is_sound_notifications_enabled());
     settings.endGroup();
@@ -403,6 +418,10 @@ void MainWindow::apply_settings_to_runtime()
     if (download_engine_) {
         download_engine_->set_max_concurrent_tasks(
             static_cast<std::size_t>(settings_page_->get_max_concurrent_downloads()));
+
+        // 应用全局速度限制（KB/s -> bytes/s）
+        const std::size_t global_limit_kb = static_cast<std::size_t>(settings_page_->get_global_speed_limit());
+        download_engine_->set_global_speed_limit(global_limit_kb * 1024);
     }
 }
 

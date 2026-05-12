@@ -31,6 +31,8 @@ SettingsPage::SettingsPage(QWidget* parent)
     , default_connections_spin_(nullptr)
     , connection_timeout_spin_(nullptr)
     , retry_count_spin_(nullptr)
+    , task_speed_limit_spin_(nullptr)
+    , global_speed_limit_spin_(nullptr)
     , notifications_checkbox_(nullptr)
     , sound_notification_checkbox_(nullptr)
     , current_theme_label_(nullptr)
@@ -80,6 +82,16 @@ void SettingsPage::set_sound_notifications_enabled(bool enabled)
     sound_notification_checkbox_->setChecked(enabled);
 }
 
+void SettingsPage::set_task_speed_limit(int kb_per_sec)
+{
+    task_speed_limit_spin_->setValue(kb_per_sec);
+}
+
+void SettingsPage::set_global_speed_limit(int kb_per_sec)
+{
+    global_speed_limit_spin_->setValue(kb_per_sec);
+}
+
 bool SettingsPage::is_clipboard_monitoring_enabled() const
 {
     return clipboard_monitoring_checkbox_->isChecked();
@@ -125,6 +137,16 @@ bool SettingsPage::is_sound_notifications_enabled() const
     return sound_notification_checkbox_->isChecked();
 }
 
+int SettingsPage::get_task_speed_limit() const
+{
+    return task_speed_limit_spin_->value();
+}
+
+int SettingsPage::get_global_speed_limit() const
+{
+    return global_speed_limit_spin_->value();
+}
+
 //==============================================================================
 // Private Slots
 //==============================================================================
@@ -152,6 +174,10 @@ void SettingsPage::reset_to_defaults()
     // Download settings
     download_dir_edit_->setText(QDir::homePath() + "/Downloads");
     max_downloads_spin_->setValue(3);
+
+    // Speed limit settings (0 = unlimited)
+    task_speed_limit_spin_->setValue(0);
+    global_speed_limit_spin_->setValue(0);
 
     // Connection settings
     default_connections_spin_->setValue(4);
@@ -197,6 +223,7 @@ void SettingsPage::setup_ui()
     scroll_layout->addWidget(create_appearance_section_widget());
     scroll_layout->addWidget(create_clipboard_section_widget());
     scroll_layout->addWidget(create_download_section_widget());
+    scroll_layout->addWidget(create_speed_limit_section_widget());
     scroll_layout->addWidget(create_connection_section_widget());
     scroll_layout->addWidget(create_notification_section_widget());
 
@@ -281,6 +308,65 @@ QWidget* SettingsPage::create_download_section_widget()
     max_downloads_spin_->setRange(1, 10);
     max_downloads_spin_->setValue(3);
     layout->addRow(max_label, max_downloads_spin_);
+
+    return group;
+}
+
+QWidget* SettingsPage::create_speed_limit_section_widget()
+{
+    auto* group = new QGroupBox(tr("Speed Limit"), this);
+
+    auto* layout = new QFormLayout(group);
+    layout->setSpacing(16);
+    layout->setContentsMargins(16, 20, 16, 16);
+    layout->setLabelAlignment(Qt::AlignRight);
+
+    // Task speed limit
+    auto* task_limit_label = new QLabel(tr("Per-task speed limit:"), this);
+    auto* task_limit_layout = new QHBoxLayout();
+    task_limit_layout->setSpacing(8);
+
+    task_speed_limit_spin_ = new QSpinBox(this);
+    task_speed_limit_spin_->setRange(0, 100000);
+    task_speed_limit_spin_->setValue(0);
+    task_speed_limit_spin_->setSuffix(" KB/s");
+    task_speed_limit_spin_->setSpecialValueText(tr("Unlimited"));
+    task_limit_layout->addWidget(task_speed_limit_spin_);
+
+    auto* task_limit_hint = new QLabel(tr("(0 = unlimited)"), this);
+    task_limit_hint->setStyleSheet("color: #888888; font-size: 8pt;");
+    task_limit_layout->addWidget(task_limit_hint);
+    task_limit_layout->addStretch();
+
+    layout->addRow(task_limit_label, task_limit_layout);
+
+    // Global speed limit
+    auto* global_limit_label = new QLabel(tr("Global speed limit:"), this);
+    auto* global_limit_layout = new QHBoxLayout();
+    global_limit_layout->setSpacing(8);
+
+    global_speed_limit_spin_ = new QSpinBox(this);
+    global_speed_limit_spin_->setRange(0, 100000);
+    global_speed_limit_spin_->setValue(0);
+    global_speed_limit_spin_->setSuffix(" KB/s");
+    global_speed_limit_spin_->setSpecialValueText(tr("Unlimited"));
+    global_limit_layout->addWidget(global_speed_limit_spin_);
+
+    auto* global_limit_hint = new QLabel(tr("(0 = unlimited)"), this);
+    global_limit_hint->setStyleSheet("color: #888888; font-size: 8pt;");
+    global_limit_layout->addWidget(global_limit_hint);
+    global_limit_layout->addStretch();
+
+    layout->addRow(global_limit_label, global_limit_layout);
+
+    // 说明文字
+    auto* desc_label = new QLabel(
+        tr("Speed limits help manage bandwidth usage. Global limit applies to all downloads combined."),
+        this
+    );
+    desc_label->setWordWrap(true);
+    desc_label->setStyleSheet("color: #888888; font-size: 8pt;");
+    layout->addRow("", desc_label);
 
     return group;
 }

@@ -41,6 +41,8 @@ public:
     void set_default_connections(int count);
     void set_notifications_enabled(bool enabled);
     void set_sound_notifications_enabled(bool enabled);
+    void set_task_speed_limit(int kb_per_sec);
+    void set_global_speed_limit(int kb_per_sec);
 
     /**
      * @brief Get clipboard monitoring enabled state
@@ -84,6 +86,18 @@ public:
 
     bool is_sound_notifications_enabled() const;
 
+    /**
+     * @brief Get task speed limit
+     * @return Speed limit in KB/s (0 = unlimited)
+     */
+    int get_task_speed_limit() const;
+
+    /**
+     * @brief Get global speed limit
+     * @return Speed limit in KB/s (0 = unlimited)
+     */
+    int get_global_speed_limit() const;
+
 signals:
     /**
      * @brief Signal emitted when settings are changed
@@ -121,6 +135,7 @@ private:
     void setup_ui();
     QWidget* create_clipboard_section_widget();
     QWidget* create_download_section_widget();
+    QWidget* create_speed_limit_section_widget();
     QWidget* create_connection_section_widget();
     QWidget* create_notification_section_widget();
     QWidget* create_appearance_section_widget();
@@ -140,6 +155,10 @@ private:
     QSpinBox* default_connections_spin_;
     QSpinBox* connection_timeout_spin_;
     QSpinBox* retry_count_spin_;
+
+    // Speed limit settings
+    QSpinBox* task_speed_limit_spin_;
+    QSpinBox* global_speed_limit_spin_;
 
     // Notification settings
     QCheckBox* notifications_checkbox_;
