@@ -48,6 +48,7 @@ MainWindow::MainWindow(QWidget* parent)
     , tray_menu_(nullptr)
     , theme_manager_(nullptr)
     , download_engine_(nullptr)
+    , status_update_timer_(nullptr)
 {
     // 初始化主题管理器（必须在 setup_ui 之前）
     theme_manager_ = new ThemeManager(this);
@@ -61,6 +62,7 @@ MainWindow::MainWindow(QWidget* parent)
     setup_ui();
     setup_clipboard_monitor();
     setup_system_tray();
+    setup_status_update_timer();
     load_settings();
     apply_settings_to_runtime();
     setup_ipc_server();
@@ -429,6 +431,34 @@ void MainWindow::apply_settings_to_runtime()
         const std::size_t global_limit_kb = static_cast<std::size_t>(settings_page_->get_global_speed_limit());
         download_engine_->set_global_speed_limit(global_limit_kb * 1024);
     }
+}
+
+void MainWindow::setup_status_update_timer()
+{
+    status_update_timer_ = new QTimer(this);
+    status_update_timer_->setInterval(500);  // 每 500ms 更新一次
+    connect(status_update_timer_, &QTimer::timeout, this, &MainWindow::update_status_bar);
+    status_update_timer_->start();
+}
+
+void MainWindow::update_status_bar()
+{
+    if (!download_engine_ || !status_bar_) {
+        return;
+    }
+
+    // 获取总下载速度
+    const falcon::BytesPerSecond total_speed = download_engine_->get_total_speed();
+    status_bar_->set_download_speed(static_cast<uint64_t>(total_speed));
+
+    // 获取活动任务数和总任务数
+    const std::size_t active_count = download_engine_->get_active_task_count();
+    const std::size_t total_count = download_engine_->get_total_task_count();
+
+    // 计算已完成任务数（非活动且非待处理）
+    const std::size_t completed_count = total_count - active_count;
+
+    status_bar_->set_task_counts(static_cast<int>(active_count), static_cast<int>(completed_count));
 }
 
 void MainWindow::setup_ipc_server()

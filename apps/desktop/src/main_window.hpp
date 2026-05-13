@@ -8,6 +8,7 @@
 #pragma once
 
 #include <QMainWindow>
+#include <QTimer>
 #include <memory>
 #include <QStackedWidget>
 #include <QSystemTrayIcon>
@@ -94,6 +95,8 @@ private:
     void load_settings();
     void save_settings() const;
     void apply_settings_to_runtime();
+    void setup_status_update_timer();
+    void update_status_bar();
 
     // 顶部工具栏
     TopBar* top_bar_;
@@ -126,6 +129,9 @@ private:
 
     // 核心下载引擎
     std::unique_ptr<falcon::DownloadEngine> download_engine_;
+
+    // 状态更新定时器
+    QTimer* status_update_timer_;
 
     // 页面索引
     enum PageIndex {
