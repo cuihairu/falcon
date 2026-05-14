@@ -6,6 +6,12 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-05-14 - 任务优先级管理
+- 统一 `TaskPriority` 枚举到 `types.hpp`（Low/Normal/High/Critical）
+- 添加 `DownloadTask::get_priority()` / `set_priority()` 方法
+- 添加 `DownloadEngine::adjust_task_priority()` 方法
+- 支持运行时动态调整任务执行优先级
+
 ### 2025-12-21 - 初始化模块架构
 - 创建核心库目录结构
 - 定义公共 API 接口
@@ -97,6 +103,9 @@ public:
     void resume_task(TaskID id);
     void cancel_task(TaskID id);
 
+    // 任务优先级
+    bool adjust_task_priority(TaskID id, TaskPriority priority);
+
     // 全局控制
     void pause_all();
     void resume_all();
@@ -122,6 +131,10 @@ public:
     size_t total_bytes() const;
     size_t downloaded_bytes() const;
     size_t speed() const;  // bytes/s
+
+    // 优先级
+    TaskPriority get_priority() const;
+    void set_priority(TaskPriority priority);
 
     // 控制操作
     void wait();
