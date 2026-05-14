@@ -185,9 +185,44 @@ TEST_F(TaskManagerApiTest, AdjustTaskPriorityNonExistent) {
 
 TEST_F(TaskManagerApiTest, AdjustTaskPriorityExistingTask) {
     TaskId id = manager_->add_task(make_task(1, "https://a.com/1"));
-    // adjust_task_priority may require the task to be in the queue
-    // Just verify the API doesn't crash
-    manager_->adjust_task_priority(id, TaskPriority::High);
+    auto task = manager_->get_task(id);
+    ASSERT_NE(task, nullptr);
+
+    // Initial priority should be Normal (default)
+    EXPECT_EQ(task->get_priority(), TaskPriority::Normal);
+
+    // Adjust to High
+    bool adjusted = manager_->adjust_task_priority(id, TaskPriority::High);
+    EXPECT_TRUE(adjusted);
+    EXPECT_EQ(task->get_priority(), TaskPriority::High);
+
+    // Adjust to Low
+    adjusted = manager_->adjust_task_priority(id, TaskPriority::Low);
+    EXPECT_TRUE(adjusted);
+    EXPECT_EQ(task->get_priority(), TaskPriority::Low);
+}
+
+TEST_F(TaskManagerApiTest, AdjustTaskPriorityMultipleTasks) {
+    TaskId id1 = manager_->add_task(make_task(1, "https://a.com/1"));
+    TaskId id2 = manager_->add_task(make_task(2, "https://b.com/2"));
+    TaskId id3 = manager_->add_task(make_task(3, "https://c.com/3"));
+
+    auto task1 = manager_->get_task(id1);
+    auto task2 = manager_->get_task(id2);
+    auto task3 = manager_->get_task(id3);
+
+    ASSERT_NE(task1, nullptr);
+    ASSERT_NE(task2, nullptr);
+    ASSERT_NE(task3, nullptr);
+
+    // Set different priorities
+    manager_->adjust_task_priority(id1, TaskPriority::Low);
+    manager_->adjust_task_priority(id2, TaskPriority::High);
+    manager_->adjust_task_priority(id3, TaskPriority::Critical);
+
+    EXPECT_EQ(task1->get_priority(), TaskPriority::Low);
+    EXPECT_EQ(task2->get_priority(), TaskPriority::High);
+    EXPECT_EQ(task3->get_priority(), TaskPriority::Critical);
 }
 
 // ---------------------------------------------------------------------------

@@ -310,3 +310,55 @@ TEST(DownloadEngineApiTest, GetTaskByInvalidId) {
     auto t = engine.get_task(falcon::INVALID_TASK_ID);
     EXPECT_EQ(t, nullptr);
 }
+
+// ---------------------------------------------------------------------------
+// adjust_task_priority
+// ---------------------------------------------------------------------------
+
+TEST(DownloadEngineApiTest, AdjustTaskPriorityNonExistent) {
+    falcon::DownloadEngine engine;
+    bool adjusted = engine.adjust_task_priority(99999, falcon::TaskPriority::High);
+    EXPECT_FALSE(adjusted);
+}
+
+TEST(DownloadEngineApiTest, AdjustTaskPriorityExistingTask) {
+    falcon::DownloadEngine engine;
+    engine.register_handler(std::make_unique<QuickHandler>());
+
+    auto t = engine.add_task("quick://a.com/1");
+    ASSERT_NE(t, nullptr);
+
+    // Initial priority should be Normal (default)
+    EXPECT_EQ(t->get_priority(), falcon::TaskPriority::Normal);
+
+    // Adjust to High
+    bool adjusted = engine.adjust_task_priority(t->id(), falcon::TaskPriority::High);
+    EXPECT_TRUE(adjusted);
+    EXPECT_EQ(t->get_priority(), falcon::TaskPriority::High);
+
+    // Adjust to Low
+    adjusted = engine.adjust_task_priority(t->id(), falcon::TaskPriority::Low);
+    EXPECT_TRUE(adjusted);
+    EXPECT_EQ(t->get_priority(), falcon::TaskPriority::Low);
+}
+
+TEST(DownloadEngineApiTest, AdjustTaskPriorityAllLevels) {
+    falcon::DownloadEngine engine;
+    engine.register_handler(std::make_unique<QuickHandler>());
+
+    auto t = engine.add_task("quick://a.com/1");
+    ASSERT_NE(t, nullptr);
+
+    // Test all priority levels
+    EXPECT_TRUE(engine.adjust_task_priority(t->id(), falcon::TaskPriority::Low));
+    EXPECT_EQ(t->get_priority(), falcon::TaskPriority::Low);
+
+    EXPECT_TRUE(engine.adjust_task_priority(t->id(), falcon::TaskPriority::Normal));
+    EXPECT_EQ(t->get_priority(), falcon::TaskPriority::Normal);
+
+    EXPECT_TRUE(engine.adjust_task_priority(t->id(), falcon::TaskPriority::High));
+    EXPECT_EQ(t->get_priority(), falcon::TaskPriority::High);
+
+    EXPECT_TRUE(engine.adjust_task_priority(t->id(), falcon::TaskPriority::Critical));
+    EXPECT_EQ(t->get_priority(), falcon::TaskPriority::Critical);
+}
