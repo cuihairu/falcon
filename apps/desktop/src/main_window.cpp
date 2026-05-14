@@ -680,9 +680,36 @@ void MainWindow::on_progress(const falcon::ProgressInfo& info)
 
 void MainWindow::on_error(falcon::TaskId task_id, const std::string& error_message)
 {
-    (void)task_id;
-    (void)error_message;
-    // TODO: Show error notification
+    // 如果通知未启用，直接返回
+    if (!settings_page_ || !settings_page_->is_notifications_enabled()) {
+        return;
+    }
+
+    // 获取任务信息（用于显示文件名）
+    QString task_name = tr("Task #%1").arg(task_id);
+    if (download_engine_) {
+        auto task = download_engine_->get_task(task_id);
+        if (task) {
+            const QString url = QString::fromStdString(task->url());
+            // 从 URL 提取文件名
+            const int last_slash = url.lastIndexOf('/');
+            if (last_slash >= 0 && last_slash < url.length() - 1) {
+                task_name = url.mid(last_slash + 1);
+            } else {
+                task_name = url;
+            }
+        }
+    }
+
+    // 使用系统托盘显示错误通知
+    if (system_tray_ && system_tray_->isVisible()) {
+        system_tray_->showMessage(
+            tr("Download Error"),
+            tr("%1\nError: %2").arg(task_name, QString::fromStdString(error_message)),
+            QSystemTrayIcon::Critical,
+            5000  // 显示 5 秒
+        );
+    }
 }
 
 void MainWindow::on_completed(falcon::TaskId task_id, const std::string& output_path)
