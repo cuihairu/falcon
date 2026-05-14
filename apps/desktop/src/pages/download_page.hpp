@@ -61,6 +61,7 @@ signals:
     void new_task_requested();
     void remove_task_requested(falcon::TaskId id);
     void remove_finished_tasks_requested();
+    void priority_changed(falcon::TaskId id, falcon::TaskPriority priority);
 
 private slots:
     void on_new_task_clicked();

@@ -68,6 +68,7 @@ private slots:
     void on_direct_download_requested(const QString& url, bool start_immediately);
     void on_remove_task_requested(falcon::TaskId id);
     void on_remove_finished_tasks_requested();
+    void on_priority_changed(falcon::TaskId id, falcon::TaskPriority priority);
     void on_minimize_requested();
     void on_maximize_requested();
     void on_close_requested();

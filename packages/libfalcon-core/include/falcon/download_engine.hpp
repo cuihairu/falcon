@@ -150,6 +150,12 @@ public:
     /// @param max_tasks Maximum number
     void set_max_concurrent_tasks(std::size_t max_tasks);
 
+    /// Adjust task priority
+    /// @param id Task ID
+    /// @param priority New priority level
+    /// @return true if priority was adjusted successfully
+    bool adjust_task_priority(TaskId id, TaskPriority priority);
+
     // === Statistics ===
 
     /// Get total download speed

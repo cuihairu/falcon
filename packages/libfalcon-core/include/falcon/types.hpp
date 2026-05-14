@@ -58,4 +58,23 @@ struct ProgressInfo {
     Duration estimated_remaining{};
 };
 
+/// Task priority levels
+enum class TaskPriority : int {
+    Low = 0,
+    Normal = 1,
+    High = 2,
+    Critical = 3
+};
+
+/// Convert TaskPriority to string
+inline const char* to_string(TaskPriority priority) {
+    switch (priority) {
+        case TaskPriority::Low: return "Low";
+        case TaskPriority::Normal: return "Normal";
+        case TaskPriority::High: return "High";
+        case TaskPriority::Critical: return "Critical";
+        default: return "Unknown";
+    }
+}
+
 }  // namespace falcon

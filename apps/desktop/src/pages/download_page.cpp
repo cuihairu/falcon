@@ -688,6 +688,33 @@ void DownloadPage::show_context_menu(const QPoint& pos)
 
     menu.addSeparator();
 
+    // 优先级子菜单
+    auto* priority_menu = menu.addMenu(tr("优先级"));
+    const auto current_priority = task->get_priority();
+
+    auto* low_action = priority_menu->addAction(tr("低"));
+    low_action->setCheckable(true);
+    low_action->setChecked(current_priority == falcon::TaskPriority::Low);
+    connect(low_action, &QAction::triggered, this, [this, id = task->id()]() {
+        emit priority_changed(id, falcon::TaskPriority::Low);
+    });
+
+    auto* normal_action = priority_menu->addAction(tr("普通"));
+    normal_action->setCheckable(true);
+    normal_action->setChecked(current_priority == falcon::TaskPriority::Normal);
+    connect(normal_action, &QAction::triggered, this, [this, id = task->id()]() {
+        emit priority_changed(id, falcon::TaskPriority::Normal);
+    });
+
+    auto* high_action = priority_menu->addAction(tr("高"));
+    high_action->setCheckable(true);
+    high_action->setChecked(current_priority == falcon::TaskPriority::High);
+    connect(high_action, &QAction::triggered, this, [this, id = task->id()]() {
+        emit priority_changed(id, falcon::TaskPriority::High);
+    });
+
+    menu.addSeparator();
+
     // 删除任务
     auto* delete_action = menu.addAction(tr("删除任务"));
     connect(delete_action, &QAction::triggered, this, &DownloadPage::on_delete_selected);

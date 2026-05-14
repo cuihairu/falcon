@@ -292,6 +292,20 @@ public:
         return stats.total_tasks;
     }
 
+    bool adjust_task_priority(TaskId id, TaskPriority priority) {
+        // 获取任务
+        auto task = task_manager_.get_task(id);
+        if (!task) {
+            return false;
+        }
+
+        // 更新任务对象的优先级
+        task->set_priority(priority);
+
+        // 更新任务管理器的优先级（重新排队）
+        return task_manager_.adjust_task_priority(id, priority);
+    }
+
     void load_all_handlers() {
         protocol_registry_.load_builtin_handlers();
 
@@ -466,6 +480,10 @@ std::size_t DownloadEngine::get_active_task_count() const {
 
 std::size_t DownloadEngine::get_total_task_count() const {
     return impl_->get_total_task_count();
+}
+
+bool DownloadEngine::adjust_task_priority(TaskId id, TaskPriority priority) {
+    return impl_->adjust_task_priority(id, priority);
 }
 
 } // namespace falcon

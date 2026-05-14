@@ -39,16 +39,6 @@ namespace falcon {
 class EventDispatcher;
 
 /**
- * @brief 任务优先级
- */
-enum class TaskPriority : int {
-    Low = 0,
-    Normal = 1,
-    High = 2,
-    Critical = 3
-};
-
-/**
  * @brief 任务队列项
  */
 struct TaskQueueItem {

@@ -104,6 +104,12 @@ public:
     /// Check if task is finished (completed, failed, or cancelled)
     [[nodiscard]] bool is_finished() const noexcept;
 
+    /// Get task priority
+    [[nodiscard]] TaskPriority get_priority() const noexcept { return priority_.load(); }
+
+    /// Set task priority
+    void set_priority(TaskPriority priority) noexcept { priority_.store(priority); }
+
     // === Control Operations ===
 
     /// Pause the download
@@ -167,6 +173,7 @@ private:
     std::atomic<Bytes> total_bytes_{0};
     std::atomic<Bytes> downloaded_bytes_{0};
     std::atomic<BytesPerSecond> current_speed_{0};
+    std::atomic<TaskPriority> priority_{TaskPriority::Normal};
 
     std::string output_path_;
     std::string error_message_;

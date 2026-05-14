@@ -313,6 +313,8 @@ void MainWindow::create_pages()
             this, &MainWindow::on_remove_task_requested);
     connect(download_page_, &DownloadPage::remove_finished_tasks_requested,
             this, &MainWindow::on_remove_finished_tasks_requested);
+    connect(download_page_, &DownloadPage::priority_changed,
+            this, &MainWindow::on_priority_changed);
 
     // 云盘页面
     auto* cloud_page = new CloudPage(this);
@@ -622,6 +624,15 @@ void MainWindow::on_remove_finished_tasks_requested()
     }
 
     (void)download_engine_->remove_finished_tasks();
+}
+
+void MainWindow::on_priority_changed(falcon::TaskId id, falcon::TaskPriority priority)
+{
+    if (!download_engine_) {
+        return;
+    }
+
+    (void)download_engine_->adjust_task_priority(id, priority);
 }
 
 void MainWindow::on_minimize_requested()
