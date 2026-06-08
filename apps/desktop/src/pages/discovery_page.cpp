@@ -43,22 +43,14 @@ DiscoveryPage::~DiscoveryPage() = default;
 void DiscoveryPage::setup_ui()
 {
     auto* main_layout = new QVBoxLayout(this);
-    main_layout->setContentsMargins(24, 24, 24, 24);
-    main_layout->setSpacing(16);
+    main_layout->setContentsMargins(18, 18, 18, 18);
+    main_layout->setSpacing(14);
 
-    // 页面标题
-    auto* title_label = new QLabel(tr("Discovery"), this);
-    auto title_font = title_label->font();
-    title_font.setPointSize(20);
-    title_font.setBold(true);
-    title_label->setFont(title_font);
-    main_layout->addWidget(title_label);
+    main_layout->addWidget(create_page_hero());
 
-    // 创建搜索栏
     search_bar_ = create_search_bar();
     main_layout->addWidget(search_bar_);
 
-    // 创建过滤栏
     filter_bar_ = create_filter_bar();
     main_layout->addWidget(filter_bar_);
 
@@ -69,6 +61,31 @@ void DiscoveryPage::setup_ui()
     // 创建状态栏
     auto* status_bar = create_status_bar();
     main_layout->addWidget(status_bar);
+}
+
+QWidget* DiscoveryPage::create_page_hero()
+{
+    auto* hero = new QWidget(this);
+    hero->setObjectName("downloadHero");
+
+    auto* layout = new QVBoxLayout(hero);
+    layout->setContentsMargins(20, 18, 20, 18);
+    layout->setSpacing(4);
+
+    auto* eyebrow = new QLabel(tr("DISCOVERY"), hero);
+    eyebrow->setObjectName("heroEyebrow");
+    layout->addWidget(eyebrow);
+
+    auto* title = new QLabel(tr("资源发现"), hero);
+    title->setObjectName("heroTitle");
+    layout->addWidget(title);
+
+    auto* desc = new QLabel(tr("搜索磁力、直链、FTP 与网盘资源，快速加入下载队列。"), hero);
+    desc->setObjectName("heroDescription");
+    desc->setWordWrap(true);
+    layout->addWidget(desc);
+
+    return hero;
 }
 
 QWidget* DiscoveryPage::create_search_bar()
@@ -88,20 +105,18 @@ QWidget* DiscoveryPage::create_search_bar()
 
     // 搜索输入框
     search_input_ = new QLineEdit(search_bar);
-    search_input_->setPlaceholderText(tr("Enter keywords..."));
+    search_input_->setPlaceholderText(tr("输入关键词、片名、文件名或资源描述"));
     search_input_->setMinimumWidth(400);
     layout->addWidget(search_input_, 1);
 
-    // 搜索按钮
     search_button_ = new QPushButton(tr("Search"), search_bar);
-    search_button_->setIcon(style()->standardIcon(QStyle::SP_FileDialogContentsView));
     search_button_->setCursor(Qt::PointingHandCursor);
+    search_button_->setObjectName("primaryButton");
     layout->addWidget(search_button_);
 
-    // 清空按钮
     clear_button_ = new QPushButton(tr("Clear"), search_bar);
-    clear_button_->setIcon(style()->standardIcon(QStyle::SP_DialogResetButton));
     clear_button_->setCursor(Qt::PointingHandCursor);
+    clear_button_->setObjectName("toolButton");
     layout->addWidget(clear_button_);
 
     // 排序方式
@@ -279,11 +294,11 @@ void DiscoveryPage::display_results(const QList<SearchResultItem>& results)
         op_layout->setSpacing(5);
 
         auto* download_btn = new QPushButton(tr("Download"), operation_widget);
-        download_btn->setIcon(style()->standardIcon(QStyle::SP_ArrowDown));
         download_btn->setCursor(Qt::PointingHandCursor);
+        download_btn->setObjectName("primaryButton");
         auto* copy_btn = new QPushButton(tr("Copy"), operation_widget);
-        copy_btn->setIcon(style()->standardIcon(QStyle::SP_DialogOpenButton));
         copy_btn->setCursor(Qt::PointingHandCursor);
+        copy_btn->setObjectName("toolButton");
 
         op_layout->addWidget(download_btn);
         op_layout->addWidget(copy_btn);

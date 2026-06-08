@@ -7,16 +7,16 @@
 
 #include "sidebar.hpp"
 
-#include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QButtonGroup>
+#include <QFrame>
 
 namespace falcon::desktop {
 
 namespace {
-constexpr int kSideBarWidth = 200;
-constexpr int kSectionSpacing = 16;
-constexpr int kItemSpacing = 4;
+constexpr int kSideBarWidth = 232;
+constexpr int kSectionSpacing = 18;
+constexpr int kItemSpacing = 6;
 } // namespace
 
 SideBar::SideBar(QWidget* parent)
@@ -47,126 +47,116 @@ void SideBar::setup_ui()
     setObjectName("sideBar");
 
     main_layout_ = new QVBoxLayout(this);
-    main_layout_->setContentsMargins(12, 16, 12, 16);
+    main_layout_->setContentsMargins(16, 18, 16, 18);
     main_layout_->setSpacing(kSectionSpacing);
 
-    create_my_download_section();
-    create_common_tools_section();
-    create_private_space_section();
+    library_label_ = new QLabel(tr("工作台"), this);
+    library_label_->setObjectName("sectionLabel");
+    main_layout_->addWidget(library_label_);
+
+    create_download_section();
+    main_layout_->addWidget(create_separator());
+
+    transfer_label_ = new QLabel(tr("发现与空间"), this);
+    transfer_label_->setObjectName("sectionLabel");
+    main_layout_->addWidget(transfer_label_);
+
+    create_space_section();
 
     main_layout_->addStretch();
+
+    footer_card_ = new QWidget(this);
+    footer_card_->setObjectName("sideBarFooter");
+    auto* footer_layout = new QVBoxLayout(footer_card_);
+    footer_layout->setContentsMargins(14, 14, 14, 14);
+    footer_layout->setSpacing(4);
+
+    footer_value_ = new QLabel(tr("12"), footer_card_);
+    footer_value_->setObjectName("sidebarStatValue");
+    footer_layout->addWidget(footer_value_);
+
+    footer_label_ = new QLabel(tr("当前队列任务"), footer_card_);
+    footer_label_->setObjectName("sidebarStatLabel");
+    footer_layout->addWidget(footer_label_);
+
+    main_layout_->addWidget(footer_card_);
 }
 
-void SideBar::create_my_download_section()
+QPushButton* SideBar::create_nav_button(const QString& text, QButtonGroup* group, int id)
 {
-    // 区域标题
+    auto* button = new QPushButton(text, this);
+    button->setObjectName("navTab");
+    button->setCheckable(true);
+    group->addButton(button, id);
+    return button;
+}
+
+QWidget* SideBar::create_separator()
+{
+    auto* separator = new QWidget(this);
+    separator->setObjectName("separatorLine");
+    separator->setFixedHeight(1);
+    return separator;
+}
+
+void SideBar::create_download_section()
+{
     my_download_label_ = new QLabel(tr("我的下载"), this);
-    my_download_label_->setObjectName("navLabel");
+    my_download_label_->setObjectName("sectionLabel");
     main_layout_->addWidget(my_download_label_);
 
-    // 标签页容器
     auto* tabs_layout = new QVBoxLayout();
     tabs_layout->setSpacing(kItemSpacing);
     main_layout_->addLayout(tabs_layout);
 
-    // 下载中标签
-    downloading_tab_ = new QPushButton(tr("下载中"), this);
-    downloading_tab_->setObjectName("navTab");
-    downloading_tab_->setCheckable(true);
-    downloading_tab_->setChecked(true);  // 默认选中
-    my_download_tabs_->addButton(downloading_tab_, 0);
+    downloading_tab_ = create_nav_button(tr("下载中"), my_download_tabs_, 0);
+    downloading_tab_->setChecked(true);
     tabs_layout->addWidget(downloading_tab_);
     connect(downloading_tab_, &QPushButton::clicked, this, &SideBar::downloadingTabClicked);
     connect(downloading_tab_, &QPushButton::clicked, this, &SideBar::downloadClicked);
 
-    // 已完成标签
-    completed_tab_ = new QPushButton(tr("已完成"), this);
-    completed_tab_->setObjectName("navTab");
-    completed_tab_->setCheckable(true);
-    my_download_tabs_->addButton(completed_tab_, 1);
+    completed_tab_ = create_nav_button(tr("已完成"), my_download_tabs_, 1);
     tabs_layout->addWidget(completed_tab_);
     connect(completed_tab_, &QPushButton::clicked, this, &SideBar::completedTabClicked);
     connect(completed_tab_, &QPushButton::clicked, this, &SideBar::downloadClicked);
 
-    // 云添加标签
-    cloud_add_tab_ = new QPushButton(tr("云添加"), this);
-    cloud_add_tab_->setObjectName("navTab");
-    cloud_add_tab_->setCheckable(true);
-    my_download_tabs_->addButton(cloud_add_tab_, 2);
+    cloud_add_tab_ = create_nav_button(tr("云添加"), my_download_tabs_, 2);
     tabs_layout->addWidget(cloud_add_tab_);
     connect(cloud_add_tab_, &QPushButton::clicked, this, &SideBar::cloudAddTabClicked);
-    connect(cloud_add_tab_, &QPushButton::clicked, this, &SideBar::cloudClicked);
+    connect(cloud_add_tab_, &QPushButton::clicked, this, &SideBar::downloadClicked);
 }
 
-void SideBar::create_common_tools_section()
+void SideBar::create_space_section()
 {
-    // 分隔线
-    auto* separator = new QWidget(this);
-    separator->setFixedHeight(1);
-    separator->setStyleSheet("background-color: #E0E0E0;");
-    main_layout_->addWidget(separator);
-
-    // 常用工具按钮
     auto* tools_layout = new QVBoxLayout();
     tools_layout->setSpacing(kItemSpacing);
     main_layout_->addLayout(tools_layout);
 
-    // 片库
-    library_button_ = new QPushButton(tr("片库"), this);
-    library_button_->setObjectName("navTab");
-    library_button_->setCheckable(true);
-    common_tools_->addButton(library_button_, 0);
+    library_button_ = create_nav_button(tr("资源发现"), common_tools_, 0);
     tools_layout->addWidget(library_button_);
     connect(library_button_, &QPushButton::clicked, this, &SideBar::discoveryClicked);
 
-    // 三方网盘
-    third_party_button_ = new QPushButton(tr("三方"), this);
-    third_party_button_->setObjectName("navTab");
-    third_party_button_->setCheckable(true);
-    common_tools_->addButton(third_party_button_, 1);
+    third_party_button_ = create_nav_button(tr("云盘空间"), common_tools_, 1);
     tools_layout->addWidget(third_party_button_);
     connect(third_party_button_, &QPushButton::clicked, this, &SideBar::cloudClicked);
 
-    // 回收站
-    recycle_bin_button_ = new QPushButton(tr("回收站"), this);
-    recycle_bin_button_->setObjectName("navTab");
-    recycle_bin_button_->setCheckable(true);
-    common_tools_->addButton(recycle_bin_button_, 2);
+    recycle_bin_button_ = create_nav_button(tr("偏好设置"), common_tools_, 2);
     tools_layout->addWidget(recycle_bin_button_);
     connect(recycle_bin_button_, &QPushButton::clicked, this, &SideBar::settingsClicked);
-}
 
-void SideBar::create_private_space_section()
-{
-    // 分隔线
-    auto* separator = new QWidget(this);
-    separator->setFixedHeight(1);
-    separator->setStyleSheet("background-color: #E0E0E0;");
-    main_layout_->addWidget(separator);
-
-    // 区域标题
     private_space_label_ = new QLabel(tr("私人空间"), this);
-    private_space_label_->setObjectName("navLabel");
+    private_space_label_->setObjectName("sectionLabel");
     main_layout_->addWidget(private_space_label_);
 
-    // 私人空间按钮
     auto* space_layout = new QVBoxLayout();
     space_layout->setSpacing(kItemSpacing);
     main_layout_->addLayout(space_layout);
 
-    // 下载中
-    private_downloading_button_ = new QPushButton(tr("下载中"), this);
-    private_downloading_button_->setObjectName("navTab");
-    private_downloading_button_->setCheckable(true);
-    private_space_tools_->addButton(private_downloading_button_, 0);
+    private_downloading_button_ = create_nav_button(tr("隐私下载"), private_space_tools_, 0);
     space_layout->addWidget(private_downloading_button_);
     connect(private_downloading_button_, &QPushButton::clicked, this, &SideBar::downloadClicked);
 
-    // 已完成
-    private_completed_button_ = new QPushButton(tr("已完成"), this);
-    private_completed_button_->setObjectName("navTab");
-    private_completed_button_->setCheckable(true);
-    private_space_tools_->addButton(private_completed_button_, 1);
+    private_completed_button_ = create_nav_button(tr("隐私完成"), private_space_tools_, 1);
     space_layout->addWidget(private_completed_button_);
     connect(private_completed_button_, &QPushButton::clicked, this, &SideBar::downloadClicked);
 }

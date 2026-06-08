@@ -343,6 +343,14 @@ void MainWindow::create_pages()
         apply_settings_to_runtime();
     });
     connect(settings_page_, &SettingsPage::theme_toggle_requested, this, &MainWindow::on_theme_toggle_requested);
+    if (theme_manager_) {
+        settings_page_->set_theme_display(theme_manager_->current_theme() == ThemeType::Dark);
+        connect(theme_manager_, &ThemeManager::theme_changed, settings_page_, [this](ThemeType theme) {
+            if (settings_page_) {
+                settings_page_->set_theme_display(theme == ThemeType::Dark);
+            }
+        });
+    }
 }
 
 void MainWindow::setup_clipboard_monitor()

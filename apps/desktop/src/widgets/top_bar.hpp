@@ -11,6 +11,7 @@
 #include <QPushButton>
 #include <QLineEdit>
 #include <QLabel>
+#include <QFrame>
 
 namespace falcon::desktop {
 
@@ -41,8 +42,11 @@ signals:
 
 private:
     void setup_ui();
-    void setup_styles();
 
+    QLabel* brand_mark_ = nullptr;
+    QLabel* brand_title_ = nullptr;
+    QLabel* brand_subtitle_ = nullptr;
+    QLabel* meta_badge_ = nullptr;
     // 搜索相关
     QLineEdit* search_edit_ = nullptr;
 

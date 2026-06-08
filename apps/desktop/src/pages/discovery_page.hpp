@@ -76,6 +76,7 @@ private slots:
 
 private:
     void setup_ui();
+    QWidget* create_page_hero();
     QWidget* create_search_bar();
     QWidget* create_filter_bar();
     void create_results_table();

@@ -14,6 +14,7 @@
 #include <QComboBox>
 #include <QPushButton>
 #include <QLabel>
+#include <QScrollArea>
 
 namespace falcon::desktop {
 
@@ -45,6 +46,7 @@ public:
     void set_global_speed_limit(int kb_per_sec);
     void set_open_file_when_completed(bool enabled);
     void set_action_when_completed(int action);
+    void set_theme_display(bool dark_mode);
 
     /**
      * @brief Get clipboard monitoring enabled state
@@ -147,6 +149,7 @@ private slots:
 
 private:
     void setup_ui();
+    QWidget* create_page_hero();
     QWidget* create_clipboard_section_widget();
     QWidget* create_download_section_widget();
     QWidget* create_speed_limit_section_widget();

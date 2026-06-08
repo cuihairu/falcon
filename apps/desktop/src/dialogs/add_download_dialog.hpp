@@ -90,6 +90,7 @@ private slots:
 
 private:
     void setup_ui();
+    QWidget* create_page_hero();
     QWidget* create_url_section_widget();
     QWidget* create_file_section_widget();
     QWidget* create_options_section_widget();

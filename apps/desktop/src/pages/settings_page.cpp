@@ -14,6 +14,8 @@
 #include <QFileDialog>
 #include <QLabel>
 #include <QHeaderView>
+#include <QScrollArea>
+#include <QFrame>
 #include <QStyle>
 
 namespace falcon::desktop {
@@ -102,6 +104,16 @@ void SettingsPage::set_action_when_completed(int action)
 {
     if (completion_action_combo_) {
         completion_action_combo_->setCurrentIndex(action);
+    }
+}
+
+void SettingsPage::set_theme_display(bool dark_mode)
+{
+    if (current_theme_label_) {
+        current_theme_label_->setText(dark_mode ? tr("Dark") : tr("Light"));
+    }
+    if (theme_toggle_button_) {
+        theme_toggle_button_->setText(dark_mode ? tr("Switch to Light") : tr("Switch to Dark"));
     }
 }
 
@@ -228,21 +240,18 @@ void SettingsPage::apply_settings()
 void SettingsPage::setup_ui()
 {
     auto* main_layout = new QVBoxLayout(this);
-    main_layout->setContentsMargins(24, 24, 24, 24);
-    main_layout->setSpacing(20);
+    main_layout->setContentsMargins(18, 18, 18, 18);
+    main_layout->setSpacing(14);
 
-    // Page title
-    auto* title_label = new QLabel(tr("Settings"), this);
-    auto title_font = title_label->font();
-    title_font.setPointSize(20);
-    title_font.setBold(true);
-    title_label->setFont(title_font);
-    main_layout->addWidget(title_label);
+    main_layout->addWidget(create_page_hero());
 
-    // Scroll area for settings
-    auto* scroll_content = new QWidget(this);
+    auto* scroll_area = new QScrollArea(this);
+    scroll_area->setWidgetResizable(true);
+    scroll_area->setFrameShape(QFrame::NoFrame);
+
+    auto* scroll_content = new QWidget(scroll_area);
     auto* scroll_layout = new QVBoxLayout(scroll_content);
-    scroll_layout->setSpacing(20);
+    scroll_layout->setSpacing(16);
     scroll_layout->setContentsMargins(0, 0, 0, 0);
 
     // Create setting sections
@@ -259,7 +268,33 @@ void SettingsPage::setup_ui()
     // Action buttons
     scroll_layout->addLayout(create_action_buttons_layout());
 
-    main_layout->addWidget(scroll_content, 1);
+    scroll_area->setWidget(scroll_content);
+    main_layout->addWidget(scroll_area, 1);
+}
+
+QWidget* SettingsPage::create_page_hero()
+{
+    auto* hero = new QWidget(this);
+    hero->setObjectName("downloadHero");
+
+    auto* layout = new QVBoxLayout(hero);
+    layout->setContentsMargins(20, 18, 20, 18);
+    layout->setSpacing(4);
+
+    auto* eyebrow = new QLabel(tr("PREFERENCES"), hero);
+    eyebrow->setObjectName("heroEyebrow");
+    layout->addWidget(eyebrow);
+
+    auto* title = new QLabel(tr("下载器设置"), hero);
+    title->setObjectName("heroTitle");
+    layout->addWidget(title);
+
+    auto* desc = new QLabel(tr("统一管理主题、连接、限速、通知与下载目录。"), hero);
+    desc->setObjectName("heroDescription");
+    desc->setWordWrap(true);
+    layout->addWidget(desc);
+
+    return hero;
 }
 
 QWidget* SettingsPage::create_clipboard_section_widget()
@@ -278,6 +313,7 @@ QWidget* SettingsPage::create_clipboard_section_widget()
         this
     );
     desc_label->setWordWrap(true);
+    desc_label->setObjectName("cardInfoLabel");
 
     layout->addWidget(clipboard_monitoring_checkbox_);
     layout->addWidget(desc_label);
@@ -292,6 +328,7 @@ QWidget* SettingsPage::create_clipboard_section_widget()
     clipboard_delay_spin_->setSuffix(" ms");
 
     auto* delay_hint = new QLabel(tr("(avoid duplicate triggers)"), this);
+    delay_hint->setObjectName("cardInfoLabel");
 
     delay_layout->addWidget(delay_label);
     delay_layout->addWidget(clipboard_delay_spin_);
@@ -322,8 +359,8 @@ QWidget* SettingsPage::create_download_section_widget()
     dir_layout->addWidget(download_dir_edit_, 1);
 
     auto* browse_btn = new QPushButton(tr("Browse..."), this);
-    browse_btn->setIcon(style()->standardIcon(QStyle::SP_DirOpenIcon));
     browse_btn->setCursor(Qt::PointingHandCursor);
+    browse_btn->setObjectName("toolButton");
     connect(browse_btn, &QPushButton::clicked, this, &SettingsPage::browse_download_dir);
     dir_layout->addWidget(browse_btn);
 
@@ -361,7 +398,7 @@ QWidget* SettingsPage::create_speed_limit_section_widget()
     task_limit_layout->addWidget(task_speed_limit_spin_);
 
     auto* task_limit_hint = new QLabel(tr("(0 = unlimited)"), this);
-    task_limit_hint->setStyleSheet("color: #888888; font-size: 8pt;");
+    task_limit_hint->setObjectName("cardInfoLabel");
     task_limit_layout->addWidget(task_limit_hint);
     task_limit_layout->addStretch();
 
@@ -380,7 +417,7 @@ QWidget* SettingsPage::create_speed_limit_section_widget()
     global_limit_layout->addWidget(global_speed_limit_spin_);
 
     auto* global_limit_hint = new QLabel(tr("(0 = unlimited)"), this);
-    global_limit_hint->setStyleSheet("color: #888888; font-size: 8pt;");
+    global_limit_hint->setObjectName("cardInfoLabel");
     global_limit_layout->addWidget(global_limit_hint);
     global_limit_layout->addStretch();
 
@@ -392,7 +429,7 @@ QWidget* SettingsPage::create_speed_limit_section_widget()
         this
     );
     desc_label->setWordWrap(true);
-    desc_label->setStyleSheet("color: #888888; font-size: 8pt;");
+    desc_label->setObjectName("cardInfoLabel");
     layout->addRow("", desc_label);
 
     return group;
@@ -430,7 +467,7 @@ QWidget* SettingsPage::create_completion_action_section_widget()
         this
     );
     desc_label->setWordWrap(true);
-    desc_label->setStyleSheet("color: #888888; font-size: 8pt;");
+    desc_label->setObjectName("cardInfoLabel");
     layout->addWidget(desc_label);
 
     return group;
@@ -497,16 +534,16 @@ QLayout* SettingsPage::create_action_buttons_layout()
     layout->addStretch();
 
     reset_button_ = new QPushButton(tr("Reset"), this);
-    reset_button_->setIcon(style()->standardIcon(QStyle::SP_DialogResetButton));
     reset_button_->setCursor(Qt::PointingHandCursor);
     reset_button_->setMinimumWidth(100);
+    reset_button_->setObjectName("toolButton");
     connect(reset_button_, &QPushButton::clicked, this, &SettingsPage::reset_to_defaults);
     layout->addWidget(reset_button_);
 
     apply_button_ = new QPushButton(tr("Apply"), this);
-    apply_button_->setIcon(style()->standardIcon(QStyle::SP_DialogApplyButton));
     apply_button_->setCursor(Qt::PointingHandCursor);
     apply_button_->setMinimumWidth(100);
+    apply_button_->setObjectName("primaryButton");
     connect(apply_button_, &QPushButton::clicked, this, &SettingsPage::apply_settings);
     layout->addWidget(apply_button_);
 
@@ -534,8 +571,8 @@ QWidget* SettingsPage::create_appearance_section_widget()
     theme_layout->addStretch();
 
     theme_toggle_button_ = new QPushButton(tr("Switch to Dark"), this);
-    theme_toggle_button_->setIcon(style()->standardIcon(QStyle::SP_DialogResetButton));
     theme_toggle_button_->setCursor(Qt::PointingHandCursor);
+    theme_toggle_button_->setObjectName("toolButton");
     connect(theme_toggle_button_, &QPushButton::clicked, this, &SettingsPage::on_theme_button_clicked);
     theme_layout->addWidget(theme_toggle_button_);
 
@@ -543,7 +580,7 @@ QWidget* SettingsPage::create_appearance_section_widget()
 
     // 说明文字
     auto* desc_label = new QLabel(tr("Switch between light and dark themes."), this);
-    desc_label->setStyleSheet("color: #888888; font-size: 8pt;");
+    desc_label->setObjectName("cardInfoLabel");
     layout->addWidget(desc_label);
 
     return group;

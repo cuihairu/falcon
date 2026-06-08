@@ -16,12 +16,14 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QScrollArea>
+#include <QFrame>
 #include <algorithm>
 
 namespace falcon::desktop {
 
 namespace {
 constexpr int kRowHeight = 56;
+constexpr int kSummaryCardWidth = 168;
 } // namespace
 
 DownloadPage::DownloadPage(QWidget* parent)
@@ -57,13 +59,19 @@ DownloadPage::~DownloadPage() = default;
 void DownloadPage::setup_ui()
 {
     auto* main_layout = new QVBoxLayout(this);
-    main_layout->setContentsMargins(16, 12, 16, 16);
-    main_layout->setSpacing(0);
+    main_layout->setContentsMargins(18, 18, 18, 18);
+    main_layout->setSpacing(14);
+
+    create_hero_section();
+
+    create_summary_cards();
+    main_layout->addSpacing(4);
 
     create_header_bar();
     main_layout->addLayout(header_layout_);
 
-    main_layout->addSpacing(8);
+    create_empty_state();
+    main_layout->addWidget(empty_state_widget_);
 
     // 创建表格视图
     create_task_table();
@@ -74,61 +82,141 @@ void DownloadPage::setup_ui()
     main_layout->addWidget(grid_container_);
     grid_container_->hide();
 
-    // 底部推广区域（预留）
-    main_layout->addStretch();
+    main_layout->addStretch(1);
+    update_empty_state();
+}
+
+void DownloadPage::create_hero_section()
+{
+    auto* hero_container = new QWidget(this);
+    hero_container->setObjectName("downloadHero");
+
+    auto* hero_layout = new QHBoxLayout(hero_container);
+    hero_layout->setContentsMargins(20, 18, 20, 18);
+    hero_layout->setSpacing(16);
+
+    auto* text_layout = new QVBoxLayout();
+    text_layout->setSpacing(4);
+
+    auto* eyebrow = new QLabel(tr("DOWNLOAD CENTER"), hero_container);
+    eyebrow->setObjectName("heroEyebrow");
+    text_layout->addWidget(eyebrow);
+
+    hero_title_label_ = new QLabel(tr("下载中"), hero_container);
+    hero_title_label_->setObjectName("heroTitle");
+    text_layout->addWidget(hero_title_label_);
+
+    hero_description_label_ = new QLabel(tr("集中管理任务、速度与完成状态。"), hero_container);
+    hero_description_label_->setObjectName("heroDescription");
+    text_layout->addWidget(hero_description_label_);
+
+    hero_layout->addLayout(text_layout, 1);
+
+    new_task_button_ = new QPushButton(tr("新建下载"), hero_container);
+    new_task_button_->setObjectName("primaryButton");
+    new_task_button_->setMinimumHeight(40);
+    connect(new_task_button_, &QPushButton::clicked, this, &DownloadPage::on_new_task_clicked);
+    hero_layout->addWidget(new_task_button_);
+
+    auto* root_layout = qobject_cast<QVBoxLayout*>(layout());
+    if (root_layout) {
+        root_layout->addWidget(hero_container);
+    }
+}
+
+void DownloadPage::create_summary_cards()
+{
+    auto* summary_layout = new QHBoxLayout();
+    summary_layout->setSpacing(12);
+
+    auto create_card = [this, summary_layout](const QString& caption, QLabel** value_label) {
+        auto* card = new QWidget(this);
+        card->setObjectName("summaryCard");
+        card->setFixedWidth(kSummaryCardWidth);
+
+        auto* card_layout = new QVBoxLayout(card);
+        card_layout->setContentsMargins(16, 14, 16, 14);
+        card_layout->setSpacing(2);
+
+        auto* value = new QLabel("0", card);
+        value->setObjectName("summaryValue");
+        card_layout->addWidget(value);
+
+        auto* label = new QLabel(caption, card);
+        label->setObjectName("summaryCaption");
+        card_layout->addWidget(label);
+
+        *value_label = value;
+        summary_layout->addWidget(card);
+    };
+
+    create_card(tr("活跃任务"), &active_summary_value_);
+    create_card(tr("已完成"), &completed_summary_value_);
+    create_card(tr("当前速度"), &speed_summary_value_);
+    summary_layout->addStretch();
+
+    auto* root_layout = qobject_cast<QVBoxLayout*>(layout());
+    if (root_layout) {
+        root_layout->addLayout(summary_layout);
+    }
+}
+
+void DownloadPage::create_empty_state()
+{
+    empty_state_widget_ = new QWidget(this);
+    empty_state_widget_->setObjectName("summaryCard");
+
+    auto* layout = new QVBoxLayout(empty_state_widget_);
+    layout->setContentsMargins(20, 28, 20, 28);
+    layout->setSpacing(8);
+    layout->setAlignment(Qt::AlignCenter);
+
+    empty_state_title_ = new QLabel(tr("还没有任务"), empty_state_widget_);
+    empty_state_title_->setObjectName("emptyStateTitle");
+    empty_state_title_->setAlignment(Qt::AlignCenter);
+    layout->addWidget(empty_state_title_);
+
+    empty_state_body_ = new QLabel(tr("点击“新建下载”，或在顶部直接粘贴链接开始。"), empty_state_widget_);
+    empty_state_body_->setObjectName("emptyStateBody");
+    empty_state_body_->setAlignment(Qt::AlignCenter);
+    empty_state_body_->setWordWrap(true);
+    layout->addWidget(empty_state_body_);
 }
 
 void DownloadPage::create_header_bar()
 {
     header_layout_ = new QHBoxLayout();
-    header_layout_->setSpacing(12);
+    header_layout_->setSpacing(10);
+    header_layout_->setContentsMargins(2, 0, 2, 0);
+    header_layout_->setObjectName("downloadToolbar");
 
-    // 状态标题
     status_label_ = new QLabel(tr("已暂停"), this);
     status_label_->setObjectName("headerLabel");
-    auto title_font = status_label_->font();
-    title_font.setPointSize(14);
-    title_font.setBold(true);
-    status_label_->setFont(title_font);
     header_layout_->addWidget(status_label_);
 
     header_layout_->addStretch();
 
-    // 新建按钮
-    new_task_button_ = new QPushButton(tr("+ 新建"), this);
-    new_task_button_->setObjectName("primaryButton");
-    connect(new_task_button_, &QPushButton::clicked, this, &DownloadPage::on_new_task_clicked);
-    header_layout_->addWidget(new_task_button_);
-
-    // 刷新按钮
-    refresh_button_ = new QPushButton(tr("🔄"), this);
+    refresh_button_ = new QPushButton(tr("刷新列表"), this);
     refresh_button_->setObjectName("toolButton");
-    refresh_button_->setFixedSize(32, 32);
-    refresh_button_->setToolTip(tr("刷新"));
+    refresh_button_->setFixedHeight(34);
     connect(refresh_button_, &QPushButton::clicked, this, &DownloadPage::on_refresh_clicked);
     header_layout_->addWidget(refresh_button_);
 
-    // 视图切换按钮（过滤模式）
-    view_toggle_button_ = new QPushButton(tr("📋"), this);
+    view_toggle_button_ = new QPushButton(tr("切换分组"), this);
     view_toggle_button_->setObjectName("toolButton");
-    view_toggle_button_->setFixedSize(32, 32);
-    view_toggle_button_->setToolTip(tr("切换过滤模式"));
+    view_toggle_button_->setFixedHeight(34);
     connect(view_toggle_button_, &QPushButton::clicked, this, &DownloadPage::on_view_toggle_clicked);
     header_layout_->addWidget(view_toggle_button_);
 
-    // 显示样式切换按钮（表格/网格）
-    style_toggle_button_ = new QPushButton(tr("▦"), this);
+    style_toggle_button_ = new QPushButton(tr("卡片视图"), this);
     style_toggle_button_->setObjectName("toolButton");
-    style_toggle_button_->setFixedSize(32, 32);
-    style_toggle_button_->setToolTip(tr("切换显示样式"));
+    style_toggle_button_->setFixedHeight(34);
     connect(style_toggle_button_, &QPushButton::clicked, this, &DownloadPage::on_style_toggle_clicked);
     header_layout_->addWidget(style_toggle_button_);
 
-    // 更多选项按钮
-    more_button_ = new QPushButton(tr("⋯"), this);
+    more_button_ = new QPushButton(tr("批量操作"), this);
     more_button_->setObjectName("toolButton");
-    more_button_->setFixedSize(32, 32);
-    more_button_->setToolTip(tr("更多选项"));
+    more_button_->setFixedHeight(34);
     connect(more_button_, &QPushButton::clicked, this, &DownloadPage::on_more_options_clicked);
     header_layout_->addWidget(more_button_);
 }
@@ -194,13 +282,66 @@ void DownloadPage::update_header_for_mode()
     switch (view_mode_) {
         case DownloadViewMode::Downloading:
             status_label_->setText(tr("下载中"));
+            hero_title_label_->setText(tr("下载中"));
+            hero_description_label_->setText(tr("优先关注活跃任务、速度与剩余进度。"));
             break;
         case DownloadViewMode::Completed:
             status_label_->setText(tr("已完成"));
+            hero_title_label_->setText(tr("已完成"));
+            hero_description_label_->setText(tr("快速回看已完成内容，清理或打开文件目录。"));
             break;
         case DownloadViewMode::CloudAdd:
             status_label_->setText(tr("云添加"));
+            hero_title_label_->setText(tr("云添加"));
+            hero_description_label_->setText(tr("整理来自网盘与转存链路的下载任务。"));
             break;
+    }
+}
+
+void DownloadPage::update_summary_cards()
+{
+    int active_count = 0;
+    int completed_count = 0;
+    uint64_t total_speed = 0;
+
+    for (auto it = task_records_.cbegin(); it != task_records_.cend(); ++it) {
+        const auto& task = it.value().task;
+        if (!task) {
+            continue;
+        }
+
+        const auto status = task->status();
+        if (status == falcon::TaskStatus::Downloading || status == falcon::TaskStatus::Preparing) {
+            ++active_count;
+        }
+        if (status == falcon::TaskStatus::Completed) {
+            ++completed_count;
+        }
+        total_speed += static_cast<uint64_t>(task->speed());
+    }
+
+    if (active_summary_value_) {
+        active_summary_value_->setText(QString::number(active_count));
+    }
+    if (completed_summary_value_) {
+        completed_summary_value_->setText(QString::number(completed_count));
+    }
+    if (speed_summary_value_) {
+        speed_summary_value_->setText(format_speed(total_speed));
+    }
+}
+
+void DownloadPage::update_empty_state()
+{
+    const bool has_rows = task_table_ && task_table_->rowCount() > 0;
+    if (empty_state_widget_) {
+        empty_state_widget_->setVisible(!has_rows);
+    }
+    if (task_table_) {
+        task_table_->setVisible(has_rows && display_style_ == TaskDisplayStyle::Table);
+    }
+    if (grid_container_) {
+        grid_container_->setVisible(has_rows && display_style_ == TaskDisplayStyle::Grid);
     }
 }
 
@@ -248,10 +389,10 @@ void DownloadPage::update_action_buttons()
             pause_btn->setEnabled(is_running || is_paused || can_resume);
 
             if (is_running) {
-                pause_btn->setText(tr("⏸"));
+                pause_btn->setText(tr("暂停"));
                 pause_btn->setToolTip(tr("暂停"));
             } else if (is_paused || can_resume) {
-                pause_btn->setText(tr("▶"));
+                pause_btn->setText(tr("继续"));
                 pause_btn->setToolTip(tr("继续"));
             } else {
                 pause_btn->setEnabled(false);
@@ -358,9 +499,19 @@ void DownloadPage::on_more_options_clicked()
 
 void DownloadPage::on_pause_selected()
 {
-    const auto task = selected_task();
+    auto task = task_from_sender();
+    if (!task) {
+        task = selected_task();
+    }
     if (task) {
-        (void)task->pause();
+        const auto status = task->status();
+        if (status == falcon::TaskStatus::Downloading ||
+            status == falcon::TaskStatus::Preparing) {
+            (void)task->pause();
+        } else if (status == falcon::TaskStatus::Paused ||
+                   status == falcon::TaskStatus::Failed) {
+            (void)task->resume();
+        }
     }
 }
 
@@ -374,10 +525,34 @@ void DownloadPage::on_resume_selected()
 
 void DownloadPage::on_delete_selected()
 {
-    const auto task = selected_task();
+    auto task = task_from_sender();
+    if (!task) {
+        task = selected_task();
+    }
     if (task) {
         emit remove_task_requested(task->id());
     }
+}
+
+falcon::DownloadTask::Ptr DownloadPage::task_from_sender() const
+{
+    const QObject* sender_object = sender();
+    if (!sender_object) {
+        return nullptr;
+    }
+
+    const QVariant task_id_var = sender_object->property("taskId");
+    if (!task_id_var.isValid()) {
+        return nullptr;
+    }
+
+    const qulonglong key = task_id_var.toULongLong();
+    auto record_it = task_records_.constFind(key);
+    if (record_it == task_records_.constEnd()) {
+        return nullptr;
+    }
+
+    return record_it->task;
 }
 
 QString DownloadPage::format_bytes(uint64_t bytes)
@@ -484,6 +659,8 @@ void DownloadPage::refresh_engine_tasks()
     }
 
     update_action_buttons();
+    update_summary_cards();
+    update_empty_state();
 
     // 如果是网格视图，刷新网格显示
     if (display_style_ == TaskDisplayStyle::Grid) {
@@ -554,6 +731,7 @@ void DownloadPage::sync_task_tables(const falcon::DownloadTask::Ptr& task)
                 }
             }
         }
+        update_empty_state();
         return;
     }
 
@@ -568,7 +746,7 @@ void DownloadPage::sync_task_tables(const falcon::DownloadTask::Ptr& task)
     row_by_task_id_.insert(key, row);
 
     // 文件名（带图标）
-    auto* name_item = new QTableWidgetItem("📄 " + record.filename);
+    auto* name_item = new QTableWidgetItem(record.filename);
     name_item->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     name_item->setData(Qt::UserRole, QVariant::fromValue<qulonglong>(key));
     task_table_->setItem(row, 0, name_item);
@@ -602,21 +780,24 @@ void DownloadPage::sync_task_tables(const falcon::DownloadTask::Ptr& task)
     actions_layout->setContentsMargins(4, 0, 4, 0);
     actions_layout->setSpacing(4);
 
-    auto* pause_btn = new QPushButton(tr("⏸"), actions_widget);
+    auto* pause_btn = new QPushButton(tr("暂停"), actions_widget);
     pause_btn->setObjectName("rowActionButton");
-    pause_btn->setFixedSize(24, 24);
+    pause_btn->setFixedHeight(28);
     pause_btn->setToolTip(tr("暂停"));
+    pause_btn->setProperty("taskId", QVariant::fromValue<qulonglong>(key));
     connect(pause_btn, &QPushButton::clicked, this, &DownloadPage::on_pause_selected);
     actions_layout->addWidget(pause_btn);
 
-    auto* delete_btn = new QPushButton(tr("✕"), actions_widget);
+    auto* delete_btn = new QPushButton(tr("删除"), actions_widget);
     delete_btn->setObjectName("rowActionButton");
-    delete_btn->setFixedSize(24, 24);
+    delete_btn->setFixedHeight(28);
     delete_btn->setToolTip(tr("删除"));
+    delete_btn->setProperty("taskId", QVariant::fromValue<qulonglong>(key));
     connect(delete_btn, &QPushButton::clicked, this, &DownloadPage::on_delete_selected);
     actions_layout->addWidget(delete_btn);
 
     task_table_->setCellWidget(row, 5, actions_widget);
+    update_empty_state();
 }
 
 falcon::DownloadTask::Ptr DownloadPage::task_at_row(int row) const
@@ -762,15 +943,10 @@ void DownloadPage::set_display_style(TaskDisplayStyle style)
 
     display_style_ = style;
 
-    // 切换视图可见性
-    if (style == TaskDisplayStyle::Table) {
-        task_table_->show();
-        grid_container_->hide();
-    } else {
-        task_table_->hide();
-        grid_container_->show();
+    if (style == TaskDisplayStyle::Grid) {
         refresh_display();  // 刷新网格内容
     }
+    update_empty_state();
 }
 
 void DownloadPage::on_style_toggle_clicked()
@@ -779,9 +955,11 @@ void DownloadPage::on_style_toggle_clicked()
     switch (display_style_) {
         case TaskDisplayStyle::Table:
             set_display_style(TaskDisplayStyle::Grid);
+            style_toggle_button_->setText(tr("列表视图"));
             break;
         case TaskDisplayStyle::Grid:
             set_display_style(TaskDisplayStyle::Table);
+            style_toggle_button_->setText(tr("卡片视图"));
             break;
     }
 }

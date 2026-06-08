@@ -13,7 +13,7 @@
 namespace falcon::desktop {
 
 namespace {
-constexpr int kStatusBarHeight = 40;
+constexpr int kStatusBarHeight = 48;
 } // namespace
 
 StatusBar::StatusBar(QWidget* parent)
@@ -40,23 +40,23 @@ void StatusBar::setup_ui()
     setObjectName("statusBar");
 
     main_layout_ = new QHBoxLayout(this);
-    main_layout_->setContentsMargins(16, 0, 16, 0);
-    main_layout_->setSpacing(8);
+    main_layout_->setContentsMargins(16, 6, 16, 6);
+    main_layout_->setSpacing(10);
 
     // 左侧工具按钮
-    plan_button_ = new QPushButton(tr("🕐"), this);
+    plan_button_ = new QPushButton(tr("计划"), this);
     plan_button_->setObjectName("statusBarButton");
     plan_button_->setToolTip(tr("下载计划"));
     connect(plan_button_, &QPushButton::clicked, this, &StatusBar::downloadPlanClicked);
     main_layout_->addWidget(plan_button_);
 
-    remote_button_ = new QPushButton(tr("☁️"), this);
+    remote_button_ = new QPushButton(tr("远程"), this);
     remote_button_->setObjectName("statusBarButton");
     remote_button_->setToolTip(tr("远程下载"));
     connect(remote_button_, &QPushButton::clicked, this, &StatusBar::remoteDownloadClicked);
     main_layout_->addWidget(remote_button_);
 
-    plugin_button_ = new QPushButton(tr("🔌"), this);
+    plugin_button_ = new QPushButton(tr("插件"), this);
     plugin_button_->setObjectName("statusBarButton");
     plugin_button_->setToolTip(tr("万能下载插件"));
     connect(plugin_button_, &QPushButton::clicked, this, &StatusBar::pluginClicked);
@@ -80,7 +80,7 @@ void StatusBar::setup_ui()
     detection_layout->setSpacing(4);
     main_layout_->addLayout(detection_layout);
 
-    detection_button_ = new QPushButton(tr("⚠️ 下载检测"), this);
+    detection_button_ = new QPushButton(tr("下载检测"), this);
     detection_button_->setObjectName("statusBarButton");
     connect(detection_button_, &QPushButton::clicked, this, &StatusBar::downloadDetectionClicked);
     detection_layout->addWidget(detection_button_);
@@ -109,17 +109,14 @@ void StatusBar::update_detection_badge()
 {
     if (detection_count_ > 0) {
         detection_badge_->setText(QString::number(detection_count_));
-        detection_badge_->setStyleSheet(R"(
-            QLabel#detectionBadge {
-                background-color: #F44336;
-                color: white;
-                border-radius: 8px;
-                font-size: 10px;
-                font-weight: bold;
-            }
-        )");
+        detection_badge_->setProperty("active", true);
+        detection_badge_->style()->unpolish(detection_badge_);
+        detection_badge_->style()->polish(detection_badge_);
         detection_badge_->show();
     } else {
+        detection_badge_->setProperty("active", false);
+        detection_badge_->style()->unpolish(detection_badge_);
+        detection_badge_->style()->polish(detection_badge_);
         detection_badge_->hide();
     }
 }

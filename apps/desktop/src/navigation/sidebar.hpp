@@ -42,14 +42,16 @@ signals:
 
 private:
     void setup_ui();
-    void create_my_download_section();
-    void create_common_tools_section();
-    void create_private_space_section();
+    void create_download_section();
+    void create_space_section();
+    QPushButton* create_nav_button(const QString& text, QButtonGroup* group, int id);
+    QWidget* create_separator();
 
     // 主布局
     QVBoxLayout* main_layout_;
 
-    // 我的下载区域
+    QLabel* library_label_ = nullptr;
+    QLabel* transfer_label_ = nullptr;
     QLabel* my_download_label_;
     QButtonGroup* my_download_tabs_;
     QPushButton* downloading_tab_;
@@ -67,6 +69,9 @@ private:
     QButtonGroup* private_space_tools_;
     QPushButton* private_downloading_button_;
     QPushButton* private_completed_button_;
+    QWidget* footer_card_ = nullptr;
+    QLabel* footer_value_ = nullptr;
+    QLabel* footer_label_ = nullptr;
 };
 
 } // namespace falcon::desktop

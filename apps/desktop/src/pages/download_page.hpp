@@ -15,6 +15,7 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QScrollArea>
+#include <QFrame>
 
 #include <falcon/download_task.hpp>
 
@@ -87,15 +88,21 @@ private:
 
     void setup_ui();
     void create_header_bar();
+    void create_hero_section();
+    void create_summary_cards();
+    void create_empty_state();
     void create_task_table();
     void create_task_grid();  // 创建网格视图
     void update_header_for_mode();
+    void update_summary_cards();
+    void update_empty_state();
     void update_action_buttons();
     void show_context_menu(const QPoint& pos);
     void show_grid_context_menu(const QPoint& pos);  // 网格视图右键菜单
     void refresh_display();  // 刷新当前显示
     void sync_task_grid();   // 同步网格内容
     QWidget* create_task_card(const TaskRecord& record);  // 创建任务卡片
+    falcon::DownloadTask::Ptr task_from_sender() const;
     falcon::DownloadTask::Ptr selected_task() const;
     falcon::DownloadTask::Ptr task_at_row(int row) const;
 
@@ -111,11 +118,19 @@ private:
     // 头部区域
     QHBoxLayout* header_layout_;
     QLabel* status_label_;
+    QLabel* hero_title_label_ = nullptr;
+    QLabel* hero_description_label_ = nullptr;
     QPushButton* new_task_button_;
     QPushButton* refresh_button_;
     QPushButton* view_toggle_button_;
     QPushButton* style_toggle_button_;  // 切换表格/网格视图
     QPushButton* more_button_;
+    QLabel* active_summary_value_ = nullptr;
+    QLabel* completed_summary_value_ = nullptr;
+    QLabel* speed_summary_value_ = nullptr;
+    QWidget* empty_state_widget_ = nullptr;
+    QLabel* empty_state_title_ = nullptr;
+    QLabel* empty_state_body_ = nullptr;
 
     // 任务表格
     QTableWidget* task_table_;
