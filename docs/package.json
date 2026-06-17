@@ -7,7 +7,7 @@
     "docs:dev": "vitepress dev src",
     "docs:build": "vitepress build src",
     "docs:preview": "vitepress preview src",
-    "docs:clean": "rm -rf src/.vitepress/dist"
+    "docs:clean": "node -e \"const fs=require('fs'); for (const path of ['src/.vitepress/dist','src/.vitepress/cache','src/.vitepress/.temp']) fs.rmSync(path,{recursive:true,force:true})\""
   },
   "keywords": [
     "falcon",
