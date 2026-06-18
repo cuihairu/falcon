@@ -602,3 +602,171 @@ TEST_F(DownloadEngineV2Test, NoMemoryLeaks_MultipleCycles) {
     // 如果有内存泄漏，Valgrind/ASan 会报告
     SUCCEED();
 }
+
+// ============================================================================
+// 命令等待超时清理测试
+// 验证 DownloadEngineV2::cleanup_completed_commands 的行为：
+//   1) timeout <= 0 时禁用清理；
+//   2) 超时命令从所有 sidecar 映射中被移除；
+//   3) 未超时命令保留；
+//   4) 超时命令的 unique_ptr<Command> 被正确销毁。
+// 友元 ::DownloadEngineV2Test 直接驱动 private 成员，避免依赖真实 socket/EventPoll。
+// ============================================================================
+
+// 自定义命令：execute() 始终返回 false，模拟等待 I/O 的命令
+namespace {
+class AlwaysWaitingCommand : public AbstractCommand {
+public:
+    AlwaysWaitingCommand() : AbstractCommand(1) {}
+    bool execute(DownloadEngineV2*) override { return false; }
+    const char* name() const override { return "AlwaysWaitingCommand"; }
+};
+}  // namespace
+
+TEST_F(DownloadEngineV2Test, Config_DefaultCommandWaitTimeout) {
+    EngineConfigV2 config;
+    EXPECT_EQ(config.command_wait_timeout_seconds, 120);
+}
+
+TEST_F(DownloadEngineV2Test, CleanupCompletedCommands_NoWaiting_NoOp) {
+    // 空状态下调用清理不应崩溃
+    engine_->cleanup_completed_commands();
+    SUCCEED();
+}
+
+TEST_F(DownloadEngineV2Test, CleanupCompletedCommands_DisabledWhenZeroTimeout) {
+    EngineConfigV2 config;
+    config.max_concurrent_tasks = 1;
+    config.poll_timeout_ms = 10;
+    config.command_wait_timeout_seconds = 0;  // 禁用清理
+
+    auto engine = std::make_unique<DownloadEngineV2>(config);
+
+    constexpr CommandId kCmd = 7001;
+    constexpr int kFd = 79;
+    {
+        std::lock_guard<std::mutex> lock(engine->socket_map_mutex_);
+        engine->socket_wait_map_[kCmd] = {kFd, 1};
+        engine->socket_command_map_[kFd] = kCmd;
+        engine->waiting_command_times_[kCmd] =
+            std::chrono::steady_clock::time_point::min();
+    }
+
+    engine->cleanup_completed_commands();
+
+    // 禁用清理：所有映射应原封不动
+    std::lock_guard<std::mutex> lock(engine->socket_map_mutex_);
+    EXPECT_EQ(engine->waiting_command_times_.count(kCmd), 1u);
+    EXPECT_EQ(engine->socket_wait_map_.count(kCmd), 1u);
+    EXPECT_EQ(engine->socket_command_map_.count(kFd), 1u);
+}
+
+TEST_F(DownloadEngineV2Test, CleanupCompletedCommands_RemovesExpiredEntries) {
+    EngineConfigV2 config;
+    config.max_concurrent_tasks = 1;
+    config.poll_timeout_ms = 10;
+    config.command_wait_timeout_seconds = 1;
+
+    auto engine = std::make_unique<DownloadEngineV2>(config);
+
+    constexpr CommandId kCmd = 7101;
+    constexpr int kFd = 81;
+    {
+        std::lock_guard<std::mutex> lock(engine->socket_map_mutex_);
+        engine->socket_wait_map_[kCmd] = {kFd, 1};
+        engine->socket_command_map_[kFd] = kCmd;
+        // 远古时间戳 -> 必然超时
+        engine->waiting_command_times_[kCmd] =
+            std::chrono::steady_clock::time_point::min();
+    }
+
+    engine->cleanup_completed_commands();
+
+    std::lock_guard<std::mutex> lock(engine->socket_map_mutex_);
+    EXPECT_EQ(engine->waiting_command_times_.count(kCmd), 0u);
+    EXPECT_EQ(engine->socket_wait_map_.count(kCmd), 0u);
+    EXPECT_EQ(engine->socket_command_map_.count(kFd), 0u);
+    EXPECT_EQ(engine->waiting_commands_.count(kCmd), 0u);
+}
+
+TEST_F(DownloadEngineV2Test, CleanupCompletedCommands_PreservesFreshEntries) {
+    EngineConfigV2 config;
+    config.max_concurrent_tasks = 1;
+    config.poll_timeout_ms = 10;
+    config.command_wait_timeout_seconds = 3600;  // 1 小时
+
+    auto engine = std::make_unique<DownloadEngineV2>(config);
+
+    constexpr CommandId kCmd = 7201;
+    constexpr int kFd = 82;
+    {
+        std::lock_guard<std::mutex> lock(engine->socket_map_mutex_);
+        engine->socket_wait_map_[kCmd] = {kFd, 1};
+        engine->socket_command_map_[kFd] = kCmd;
+        engine->waiting_command_times_[kCmd] = std::chrono::steady_clock::now();
+    }
+
+    engine->cleanup_completed_commands();
+
+    std::lock_guard<std::mutex> lock(engine->socket_map_mutex_);
+    EXPECT_EQ(engine->waiting_command_times_.count(kCmd), 1u);
+    EXPECT_EQ(engine->socket_wait_map_.count(kCmd), 1u);
+    EXPECT_EQ(engine->socket_command_map_.count(kFd), 1u);
+}
+
+TEST_F(DownloadEngineV2Test, CleanupCompletedCommands_PartialExpiry) {
+    EngineConfigV2 config;
+    config.command_wait_timeout_seconds = 1;
+    auto engine = std::make_unique<DownloadEngineV2>(config);
+
+    constexpr CommandId kExpired = 7301;
+    constexpr CommandId kFresh = 7302;
+    constexpr int kFdExpired = 91;
+    constexpr int kFdFresh = 92;
+    {
+        std::lock_guard<std::mutex> lock(engine->socket_map_mutex_);
+        engine->socket_wait_map_[kExpired] = {kFdExpired, 1};
+        engine->socket_command_map_[kFdExpired] = kExpired;
+        engine->waiting_command_times_[kExpired] =
+            std::chrono::steady_clock::time_point::min();
+
+        engine->socket_wait_map_[kFresh] = {kFdFresh, 1};
+        engine->socket_command_map_[kFdFresh] = kFresh;
+        engine->waiting_command_times_[kFresh] = std::chrono::steady_clock::now();
+    }
+
+    engine->cleanup_completed_commands();
+
+    std::lock_guard<std::mutex> lock(engine->socket_map_mutex_);
+    EXPECT_EQ(engine->waiting_command_times_.count(kExpired), 0u);
+    EXPECT_EQ(engine->socket_wait_map_.count(kExpired), 0u);
+    EXPECT_EQ(engine->socket_command_map_.count(kFdExpired), 0u);
+
+    EXPECT_EQ(engine->waiting_command_times_.count(kFresh), 1u);
+    EXPECT_EQ(engine->socket_wait_map_.count(kFresh), 1u);
+    EXPECT_EQ(engine->socket_command_map_.count(kFdFresh), 1u);
+}
+
+TEST_F(DownloadEngineV2Test, CleanupCompletedCommands_DropsParkedCommandOwnership) {
+    EngineConfigV2 config;
+    config.command_wait_timeout_seconds = 1;
+    auto engine = std::make_unique<DownloadEngineV2>(config);
+
+    constexpr int kFd = 101;
+    auto cmd = std::make_unique<AlwaysWaitingCommand>();
+    CommandId real_id = cmd->id();
+    {
+        std::lock_guard<std::mutex> lock(engine->socket_map_mutex_);
+        engine->socket_wait_map_[real_id] = {kFd, 1};
+        engine->socket_command_map_[kFd] = real_id;
+        engine->waiting_commands_[real_id] = std::move(cmd);
+        engine->waiting_command_times_[real_id] =
+            std::chrono::steady_clock::time_point::min();
+    }
+
+    engine->cleanup_completed_commands();
+
+    std::lock_guard<std::mutex> lock(engine->socket_map_mutex_);
+    EXPECT_EQ(engine->waiting_commands_.count(real_id), 0u);
+    EXPECT_EQ(engine->waiting_command_times_.count(real_id), 0u);
+}

@@ -91,6 +91,83 @@ TEST_F(CloudStorageTest, LanzouCloudPlugin) {
     EXPECT_NE(std::find(platforms.begin(), platforms.end(), "LanzouCloud"), platforms.end());
 }
 
+// 测试百度网盘插件默认注册
+TEST_F(CloudStorageTest, BaiduNetdiskPluginRegistered) {
+    auto platforms = manager_->get_supported_platforms();
+    EXPECT_NE(std::find(platforms.begin(), platforms.end(), "BaiduNetdisk"), platforms.end());
+}
+
+// 测试阿里云盘插件默认注册
+TEST_F(CloudStorageTest, AliyunDrivePluginRegistered) {
+    auto platforms = manager_->get_supported_platforms();
+    EXPECT_NE(std::find(platforms.begin(), platforms.end(), "AliyunDrive"), platforms.end());
+}
+
+// 测试夸克网盘插件默认注册
+TEST_F(CloudStorageTest, QuarkDrivePluginRegistered) {
+    auto platforms = manager_->get_supported_platforms();
+    EXPECT_NE(std::find(platforms.begin(), platforms.end(), "QuarkDrive"), platforms.end());
+}
+
+// 验证默认注册的内置插件数量（蓝奏云 + 百度网盘 + 阿里云盘 + 夸克网盘 + 腾讯微云 +
+//   115 + PikPak + MEGA + Google Drive + OneDrive + Dropbox + Yandex Disk）
+TEST_F(CloudStorageTest, DefaultPluginCount) {
+    auto platforms = manager_->get_supported_platforms();
+    EXPECT_GE(platforms.size(), 11u);
+}
+
+// 测试 YandexDisk 插件默认注册
+TEST_F(CloudStorageTest, YandexDiskPluginRegistered) {
+    auto platforms = manager_->get_supported_platforms();
+    EXPECT_NE(std::find(platforms.begin(), platforms.end(), "YandexDisk"), platforms.end());
+}
+
+// 验证百度网盘链接会被对应的插件处理（不依赖外网访问）
+TEST_F(CloudStorageTest, BaiduNetdiskLinkRouting) {
+    auto result = manager_->handle_share_link("https://pan.baidu.com/s/1abcdefg");
+    EXPECT_EQ(result.platform_name, "BaiduNetdisk");
+    EXPECT_EQ(result.platform_type, CloudPlatform::BaiduNetdisk);
+    // 轻量插件：识别成功（recognized=true），但无直链（success=false）
+    EXPECT_TRUE(result.recognized);
+    EXPECT_FALSE(result.success);
+    EXPECT_FALSE(result.error_message.empty());
+}
+
+// 验证阿里云盘链接会被对应的插件处理
+TEST_F(CloudStorageTest, AliyunDriveLinkRouting) {
+    auto result = manager_->handle_share_link("https://www.alipan.com/s/abcdefg");
+    EXPECT_EQ(result.platform_name, "AliyunDrive");
+    EXPECT_EQ(result.platform_type, CloudPlatform::AlibabaCloud);
+    EXPECT_TRUE(result.recognized);
+    EXPECT_FALSE(result.success);
+}
+
+// 验证夸克网盘链接会被对应的插件处理
+TEST_F(CloudStorageTest, QuarkDriveLinkRouting) {
+    auto result = manager_->handle_share_link("https://pan.quark.cn/s/abcdefg");
+    EXPECT_EQ(result.platform_name, "QuarkDrive");
+    EXPECT_EQ(result.platform_type, CloudPlatform::Quark);
+    EXPECT_TRUE(result.recognized);
+    EXPECT_FALSE(result.success);
+}
+
+// 验证 Yandex Disk 链接会被对应的插件处理
+TEST_F(CloudStorageTest, YandexDiskLinkRouting) {
+    auto result = manager_->handle_share_link("https://disk.yandex.ru/d/abcdefg/file.zip");
+    EXPECT_EQ(result.platform_name, "YandexDisk");
+    EXPECT_EQ(result.platform_type, CloudPlatform::YandexDisk);
+    EXPECT_TRUE(result.recognized);
+    EXPECT_FALSE(result.success);
+}
+
+// 验证未知链接：既不识别也不成功
+TEST_F(CloudStorageTest, UnknownLinkNotRecognized) {
+    auto result = manager_->handle_share_link("https://example.com/some/random/file");
+    EXPECT_FALSE(result.recognized);
+    EXPECT_FALSE(result.success);
+    EXPECT_FALSE(result.error_message.empty());
+}
+
 // 模拟网盘插件
 class MockCloudPlugin : public ICloudStoragePlugin {
 public:

@@ -211,5 +211,30 @@ protected:
     int last_request_time_ = 0;
 };
 
+/**
+ * @brief 内部解析工具（可单元测试）
+ *
+ * 这些函数被 GenericSearchProvider 内部调用，但通过 detail 命名空间
+ * 暴露以便离线单元测试（无需网络/curl）。
+ */
+namespace detail {
+
+/// 基于 selectors 的通用 HTML 解析
+/// selectors 为正则模式映射，必需键：item（用于切分结果项）
+/// 可选键：title/url/magnet/size/seeds/peers/hash/date/type
+/// 每个字段正则的第一个捕获组将被填入对应 SearchResult 字段
+std::vector<SearchResult> parse_html_by_selectors(const std::string& html,
+                                                  const SearchEngineConfig& config);
+
+/// 将单个 selector 捕获值映射到 SearchResult 对应字段
+void apply_selector_field(SearchResult& result,
+                          const std::string& key,
+                          const std::string& value);
+
+/// 基于种子数和文件大小计算置信度（0.0-1.0）
+double calculate_confidence(const SearchResult& result);
+
+} // namespace detail
+
 } // namespace search
 } // namespace falcon

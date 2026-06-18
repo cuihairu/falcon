@@ -20,10 +20,14 @@
 #include <memory>
 #include <deque>
 #include <vector>
+#include <map>
 #include <atomic>
 #include <mutex>
 #include <chrono>
 #include <unordered_map>
+
+// 前向声明（全局命名空间）：测试夹具需访问 private cleanup_completed_commands 以验证超时清理
+class DownloadEngineV2Test;
 
 namespace falcon {
 
@@ -36,6 +40,9 @@ struct EngineConfigV2 {
     int poll_timeout_ms = 100;              // 事件轮询超时
     bool enable_disk_cache = true;          // 启用磁盘缓存
     std::size_t disk_cache_size = 4 * 1024 * 1024;  // 磁盘缓存大小
+    /// 命令进入 waiting_commands_ 后允许的最长等待时长（秒）
+    /// 超时后由 cleanup_completed_commands 移除，防止对端异常导致资源泄漏
+    int command_wait_timeout_seconds = 120;
 };
 
 /**
@@ -59,6 +66,9 @@ public:
     explicit DownloadEngineV2(const EngineConfigV2& config = {});
 
     ~DownloadEngineV2();
+
+    // 允许单元测试夹具直接驱动 private cleanup_completed_commands
+    friend class ::DownloadEngineV2Test;
 
     // 禁止拷贝和移动
     DownloadEngineV2(const DownloadEngineV2&) = delete;
@@ -232,6 +242,9 @@ private:
     };
     std::unordered_map<CommandId, SocketWait> socket_wait_map_;
     std::unordered_map<CommandId, std::unique_ptr<Command>> waiting_commands_;
+    /// sidecar：记录每个 waiting command 进入等待状态的时间点
+    /// 用于 cleanup_completed_commands 中的超时清理
+    std::unordered_map<CommandId, std::chrono::steady_clock::time_point> waiting_command_times_;
     std::mutex socket_map_mutex_;
 
     // 状态

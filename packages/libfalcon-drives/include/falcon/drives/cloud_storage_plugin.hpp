@@ -52,10 +52,17 @@ enum class CloudPlatform {
 
 /**
  * @brief 网盘提取结果
+ *
+ * 字段语义（按"是否能直接下载"由强到弱）：
+ *   - success=true:  完整解析成功，files[0].download_url 可直接下载
+ *   - recognized=true / success=false: 识别到平台并提取了元数据，
+ *                    但直链需额外步骤（账号/客户端/API 等），详见 error_message
+ *   - recognized=false: 完全无法识别或处理失败
  */
 struct CloudExtractionResult {
-    bool success = false;
-    std::string error_message;
+    bool success = false;          // 完整成功（含可直接下载的 URL）
+    bool recognized = false;       // 已识别平台（即使无直链）
+    std::string error_message;     // 失败原因或下一步提示
     std::vector<CloudFileInfo> files;
     std::string platform_name;
     CloudPlatform platform_type = CloudPlatform::Unknown;

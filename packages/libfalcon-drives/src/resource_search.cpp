@@ -16,6 +16,7 @@ using json = nlohmann::json;
 #include <chrono>
 #include <regex>
 #include <sstream>
+#include <iomanip>
 #include <algorithm>
 #include <unordered_set>
 #include <fstream>
@@ -23,6 +24,129 @@ using json = nlohmann::json;
 
 namespace falcon {
 namespace search {
+
+// ============================================================================
+// detail 命名空间：selectors 解析工具
+// 实现与 GenericSearchProvider 内部完全一致，但暴露在 detail 中
+// 以便单元测试在不依赖 WebCrawler/CURL 的情况下直接调用
+// ============================================================================
+namespace detail {
+
+double calculate_confidence(const SearchResult& result) {
+    double confidence = 0.5;
+    if (result.seeds > 100) confidence += 0.3;
+    else if (result.seeds > 50) confidence += 0.2;
+    else if (result.seeds > 10) confidence += 0.1;
+    if (result.size > 100 * 1024 * 1024 && result.size < 10ULL * 1024 * 1024 * 1024) {
+        confidence += 0.1;
+    }
+    return (std::min)(confidence, 1.0);
+}
+
+size_t parse_size(const std::string& size_str) {
+    std::regex size_regex("(\\d+(?:\\.\\d+)?)\\s*(B|KB|MB|GB|TB)", std::regex::icase);
+    std::smatch match;
+    if (std::regex_search(size_str, match, size_regex)) {
+        double value = std::stod(match[1].str());
+        std::string unit = match[2].str();
+        std::transform(unit.begin(), unit.end(), unit.begin(), ::toupper);
+        if (unit == "B") return static_cast<size_t>(value);
+        if (unit == "KB") return static_cast<size_t>(value * 1024);
+        if (unit == "MB") return static_cast<size_t>(value * 1024 * 1024);
+        if (unit == "GB") return static_cast<size_t>(value * 1024 * 1024 * 1024);
+        if (unit == "TB") return static_cast<size_t>(value * 1024ULL * 1024 * 1024 * 1024);
+    }
+    return 0;
+}
+
+void apply_selector_field(SearchResult& result, const std::string& key,
+                          const std::string& value) {
+    if (key == "title") {
+        result.title = value;
+    } else if (key == "url") {
+        result.url = value;
+    } else if (key == "magnet") {
+        result.url = value;
+        if (result.type.empty()) result.type = "magnet";
+    } else if (key == "hash") {
+        result.hash = value;
+    } else if (key == "size") {
+        result.size = parse_size(value);
+    } else if (key == "seeds") {
+        try { result.seeds = std::stoi(value); } catch (...) {}
+    } else if (key == "peers") {
+        try { result.peers = std::stoi(value); } catch (...) {}
+    } else if (key == "leeches") {
+        try { result.peers = std::stoi(value); } catch (...) {}
+    } else if (key == "date") {
+        result.publish_date = value;
+    } else if (key == "type") {
+        result.type = value;
+    } else {
+        result.metadata[key] = value;
+    }
+}
+
+std::vector<SearchResult> parse_html_by_selectors(const std::string& html,
+                                                  const SearchEngineConfig& config) {
+    std::vector<SearchResult> results;
+    if (html.empty()) return results;
+
+    const auto it_item = config.selectors.find("item");
+    if (it_item == config.selectors.end() || it_item->second.empty()) {
+        return results;
+    }
+
+    std::regex item_regex;
+    try {
+        item_regex = std::regex(it_item->second, std::regex::ECMAScript);
+    } catch (const std::regex_error& e) {
+        FALCON_LOG_ERROR_STREAM("[" << config.name << "] 无效的 item 正则 '"
+            << it_item->second << "': " << e.what());
+        return results;
+    }
+
+    struct FieldRegex {
+        std::string key;
+        std::regex regex;
+    };
+    std::vector<FieldRegex> field_regexes;
+    for (const auto& sel : config.selectors) {
+        if (sel.first == "item") continue;
+        if (sel.second.empty()) continue;
+        try {
+            field_regexes.push_back({sel.first, std::regex(sel.second, std::regex::ECMAScript)});
+        } catch (const std::regex_error& e) {
+            FALCON_LOG_ERROR_STREAM("[" << config.name << "] 无效的 "
+                << sel.first << " 正则 '" << sel.second << "': " << e.what());
+        }
+    }
+
+    std::sregex_iterator iter(html.begin(), html.end(), item_regex);
+    const std::sregex_iterator end;
+
+    for (; iter != end; ++iter) {
+        const std::string item_html = iter->str(0);
+        if (item_html.empty()) continue;
+
+        SearchResult result;
+        for (const auto& fr : field_regexes) {
+            std::smatch m;
+            if (!std::regex_search(item_html, m, fr.regex) || m.size() < 2) continue;
+            apply_selector_field(result, fr.key, m.str(1));
+        }
+
+        if (!result.title.empty() && !result.url.empty()) {
+            result.source = config.name;
+            result.confidence = calculate_confidence(result);
+            results.push_back(result);
+        }
+    }
+
+    return results;
+}
+
+} // namespace detail
 
 /**
  * @brief CURL写数据回调
@@ -146,6 +270,12 @@ public:
         crawler_->set_headers(config_.headers);
     }
 
+    /// 测试与离线解析用：仅初始化配置，不创建 WebCrawler
+    /// 通过此构造函数创建的实例不可调用 search() 等需要网络的方法
+    struct NoCrawlerTag {};
+    GenericSearchProvider(const SearchEngineConfig& config, NoCrawlerTag)
+        : config_(config), crawler_(nullptr) {}
+
     std::string name() const override {
         return config_.name;
     }
@@ -267,67 +397,8 @@ protected:
     }
 
     virtual std::vector<SearchResult> parse_html_response(const std::string& html) {
-        std::vector<SearchResult> results;
-
-        // TODO: 实现 selectors 支持
-        // 简单的HTML解析（实际项目中应使用专门的HTML解析库）
-        // if (config_.selectors.empty()) {
-        //     return results;
-        // }
-        //
-        // // 这里使用正则表达式作为简单实现
-        // // 实际项目中建议使用Gumbo或类似的HTML解析库
-        //
-        // std::string item_selector = config_.selectors.at("item");
-
-        // 示例：解析1337x的HTML结构
-        if (config_.name == "1337x") {
-            std::regex item_regex("<tr>(.*?)</tr>", std::regex::ECMAScript);
-            std::sregex_iterator iter(html.begin(), html.end(), item_regex);
-            std::sregex_iterator end;
-
-            for (; iter != end; ++iter) {
-                std::string item_html = iter->str();
-                SearchResult result = parse_1337x_item(item_html);
-                if (!result.title.empty()) {
-                    result.source = config_.name;
-                    result.confidence = calculate_confidence(result);
-                    results.push_back(result);
-                }
-            }
-        }
-        // 其他网站的解析逻辑...
-
-        return results;
-    }
-
-    virtual std::vector<SearchResult> parse_json_response(const std::string& json_str) {
-        std::vector<SearchResult> results;
-
-        try {
-            json data = json::parse(json_str);
-
-            // 解析ThePirateBay的API响应
-            if (config_.name == "ThePirateBay") {
-                for (const auto& item : data) {
-                    SearchResult result;
-                    result.title = item["name"].get<std::string>();
-                    result.url = "magnet:?xt=urn:btih:" + item["info_hash"].get<std::string>();
-                    result.size = parse_size(item["size"].get<std::string>());
-                    result.seeds = item["seeders"].get<int>();
-                    result.peers = item["leechers"].get<int>();
-                    result.hash = item["info_hash"].get<std::string>();
-                    result.source = config_.name;
-                    result.confidence = calculate_confidence(result);
-
-                    results.push_back(result);
-                }
-            }
-        } catch (const std::exception& e) {
-            FALCON_LOG_ERROR_STREAM("Failed to parse JSON response: " << e.what());
-        }
-
-        return results;
+        // 优先：selectors 配置驱动（通用解析流程）
+        return detail::parse_html_by_selectors(html, config_);
     }
 
     std::vector<SearchResult> filter_results(const std::vector<SearchResult>& results,
@@ -403,7 +474,7 @@ private:
                     if (item.contains("hash")) result.hash = item["hash"].get<std::string>();
                     if (item.contains("size")) result.size = item["size"].get<uint64_t>();
                     if (item.contains("seeds")) result.seeds = item["seeds"].get<int>();
-                    if (item.contains("leeches")) result.leeches = item["leeches"].get<int>();
+                    if (item.contains("leeches")) result.peers = item["leeches"].get<int>();
                     if (item.contains("type")) result.type = item["type"].get<std::string>();
                     if (item.contains("source")) result.source = item["source"].get<std::string>();
 
@@ -422,7 +493,7 @@ private:
                     if (item.contains("hash")) result.hash = item["hash"].get<std::string>();
                     if (item.contains("size")) result.size = item["size"].get<uint64_t>();
                     if (item.contains("seeds")) result.seeds = item["seeds"].get<int>();
-                    if (item.contains("leeches")) result.leeches = item["leeches"].get<int>();
+                    if (item.contains("leeches")) result.peers = item["leeches"].get<int>();
                     if (item.contains("type")) result.type = item["type"].get<std::string>();
                     if (item.contains("source")) result.source = item["source"].get<std::string>();
 
@@ -439,7 +510,7 @@ private:
                 if (j.contains("hash")) result.hash = j["hash"].get<std::string>();
                 if (j.contains("size")) result.size = j["size"].get<uint64_t>();
                 if (j.contains("seeds")) result.seeds = j["seeds"].get<int>();
-                if (j.contains("leeches")) result.leeches = j["leeches"].get<int>();
+                if (j.contains("leeches")) result.peers = j["leeches"].get<int>();
                 if (j.contains("type")) result.type = j["type"].get<std::string>();
                 if (j.contains("source")) result.source = j["source"].get<std::string>();
 
@@ -478,20 +549,8 @@ private:
         return result;
     }
 
-    double calculate_confidence(const SearchResult& result) {
-        double confidence = 0.5;
-
-        // 根据种子数调整置信度
-        if (result.seeds > 100) confidence += 0.3;
-        else if (result.seeds > 50) confidence += 0.2;
-        else if (result.seeds > 10) confidence += 0.1;
-
-        // 根据文件大小调整
-        if (result.size > 100 * 1024 * 1024 && result.size < 10ULL * 1024 * 1024 * 1024) {
-            confidence += 0.1;
-        }
-
-        return (std::min)(confidence, 1.0);
+    static double calculate_confidence(const SearchResult& result) {
+        return detail::calculate_confidence(result);
     }
 
     std::string url_encode(const std::string& str) {
@@ -543,33 +602,8 @@ private:
         return result;
     }
 
-    void replace_all(std::string& str, const std::string& from, const std::string& to) {
-        size_t pos = 0;
-        while ((pos = str.find(from, pos)) != std::string::npos) {
-            str.replace(pos, from.length(), to);
-            pos += to.length();
-        }
-    }
-
-    size_t parse_size(const std::string& size_str) {
-        std::regex size_regex("(\\d+(?:\\.\\d+)?)\\s*(B|KB|MB|GB|TB)", std::regex::icase);
-        std::smatch match;
-
-        if (std::regex_search(size_str, match, size_regex)) {
-            double value = std::stod(match[1].str());
-            std::string unit = match[2].str();
-
-            std::transform(unit.begin(), unit.end(), unit.begin(), ::toupper);
-
-            if (unit == "KB") value *= 1024;
-            else if (unit == "MB") value *= 1024 * 1024;
-            else if (unit == "GB") value *= 1024 * 1024 * 1024;
-            else if (unit == "TB") value *= 1024ULL * 1024 * 1024 * 1024;
-
-            return static_cast<size_t>(value);
-        }
-
-        return 0;
+    static size_t parse_size(const std::string& size_str) {
+        return detail::parse_size(size_str);
     }
 };
 

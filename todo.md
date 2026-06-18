@@ -885,3 +885,160 @@ feature 候选：
 - FlashGet: `[FLASHGET]` 前缀处理 + Base64/URL 解码 → 委托
 - QQDL: GID 格式解析 + Base64 解码 → 委托
 - 所有包装协议现在都通过统一的 `delegateDownload()` 方法委托
+
+### 2026-06-14 - 网盘插件矩阵扩展（10 个平台默认注册）
+
+**目标：**
+- 将 `CloudStorageManager` 的默认插件从单一 `LanzouCloudPlugin` 扩展到主流网盘全覆盖
+- 让任意主流网盘链接都能被正确识别并路由到对应插件
+
+**已完成：**
+- ✅ 新增 `BaiduNetdiskPlugin`（百度网盘）
+  - 解析 `pan.baidu.com/s/...`、`yun.baidu.com/s/...`、`baidupan://` 链接
+  - 通过分享页面提取文件标题作为候选文件名
+- ✅ 新增 `AliyunDrivePlugin`（阿里云盘）
+  - 解析 `aliyundrive.com`、`alipan.com`、`alipan://` 链接
+  - 分享页面标题解析
+- ✅ 新增 `QuarkDrivePlugin`（夸克网盘）
+  - 解析 `pan.quark.cn/s/...`、`quark://` 链接
+- ✅ 引入 `LightweightCloudPluginBase` 模板基类
+  - 统一识别/规范化/HTTP 标题解析流程
+  - DRY 原则：消除每个轻量插件 ~200 行模板代码重复
+  - 子类只需提供平台名、平台枚举、错误提示
+- ✅ 基于 `LightweightCloudPluginBase` 实现 7 个轻量插件
+  - `TencentWeiyunPlugin`（腾讯微云）
+  - `Cloud115Plugin`（115 网盘）
+  - `PikPakPlugin`（PikPak）
+  - `MegaPlugin`（MEGA）
+  - `GoogleDrivePlugin`（Google Drive）
+  - `OneDrivePlugin`（OneDrive）
+  - `DropboxPlugin`（Dropbox）
+- ✅ `CloudStorageManager::register_default_plugins()` 注册全部 10 个插件
+- ✅ 单元测试补充
+  - `BaiduNetdiskPluginRegistered`、`AliyunDrivePluginRegistered`、`QuarkDrivePluginRegistered`
+  - `DefaultPluginCount`（≥4 个默认插件）
+  - `BaiduNetdiskLinkRouting`、`AliyunDriveLinkRouting`、`QuarkDriveLinkRouting`
+  - 验证链接路由到正确插件的 `platform_name` 与 `platform_type`
+- ✅ g++ 语法验证通过（缺 curl/json/gtest 的本地环境用最小 stub）
+
+**技术要点：**
+- 设计上区分两类插件：
+  1. **完整插件**（如 `LanzouCloudPlugin`）：实现 `get_download_url` 等真实拉取逻辑
+  2. **轻量插件**（基于 `LightweightCloudPluginBase`）：仅完成识别 + 元数据 + 路由，直链获取待后续接入各平台 API
+- 所有 `extract_share_link` 都返回 `success=true`，并通过 `error_message` 提示需要何种额外步骤（客户端/账号/插件）才能完成真正下载
+- `can_handle()` 委托给 `CloudLinkDetector::detect_platform()`，保证识别规则集中维护
+
+**待实现（后续迭代）：**
+- 各网盘平台的真实直链获取 API（需账号态/OAuth/API Key）
+- YandexDisk 插件（URL 模式已在 `CloudLinkDetector` 注册，缺 plugin 实现）
+- 集成测试覆盖（mock HTTP 服务器）
+
+### 2026-06-15 - 提取结果语义重构 + YandexDisk 补全
+
+**目标：**
+- 修正「轻量插件返回 `success=true` 但实际无直链」的语义混淆
+- 让上层能精确区分「无法识别」「识别成功但需额外步骤」「可直接下载」三种状态
+- 补齐最后一个缺失的 YandexDisk 插件
+
+**已完成：**
+- ✅ `CloudExtractionResult` 引入 `recognized` 字段
+  - `success=true`：完整解析成功（含可直接下载的 URL）
+  - `recognized=true / success=false`：识别到平台并提取了元数据，但直链需额外步骤
+  - `recognized=false`：完全无法识别或处理失败
+- ✅ `LightweightCloudPluginBase` 基类改为返回 `recognized=true, success=false`
+- ✅ `BaiduNetdiskPlugin`、`AliyunDrivePlugin`、`QuarkDrivePlugin` 三个早期实现同步语义
+- ✅ `CloudStorageManager::get_direct_download_url` 增加 recognized 诊断日志
+- ✅ 新增 `YandexDiskPlugin` 轻量插件
+  - URL 模式 `disk.yandex.ru/d/...` 和 `yadi.sk/d/...`
+  - 提示直链可通过 `?dl=1` 参数或 Yandex Disk API 获取
+- ✅ 默认插件矩阵扩充至 11 个（蓝奏云、百度网盘、阿里云盘、夸克、腾讯微云、115、PikPak、MEGA、Google Drive、OneDrive、Dropbox、Yandex Disk）
+- ✅ 单元测试同步新语义
+  - LinkRouting 测试改为 `EXPECT_TRUE(recognized) + EXPECT_FALSE(success)`
+  - 新增 `YandexDiskLinkRouting` 测试
+  - 新增 `UnknownLinkNotRecognized` 测试覆盖「完全无法识别」分支
+  - 新增 `YandexDiskPluginRegistered` 测试
+  - `DefaultPluginCount` 阈值从 4 提升到 11
+
+**技术要点：**
+- 语义重构遵循「最小惊讶原则」：`success` 的含义保持「可直接下载」，避免破坏老代码对 `get_direct_download_url` 的假设
+- `recognized` 是「软成功」标志，上层 UI 可据此显示「识别到 X 网盘，需要客户端才能下载」类提示
+- YandexDisk 利用 `LightweightCloudPluginBase` 模板，整个插件实现仅需 ~15 行
+
+### 2026-06-15 - resource_search 编译修复 + selectors 通用解析实现
+
+**目标：**
+- 修复 `resource_search.cpp` 多个被本地环境（无 curl/json）掩盖的真实编译问题
+- 实现 `selectors` 配置驱动的通用 HTML 解析，取代站点硬编码
+- 暴露可单元测试的内部接口
+
+**已完成：**
+- ✅ 真实编译错误修复
+  - 删除重复的 `parse_json_response` 方法（行 304 与行 390 完全相同签名）
+  - 修复 `result.leeches` → `result.peers`（字段不存在于 `SearchResult`）
+  - 添加缺失的 `#include <iomanip>`（`std::setw` 在 `url_encode` 中使用）
+  - 删除无调用者的 `replace_all(std::string&, ...)` 重载，消除与按值版本的重载歧义
+- ✅ 实现 selectors 通用 HTML 解析
+  - `SearchEngineConfig::selectors` 中配置正则模式映射
+  - 必需键：`item`（用于切分结果项）
+  - 可选键：`title/url/magnet/size/seeds/peers/leeches/hash/date/type`
+  - 支持任何配置驱动的搜索引擎，无需修改代码即可接入新站点
+  - 向后兼容：未配置 selectors 时返回空（移除 1337x 硬编码回退以保持架构纯净）
+- ✅ 重构 GenericSearchProvider 提升可测试性
+  - 将 `parse_html_by_selectors / apply_selector_field / calculate_confidence / parse_size` 实现下沉到 `falcon::search::detail` 命名空间
+  - GenericSearchProvider 内同名方法保留为转发（避免改动其他调用点）
+  - 暴露在 header 中以便单元测试直接调用，无需 WebCrawler/libcurl
+- ✅ 单元测试覆盖（新增 7 个测试用例）
+  - `ParsesMultipleItems`：验证多 item 解析、字段映射、leeches→peers
+  - `ReturnsEmptyWhenItemMissing`：未配置 item selector 时返回空
+  - `ReturnsEmptyWhenHtmlEmpty`：空 HTML 安全处理
+  - `SkipsItemsMissingTitleOrUrl`：不完整项被过滤
+  - `InvalidRegexIsHandled`：无效正则不崩溃（被 try/catch 捕获）
+  - `MagnetFieldSetsType`：magnet 字段自动设置 type="magnet"
+  - `ApplyFieldMapsAllKnownKeys`：所有字段映射覆盖（含 metadata）
+  - `ConfidenceScoringSanity`：置信度评分单调性
+
+**技术要点：**
+- 测试代码使用 `R"re(...)re"` raw string 形式避免 `)"` 序列冲突
+- `detail` 命名空间是「为测试暴露的内部 API」，明确区分公开 API 和实现细节
+- selectors 设计遵循 ISP（接口隔离）：SearchEngineConfig 是数据载体，detail 是无状态函数集
+- LSP：通过 detail::parse_size 让 GenericSearchProvider::parse_size 行为与外部测试完全一致
+
+### 2026-06-16 - download_engine_v2 等待命令超时清理机制
+
+**目标：**
+- 修复事件驱动下载引擎中「park 后 socket 永不就绪」的资源泄漏场景
+  - 对端异常断开但 EventPoll 未触发（部分平台行为）
+  - one-shot 监听丢失、注册时序竞态等
+- 防止 `waiting_commands_` / `socket_wait_map_` / `socket_command_map_` 长期累积
+- 单元测试可验证清理行为，无需真实网络/EventPoll
+
+**已完成：**
+- ✅ EngineConfigV2 新增可配置 `command_wait_timeout_seconds`（默认 120s）
+- ✅ 头文件补充 `#include <map>`（修复 `socket_command_map_` 用 `std::map` 时的潜在编译错误）
+- ✅ `execute_commands` 在 park 命令时记录时间戳到 `waiting_command_times_`
+- ✅ `register_socket_event` 回调恢复命令时同步清除时间戳
+- ✅ `cleanup_completed_commands` 实现：
+  - 双阶段：锁内收集超时项与对应 fd，锁外执行 EventPoll.remove_event 与日志
+  - timeout <= 0 时直接返回（提供禁用清理的能力）
+  - 一次扫描清理全部关联映射：`waiting_commands_` / `waiting_command_times_` /
+    `socket_wait_map_` / `socket_command_map_`，并移除 EventPoll 监听
+- ✅ 友元测试访问：`friend class ::DownloadEngineV2Test`（全局命名空间前向声明）
+- ✅ 单元测试新增 6 个用例：
+  - `Config_DefaultCommandWaitTimeout`：默认值断言
+  - `CleanupCompletedCommands_NoWaiting_NoOp`：空状态调用安全
+  - `CleanupCompletedCommands_DisabledWhenZeroTimeout`：禁用时映射保持不变
+  - `CleanupCompletedCommands_RemovesExpiredEntries`：超时项被全量清除
+  - `CleanupCompletedCommands_PreservesFreshEntries`：未超时项保留
+  - `CleanupCompletedCommands_PartialExpiry`：混合场景下选择性清理
+  - `CleanupCompletedCommands_DropsParkedCommandOwnership`：超时命令的
+    `unique_ptr<Command>` 被移出并销毁（避免命令对象泄漏）
+
+**技术要点：**
+- 锁外执行 `event_poll_->remove_event` 与日志，避免在 socket_map_mutex_ 持有期间
+  触发平台 IO，符合「不在锁内做 IO」的最佳实践
+- 使用 `steady_clock` 而非 `system_clock`，避免系统时间回拨导致的错误清理
+- 测试通过 friend 直接注入 `time_point::min()` 模拟「远古」时间戳，无需 sleep，
+  避免单元测试变慢；这种 fake-time-by-injection 模式适用于无法重构为 Clock
+  抽象的存量代码
+- DRY：所有超时清理逻辑集中在 `cleanup_completed_commands`，主循环只负责调用
+

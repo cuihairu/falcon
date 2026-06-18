@@ -525,3 +525,182 @@ TEST_F(ResourceSearchTest, ProxyConfiguration) {
     std::string socks_url = "socks5://socks.example.com:1080";
     EXPECT_TRUE(socks_url.find("socks5://") == 0);
 }
+
+// ============================================================================
+// detail::parse_html_by_selectors 单元测试
+// 验证 selectors 配置驱动的通用 HTML 解析流程
+// 不依赖网络/curl，可直接离线测试
+// ============================================================================
+
+using falcon::search::detail::apply_selector_field;
+using falcon::search::detail::calculate_confidence;
+using falcon::search::detail::parse_html_by_selectors;
+
+// 构造一个最小的搜索结果 HTML 片段用于测试
+static const char* kSampleHtml = R"(
+<html><body>
+<table>
+<tr class="item">
+    <td><a href="/torrent/1">Movie A 2025 1080p</a></td>
+    <td class="size">2.5GB</td>
+    <td class="seeds">142</td>
+    <td class="leeches">12</td>
+</tr>
+<tr class="item">
+    <td><a href="/torrent/2">Music B FLAC</a></td>
+    <td class="size">450MB</td>
+    <td class="seeds">88</td>
+    <td class="leeches">3</td>
+</tr>
+</table>
+</body></html>
+)";
+
+TEST(ResourceSearchSelectorsTest, ParsesMultipleItems) {
+    SearchEngineConfig config;
+    config.name = "UnitTestEngine";
+    config.selectors = {
+        {"item",   R"re(<tr class="item">[\s\S]*?</tr>)re"},
+        {"title",  R"re(<a href="[^"]+">([^<]+)</a>)re"},
+        {"url",    R"re(<a href="([^"]+)">)re"},
+        {"size",   R"re(class="size">([^<]+)<)re"},
+        {"seeds",  R"re(class="seeds">(\d+)<)re"},
+        {"leeches", R"re(class="leeches">(\d+)<)re"}
+    };
+
+    auto results = parse_html_by_selectors(kSampleHtml, config);
+    ASSERT_EQ(results.size(), 2u);
+    EXPECT_EQ(results[0].title, "Movie A 2025 1080p");
+    EXPECT_EQ(results[0].url, "/torrent/1");
+    EXPECT_EQ(results[0].size, 2ULL * 1024 * 1024 * 1024 + 512ULL * 1024 * 1024);
+    EXPECT_EQ(results[0].seeds, 142);
+    EXPECT_EQ(results[0].peers, 12);  // leeches 映射到 peers
+    EXPECT_EQ(results[0].source, "UnitTestEngine");
+    EXPECT_EQ(results[1].title, "Music B FLAC");
+    EXPECT_EQ(results[1].url, "/torrent/2");
+    EXPECT_EQ(results[1].seeds, 88);
+    EXPECT_EQ(results[1].peers, 3);
+}
+
+TEST(ResourceSearchSelectorsTest, ReturnsEmptyWhenItemMissing) {
+    SearchEngineConfig config;
+    config.name = "NoItemEngine";
+    // 未提供 item selector，应返回空
+    config.selectors = {{"title", R"re(<a[^>]+>([^<]+)</a>)re"}};
+
+    auto results = parse_html_by_selectors(kSampleHtml, config);
+    EXPECT_TRUE(results.empty());
+}
+
+TEST(ResourceSearchSelectorsTest, ReturnsEmptyWhenHtmlEmpty) {
+    SearchEngineConfig config;
+    config.name = "Engine";
+    config.selectors = {{"item", R"re(<tr>.*?</tr>)re"}};
+
+    auto results = parse_html_by_selectors("", config);
+    EXPECT_TRUE(results.empty());
+}
+
+TEST(ResourceSearchSelectorsTest, SkipsItemsMissingTitleOrUrl) {
+    // 一个 item 缺 url，一个 item 缺 title，都不应该出现在结果里
+    const std::string html = R"(
+        <div class="row"><span class="t">Has title but no url</span></div>
+        <div class="row"><a href="/x"></a><span class="t"></span></div>
+        <div class="row"><a href="/ok">Valid</a><span class="t">Real Title</span></div>
+    )";
+    SearchEngineConfig config;
+    config.name = "SkipEngine";
+    config.selectors = {
+        {"item",  R"re(<div class="row">[\s\S]*?</div>)re"},
+        {"title", R"re(class="t">([^<]+)<)re"},
+        {"url",   R"re(<a href="([^"]+)">)re"}
+    };
+
+    auto results = parse_html_by_selectors(html, config);
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_EQ(results[0].title, "Real Title");
+    EXPECT_EQ(results[0].url, "/ok");
+}
+
+TEST(ResourceSearchSelectorsTest, InvalidRegexIsHandled) {
+    SearchEngineConfig config;
+    config.name = "BadRegexEngine";
+    // title 正则无效（未闭合的字符类）应被 std::regex 抛 regex_error 并被吞掉
+    config.selectors = {
+        {"item",  R"re(<tr class="item">[\s\S]*?</tr>)re"},  // valid
+        {"title", R"re([invalid-unmatched)re"}  // invalid: 未闭合字符类
+    };
+
+    auto results = parse_html_by_selectors(kSampleHtml, config);
+    // item 正则有效，但 title 正则无效，最终所有 result 都因 title 为空被过滤
+    EXPECT_TRUE(results.empty());
+}
+
+TEST(ResourceSearchSelectorsTest, MagnetFieldSetsType) {
+    SearchEngineConfig config;
+    config.name = "MagnetEngine";
+    config.selectors = {
+        {"item",   R"re(<li>[\s\S]*?</li>)re"},
+        {"title",  R"re(<b>([^<]+)</b>)re"},
+        {"magnet", R"re(href="(magnet:[^"]+)")re"}
+    };
+    const std::string html = R"(
+        <ul>
+            <li><b>Torrent Title</b> <a href="magnet:?xt=urn:btih:abc123">link</a></li>
+        </ul>
+    )";
+
+    auto results = parse_html_by_selectors(html, config);
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_EQ(results[0].title, "Torrent Title");
+    EXPECT_EQ(results[0].url, "magnet:?xt=urn:btih:abc123");
+    EXPECT_EQ(results[0].type, "magnet");
+}
+
+TEST(ResourceSearchSelectorsTest, ApplyFieldMapsAllKnownKeys) {
+    SearchResult r;
+    apply_selector_field(r, "title", "Foo");
+    apply_selector_field(r, "url", "http://example.com");
+    apply_selector_field(r, "hash", "abc123");
+    apply_selector_field(r, "seeds", "50");
+    apply_selector_field(r, "peers", "5");
+    apply_selector_field(r, "date", "2026-06-15");
+    apply_selector_field(r, "type", "video");
+    apply_selector_field(r, "custom_key", "custom_value");
+
+    EXPECT_EQ(r.title, "Foo");
+    EXPECT_EQ(r.url, "http://example.com");
+    EXPECT_EQ(r.hash, "abc123");
+    EXPECT_EQ(r.seeds, 50);
+    EXPECT_EQ(r.peers, 5);
+    EXPECT_EQ(r.publish_date, "2026-06-15");
+    EXPECT_EQ(r.type, "video");
+    ASSERT_EQ(r.metadata.count("custom_key"), 1u);
+    EXPECT_EQ(r.metadata["custom_key"], "custom_value");
+}
+
+TEST(ResourceSearchSelectorsTest, ApplyFieldHandlesInvalidNumbers) {
+    SearchResult r;
+    apply_selector_field(r, "seeds", "not-a-number");
+    apply_selector_field(r, "peers", "");
+    EXPECT_EQ(r.seeds, 0);
+    EXPECT_EQ(r.peers, 0);
+}
+
+TEST(ResourceSearchSelectorsTest, ConfidenceScoringSanity) {
+    SearchResult empty;
+    SearchResult big_seeds;
+    big_seeds.seeds = 200;
+    big_seeds.size = 1ULL * 1024 * 1024 * 1024;
+    SearchResult small_seeds;
+    small_seeds.seeds = 5;
+
+    double base = calculate_confidence(empty);
+    double with_seeds = calculate_confidence(big_seeds);
+    double tiny = calculate_confidence(small_seeds);
+
+    EXPECT_GE(with_seeds, base);
+    EXPECT_GE(base, tiny);
+    EXPECT_LE(with_seeds, 1.0);
+    EXPECT_GE(base, 0.5);  // base 至少是 0.5
+}

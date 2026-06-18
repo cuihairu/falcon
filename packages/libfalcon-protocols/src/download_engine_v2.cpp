@@ -259,6 +259,7 @@ void DownloadEngineV2::execute_commands() {
             auto it = socket_wait_map_.find(command->id());
             if (it != socket_wait_map_.end()) {
                 waiting_commands_[command->id()] = std::move(command);
+                waiting_command_times_[command->id()] = std::chrono::steady_clock::now();
                 parked = true;
             }
         }
@@ -285,8 +286,66 @@ void DownloadEngineV2::process_ready_events() {
 }
 
 void DownloadEngineV2::cleanup_completed_commands() {
-    // TODO: 清理已完成的命令
-    // 目前命令在完成后自动销毁，不需要额外清理
+    // 清理两类资源：
+    // 1) waiting_commands_ 中超时未恢复的命令（对端异常断开、EventPoll one-shot 丢失等）
+    // 2) 关联的 socket 事件注册，避免 fd 资源泄漏
+    if (config_.command_wait_timeout_seconds <= 0) {
+        return;  // 超时清理已禁用
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    const auto timeout = std::chrono::seconds(config_.command_wait_timeout_seconds);
+
+    // 第一遍扫描：在锁内收集超时命令 ID 与对应 fd，避免在锁内执行回调或 IO
+    std::vector<std::pair<CommandId, int>> expired;  // {command_id, fd}
+    std::vector<std::unique_ptr<Command>> dropped;
+
+    {
+        std::lock_guard<std::mutex> lock(socket_map_mutex_);
+        if (waiting_command_times_.empty()) {
+            return;
+        }
+
+        expired.reserve(waiting_command_times_.size());
+        for (const auto& [cmd_id, ts] : waiting_command_times_) {
+            if (now - ts >= timeout) {
+                int fd = -1;
+                auto w_it = socket_wait_map_.find(cmd_id);
+                if (w_it != socket_wait_map_.end()) {
+                    fd = w_it->second.fd;
+                }
+                expired.emplace_back(cmd_id, fd);
+            }
+        }
+
+        if (expired.empty()) {
+            return;
+        }
+
+        // 第二遍：从所有映射中移除，并取出命令所有权以便锁外销毁
+        for (const auto& [cmd_id, fd] : expired) {
+            auto w_it = waiting_commands_.find(cmd_id);
+            if (w_it != waiting_commands_.end()) {
+                dropped.push_back(std::move(w_it->second));
+                waiting_commands_.erase(w_it);
+            }
+            waiting_command_times_.erase(cmd_id);
+            socket_wait_map_.erase(cmd_id);
+            if (fd >= 0) {
+                socket_command_map_.erase(fd);
+            }
+        }
+    }
+
+    // 锁外：移除 EventPoll 监听（平台 IO 调用不应持锁），记录日志
+    for (const auto& [cmd_id, fd] : expired) {
+        if (fd >= 0) {
+            event_poll_->remove_event(fd);
+        }
+        FALCON_LOG_WARN_STREAM("等待中的命令超时被清理: cmd=" << cmd_id
+                              << ", timeout=" << config_.command_wait_timeout_seconds << "s");
+    }
+    // dropped 在作用域结束时自动销毁命令对象
 }
 
 void DownloadEngineV2::update_task_status() {
@@ -315,6 +374,7 @@ bool DownloadEngineV2::register_socket_event(int fd, int events, CommandId comma
             if (w_it != waiting_commands_.end()) {
                 resumed = std::move(w_it->second);
                 waiting_commands_.erase(w_it);
+                waiting_command_times_.erase(cmd_id);
             }
 
             socket_wait_map_.erase(cmd_id);
