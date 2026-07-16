@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <memory>
 #include <string>
@@ -190,8 +191,8 @@ TEST(ProtocolRegistryTest, SupportedProtocolsList) {
     auto protocols = manager.supported_protocols();
 
     EXPECT_EQ(protocols.size(), 2u);
-    EXPECT_TRUE(std::find(protocols.begin(), protocols.end(), "http") != protocols.end());
-    EXPECT_TRUE(std::find(protocols.begin(), protocols.end(), "ftp") != protocols.end());
+    EXPECT_TRUE(std::find(protocols.begin(), protocols.end(), std::string("http")) != protocols.end());
+    EXPECT_TRUE(std::find(protocols.begin(), protocols.end(), std::string("ftp")) != protocols.end());
 }
 
 // 新增：支持的 URL schemes
@@ -206,9 +207,9 @@ TEST(ProtocolRegistryTest, SupportedSchemesList) {
     auto schemes = manager.supported_schemes();
 
     EXPECT_EQ(schemes.size(), 3u);
-    EXPECT_TRUE(std::find(schemes.begin(), schemes.end(), "http") != schemes.end());
-    EXPECT_TRUE(std::find(schemes.begin(), schemes.end(), "https") != schemes.end());
-    EXPECT_TRUE(std::find(schemes.begin(), schemes.end(), "ftp") != schemes.end());
+    EXPECT_TRUE(std::find(schemes.begin(), schemes.end(), std::string("http")) != schemes.end());
+    EXPECT_TRUE(std::find(schemes.begin(), schemes.end(), std::string("https")) != schemes.end());
+    EXPECT_TRUE(std::find(schemes.begin(), schemes.end(), std::string("ftp")) != schemes.end());
 }
 
 // 新增：URL 路由到正确的插件

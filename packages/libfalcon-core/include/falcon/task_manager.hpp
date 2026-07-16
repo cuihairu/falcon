@@ -31,6 +31,7 @@
 #include <condition_variable>
 #include <thread>
 #include <atomic>
+#include <cstdint>
 #include <queue>
 
 namespace falcon {
@@ -45,6 +46,7 @@ struct TaskQueueItem {
     TaskId task_id;
     TaskPriority priority;
     std::chrono::steady_clock::time_point schedule_time;
+    std::uint64_t sequence = 0;
 
     // 优先级队列比较函数
     bool operator<(const TaskQueueItem& other) const {

@@ -8,6 +8,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <string>
 #include <vector>
 #include <map>
@@ -46,7 +47,7 @@ TEST(TaskManagerPersistenceTest, SaveAndLoadState) {
     auto t1 = std::make_shared<falcon::DownloadTask>(1, "https://example.com/a.bin", opt);
     t1->set_output_path("out/file.bin");
     t1->set_status(falcon::TaskStatus::Paused);
-    tm.add_task(t1);
+    tm.add_task(t1, falcon::TaskPriority::Critical);
 
     auto t2 = std::make_shared<falcon::DownloadTask>(2, "https://example.com/b.bin", falcon::DownloadOptions{});
     t2->set_output_path("b.bin");
@@ -65,6 +66,7 @@ TEST(TaskManagerPersistenceTest, SaveAndLoadState) {
     EXPECT_EQ(r1->url(), "https://example.com/a.bin");
     EXPECT_EQ(r1->output_path(), "out/file.bin");
     EXPECT_EQ(r1->status(), falcon::TaskStatus::Paused);
+    EXPECT_EQ(r1->get_priority(), falcon::TaskPriority::Critical);
     EXPECT_EQ(r1->options().output_directory, "out");
     EXPECT_EQ(r1->options().output_filename, "file.bin");
     EXPECT_EQ(r1->options().max_connections, 8u);
@@ -80,6 +82,59 @@ TEST(TaskManagerPersistenceTest, SaveAndLoadState) {
     EXPECT_EQ(r2->output_path(), "b.bin");
     EXPECT_EQ(r2->status(), falcon::TaskStatus::Failed);
     EXPECT_EQ(r2->error_message(), "oops");
+}
+
+TEST(TaskManagerPersistenceTest, LoadVersionOneStateDefaultsPriorityToNormal) {
+    falcon::TaskManagerConfig cfg;
+    cfg.auto_save_state = false;
+    cfg.cleanup_interval = std::chrono::seconds(0);
+
+    auto state_path = unique_temp_file("falcon_task_state_v1_");
+    {
+        std::ofstream file(state_path.string(), std::ios::binary | std::ios::trunc);
+        ASSERT_TRUE(file.is_open());
+        file << "falcon_task_state 1\n";
+        file << "task "
+             << 1 << " "
+             << static_cast<int>(falcon::TaskStatus::Paused) << " "
+             << 0 << " "
+             << 0 << " "
+             << 0 << " "
+             << std::quoted(std::string("https://example.com/legacy.bin")) << " "
+             << std::quoted(std::string("legacy.bin")) << " "
+             << std::quoted(std::string("")) << " "
+             << 4 << " "
+             << 30 << " "
+             << 3 << " "
+             << 1 << " "
+             << std::quoted(std::string("")) << " "
+             << std::quoted(std::string("")) << " "
+             << 0 << " "
+             << 1 << " "
+             << std::quoted(std::string("")) << " "
+             << std::quoted(std::string("")) << " "
+             << std::quoted(std::string("")) << " "
+             << std::quoted(std::string("")) << " "
+             << std::quoted(std::string("")) << " "
+             << 1 << " "
+             << std::quoted(std::string("")) << " "
+             << std::quoted(std::string("")) << " "
+             << std::quoted(std::string("")) << " "
+             << 1048576 << " "
+             << 1 << " "
+             << 500 << " "
+             << 1 << " "
+             << 0 << " "
+             << 0 << "\n";
+    }
+
+    falcon::TaskManager tm(cfg, nullptr);
+    ASSERT_TRUE(tm.load_state(state_path.string()));
+
+    auto loaded = tm.get_task(1);
+    ASSERT_NE(loaded, nullptr);
+    EXPECT_EQ(loaded->status(), falcon::TaskStatus::Paused);
+    EXPECT_EQ(loaded->get_priority(), falcon::TaskPriority::Normal);
 }
 
 //==============================================================================
@@ -827,4 +882,3 @@ TEST(TaskManagerPersistenceResume, ResumeEnabled) {
 //==============================================================================
 // 主函数
 //==============================================================================
-

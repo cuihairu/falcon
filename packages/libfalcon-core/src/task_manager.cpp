@@ -14,12 +14,14 @@
 #include <iomanip>
 #include <sstream>
 #include <thread>
+#include <utility>
 #include <unordered_set>
+#include <unordered_map>
 
 namespace falcon {
 
 namespace {
-constexpr int kTaskManagerStateVersion = 1;
+constexpr int kTaskManagerStateVersion = 2;
 constexpr const char* kTaskManagerStateMagic = "falcon_task_state";
 
 template <typename Int>
@@ -30,6 +32,14 @@ bool read_int(std::istream& in, Int& out) {
     }
     out = static_cast<Int>(value);
     return true;
+}
+
+TaskPriority sanitize_priority_for_restore(int priority_int) {
+    if (priority_int < static_cast<int>(TaskPriority::Low) ||
+        priority_int > static_cast<int>(TaskPriority::Critical)) {
+        return TaskPriority::Normal;
+    }
+    return static_cast<TaskPriority>(priority_int);
 }
 
 TaskStatus sanitize_status_for_restore(TaskStatus status) {
@@ -121,11 +131,19 @@ bool read_download_options(std::istream& in, DownloadOptions& options) {
 /**
  * @brief 从流中读取单个任务数据
  */
-bool read_task_data(std::istream& in, TaskId& id, std::string& url, std::string& output_path,
-                     std::string& error_message, Bytes& downloaded_bytes, Bytes& total_bytes,
-                     BytesPerSecond& speed, int& status_int) {
+bool read_task_data(std::istream& in, int version, TaskId& id, std::string& url,
+                     std::string& output_path, std::string& error_message,
+                     Bytes& downloaded_bytes, Bytes& total_bytes,
+                     BytesPerSecond& speed, int& status_int, int& priority_int) {
     if (!(in >> id >> status_int >> downloaded_bytes >> total_bytes >> speed)) {
         return false;
+    }
+    if (version >= 2) {
+        if (!(in >> priority_int)) {
+            return false;
+        }
+    } else {
+        priority_int = static_cast<int>(TaskPriority::Normal);
     }
     if (!(in >> std::quoted(url) >> std::quoted(output_path) >> std::quoted(error_message))) {
         return false;
@@ -204,7 +222,7 @@ public:
         download_pool_.wait();
     }
 
-    TaskId add_task(DownloadTask::Ptr task, TaskPriority /*priority*/) {
+    TaskId add_task(DownloadTask::Ptr task, TaskPriority priority) {
         if (!task) return INVALID_TASK_ID;
 
         std::lock_guard<std::mutex> lock(tasks_mutex_);
@@ -216,6 +234,7 @@ public:
         if (tasks_.find(id) != tasks_.end()) {
             return INVALID_TASK_ID;
         }
+        task->set_priority(priority);
         task->set_listener(this);
         tasks_[id] = std::move(task);
 
@@ -278,15 +297,16 @@ public:
         if (!task || task->is_active() || task->is_finished()) {
             return false;
         }
+        if (is_task_enqueued(id)) {
+            return false;
+        }
 
-        // 添加到优先级队列
-        std::lock_guard<std::mutex> lock(queue_mutex_);
-        TaskQueueItem item{id, priority, std::chrono::steady_clock::now()};
-        task_queue_.push(item);
+        if (task->status() == TaskStatus::Paused) {
+            task->set_status(TaskStatus::Pending);
+        }
 
-        // 通知工作线程
-        cv_.notify_one();
-
+        task->set_priority(priority);
+        enqueue_task(id, priority);
         return true;
     }
 
@@ -303,6 +323,7 @@ public:
             return false;
         }
 
+        clear_enqueued_task(id);
         tasks_.erase(it);
 
         // 如果启用了自动保存，保存状态
@@ -319,6 +340,7 @@ public:
 
         for (auto it = tasks_.begin(); it != tasks_.end();) {
             if (it->second->is_finished()) {
+                clear_enqueued_task(it->first);
                 it = tasks_.erase(it);
                 ++count;
             } else {
@@ -335,12 +357,14 @@ public:
             return false;
         }
 
-        return resume_task(id);
+        return start_task(id, task->get_priority());
     }
 
     bool pause_task(TaskId id) {
         auto task = get_task(id);
         if (!task) return false;
+
+        clear_enqueued_task(id);
 
         // 从活动任务中移除
         {
@@ -359,24 +383,16 @@ public:
 
     bool resume_task(TaskId id) {
         auto task = get_task(id);
-        if (!task) return false;
+        if (!task || task->status() != TaskStatus::Paused) return false;
 
-        // 添加到等待队列
-        {
-            std::lock_guard<std::mutex> lock(queue_mutex_);
-            TaskQueueItem item{id, TaskPriority::Normal, std::chrono::steady_clock::now()};
-            task_queue_.push(item);
-        }
-
-        // 通知工作线程
-        cv_.notify_one();
-
-        return true;
+        return start_task(id, task->get_priority());
     }
 
     bool cancel_task(TaskId id) {
         auto task = get_task(id);
         if (!task) return false;
+
+        clear_enqueued_task(id);
 
         // 从活动任务中移除
         {
@@ -438,7 +454,7 @@ public:
 
     size_t get_queue_size() const {
         std::lock_guard<std::mutex> lock(queue_mutex_);
-        return task_queue_.size();
+        return queued_task_versions_.size();
     }
 
     size_t get_active_task_count() const {
@@ -455,10 +471,17 @@ public:
         cv_.notify_one();
     }
 
-    bool adjust_task_priority(TaskId /*id*/, TaskPriority /*priority*/) {
-        // 需要找到并调整任务在队列中的优先级
-        // 这里简化实现，实际可能需要更复杂的优先级队列
-        return false;
+    bool adjust_task_priority(TaskId id, TaskPriority priority) {
+        auto task = get_task(id);
+        if (!task) return false;
+
+        // 更新任务对象的优先级
+        task->set_priority(priority);
+
+        if (is_task_enqueued(id)) {
+            enqueue_task(id, priority);
+        }
+        return true;
     }
 
     TaskManager::Statistics get_statistics() const {
@@ -515,6 +538,7 @@ public:
                  << task->downloaded_bytes() << " "
                  << task->total_bytes() << " "
                  << task->speed() << " "
+                 << static_cast<int>(task->get_priority()) << " "
                  << std::quoted(task->url()) << " "
                  << std::quoted(task->output_path()) << " "
                  << std::quoted(task->error_message()) << " "
@@ -568,7 +592,7 @@ public:
         }
 
         int version = 0;
-        if (!(file >> version) || version != kTaskManagerStateVersion) {
+        if (!(file >> version) || (version != 1 && version != kTaskManagerStateVersion)) {
             return false;
         }
 
@@ -580,6 +604,8 @@ public:
         {
             std::lock_guard<std::mutex> lock(queue_mutex_);
             task_queue_ = std::priority_queue<TaskQueueItem>{};
+            queued_task_versions_.clear();
+            queue_sequence_.store(0, std::memory_order_relaxed);
         }
         {
             std::lock_guard<std::mutex> lock(active_mutex_);
@@ -606,9 +632,11 @@ public:
             Bytes downloaded_bytes = 0, total_bytes = 0;
             BytesPerSecond speed = 0;
             int status_int = 0;
+            int priority_int = static_cast<int>(TaskPriority::Normal);
 
-            if (!read_task_data(in, id, url, output_path, error_message,
-                                 downloaded_bytes, total_bytes, speed, status_int)) {
+            if (!read_task_data(in, version, id, url, output_path, error_message,
+                                downloaded_bytes, total_bytes, speed, status_int,
+                                priority_int)) {
                 continue;
             }
 
@@ -628,9 +656,11 @@ public:
                 status = static_cast<TaskStatus>(status_int);
             }
             status = sanitize_status_for_restore(status);
+            const auto priority = sanitize_priority_for_restore(priority_int);
 
             auto task = std::make_shared<DownloadTask>(id, url, options);
             task->set_listener(this);  // Set listener first before any operations
+            task->set_priority(priority);
             task->set_output_path(output_path);
             if (!error_message.empty()) {
                 task->set_error(error_message);
@@ -755,11 +785,18 @@ private:
                 // 获取任务
                 item = task_queue_.top();
                 task_queue_.pop();
+
+                auto it = queued_task_versions_.find(item.task_id);
+                if (it == queued_task_versions_.end() || it->second != item.sequence) {
+                    continue;
+                }
+                queued_task_versions_.erase(it);
             }
 
             // 获取任务对象
             task = get_task(item.task_id);
-            if (!task || task->is_finished() || task->is_active()) {
+            if (!task || task->is_finished() || task->is_active() ||
+                task->status() != TaskStatus::Pending) {
                 continue;
             }
 
@@ -825,6 +862,26 @@ private:
         });
     }
 
+    void enqueue_task(TaskId id, TaskPriority priority) {
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex_);
+            const auto sequence = ++queue_sequence_;
+            queued_task_versions_[id] = sequence;
+            task_queue_.push(TaskQueueItem{id, priority, std::chrono::steady_clock::now(), sequence});
+        }
+        cv_.notify_one();
+    }
+
+    [[nodiscard]] bool is_task_enqueued(TaskId id) const {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        return queued_task_versions_.find(id) != queued_task_versions_.end();
+    }
+
+    void clear_enqueued_task(TaskId id) {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        queued_task_versions_.erase(id);
+    }
+
     TaskManagerConfig config_;
     EventDispatcher* event_dispatcher_;
     std::atomic<size_t> max_concurrent_tasks_{1};
@@ -837,6 +894,9 @@ private:
     // 任务队列
     mutable std::mutex queue_mutex_;
     std::priority_queue<TaskQueueItem> task_queue_;
+    // 记录每个任务当前有效的入队版本，用于跳过旧条目和重复调度
+    std::unordered_map<TaskId, std::uint64_t> queued_task_versions_;
+    std::atomic<std::uint64_t> queue_sequence_{0};
     std::condition_variable cv_;
 
     // 清理线程唤醒
@@ -979,7 +1039,7 @@ void TaskManager::on_task_progress(TaskId /*task_id*/, const ProgressInfo& progr
 }
 
 bool TaskManager::start_task(TaskId id) {
-    return impl_->start_task(id, TaskPriority::Normal);
+    return impl_->start_task(id);
 }
 
 bool TaskManager::start_task(TaskId id, TaskPriority priority) {

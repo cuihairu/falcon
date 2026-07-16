@@ -20,13 +20,47 @@ packages/falcon-daemon/tests/
 
 ## 构建测试
 
+推荐使用 vcpkg manifest 构建测试。仓库根目录的 `vcpkg.json` 已声明 `gtest`，使用 vcpkg toolchain 配置时会自动安装测试依赖。
+
+```bash
+export VCPKG_ROOT=/path/to/vcpkg
+cmake -B build-vcpkg-core -S . \
+  -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake \
+  -DVCPKG_TARGET_TRIPLET=x64-linux \
+  -DFALCON_BUILD_TESTS=ON \
+  -DFALCON_BUILD_DESKTOP=OFF \
+  -DFALCON_BUILD_DAEMON=OFF \
+  -DFALCON_BUILD_CLI=OFF \
+  -DFALCON_BUILD_EXAMPLES=OFF \
+  -DFALCON_ENABLE_RESOURCE_BROWSER=OFF \
+  -DFALCON_ENABLE_CLOUD_STORAGE=OFF \
+  -DFALCON_ENABLE_RESOURCE_SEARCH=OFF \
+  -DFALCON_ENABLE_CONFIG_MANAGER=OFF
+
+cmake --build build-vcpkg-core --target falcon_core_tests falcon_split_tests -j4
+```
+
+核心库最小稳定面验证：
+
+```bash
+./build-vcpkg-core/bin/falcon_core_tests --gtest_brief=1
+./build-vcpkg-core/bin/falcon_split_tests --gtest_brief=1
+```
+
+当前已验证结果：
+
+- `falcon_core_tests`: 384 个测试通过
+- `falcon_split_tests`: 10 个测试通过
+
+如果使用系统依赖而不是 vcpkg：
+
 ```bash
 cmake -B build -S . -DCMAKE_BUILD_TYPE=Debug -DFALCON_BUILD_TESTS=ON
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-如果本机没有预装 `GTest`，当前仓库会直接跳过各测试目录，不再自动联网拉取依赖。
+裸 CMake 配置不会自动从 vcpkg manifest 安装依赖。如果本机没有预装 `GTest`，当前仓库会直接跳过各测试目录，不再自动通过 `FetchContent` 联网拉取依赖。
 
 常见安装方式：
 

@@ -22,10 +22,13 @@ cd falcon
 git clone https://github.com/Microsoft/vcpkg.git $VCPKG_ROOT
 $VCPKG_ROOT/bootstrap-vcpkg.sh
 
-# 安装项目依赖
+# 让 CMake 通过 vcpkg manifest 自动安装项目依赖
 export VCPKG_ROOT=/path/to/vcpkg
-vcpkg install
 ```
+
+仓库根目录包含 `vcpkg.json`。使用 `CMAKE_TOOLCHAIN_FILE` 配置 CMake 时，vcpkg 会自动安装默认依赖，包括 `gtest`、`curl`、`openssl`、`spdlog`、`nlohmann-json` 和 `fmt`。
+
+Qt6 不在默认依赖中；桌面应用依赖位于 `desktop` feature，需要显式启用。
 
 #### 方法二：使用系统包管理器
 ```bash
@@ -51,17 +54,27 @@ cmake --build build --config Release
 
 #### 使用 vcpkg 配置构建（推荐）
 ```bash
-# macOS
 export VCPKG_ROOT=/path/to/vcpkg
 cmake -B build -S . \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake \
-  -DVCPKG_TARGET_TRIPLET=x64-osx \
+  -DVCPKG_TARGET_TRIPLET=x64-linux \
   -DFALCON_ENABLE_HTTP=ON \
   -DFALCON_BUILD_TESTS=OFF \
+  -DFALCON_BUILD_DESKTOP=OFF \
   -DFALCON_BUILD_CLI=OFF
 
 cmake --build build --config Release
+```
+
+如需构建桌面应用，需要额外安装/启用 Qt6：
+
+```bash
+cmake -B build-desktop -S . \
+  -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake \
+  -DVCPKG_TARGET_TRIPLET=x64-linux \
+  -DVCPKG_MANIFEST_FEATURES=desktop \
+  -DFALCON_BUILD_DESKTOP=ON
 ```
 
 ## 构建选项
@@ -134,13 +147,41 @@ cmake --build build --config Release
 
 ## 测试
 
-运行单元测试：
+推荐先运行核心库和分层约束测试，验证最小稳定面：
+
+```bash
+export VCPKG_ROOT=/path/to/vcpkg
+cmake -B build-vcpkg-core -S . \
+  -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake \
+  -DVCPKG_TARGET_TRIPLET=x64-linux \
+  -DFALCON_BUILD_TESTS=ON \
+  -DFALCON_BUILD_DESKTOP=OFF \
+  -DFALCON_BUILD_DAEMON=OFF \
+  -DFALCON_BUILD_CLI=OFF \
+  -DFALCON_BUILD_EXAMPLES=OFF \
+  -DFALCON_ENABLE_RESOURCE_BROWSER=OFF \
+  -DFALCON_ENABLE_CLOUD_STORAGE=OFF \
+  -DFALCON_ENABLE_RESOURCE_SEARCH=OFF \
+  -DFALCON_ENABLE_CONFIG_MANAGER=OFF
+
+cmake --build build-vcpkg-core --target falcon_core_tests falcon_split_tests -j4
+./build-vcpkg-core/bin/falcon_core_tests --gtest_brief=1
+./build-vcpkg-core/bin/falcon_split_tests --gtest_brief=1
+```
+
+当前已验证结果：
+
+- `falcon_core_tests`: 384 个测试通过
+- `falcon_split_tests`: 10 个测试通过
+
+运行全部已配置测试：
+
 ```bash
 cd build
 ctest --output-on-failure
 ```
 
-如果配置阶段提示 `GTest not found`，说明本机尚未安装本地测试依赖。当前仓库不会再自动通过 `FetchContent` 联网拉取 `googletest`，需要先按上面的系统包管理器方式安装。
+如果裸 CMake 配置提示 `GTest not found`，说明当前构建没有使用 vcpkg toolchain，也没有安装系统 GTest。优先使用上面的 vcpkg manifest 构建；只有选择系统包管理器构建时，才需要手动安装 `libgtest-dev` / `googletest`。
 
 ## 安装
 

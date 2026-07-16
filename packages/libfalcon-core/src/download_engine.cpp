@@ -293,16 +293,6 @@ public:
     }
 
     bool adjust_task_priority(TaskId id, TaskPriority priority) {
-        // 获取任务
-        auto task = task_manager_.get_task(id);
-        if (!task) {
-            return false;
-        }
-
-        // 更新任务对象的优先级
-        task->set_priority(priority);
-
-        // 更新任务管理器的优先级（重新排队）
         return task_manager_.adjust_task_priority(id, priority);
     }
 

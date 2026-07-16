@@ -297,6 +297,7 @@ struct CliArgs {
     bool quiet = false;
     bool show_help = false;
     bool show_version = false;
+    std::string priority_str;  // 任务优先级: low/normal/high/critical
     bool show_config_path = false; // 显示配置文件路径
     bool create_default_config = false; // 创建默认配置文件
     bool no_color = false; // 禁用彩色输出
@@ -322,6 +323,16 @@ static falcon::Bytes parse_size_bytes(std::string size_str) {
     }
 
     return static_cast<falcon::Bytes>(std::stoull(size_str) * multiplier);
+}
+
+// 将字符串解析为 TaskPriority，支持 low/normal/high/critical（大小写不敏感）
+static falcon::TaskPriority parse_priority(const std::string& s) {
+    std::string lower = s;
+    for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (lower == "low" || lower == "0") return falcon::TaskPriority::Low;
+    if (lower == "high" || lower == "2") return falcon::TaskPriority::High;
+    if (lower == "critical" || lower == "3") return falcon::TaskPriority::Critical;
+    return falcon::TaskPriority::Normal;  // normal/1/默认
 }
 
 static bool parse_bool(std::string value, bool default_value) {
@@ -473,6 +484,10 @@ CliArgs parse_args(int argc, char* argv[]) {
             args.verbose = true;
         } else if (arg == "-q" || arg == "--quiet") {
             args.quiet = true;
+        } else if (arg == "--priority" || arg == "-p") {
+            if (i + 1 < argc) {
+                args.priority_str = argv[++i];
+            }
         } else if (arg == "--retry-wait") {
             // aria2: --retry-wait
             if (i + 1 < argc) {
@@ -577,7 +592,8 @@ void show_help() {
     std::cout << "      --no-color             Disable colored output\n\n";
 
     std::cout << "下载队列选项 (aria2 风格):\n";
-    std::cout << "  -j, --max-concurrent-downloads <N>  最大并发下载任务数 [默认: 1]\n\n";
+    std::cout << "  -j, --max-concurrent-downloads <N>  最大并发下载任务数 [默认: 1]\n";
+    std::cout << "  -p, --priority <级别>      任务优先级: low/normal/high/critical [默认: normal]\n\n";
 
     std::cout << "多线程下载选项 (aria2 风格):\n";
     std::cout << "  -c, --connections <数量>   并发连接数 (1-64) [默认: 4]\n";
@@ -1005,6 +1021,14 @@ int main(int argc, char* argv[]) {
             if (!engine.start_task(task->id())) {
                 std::cerr << term::red("Error: ") << "cannot start download task: " << task->url() << "\n";
                 return 1;
+            }
+        }
+
+        // 应用优先级（如果用户指定了 --priority）
+        if (!args.priority_str.empty()) {
+            const auto priority = parse_priority(args.priority_str);
+            for (const auto& task : tasks) {
+                engine.adjust_task_priority(task->id(), priority);
             }
         }
 

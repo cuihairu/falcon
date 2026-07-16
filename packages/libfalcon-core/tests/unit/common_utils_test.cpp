@@ -204,13 +204,24 @@ TEST(CommonUtilsTest, TaskPriorityValues) {
     std::vector<TaskPriority> all_priorities = {
         TaskPriority::Low,
         TaskPriority::Normal,
-        TaskPriority::High
+        TaskPriority::High,
+        TaskPriority::Critical
     };
 
+    EXPECT_EQ(all_priorities.size(), 4u);
+
     // 验证优先级可以比较
+    EXPECT_TRUE(TaskPriority::Critical > TaskPriority::High);
+    EXPECT_TRUE(TaskPriority::Critical > TaskPriority::Normal);
+    EXPECT_TRUE(TaskPriority::Critical > TaskPriority::Low);
     EXPECT_TRUE(TaskPriority::High > TaskPriority::Normal);
     EXPECT_TRUE(TaskPriority::Normal > TaskPriority::Low);
     EXPECT_TRUE(TaskPriority::High > TaskPriority::Low);
+
+    EXPECT_STREQ(to_string(TaskPriority::Low), "Low");
+    EXPECT_STREQ(to_string(TaskPriority::Normal), "Normal");
+    EXPECT_STREQ(to_string(TaskPriority::High), "High");
+    EXPECT_STREQ(to_string(TaskPriority::Critical), "Critical");
 }
 
 // ============================================================================
