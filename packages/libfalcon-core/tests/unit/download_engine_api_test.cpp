@@ -12,10 +12,12 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -56,6 +58,77 @@ public:
 
 private:
     std::string proto_;
+};
+
+class OrderedBlockingHandler final : public falcon::IProtocolHandler {
+public:
+    [[nodiscard]] std::string protocol_name() const override { return "ordered"; }
+    [[nodiscard]] std::vector<std::string> supported_schemes() const override {
+        return {"ordered"};
+    }
+    [[nodiscard]] bool can_handle(const std::string& url) const override {
+        return url.rfind("ordered://", 0) == 0;
+    }
+    [[nodiscard]] falcon::FileInfo get_file_info(const std::string& url,
+                                                 const falcon::DownloadOptions&) override {
+        falcon::FileInfo info;
+        info.url = url;
+        info.filename = "file.bin";
+        info.total_size = 1;
+        return info;
+    }
+    void download(falcon::DownloadTask::Ptr task, falcon::IEventListener*) override {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            execution_order_.push_back(task->id());
+        }
+        cv_.notify_all();
+
+        std::unique_lock<std::mutex> lock(mutex_);
+        cv_.wait(lock, [this, task_id = task->id()] {
+            return released_ids_.count(task_id) > 0;
+        });
+        released_ids_.erase(task->id());
+        lock.unlock();
+        cv_.notify_all();
+
+        task->set_status(falcon::TaskStatus::Completed);
+    }
+    void pause(falcon::DownloadTask::Ptr task) override {
+        if (task) task->set_status(falcon::TaskStatus::Paused);
+    }
+    void resume(falcon::DownloadTask::Ptr task, falcon::IEventListener* listener) override {
+        download(std::move(task), listener);
+    }
+    void cancel(falcon::DownloadTask::Ptr task) override {
+        if (task) task->set_status(falcon::TaskStatus::Cancelled);
+    }
+
+    void release(falcon::TaskId id) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            released_ids_.insert(id);
+        }
+        cv_.notify_all();
+    }
+
+    bool wait_for_activated_count(std::size_t count, std::chrono::milliseconds timeout) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        return cv_.wait_for(lock, timeout, [this, count] {
+            return execution_order_.size() >= count;
+        });
+    }
+
+    [[nodiscard]] std::vector<falcon::TaskId> execution_order() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return execution_order_;
+    }
+
+private:
+    mutable std::mutex mutex_;
+    std::condition_variable cv_;
+    std::vector<falcon::TaskId> execution_order_;
+    std::unordered_set<falcon::TaskId> released_ids_;
 };
 
 } // namespace
@@ -361,4 +434,41 @@ TEST(DownloadEngineApiTest, AdjustTaskPriorityAllLevels) {
 
     EXPECT_TRUE(engine.adjust_task_priority(t->id(), falcon::TaskPriority::Critical));
     EXPECT_EQ(t->get_priority(), falcon::TaskPriority::Critical);
+}
+
+TEST(DownloadEngineApiTest, StartTaskUsesPriorityAdjustedBeforeQueueing) {
+    falcon::EngineConfig config;
+    config.max_concurrent_tasks = 1;
+    falcon::DownloadEngine engine(config);
+
+    auto handler = std::make_unique<OrderedBlockingHandler>();
+    auto* raw_handler = handler.get();
+    engine.register_handler(std::move(handler));
+
+    auto blocker = engine.add_task("ordered://example.com/blocker");
+    auto normal = engine.add_task("ordered://example.com/normal");
+    auto critical = engine.add_task("ordered://example.com/critical");
+    ASSERT_NE(blocker, nullptr);
+    ASSERT_NE(normal, nullptr);
+    ASSERT_NE(critical, nullptr);
+
+    ASSERT_TRUE(engine.start_task(blocker->id()));
+    ASSERT_TRUE(raw_handler->wait_for_activated_count(1, std::chrono::milliseconds(1000)));
+    EXPECT_EQ(raw_handler->execution_order(), std::vector<falcon::TaskId>({blocker->id()}));
+
+    ASSERT_TRUE(engine.adjust_task_priority(critical->id(), falcon::TaskPriority::Critical));
+    ASSERT_TRUE(engine.start_task(normal->id()));
+    ASSERT_TRUE(engine.start_task(critical->id()));
+
+    raw_handler->release(blocker->id());
+    ASSERT_TRUE(raw_handler->wait_for_activated_count(2, std::chrono::milliseconds(1000)));
+
+    auto order = raw_handler->execution_order();
+    ASSERT_EQ(order.size(), 2u);
+    EXPECT_EQ(order[1], critical->id());
+
+    raw_handler->release(critical->id());
+    ASSERT_TRUE(raw_handler->wait_for_activated_count(3, std::chrono::milliseconds(1000)));
+    raw_handler->release(normal->id());
+    engine.wait_all();
 }

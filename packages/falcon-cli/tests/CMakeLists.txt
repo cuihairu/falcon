@@ -19,6 +19,7 @@ endif()
 add_executable(falcon_cli_tests
     unit/arg_parser_test.cpp
     unit/config_loader_test.cpp
+    ../src/arg_parser.cpp
     ../src/config_loader.cpp
 )
 

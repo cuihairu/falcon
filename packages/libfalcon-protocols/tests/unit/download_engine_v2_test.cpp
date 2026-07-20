@@ -65,6 +65,13 @@ private:
 
 class DownloadEngineV2Test : public ::testing::Test {
 protected:
+    struct WaitingStateCounts {
+        std::size_t waiting_command_times = 0;
+        std::size_t socket_waits = 0;
+        std::size_t socket_commands = 0;
+        std::size_t waiting_commands = 0;
+    };
+
     void SetUp() override {
         EngineConfigV2 config;
         config.max_concurrent_tasks = 3;
@@ -80,6 +87,42 @@ protected:
     }
 
     std::unique_ptr<DownloadEngineV2> engine_;
+
+    static void cleanup_completed_commands(DownloadEngineV2& engine) {
+        engine.cleanup_completed_commands();
+    }
+
+    static void add_waiting_entry(
+        DownloadEngineV2& engine,
+        CommandId command_id,
+        int fd,
+        std::chrono::steady_clock::time_point timestamp,
+        std::unique_ptr<Command> command = nullptr
+    ) {
+        ASSERT_TRUE(engine.register_socket_event(
+            fd, static_cast<int>(net::IOEvent::READ), command_id));
+        std::lock_guard<std::mutex> lock(engine.socket_map_mutex_);
+        engine.waiting_command_times_[command_id] = timestamp;
+        if (command) {
+            engine.waiting_commands_[command_id] = std::move(command);
+        }
+    }
+
+    static WaitingStateCounts count_waiting_entry(DownloadEngineV2& engine,
+                                                  CommandId command_id,
+                                                  int fd) {
+        std::lock_guard<std::mutex> lock(engine.socket_map_mutex_);
+        return {
+            engine.waiting_command_times_.count(command_id),
+            engine.socket_wait_map_.count(command_id),
+            engine.socket_command_map_.count(fd),
+            engine.waiting_commands_.count(command_id)
+        };
+    }
+
+    static std::chrono::steady_clock::time_point expired_wait_time() {
+        return std::chrono::steady_clock::now() - std::chrono::seconds(2);
+    }
 };
 
 // ============================================================================
@@ -630,7 +673,7 @@ TEST_F(DownloadEngineV2Test, Config_DefaultCommandWaitTimeout) {
 
 TEST_F(DownloadEngineV2Test, CleanupCompletedCommands_NoWaiting_NoOp) {
     // 空状态下调用清理不应崩溃
-    engine_->cleanup_completed_commands();
+    cleanup_completed_commands(*engine_);
     SUCCEED();
 }
 
@@ -643,22 +686,17 @@ TEST_F(DownloadEngineV2Test, CleanupCompletedCommands_DisabledWhenZeroTimeout) {
     auto engine = std::make_unique<DownloadEngineV2>(config);
 
     constexpr CommandId kCmd = 7001;
-    constexpr int kFd = 79;
-    {
-        std::lock_guard<std::mutex> lock(engine->socket_map_mutex_);
-        engine->socket_wait_map_[kCmd] = {kFd, 1};
-        engine->socket_command_map_[kFd] = kCmd;
-        engine->waiting_command_times_[kCmd] =
-            std::chrono::steady_clock::time_point::min();
-    }
+    ScopedPipe fds;
+    ASSERT_TRUE(fds.valid());
+    add_waiting_entry(*engine, kCmd, fds.read_fd(), expired_wait_time());
 
-    engine->cleanup_completed_commands();
+    cleanup_completed_commands(*engine);
 
     // 禁用清理：所有映射应原封不动
-    std::lock_guard<std::mutex> lock(engine->socket_map_mutex_);
-    EXPECT_EQ(engine->waiting_command_times_.count(kCmd), 1u);
-    EXPECT_EQ(engine->socket_wait_map_.count(kCmd), 1u);
-    EXPECT_EQ(engine->socket_command_map_.count(kFd), 1u);
+    auto counts = count_waiting_entry(*engine, kCmd, fds.read_fd());
+    EXPECT_EQ(counts.waiting_command_times, 1u);
+    EXPECT_EQ(counts.socket_waits, 1u);
+    EXPECT_EQ(counts.socket_commands, 1u);
 }
 
 TEST_F(DownloadEngineV2Test, CleanupCompletedCommands_RemovesExpiredEntries) {
@@ -670,23 +708,17 @@ TEST_F(DownloadEngineV2Test, CleanupCompletedCommands_RemovesExpiredEntries) {
     auto engine = std::make_unique<DownloadEngineV2>(config);
 
     constexpr CommandId kCmd = 7101;
-    constexpr int kFd = 81;
-    {
-        std::lock_guard<std::mutex> lock(engine->socket_map_mutex_);
-        engine->socket_wait_map_[kCmd] = {kFd, 1};
-        engine->socket_command_map_[kFd] = kCmd;
-        // 远古时间戳 -> 必然超时
-        engine->waiting_command_times_[kCmd] =
-            std::chrono::steady_clock::time_point::min();
-    }
+    ScopedPipe fds;
+    ASSERT_TRUE(fds.valid());
+    add_waiting_entry(*engine, kCmd, fds.read_fd(), expired_wait_time());
 
-    engine->cleanup_completed_commands();
+    cleanup_completed_commands(*engine);
 
-    std::lock_guard<std::mutex> lock(engine->socket_map_mutex_);
-    EXPECT_EQ(engine->waiting_command_times_.count(kCmd), 0u);
-    EXPECT_EQ(engine->socket_wait_map_.count(kCmd), 0u);
-    EXPECT_EQ(engine->socket_command_map_.count(kFd), 0u);
-    EXPECT_EQ(engine->waiting_commands_.count(kCmd), 0u);
+    auto counts = count_waiting_entry(*engine, kCmd, fds.read_fd());
+    EXPECT_EQ(counts.waiting_command_times, 0u);
+    EXPECT_EQ(counts.socket_waits, 0u);
+    EXPECT_EQ(counts.socket_commands, 0u);
+    EXPECT_EQ(counts.waiting_commands, 0u);
 }
 
 TEST_F(DownloadEngineV2Test, CleanupCompletedCommands_PreservesFreshEntries) {
@@ -698,20 +730,16 @@ TEST_F(DownloadEngineV2Test, CleanupCompletedCommands_PreservesFreshEntries) {
     auto engine = std::make_unique<DownloadEngineV2>(config);
 
     constexpr CommandId kCmd = 7201;
-    constexpr int kFd = 82;
-    {
-        std::lock_guard<std::mutex> lock(engine->socket_map_mutex_);
-        engine->socket_wait_map_[kCmd] = {kFd, 1};
-        engine->socket_command_map_[kFd] = kCmd;
-        engine->waiting_command_times_[kCmd] = std::chrono::steady_clock::now();
-    }
+    ScopedPipe fds;
+    ASSERT_TRUE(fds.valid());
+    add_waiting_entry(*engine, kCmd, fds.read_fd(), std::chrono::steady_clock::now());
 
-    engine->cleanup_completed_commands();
+    cleanup_completed_commands(*engine);
 
-    std::lock_guard<std::mutex> lock(engine->socket_map_mutex_);
-    EXPECT_EQ(engine->waiting_command_times_.count(kCmd), 1u);
-    EXPECT_EQ(engine->socket_wait_map_.count(kCmd), 1u);
-    EXPECT_EQ(engine->socket_command_map_.count(kFd), 1u);
+    auto counts = count_waiting_entry(*engine, kCmd, fds.read_fd());
+    EXPECT_EQ(counts.waiting_command_times, 1u);
+    EXPECT_EQ(counts.socket_waits, 1u);
+    EXPECT_EQ(counts.socket_commands, 1u);
 }
 
 TEST_F(DownloadEngineV2Test, CleanupCompletedCommands_PartialExpiry) {
@@ -721,30 +749,24 @@ TEST_F(DownloadEngineV2Test, CleanupCompletedCommands_PartialExpiry) {
 
     constexpr CommandId kExpired = 7301;
     constexpr CommandId kFresh = 7302;
-    constexpr int kFdExpired = 91;
-    constexpr int kFdFresh = 92;
-    {
-        std::lock_guard<std::mutex> lock(engine->socket_map_mutex_);
-        engine->socket_wait_map_[kExpired] = {kFdExpired, 1};
-        engine->socket_command_map_[kFdExpired] = kExpired;
-        engine->waiting_command_times_[kExpired] =
-            std::chrono::steady_clock::time_point::min();
+    ScopedPipe expired_fds;
+    ScopedPipe fresh_fds;
+    ASSERT_TRUE(expired_fds.valid());
+    ASSERT_TRUE(fresh_fds.valid());
+    add_waiting_entry(*engine, kExpired, expired_fds.read_fd(), expired_wait_time());
+    add_waiting_entry(*engine, kFresh, fresh_fds.read_fd(), std::chrono::steady_clock::now());
 
-        engine->socket_wait_map_[kFresh] = {kFdFresh, 1};
-        engine->socket_command_map_[kFdFresh] = kFresh;
-        engine->waiting_command_times_[kFresh] = std::chrono::steady_clock::now();
-    }
+    cleanup_completed_commands(*engine);
 
-    engine->cleanup_completed_commands();
+    auto expired_counts = count_waiting_entry(*engine, kExpired, expired_fds.read_fd());
+    EXPECT_EQ(expired_counts.waiting_command_times, 0u);
+    EXPECT_EQ(expired_counts.socket_waits, 0u);
+    EXPECT_EQ(expired_counts.socket_commands, 0u);
 
-    std::lock_guard<std::mutex> lock(engine->socket_map_mutex_);
-    EXPECT_EQ(engine->waiting_command_times_.count(kExpired), 0u);
-    EXPECT_EQ(engine->socket_wait_map_.count(kExpired), 0u);
-    EXPECT_EQ(engine->socket_command_map_.count(kFdExpired), 0u);
-
-    EXPECT_EQ(engine->waiting_command_times_.count(kFresh), 1u);
-    EXPECT_EQ(engine->socket_wait_map_.count(kFresh), 1u);
-    EXPECT_EQ(engine->socket_command_map_.count(kFdFresh), 1u);
+    auto fresh_counts = count_waiting_entry(*engine, kFresh, fresh_fds.read_fd());
+    EXPECT_EQ(fresh_counts.waiting_command_times, 1u);
+    EXPECT_EQ(fresh_counts.socket_waits, 1u);
+    EXPECT_EQ(fresh_counts.socket_commands, 1u);
 }
 
 TEST_F(DownloadEngineV2Test, CleanupCompletedCommands_DropsParkedCommandOwnership) {
@@ -752,21 +774,15 @@ TEST_F(DownloadEngineV2Test, CleanupCompletedCommands_DropsParkedCommandOwnershi
     config.command_wait_timeout_seconds = 1;
     auto engine = std::make_unique<DownloadEngineV2>(config);
 
-    constexpr int kFd = 101;
+    ScopedPipe fds;
+    ASSERT_TRUE(fds.valid());
     auto cmd = std::make_unique<AlwaysWaitingCommand>();
     CommandId real_id = cmd->id();
-    {
-        std::lock_guard<std::mutex> lock(engine->socket_map_mutex_);
-        engine->socket_wait_map_[real_id] = {kFd, 1};
-        engine->socket_command_map_[kFd] = real_id;
-        engine->waiting_commands_[real_id] = std::move(cmd);
-        engine->waiting_command_times_[real_id] =
-            std::chrono::steady_clock::time_point::min();
-    }
+    add_waiting_entry(*engine, real_id, fds.read_fd(), expired_wait_time(), std::move(cmd));
 
-    engine->cleanup_completed_commands();
+    cleanup_completed_commands(*engine);
 
-    std::lock_guard<std::mutex> lock(engine->socket_map_mutex_);
-    EXPECT_EQ(engine->waiting_commands_.count(real_id), 0u);
-    EXPECT_EQ(engine->waiting_command_times_.count(real_id), 0u);
+    auto counts = count_waiting_entry(*engine, real_id, fds.read_fd());
+    EXPECT_EQ(counts.waiting_commands, 0u);
+    EXPECT_EQ(counts.waiting_command_times, 0u);
 }

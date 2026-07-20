@@ -1,86 +1,46 @@
 /**
  * @file arg_parser_test.cpp
  * @brief Unit tests for CLI argument parsing functions
- * @author Falcon Team
- * @date 2025-12-28
  */
 
-#include <gtest/gtest.h>
-#include <string>
-#include <vector>
-#include <sstream>
+#include "arg_parser.hpp"
 
-// Helper functions extracted from main.cpp for testing
-// These mirror the implementations in main.cpp
+#include <gtest/gtest.h>
+
+#include <falcon/types.hpp>
+
+#include <algorithm>
+#include <string>
+#include <sstream>
+#include <vector>
+
+using falcon::cli::parse_args;
+using falcon::cli::parse_bool;
+using falcon::cli::parse_priority;
+using falcon::cli::parse_size_bytes;
+using falcon::cli::parse_url_lines;
 
 namespace {
 
-/**
- * @brief Parse size string to bytes
- *
- * Supports suffixes: K/k (KB), M/m (MB), G/g (GB), T/t (TB)
- */
-std::size_t parse_size_bytes(std::string size_str) {
-    if (size_str.empty()) return 0;
-
-    std::size_t multiplier = 1;
-    char suffix = size_str.back();
-    if (suffix == 'K' || suffix == 'k') {
-        multiplier = 1024;
-        size_str.pop_back();
-    } else if (suffix == 'M' || suffix == 'm') {
-        multiplier = 1024 * 1024;
-        size_str.pop_back();
-    } else if (suffix == 'G' || suffix == 'g') {
-        multiplier = 1024 * 1024 * 1024;
-        size_str.pop_back();
-    } else if (suffix == 'T' || suffix == 't') {
-        multiplier = 1024ULL * 1024ULL * 1024ULL * 1024ULL;
-        size_str.pop_back();
-    }
-
-    return static_cast<std::size_t>(std::stoull(size_str) * multiplier);
-}
-
-/**
- * @brief Parse boolean string value
- */
-bool parse_bool(std::string value, bool default_value) {
-    if (value.empty()) return default_value;
-    for (auto& c : value) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    if (value == "1" || value == "true" || value == "yes" || value == "y" || value == "on") return true;
-    if (value == "0" || value == "false" || value == "no" || value == "n" || value == "off") return false;
-    return default_value;
-}
-
-/**
- * @brief Read URLs from a file-like content
- */
-std::vector<std::string> read_urls_from_content(const std::string& content) {
-    std::vector<std::string> urls;
+std::vector<std::string> parse_urls_from_content(const std::string& content) {
     std::istringstream in(content);
-    std::string line;
-
-    while (std::getline(in, line)) {
-        // Trim whitespace
-        while (!line.empty() && (line.back() == '\r' || line.back() == '\n' || line.back() == ' ' || line.back() == '\t')) {
-            line.pop_back();
-        }
-        std::size_t start = 0;
-        while (start < line.size() && (line[start] == ' ' || line[start] == '\t')) {
-            ++start;
-        }
-        if (start > 0) {
-            line = line.substr(start);
-        }
-        if (line.empty() || line[0] == '#') continue;
-        urls.push_back(line);
-    }
-
-    return urls;
+    return parse_url_lines(in);
 }
 
-} // anonymous namespace
+falcon::cli::CliArgs parse_args_from_vector(const std::vector<std::string>& args) {
+    std::vector<std::string> storage = {"falcon-cli"};
+    storage.insert(storage.end(), args.begin(), args.end());
+
+    std::vector<char*> argv;
+    argv.reserve(storage.size());
+    for (auto& arg : storage) {
+        argv.push_back(arg.data());
+    }
+
+    return parse_args(static_cast<int>(argv.size()), argv.data());
+}
+
+} // namespace
 
 // ============================================================================
 // parse_size_bytes Tests
@@ -172,18 +132,18 @@ TEST(ParseBool, InvalidValue) {
 // ============================================================================
 
 TEST(ReadUrlsFromContent, EmptyContent) {
-    auto urls = read_urls_from_content("");
+    auto urls = parse_urls_from_content("");
     EXPECT_TRUE(urls.empty());
 }
 
 TEST(ReadUrlsFromContent, SingleUrl) {
-    auto urls = read_urls_from_content("https://example.com/file.zip");
+    auto urls = parse_urls_from_content("https://example.com/file.zip");
     ASSERT_EQ(urls.size(), 1ULL);
     EXPECT_EQ(urls[0], "https://example.com/file.zip");
 }
 
 TEST(ReadUrlsFromContent, MultipleUrls) {
-    auto urls = read_urls_from_content(
+    auto urls = parse_urls_from_content(
         "https://example.com/file1.zip\n"
         "https://example.com/file2.tar.gz\n"
         "https://example.com/file3.iso"
@@ -195,7 +155,7 @@ TEST(ReadUrlsFromContent, MultipleUrls) {
 }
 
 TEST(ReadUrlsFromContent, IgnoreComments) {
-    auto urls = read_urls_from_content(
+    auto urls = parse_urls_from_content(
         "# This is a comment\n"
         "https://example.com/file.zip\n"
         "# Another comment"
@@ -205,7 +165,7 @@ TEST(ReadUrlsFromContent, IgnoreComments) {
 }
 
 TEST(ReadUrlsFromContent, IgnoreEmptyLines) {
-    auto urls = read_urls_from_content(
+    auto urls = parse_urls_from_content(
         "\n"
         "https://example.com/file.zip\n"
         "\n"
@@ -216,7 +176,7 @@ TEST(ReadUrlsFromContent, IgnoreEmptyLines) {
 }
 
 TEST(ReadUrlsFromContent, TrimWhitespace) {
-    auto urls = read_urls_from_content(
+    auto urls = parse_urls_from_content(
         "  https://example.com/file.zip  \n"
         "\thttps://example.com/file2.zip\t\n"
         "   \t https://example.com/file3.zip \t   "
@@ -228,7 +188,7 @@ TEST(ReadUrlsFromContent, TrimWhitespace) {
 }
 
 TEST(ReadUrlsFromContent, MixedProtocols) {
-    auto urls = read_urls_from_content(
+    auto urls = parse_urls_from_content(
         "https://example.com/file.zip\n"
         "ftp://ftp.example.com/data.csv\n"
         "http://legacy.example.com/old.iso"
@@ -240,7 +200,7 @@ TEST(ReadUrlsFromContent, MixedProtocols) {
 }
 
 TEST(ReadUrlsFromContent, WindowsLineEndings) {
-    auto urls = read_urls_from_content(
+    auto urls = parse_urls_from_content(
         "https://example.com/file1.zip\r\n"
         "https://example.com/file2.zip\r\n"
     );
@@ -287,4 +247,74 @@ TEST(ArgumentValidation, RetryLimits) {
 
     retries = std::max(0, std::min(10, 20));       // Too high
     EXPECT_EQ(retries, 10);
+}
+
+// ============================================================================
+// parse_priority Tests
+// ============================================================================
+
+TEST(ParsePriority, NamedValues) {
+    EXPECT_EQ(parse_priority("low"), falcon::TaskPriority::Low);
+    EXPECT_EQ(parse_priority("normal"), falcon::TaskPriority::Normal);
+    EXPECT_EQ(parse_priority("high"), falcon::TaskPriority::High);
+    EXPECT_EQ(parse_priority("critical"), falcon::TaskPriority::Critical);
+}
+
+TEST(ParsePriority, NumericValues) {
+    EXPECT_EQ(parse_priority("0"), falcon::TaskPriority::Low);
+    EXPECT_EQ(parse_priority("1"), falcon::TaskPriority::Normal);
+    EXPECT_EQ(parse_priority("2"), falcon::TaskPriority::High);
+    EXPECT_EQ(parse_priority("3"), falcon::TaskPriority::Critical);
+}
+
+TEST(ParsePriority, CaseInsensitive) {
+    EXPECT_EQ(parse_priority("LOW"), falcon::TaskPriority::Low);
+    EXPECT_EQ(parse_priority("High"), falcon::TaskPriority::High);
+    EXPECT_EQ(parse_priority("CRITICAL"), falcon::TaskPriority::Critical);
+}
+
+TEST(ParsePriority, InvalidDefaultsToNormal) {
+    EXPECT_EQ(parse_priority("invalid"), falcon::TaskPriority::Normal);
+    EXPECT_EQ(parse_priority(""), falcon::TaskPriority::Normal);
+}
+
+// ============================================================================
+// parse_args Tests
+// ============================================================================
+
+TEST(ParseArgs, PriorityLongOption) {
+    auto args = parse_args_from_vector({"--priority", "critical", "https://example.com/file.zip"});
+
+    EXPECT_TRUE(args.priority_specified);
+    EXPECT_EQ(args.priority, falcon::TaskPriority::Critical);
+    ASSERT_EQ(args.urls.size(), 1ULL);
+    EXPECT_EQ(args.urls[0], "https://example.com/file.zip");
+}
+
+TEST(ParseArgs, PriorityShortOption) {
+    auto args = parse_args_from_vector({"-p", "high", "https://example.com/file.zip"});
+
+    EXPECT_TRUE(args.priority_specified);
+    EXPECT_EQ(args.priority, falcon::TaskPriority::High);
+    ASSERT_EQ(args.urls.size(), 1ULL);
+    EXPECT_EQ(args.urls[0], "https://example.com/file.zip");
+}
+
+TEST(ParseArgs, PriorityDefaultsWhenMissing) {
+    auto args = parse_args_from_vector({"https://example.com/file.zip"});
+
+    EXPECT_FALSE(args.priority_specified);
+    EXPECT_EQ(args.priority, falcon::TaskPriority::Normal);
+}
+
+TEST(ParseArgs, ClampsQueueAndConnectionLimits) {
+    auto low = parse_args_from_vector({"-j", "0", "-c", "0", "-r", "-1"});
+    EXPECT_EQ(low.max_concurrent_downloads, 1);
+    EXPECT_EQ(low.connections, 1);
+    EXPECT_EQ(low.max_retries, 0);
+
+    auto high = parse_args_from_vector({"-j", "128", "-c", "128", "-r", "20"});
+    EXPECT_EQ(high.max_concurrent_downloads, 64);
+    EXPECT_EQ(high.connections, 64);
+    EXPECT_EQ(high.max_retries, 10);
 }

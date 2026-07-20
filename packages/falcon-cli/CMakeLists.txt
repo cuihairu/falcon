@@ -11,6 +11,7 @@ project(falcon-cli
 # ============================================================================
 
 add_executable(falcon-cli
+    src/arg_parser.cpp
     src/main.cpp
     src/config_loader.cpp
 )

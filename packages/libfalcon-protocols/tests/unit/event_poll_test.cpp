@@ -522,9 +522,16 @@ TEST(EventPollTest, PlatformEpoll) {
     ASSERT_NE(poll, nullptr);
 
     // Linux 应该使用 epoll
-    // 这里只能验证基本功能
     auto callback = [](int fd, int events, void* user_data) {};
-    EXPECT_TRUE(poll->add_event(0, static_cast<int>(IOEvent::READ), callback));
+    auto [fd0, fd1] = create_socket_pair();
+    ASSERT_GE(fd0, 0);
+    ASSERT_GE(fd1, 0);
+
+    EXPECT_TRUE(poll->add_event(fd0, static_cast<int>(IOEvent::READ), callback));
+    EXPECT_TRUE(poll->remove_event(fd0));
+
+    CLOSE_SOCKET(fd0);
+    CLOSE_SOCKET(fd1);
 }
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
 TEST(EventPollTest, PlatformKqueue) {

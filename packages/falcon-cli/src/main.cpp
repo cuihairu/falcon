@@ -8,6 +8,7 @@
 #include <falcon/download_engine.hpp>
 #include <falcon/download_options.hpp>
 #include <falcon/event_listener.hpp>
+#include "arg_parser.hpp"
 #include "config_loader.hpp"
 #include "terminal.hpp"
 
@@ -18,9 +19,6 @@
 #include <csignal>
 #include <atomic>
 #include <sstream>
-#include <fstream>
-#include <cctype>
-#include <algorithm>
 #include <filesystem>
 #include <map>
 #include <mutex>
@@ -34,6 +32,9 @@
 #endif
 
 namespace term = falcon::cli::term;
+using falcon::cli::CliArgs;
+using falcon::cli::parse_args;
+using falcon::cli::read_urls_from_file;
 
 // 全局变量用于信号处理
 std::atomic<bool> g_interrupted{false};
@@ -257,319 +258,6 @@ private:
     std::map<falcon::TaskId, float> task_progress_;
     std::chrono::steady_clock::time_point last_update_ = std::chrono::steady_clock::now();
 };
-
-/**
- * @brief 简单命令行参数解析器 (aria2 兼容)
- */
-struct CliArgs {
-    std::vector<std::string> urls;
-    std::string input_file;
-    std::string output_file;
-    std::string output_dir;
-    std::string config_file;       // 配置文件路径
-    int connections = 4;          // 并发连接数 (aria2 风格)
-    int max_concurrent_downloads = 1;  // aria2: -j
-    falcon::Bytes speed_limit = 0;  // 速度限制
-    std::size_t min_segment_size = 1024 * 1024;  // 最小分块大小 (1MB)
-    bool continue_download = true;
-    int timeout = 30;
-    int max_retries = 3;
-    int retry_wait = 5;            // aria2: --retry-wait
-    bool adaptive_sizing = true;   // 自适应分块大小
-    bool verify_ssl = true;
-    std::string proxy;
-    std::string proxy_user;
-    std::string proxy_passwd;
-    std::string user_agent = "Falcon/0.2.0";
-    std::string referer;           // aria2: --referer
-    std::vector<std::pair<std::string, std::string>> headers;
-    std::string cookie_file;       // aria2: --load-cookies
-    std::string save_cookies;      // aria2: --save-cookies
-    std::string http_user;         // aria2: --http-user
-    std::string http_passwd;       // aria2: --http-passwd
-    bool use_head = false;         // aria2: --use-head
-    bool conditional_download = false;  // aria2: --conditional-download
-    bool auto_renaming = false;    // aria2: --auto-file-renaming
-    std::string rpc_secret;        // aria2: --rpc-secret
-    int rpc_listen_port = 6800;    // aria2: --rpc-listen-port
-    bool rpc_allow_origin_all = false;  // aria2: --rpc-allow-origin-all
-    bool verbose = false;
-    bool quiet = false;
-    bool show_help = false;
-    bool show_version = false;
-    std::string priority_str;  // 任务优先级: low/normal/high/critical
-    bool show_config_path = false; // 显示配置文件路径
-    bool create_default_config = false; // 创建默认配置文件
-    bool no_color = false; // 禁用彩色输出
-};
-
-static falcon::Bytes parse_size_bytes(std::string size_str) {
-    if (size_str.empty()) return 0;
-
-    std::size_t multiplier = 1;
-    char suffix = size_str.back();
-    if (suffix == 'K' || suffix == 'k') {
-        multiplier = 1024;
-        size_str.pop_back();
-    } else if (suffix == 'M' || suffix == 'm') {
-        multiplier = 1024 * 1024;
-        size_str.pop_back();
-    } else if (suffix == 'G' || suffix == 'g') {
-        multiplier = 1024 * 1024 * 1024;
-        size_str.pop_back();
-    } else if (suffix == 'T' || suffix == 't') {
-        multiplier = 1024ULL * 1024ULL * 1024ULL * 1024ULL;
-        size_str.pop_back();
-    }
-
-    return static_cast<falcon::Bytes>(std::stoull(size_str) * multiplier);
-}
-
-// 将字符串解析为 TaskPriority，支持 low/normal/high/critical（大小写不敏感）
-static falcon::TaskPriority parse_priority(const std::string& s) {
-    std::string lower = s;
-    for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    if (lower == "low" || lower == "0") return falcon::TaskPriority::Low;
-    if (lower == "high" || lower == "2") return falcon::TaskPriority::High;
-    if (lower == "critical" || lower == "3") return falcon::TaskPriority::Critical;
-    return falcon::TaskPriority::Normal;  // normal/1/默认
-}
-
-static bool parse_bool(std::string value, bool default_value) {
-    if (value.empty()) return default_value;
-    for (auto& c : value) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    if (value == "1" || value == "true" || value == "yes" || value == "y" || value == "on") return true;
-    if (value == "0" || value == "false" || value == "no" || value == "n" || value == "off") return false;
-    return default_value;
-}
-
-static std::vector<std::string> read_urls_from_file(const std::string& path) {
-    std::vector<std::string> urls;
-    std::istream* in = nullptr;
-    std::ifstream file;
-
-    if (path == "-") {
-        in = &std::cin;
-    } else {
-        file.open(path);
-        if (!file.is_open()) {
-            return urls;
-        }
-        in = &file;
-    }
-
-    std::string line;
-    while (std::getline(*in, line)) {
-        // Trim whitespace
-        while (!line.empty() && (line.back() == '\r' || line.back() == '\n' || line.back() == ' ' || line.back() == '\t')) {
-            line.pop_back();
-        }
-        std::size_t start = 0;
-        while (start < line.size() && (line[start] == ' ' || line[start] == '\t')) {
-            ++start;
-        }
-        if (start > 0) {
-            line = line.substr(start);
-        }
-        if (line.empty() || line[0] == '#') continue;
-        urls.push_back(line);
-    }
-
-    return urls;
-}
-
-CliArgs parse_args(int argc, char* argv[]) {
-    CliArgs args;
-
-    for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
-
-        if (arg == "-h" || arg == "--help") {
-            args.show_help = true;
-        } else if (arg == "-V" || arg == "--version") {
-            args.show_version = true;
-        } else if (arg == "-i" || arg == "--input-file" || arg == "--input") {
-            if (i + 1 < argc) {
-                args.input_file = argv[++i];
-            }
-        } else if (arg == "-j" || arg == "--max-concurrent-downloads") {
-            if (i + 1 < argc) {
-                args.max_concurrent_downloads = std::max(1, std::min(64, std::stoi(argv[++i])));
-            }
-        } else if (arg == "-o" || arg == "--output") {
-            if (i + 1 < argc) {
-                args.output_file = argv[++i];
-            }
-        } else if (arg == "-d" || arg == "--directory" || arg == "--dir") {
-            if (i + 1 < argc) {
-                args.output_dir = argv[++i];
-            }
-        } else if (arg == "-c" || arg == "--connections") {
-            if (i + 1 < argc) {
-                args.connections = std::max(1, std::min(64, std::stoi(argv[++i])));
-            }
-        } else if (arg == "-x" || arg == "--max-connections") {
-            if (i + 1 < argc) {
-                args.connections = std::max(1, std::min(64, std::stoi(argv[++i])));
-            }
-        } else if (arg == "--max-connection-per-server") {
-            if (i + 1 < argc) {
-                args.connections = std::max(1, std::min(64, std::stoi(argv[++i])));
-            }
-        } else if (arg == "-s" || arg == "--split") {
-            if (i + 1 < argc) {
-                args.connections = std::max(1, std::min(64, std::stoi(argv[++i])));
-            }
-        } else if (arg == "-k" || arg == "--min-split-size") {
-            if (i + 1 < argc) {
-                args.min_segment_size = static_cast<std::size_t>(parse_size_bytes(argv[++i]));
-            }
-        } else if (arg == "--min-segment-size") {
-            if (i + 1 < argc) {
-                args.min_segment_size = static_cast<std::size_t>(parse_size_bytes(argv[++i]));
-            }
-        } else if (arg == "--no-continue") {
-            args.continue_download = false;
-        } else if (arg == "--continue") {
-            if (i + 1 < argc) {
-                args.continue_download = parse_bool(argv[++i], true);
-            } else {
-                args.continue_download = true;
-            }
-        } else if (arg == "--no-adaptive") {
-            args.adaptive_sizing = false;
-        } else if (arg == "--limit" || arg == "--max-download-limit") {
-            if (i + 1 < argc) {
-                args.speed_limit = parse_size_bytes(argv[++i]);
-            }
-        } else if (arg == "-t" || arg == "--timeout") {
-            if (i + 1 < argc) {
-                args.timeout = std::stoi(argv[++i]);
-            }
-        } else if (arg == "-r" || arg == "--retry") {
-            if (i + 1 < argc) {
-                args.max_retries = std::max(0, std::min(10, std::stoi(argv[++i])));
-            }
-        } else if (arg == "--no-verify-ssl") {
-            args.verify_ssl = false;
-        } else if (arg == "--check-certificate") {
-            if (i + 1 < argc) {
-                args.verify_ssl = parse_bool(argv[++i], true);
-            } else {
-                args.verify_ssl = true;
-            }
-        } else if (arg == "--proxy") {
-            if (i + 1 < argc) {
-                args.proxy = argv[++i];
-            }
-        } else if (arg == "-U" || arg == "--user-agent") {
-            if (i + 1 < argc) {
-                args.user_agent = argv[++i];
-            }
-        } else if (arg == "-H" || arg == "--header") {
-            if (i + 1 < argc) {
-                std::string header = argv[++i];
-                auto pos = header.find(':');
-                if (pos != std::string::npos && pos < header.length() - 1) {
-                    std::string key = header.substr(0, pos);
-                    std::string value = header.substr(pos + 1);
-                    // Trim leading whitespace from value
-                    while (!value.empty() && value[0] == ' ') {
-                        value = value.substr(1);
-                    }
-                    args.headers.push_back({key, value});
-                }
-            }
-        } else if (arg == "-v" || arg == "--verbose") {
-            args.verbose = true;
-        } else if (arg == "-q" || arg == "--quiet") {
-            args.quiet = true;
-        } else if (arg == "--priority" || arg == "-p") {
-            if (i + 1 < argc) {
-                args.priority_str = argv[++i];
-            }
-        } else if (arg == "--retry-wait") {
-            // aria2: --retry-wait
-            if (i + 1 < argc) {
-                args.retry_wait = std::max(0, std::stoi(argv[++i]));
-            }
-        } else if (arg == "--referer") {
-            // aria2: --referer
-            if (i + 1 < argc) {
-                args.referer = argv[++i];
-            }
-        } else if (arg == "--load-cookies") {
-            // aria2: --load-cookies
-            if (i + 1 < argc) {
-                args.cookie_file = argv[++i];
-            }
-        } else if (arg == "--save-cookies") {
-            // aria2: --save-cookies
-            if (i + 1 < argc) {
-                args.save_cookies = argv[++i];
-            }
-        } else if (arg == "--http-user") {
-            // aria2: --http-user
-            if (i + 1 < argc) {
-                args.http_user = argv[++i];
-            }
-        } else if (arg == "--http-passwd") {
-            // aria2: --http-passwd
-            if (i + 1 < argc) {
-                args.http_passwd = argv[++i];
-            }
-        } else if (arg == "--proxy-user") {
-            // aria2: --proxy-user
-            if (i + 1 < argc) {
-                args.proxy_user = argv[++i];
-            }
-        } else if (arg == "--proxy-passwd") {
-            // aria2: --proxy-passwd
-            if (i + 1 < argc) {
-                args.proxy_passwd = argv[++i];
-            }
-        } else if (arg == "--use-head") {
-            // aria2: --use-head
-            args.use_head = true;
-        } else if (arg == "--conditional-download") {
-            // aria2: --conditional-download
-            args.conditional_download = true;
-        } else if (arg == "--auto-file-renaming") {
-            // aria2: --auto-file-renaming
-            args.auto_renaming = true;
-        } else if (arg == "--rpc-secret") {
-            // aria2: --rpc-secret
-            if (i + 1 < argc) {
-                args.rpc_secret = argv[++i];
-            }
-        } else if (arg == "--rpc-listen-port") {
-            // aria2: --rpc-listen-port
-            if (i + 1 < argc) {
-                args.rpc_listen_port = std::stoi(argv[++i]);
-            }
-        } else if (arg == "--rpc-allow-origin-all") {
-            // aria2: --rpc-allow-origin-all
-            args.rpc_allow_origin_all = true;
-        } else if (arg == "--config" || arg == "-C") {
-            // 配置文件路径
-            if (i + 1 < argc) {
-                args.config_file = argv[++i];
-            }
-        } else if (arg == "--show-config-path") {
-            // 显示配置文件路径
-            args.show_config_path = true;
-        } else if (arg == "--create-default-config") {
-            // 创建默认配置文件
-            args.create_default_config = true;
-        } else if (arg == "--no-color") {
-            args.no_color = true;
-        } else if (!arg.empty() && arg[0] != '-') {
-            args.urls.push_back(arg);
-        }
-    }
-
-    return args;
-}
 
 void show_help() {
     using term::bold;
@@ -1016,19 +704,18 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        // 启动前应用优先级，避免队列线程先按默认优先级调度任务
+        if (args.priority_specified) {
+            for (const auto& task : tasks) {
+                engine.adjust_task_priority(task->id(), args.priority);
+            }
+        }
+
         // 启动任务
         for (const auto& task : tasks) {
             if (!engine.start_task(task->id())) {
                 std::cerr << term::red("Error: ") << "cannot start download task: " << task->url() << "\n";
                 return 1;
-            }
-        }
-
-        // 应用优先级（如果用户指定了 --priority）
-        if (!args.priority_str.empty()) {
-            const auto priority = parse_priority(args.priority_str);
-            for (const auto& task : tasks) {
-                engine.adjust_task_priority(task->id(), priority);
             }
         }
 
