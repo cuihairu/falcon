@@ -24,11 +24,11 @@ struct SearchResult {
     std::string title;           // 资源标题
     std::string url;             // 下载链接（magnet/http/torrent）
     std::string source;          // 来源网站
-    size_t size;                 // 文件大小（字节）
+    size_t size = 0;             // 文件大小（字节）
     std::string type;            // 资源类型（video/audio/software等）
-    int seeds;                   // 种子数（BT资源）
-    int peers;                   // 连接数（BT资源）
-    double confidence;           // 置信度（0.0-1.0）
+    int seeds = 0;               // 种子数（BT资源）
+    int peers = 0;               // 连接数（BT资源）
+    double confidence = 0.0;     // 置信度（0.0-1.0）
     std::string hash;            // 资源哈希值
     std::string publish_date;    // 发布日期
     std::map<std::string, std::string> metadata;  // 额外元数据

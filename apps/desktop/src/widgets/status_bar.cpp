@@ -8,6 +8,7 @@
 #include "status_bar.hpp"
 
 #include <QHBoxLayout>
+#include <QStyle>
 #include <QVBoxLayout>
 
 namespace falcon::desktop {

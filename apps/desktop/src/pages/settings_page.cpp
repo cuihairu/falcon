@@ -439,7 +439,7 @@ QWidget* SettingsPage::create_completion_action_section_widget()
 {
     auto* group = new QGroupBox(tr("When Download Completes"), this);
 
-    auto* layout = QVBoxLayout(group);
+    auto* layout = new QVBoxLayout(group);
     layout->setSpacing(16);
     layout->setContentsMargins(16, 20, 16, 16);
 

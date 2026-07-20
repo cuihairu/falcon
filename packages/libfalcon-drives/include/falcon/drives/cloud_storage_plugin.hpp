@@ -212,6 +212,12 @@ public:
 private:
     class Impl;
     std::unique_ptr<Impl> p_impl;
+
+    CloudExtractionResult handle_share_link(
+        const std::string& url,
+        const std::string& password,
+        bool log_selected_plugin
+    );
 };
 
 } // namespace falcon

@@ -164,8 +164,37 @@ std::string CloudLinkDetector::extract_file_id(const std::string& url, CloudPlat
             break;
         }
 
+        case CloudPlatform::Cloud115:
+        case CloudPlatform::Quark:
+        case CloudPlatform::PikPak: {
+            std::regex pattern(R"(/s/([a-zA-Z0-9]+))");
+            std::smatch match;
+            if (std::regex_search(url, match, pattern)) {
+                id = match[1].str();
+            }
+            break;
+        }
+
+        case CloudPlatform::TencentWeiyun: {
+            std::regex pattern(R"((?:share\.weiyun\.com/|/s/)([a-zA-Z0-9]+))");
+            std::smatch match;
+            if (std::regex_search(url, match, pattern)) {
+                id = match[1].str();
+            }
+            break;
+        }
+
+        case CloudPlatform::Mega: {
+            std::regex pattern(R"(#([a-zA-Z0-9_-]+))");
+            std::smatch match;
+            if (std::regex_search(url, match, pattern)) {
+                id = match[1].str();
+            }
+            break;
+        }
+
         case CloudPlatform::GoogleDrive: {
-            std::regex pattern(R"(/file/d/([a-zA-Z0-9_-]+))");
+            std::regex pattern(R"((?:/file/d/|[?&]id=)([a-zA-Z0-9_-]+))");
             std::smatch match;
             if (std::regex_search(url, match, pattern)) {
                 id = match[1].str();
@@ -175,6 +204,24 @@ std::string CloudLinkDetector::extract_file_id(const std::string& url, CloudPlat
 
         case CloudPlatform::OneDrive: {
             std::regex pattern(R"(/([a-zA-Z0-9!_-]+))");
+            std::smatch match;
+            if (std::regex_search(url, match, pattern)) {
+                id = match[1].str();
+            }
+            break;
+        }
+
+        case CloudPlatform::Dropbox: {
+            std::regex pattern(R"(/s/([a-zA-Z0-9]+))");
+            std::smatch match;
+            if (std::regex_search(url, match, pattern)) {
+                id = match[1].str();
+            }
+            break;
+        }
+
+        case CloudPlatform::YandexDisk: {
+            std::regex pattern(R"(/d/([a-zA-Z0-9]+))");
             std::smatch match;
             if (std::regex_search(url, match, pattern)) {
                 id = match[1].str();
@@ -980,14 +1027,56 @@ void CloudStorageManager::register_plugin(std::unique_ptr<ICloudStoragePlugin> p
 CloudExtractionResult CloudStorageManager::handle_share_link(
     const std::string& url,
     const std::string& password) {
+    return handle_share_link(url, password, true);
+}
+
+CloudExtractionResult CloudStorageManager::handle_share_link(
+    const std::string& url,
+    const std::string& password,
+    bool log_selected_plugin) {
 
     CloudExtractionResult result;
 
-    // 查找对应的插件（允许插件自行识别，避免平台检测误判导致无法处理）
+    auto extract_with_plugin = [&](ICloudStoragePlugin& plugin) {
+        if (log_selected_plugin) {
+            log_info("使用 " + plugin.platform_name() + " 处理网盘链接");
+        }
+        return plugin.extract_share_link(url, password);
+    };
+
+    const CloudPlatform detected_platform = CloudLinkDetector::detect_platform(url);
+    if (detected_platform != CloudPlatform::Unknown) {
+        for (auto& plugin : p_impl->plugins_) {
+            if (plugin->platform_type() == detected_platform && plugin->can_handle(url)) {
+                return extract_with_plugin(*plugin);
+            }
+        }
+    }
+
+    // 未识别平台时优先尝试自定义插件；避免默认插件重复运行同一套正则检测。
     for (auto& plugin : p_impl->plugins_) {
+        if (detected_platform == CloudPlatform::Unknown &&
+            plugin->platform_type() != CloudPlatform::Unknown) {
+            continue;
+        }
+        if (detected_platform != CloudPlatform::Unknown &&
+            plugin->platform_type() == detected_platform) {
+            continue;
+        }
         if (plugin->can_handle(url)) {
-            log_info("使用 " + plugin->platform_name() + " 处理网盘链接");
-            return plugin->extract_share_link(url, password);
+            return extract_with_plugin(*plugin);
+        }
+    }
+
+    // 兼容平台枚举非 Unknown、但未纳入 CloudLinkDetector 的外部插件。
+    if (detected_platform == CloudPlatform::Unknown) {
+        for (auto& plugin : p_impl->plugins_) {
+            if (plugin->platform_type() == CloudPlatform::Unknown) {
+                continue;
+            }
+            if (plugin->can_handle(url)) {
+                return extract_with_plugin(*plugin);
+            }
         }
     }
 
@@ -1031,7 +1120,7 @@ std::vector<CloudExtractionResult> CloudStorageManager::batch_extract(
             password = it->second;
         }
 
-        results.push_back(handle_share_link(url, password));
+        results.push_back(handle_share_link(url, password, false));
     }
 
     return results;

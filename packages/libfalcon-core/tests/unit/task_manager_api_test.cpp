@@ -470,15 +470,20 @@ TEST_F(TaskManagerPriorityTest, AdjustPriorityReorder) {
 }
 
 TEST_F(TaskManagerPriorityTest, ResumePreservesPriority) {
-    auto task = make_task(1, "https://a.com/high");
-    manager_->add_task(task, TaskPriority::High);
+    auto task = make_task_with_handler(1, "https://a.com/high", handler_);
+    ASSERT_EQ(manager_->add_task(task, TaskPriority::High), 1u);
 
     ASSERT_TRUE(manager_->pause_task(1));
     EXPECT_EQ(task->status(), TaskStatus::Paused);
 
     ASSERT_TRUE(manager_->resume_task(1));
     EXPECT_EQ(task->get_priority(), TaskPriority::High);
-    EXPECT_EQ(manager_->get_queue_size(), 1u);
+
+    ASSERT_TRUE(handler_->wait_for_activated_count(1, std::chrono::milliseconds(1000)));
+    EXPECT_EQ(handler_->get_execution_order(), std::vector<TaskId>({1u}));
+
+    handler_->release(1);
+    EXPECT_TRUE(manager_->wait_all(std::chrono::milliseconds(1000)));
 }
 
 TEST_F(TaskManagerPriorityTest, AddTaskSetsPriority) {
@@ -492,14 +497,17 @@ TEST_F(TaskManagerPriorityTest, AddTaskSetsPriority) {
 }
 
 TEST_F(TaskManagerPriorityTest, DuplicateStartDoesNotRequeueTask) {
-    auto task = make_task(1, "https://a.com/test");
-    manager_->add_task(task, TaskPriority::High);
+    auto task = make_task_with_handler(1, "https://a.com/test", handler_);
+    ASSERT_EQ(manager_->add_task(task, TaskPriority::High), 1u);
 
     ASSERT_TRUE(manager_->start_task(1));
-    EXPECT_EQ(manager_->get_queue_size(), 1u);
+    ASSERT_TRUE(handler_->wait_for_activated_count(1, std::chrono::milliseconds(1000)));
 
     EXPECT_FALSE(manager_->start_task(1));
-    EXPECT_EQ(manager_->get_queue_size(), 1u);
+    EXPECT_EQ(handler_->get_execution_order(), std::vector<TaskId>({1u}));
+
+    handler_->release(1);
+    EXPECT_TRUE(manager_->wait_all(std::chrono::milliseconds(1000)));
 }
 
 TEST_F(TaskManagerPriorityTest, AdjustNonExistentTask) {

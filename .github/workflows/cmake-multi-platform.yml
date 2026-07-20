@@ -214,7 +214,6 @@ jobs:
           - os: windows-latest
             qt-version: '6.6.3'
             qt-arch: 'mingw_64'
-            cmake-generator: 'Visual Studio 17 2022'
 
     steps:
       - uses: actions/checkout@v5
@@ -271,7 +270,6 @@ jobs:
         timeout-minutes: 5
         run: >
           cmake -B ${{ github.workspace }}/build-desktop
-          -G "${{ matrix.cmake-generator }}"
           -DCMAKE_PREFIX_PATH="${Env:Qt6_DIR}"
           -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake"
           -DFALCON_BUILD_TESTS=OFF
