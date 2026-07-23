@@ -60,6 +60,7 @@ export default defineConfig({
             { text: "编码规范", link: "/developer/coding-standards" },
             { text: "测试指南", link: "/developer/testing" },
             { text: "插件开发", link: "/developer/plugins" },
+            { text: "桌面端重设计", link: "/developer/desktop-redesign" },
             { text: "调试技巧", link: "/developer/debugging" },
             { text: "发布流程", link: "/developer/release" },
           ],
