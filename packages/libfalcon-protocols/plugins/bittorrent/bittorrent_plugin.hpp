@@ -122,6 +122,12 @@ private:
     std::mutex handlesMutex_;
 #else
     // 纯 C++ 实现所需的数据结构
+    struct TorrentFileInfo {
+        std::string name;
+        uint64_t size;
+        std::string path;
+    };
+
     struct TorrentInfo {
         std::string name;
         std::string infoHash;      // 20 字节 SHA1 哈希
@@ -133,12 +139,6 @@ private:
         std::vector<std::string> trackers;
         std::string comment;
         std::string createdBy;
-    };
-
-    struct TorrentFileInfo {
-        std::string name;
-        uint64_t size;
-        std::string path;
     };
 
     struct PeerInfo {

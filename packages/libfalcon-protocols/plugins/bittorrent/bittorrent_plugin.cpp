@@ -92,7 +92,7 @@ FileInfo BitTorrentHandler::get_file_info(const std::string& url,
 
             std::ifstream file(filePath, std::ios::binary);
             if (!file.is_open()) {
-                throw FileNotFoundException("Failed to open torrent file: " + filePath);
+                throw FileIOException("Failed to open torrent file: " + filePath);
             }
 
             std::string data((std::istreambuf_iterator<char>(file)),
@@ -101,7 +101,7 @@ FileInfo BitTorrentHandler::get_file_info(const std::string& url,
             libtorrent::error_code ec;
             libtorrent::torrent_info ti(data, ec);
             if (ec) {
-                throw ParseException("Failed to parse torrent: " + ec.message());
+                throw FileIOException("Failed to parse torrent: " + ec.message());
             }
 
             info.filename = ti.name();
@@ -127,7 +127,7 @@ FileInfo BitTorrentHandler::get_file_info(const std::string& url,
 
         std::ifstream file(filePath, std::ios::binary);
         if (!file.is_open()) {
-            throw FileNotFoundException("Failed to open torrent file: " + filePath);
+            throw FileIOException("Failed to open torrent file: " + filePath);
         }
 
         std::string data((std::istreambuf_iterator<char>(file)),
@@ -178,7 +178,7 @@ void BitTorrentHandler::download(DownloadTask::Ptr task, IEventListener* listene
 
             std::ifstream file(filePath, std::ios::binary);
             if (!file.is_open()) {
-                throw FileNotFoundException("Failed to open torrent file");
+                throw FileIOException("Failed to open torrent file");
             }
 
             std::string data((std::istreambuf_iterator<char>(file)),
@@ -187,7 +187,7 @@ void BitTorrentHandler::download(DownloadTask::Ptr task, IEventListener* listene
             libtorrent::error_code ec;
             params.ti = std::make_shared<libtorrent::torrent_info>(data, ec);
             if (ec) {
-                throw ParseException("Failed to parse torrent: " + ec.message());
+                throw FileIOException("Failed to parse torrent: " + ec.message());
             }
             infoHash = params.ti->info_hash().to_hex();
         }

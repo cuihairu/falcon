@@ -426,7 +426,11 @@ void DhtClient::start() {
 
     if (bind(socket_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
         falcon::detail::log_errorf("Failed to bind DHT socket to port {}", port_);
+#ifdef _WIN32
         closesocket(socket_);
+#else
+        ::close(socket_);
+#endif
         socket_ = -1;
         return;
     }
@@ -465,7 +469,11 @@ void DhtClient::stop() {
     }
 
     if (socket_ >= 0) {
+#ifdef _WIN32
         closesocket(socket_);
+#else
+        ::close(socket_);
+#endif
         socket_ = -1;
     }
 
@@ -497,7 +505,7 @@ void DhtClient::findNode(const DhtNodeId& targetId, NodeFoundCallback callback) 
 void DhtClient::receiveLoop() {
     uint8_t buffer[4096];
     sockaddr_in senderAddr{};
-    int senderAddrLen = sizeof(senderAddr);
+    socklen_t senderAddrLen = sizeof(senderAddr);
 
     while (running_.load()) {
         int bytesRead = recvfrom(socket_, reinterpret_cast<char*>(buffer),
