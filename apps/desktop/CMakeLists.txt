@@ -136,22 +136,42 @@ if(NOT APPLE)
       ARCHIVE DESTINATION lib
   )
 
-  # Windows: 安装时复制 vcpkg DLL 到输出目录
+  # Windows: 自动复制依赖 DLL
   if(WIN32)
-    # 使用 vcpkg 的 applocal 脚本复制运行时 DLL
     include(GNUInstallDirs)
-    install(CODE "
-      execute_process(COMMAND \"\${CMAKE_COMMAND}\" -E env \
-        \"VCPKG_APPLOCAL_DEPS_INSTALL=1\" \
-        \"\${CMAKE_COMMAND}\" --install . --config Debug --component falcon-desktop \
-        WORKING_DIRECTORY \${CMAKE_BINARY_DIR})
-    " OPTIONAL)
 
-    # 或者直接复制 vcpkg 的 bin 目录内容
+    # 使用 windeployqt 自动复制 Qt DLL 和依赖
+    find_program(WINDEPLOYQT_EXECUTABLE windeployqt HINTS ${Qt6_DIR}/../../../bin)
+
+    if(WINDEPLOYQT_EXECUTABLE)
+      # 构建后自动运行 windeployqt
+      add_custom_command(TARGET falcon-desktop POST_BUILD
+        COMMAND ${WINDEPLOYQT_EXECUTABLE}
+          --no-translations
+          --no-opengl-sw
+          --no-system-d3d-compiler
+          --dir $<TARGET_FILE_DIR:falcon-desktop>
+          $<TARGET_FILE:falcon-desktop>
+        COMMENT "Running windeployqt to copy Qt DLLs..."
+      )
+    else()
+      message(WARNING "windeployqt not found. Qt DLLs will not be copied automatically.")
+    endif()
+
+    # 复制 vcpkg 的运行时 DLL
     if(DEFINED VCPKG_INSTALLED_DIR)
-      install(DIRECTORY \${VCPKG_INSTALLED_DIR}/x64-windows/bin/
-          DESTINATION bin
-          FILES_MATCHING PATTERN \"*.dll\"
+      # 复制 vcpkg bin 目录的 DLL 到构建输出目录
+      add_custom_command(TARGET falcon-desktop POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/*.dll
+          $<TARGET_FILE_DIR:falcon-desktop> 2>nul || cd .
+        COMMENT "Copying vcpkg runtime DLLs..."
+      )
+
+      # 安装时也复制 vcpkg DLL
+      install(DIRECTORY ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/
+        DESTINATION bin
+        FILES_MATCHING PATTERN "*.dll"
       )
     endif()
   endif()
