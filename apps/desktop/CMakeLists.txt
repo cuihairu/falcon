@@ -14,6 +14,16 @@ if(APPLE)
   # set(CMAKE_MACOSX_BUNDLE TRUE)
   # set(CMAKE_MACOSX_BUNDLE_GUI_TYPE "FBND")
   # set(MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in)
+
+  # macOS 框架依赖（Qt6 可能需要）
+  # AGL 框架在 macOS 10.15+ 已被弃用，但仍需链接以保持兼容性
+  find_library(AGL_FRAMEWORK AGL)
+  find_library(APPKIT_FRAMEWORK AppKit)
+  find_library(COCOA_FRAMEWORK Cocoa)
+  find_library(COREFOUNDATION_FRAMEWORK CoreFoundation)
+  find_library(CORESERVICES_FRAMEWORK CoreServices)
+  find_library(SECURITY_FRAMEWORK Security)
+  find_library(SYSTEMCONFIGURATION_FRAMEWORK SystemConfiguration)
 endif()
 
 # Windows 特定设置
@@ -127,6 +137,32 @@ target_link_libraries(falcon-desktop PRIVATE
     Falcon::protocols
     Falcon::storage
 )
+
+# macOS 框架链接
+if(APPLE)
+  # 链接 macOS 系统框架（Qt6 依赖）
+  if(AGL_FRAMEWORK)
+    target_link_libraries(falcon-desktop PRIVATE ${AGL_FRAMEWORK})
+  endif()
+  if(APPKIT_FRAMEWORK)
+    target_link_libraries(falcon-desktop PRIVATE ${APPKIT_FRAMEWORK})
+  endif()
+  if(COCOA_FRAMEWORK)
+    target_link_libraries(falcon-desktop PRIVATE ${COCOA_FRAMEWORK})
+  endif()
+  if(COREFOUNDATION_FRAMEWORK)
+    target_link_libraries(falcon-desktop PRIVATE ${COREFOUNDATION_FRAMEWORK})
+  endif()
+  if(CORESERVICES_FRAMEWORK)
+    target_link_libraries(falcon-desktop PRIVATE ${CORESERVICES_FRAMEWORK})
+  endif()
+  if(SECURITY_FRAMEWORK)
+    target_link_libraries(falcon-desktop PRIVATE ${SECURITY_FRAMEWORK})
+  endif()
+  if(SYSTEMCONFIGURATION_FRAMEWORK)
+    target_link_libraries(falcon-desktop PRIVATE ${SYSTEMCONFIGURATION_FRAMEWORK})
+  endif()
+endif()
 
 # 安装目标（macOS 使用手动打包，跳过 install）
 if(NOT APPLE)
