@@ -168,8 +168,8 @@ std::vector<DhtNode> DhtBucket::getNodes() const {
 
 size_t DhtBucket::getActiveNodeCount() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    return std::count_if(nodes_.begin(), nodes_.end(),
-        [](const DhtNode& n) { return n.active; });
+    return static_cast<size_t>(std::count_if(nodes_.begin(), nodes_.end(),
+        [](const DhtNode& n) { return n.active; }));
 }
 
 std::vector<DhtNode> DhtBucket::findClosestNodes(const DhtNodeId& target, size_t count) const {
@@ -254,7 +254,7 @@ size_t DhtRoutingTable::getBucketIndex(const DhtNodeId& nodeId) const {
         if (byte == 0) {
             leadingZeros += 8;
         } else {
-            leadingZeros += clzByte(byte);
+            leadingZeros += static_cast<size_t>(clzByte(byte));
             break;
         }
     }
@@ -508,7 +508,7 @@ void DhtClient::receiveLoop() {
     socklen_t senderAddrLen = sizeof(senderAddr);
 
     while (running_.load()) {
-        int bytesRead = recvfrom(socket_, reinterpret_cast<char*>(buffer),
+        ssize_t bytesRead = recvfrom(socket_, reinterpret_cast<char*>(buffer),
                                   sizeof(buffer), 0,
                                   reinterpret_cast<sockaddr*>(&senderAddr),
                                   &senderAddrLen);
@@ -631,7 +631,7 @@ void DhtClient::sendMessage(const DhtMessage& message, const std::string& ip, ui
     addr.sin_port = htons(port);
     inet_pton(AF_INET, ip.c_str(), &addr.sin_addr);
 
-    sendto(socket_, data.data(), static_cast<int>(data.size()), 0,
+    sendto(socket_, data.data(), data.size(), 0,
            reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
 }
 

@@ -43,7 +43,7 @@ std::vector<uint8_t> stringToIPv6(const std::string& ip) {
         // 解析 IPv4 部分到最后 4 个字节
         std::istringstream iss(ipv4);
         std::string octet;
-        int idx = 12;
+        size_t idx = 12;
         while (std::getline(iss, octet, '.') && idx < 16) {
             result[idx++] = static_cast<uint8_t>(std::stoi(octet));
         }
@@ -101,7 +101,7 @@ std::vector<uint8_t> stringToIPv6(const std::string& ip) {
     // 解析完整的 IPv6 地址
     std::istringstream iss(addr);
     std::string segment;
-    int idx = 0;
+    size_t idx = 0;
     while (std::getline(iss, segment, ':') && idx < 8) {
         if (segment.empty()) continue;
         uint16_t value = static_cast<uint16_t>(std::stoi(segment, nullptr, 16));

@@ -89,40 +89,44 @@ inline std::string to_log_string(char* value) {
 
 template <typename... Args>
 std::string format_log_message(const std::string& format, Args&&... args) {
-    const std::string replacements[] = {to_log_string(std::forward<Args>(args))...};
-    constexpr size_t replacement_count = sizeof...(Args);
+    if constexpr (sizeof...(Args) == 0) {
+        return format;
+    } else {
+        const std::string replacements[] = {to_log_string(std::forward<Args>(args))...};
+        constexpr size_t replacement_count = sizeof...(Args);
 
-    std::string result;
-    result.reserve(format.size() + replacement_count * 8);
+        std::string result;
+        result.reserve(format.size() + replacement_count * 8);
 
-    size_t arg_index = 0;
-    size_t i = 0;
-    while (i < format.size()) {
-        if (format[i] == '{') {
-            const size_t close = format.find('}', i + 1);
-            if (close != std::string::npos) {
-                if (arg_index < replacement_count) {
-                    result += replacements[arg_index++];
-                } else {
-                    result.append(format, i, close - i + 1);
+        size_t arg_index = 0;
+        size_t i = 0;
+        while (i < format.size()) {
+            if (format[i] == '{') {
+                const size_t close = format.find('}', i + 1);
+                if (close != std::string::npos) {
+                    if (arg_index < replacement_count) {
+                        result += replacements[arg_index++];
+                    } else {
+                        result.append(format, i, close - i + 1);
+                    }
+                    i = close + 1;
+                    continue;
                 }
-                i = close + 1;
-                continue;
             }
+
+            result.push_back(format[i]);
+            ++i;
         }
 
-        result.push_back(format[i]);
-        ++i;
-    }
-
-    for (; arg_index < replacement_count; ++arg_index) {
-        if (!result.empty() && result.back() != ' ') {
-            result.push_back(' ');
+        for (; arg_index < replacement_count; ++arg_index) {
+            if (!result.empty() && result.back() != ' ') {
+                result.push_back(' ');
+            }
+            result += replacements[arg_index];
         }
-        result += replacements[arg_index];
-    }
 
-    return result;
+        return result;
+    }
 }
 
 template <typename... Args>
