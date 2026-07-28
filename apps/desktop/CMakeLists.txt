@@ -10,21 +10,6 @@ set(CMAKE_AUTOUIC ON)
 # macOS 特定设置
 if(APPLE)
   set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version" FORCE)
-  # 打包脚本会手动创建 .app，这里禁用自动创建
-  # set(CMAKE_MACOSX_BUNDLE TRUE)
-  # set(CMAKE_MACOSX_BUNDLE_GUI_TYPE "FBND")
-  # set(MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in)
-
-  # Qt6 在 macOS 上可能需要 AGL 框架，但在 macOS 11+ 中已被弃用
-  # 设置环境变量禁用 AGL 依赖
-  set(ENV{QT_MAC_NO_AGL} "1")
-  set(QT_MAC_NO_AGL ON CACHE BOOL "Disable AGL framework dependency on macOS" FORCE)
-
-  # 创建一个虚拟的 AGL 框架目标，避免链接错误
-  # AGL 在 macOS 11+ 已被移除，但 Qt6 仍可能引用它
-  if(NOT TARGET AGL::AGL)
-    add_library(AGL::AGL INTERFACE IMPORTED)
-  endif()
 endif()
 
 # Windows 特定设置
@@ -138,24 +123,6 @@ target_link_libraries(falcon-desktop PRIVATE
     Falcon::protocols
     Falcon::storage
 )
-
-# macOS: 移除 Qt6 添加的 AGL 框架依赖（在 macOS 11+ 中已弃用/移除）
-if(APPLE)
-  # 获取当前的链接库列表
-  get_target_property(_libs falcon-desktop INTERFACE_LINK_LIBRARIES)
-  if(_libs)
-    # 移除 AGL 相关的链接
-    list(FILTER _libs EXCLUDE REGEX ".*AGL.*")
-    set_target_properties(falcon-desktop PROPERTIES INTERFACE_LINK_LIBRARIES "${_libs}")
-  endif()
-
-  # 也检查 LINK_LIBRARIES
-  get_target_property(_link_libs falcon-desktop LINK_LIBRARIES)
-  if(_link_libs)
-    list(FILTER _link_libs EXCLUDE REGEX ".*AGL.*")
-    set_target_properties(falcon-desktop PROPERTIES LINK_LIBRARIES "${_link_libs}")
-  endif()
-endif()
 
 # 安装目标（macOS 使用手动打包，跳过 install）
 if(NOT APPLE)
