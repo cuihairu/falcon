@@ -89,7 +89,7 @@ jobs:
 
       - name: Install dependencies (Windows)
         if: matrix.os == 'windows-latest'
-        timeout-minutes: 20
+        timeout-minutes: 30
         shell: pwsh
         run: |
           choco install cmake ninja curl -y
@@ -102,6 +102,17 @@ jobs:
 
           # 设置环境变量
           echo "VCPKG_INSTALLATION_ROOT=C:\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Cache vcpkg packages
+        if: matrix.os == 'windows-latest'
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\vcpkg\installed
+            C:\vcpkg\packages
+          key: vcpkg-windows-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
+          restore-keys: |
+            vcpkg-windows-
 
       - name: Get version string
         id: version
@@ -136,7 +147,7 @@ jobs:
 
       - name: Configure CMake (Windows)
         if: runner.os == 'Windows'
-        timeout-minutes: 10
+        timeout-minutes: 30
         run: >
           cmake -B build-desktop
           -G "${{ matrix.cmake-generator }}"

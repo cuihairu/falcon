@@ -60,10 +60,21 @@ jobs:
 
       - name: Setup vcpkg (Windows)
         if: matrix.os == 'windows-latest'
-        timeout-minutes: 10
+        timeout-minutes: 15
         run: |
           git clone https://github.com/Microsoft/vcpkg.git
           .\vcpkg\bootstrap-vcpkg.bat
+
+      - name: Cache vcpkg packages (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/vcpkg/installed
+            ${{ github.workspace }}/vcpkg/packages
+          key: vcpkg-windows-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
+          restore-keys: |
+            vcpkg-windows-
 
       - name: Set reusable strings
         id: strings
@@ -94,7 +105,7 @@ jobs:
 
       - name: Configure CMake (Windows)
         if: matrix.os == 'windows-latest'
-        timeout-minutes: 15
+        timeout-minutes: 20
         run: >
           cmake -B ${{ steps.strings.outputs.build-output-dir }}
           -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
@@ -240,13 +251,24 @@ jobs:
 
       - name: Install dependencies (Windows)
         if: matrix.os == 'windows-latest'
-        timeout-minutes: 15
+        timeout-minutes: 20
         run: |
           choco install cmake ninja curl
           # 安装 vcpkg 并使用项目中的 vcpkg.json 安装依赖
           git clone https://github.com/Microsoft/vcpkg.git
           .\vcpkg\bootstrap-vcpkg.bat
           .\vcpkg\vcpkg install --triplet x64-windows
+
+      - name: Cache vcpkg packages (Desktop Windows)
+        if: matrix.os == 'windows-latest'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/vcpkg/installed
+            ${{ github.workspace }}/vcpkg/packages
+          key: vcpkg-desktop-windows-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
+          restore-keys: |
+            vcpkg-desktop-windows-
 
       - name: Configure CMake (Unix)
         if: runner.os != 'Windows'
@@ -267,7 +289,7 @@ jobs:
 
       - name: Configure CMake (Windows)
         if: runner.os == 'Windows'
-        timeout-minutes: 5
+        timeout-minutes: 20
         run: >
           cmake -B ${{ github.workspace }}/build-desktop
           -DCMAKE_PREFIX_PATH="${Env:Qt6_DIR}"
