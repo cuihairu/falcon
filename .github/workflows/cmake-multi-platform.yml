@@ -58,14 +58,6 @@ jobs:
         run: |
           brew install cmake ninja curl 2>/dev/null || brew upgrade cmake ninja curl 2>/dev/null || true
 
-          # 创建虚拟 AGL 框架（已在 macOS 11+ 中弃用/移除）
-          sudo mkdir -p /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/AGL.framework/Versions/A
-          sudo mkdir -p /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/AGL.framework/Versions/Current
-          sudo ln -sf Versions/Current /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/AGL.framework/AGL
-          sudo touch /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/AGL.framework/Versions/A/module.modulemap
-          sudo touch /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/AGL.framework/Versions/A/AGL.h
-          sudo ln -sf A /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/AGL.framework/Versions/Current
-
       - name: Setup vcpkg (Windows)
         if: matrix.os == 'windows-latest'
         timeout-minutes: 15
