@@ -18,7 +18,7 @@ jobs:
         include:
           - os: ubuntu-latest
             os_name: linux
-            qt-version: '6.10.0'
+            qt-version: '6.11.1'
             qt-arch: 'gcc_64'
             cmake-generator: 'Unix Makefiles'
             artifact-name: 'falcon-desktop-linux'
@@ -27,7 +27,7 @@ jobs:
             package-extension: '.tar.gz'
           - os: macos-latest
             os_name: macos
-            qt-version: '6.10.0'
+            qt-version: '6.11.1'
             qt-arch: 'clang_64'
             cmake-generator: 'Unix Makefiles'
             artifact-name: 'falcon-desktop-macos'
@@ -36,7 +36,7 @@ jobs:
             package-extension: '.tar.gz'
           - os: windows-latest
             os_name: windows
-            qt-version: '6.10.0'
+            qt-version: '6.11.1'
             qt-arch: 'mingw_64'
             cmake-generator: 'Ninja'
             artifact-name: 'falcon-desktop-windows'
