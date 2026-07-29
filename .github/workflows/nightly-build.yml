@@ -25,7 +25,7 @@ jobs:
             binary-name: 'falcon-desktop'
             binary-path: 'build-desktop/bin'
             package-extension: '.tar.gz'
-          - os: macos-latest
+          - os: macos-13
             os_name: macos
             qt-version: '6.8.2'
             qt-arch: 'clang_64'
@@ -38,7 +38,7 @@ jobs:
             os_name: windows
             qt-version: '6.8.2'
             qt-arch: 'mingw_64'
-            cmake-generator: 'Visual Studio 17 2022'
+            cmake-generator: 'Ninja'
             artifact-name: 'falcon-desktop-windows'
             binary-name: 'falcon-desktop.exe'
             binary-path: 'build-desktop/bin/Release'
