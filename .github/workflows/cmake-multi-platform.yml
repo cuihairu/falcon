@@ -215,15 +215,15 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         include:
           - os: ubuntu-latest
-            qt-version: '6.9.0'
+            qt-version: '6.8.2'
             qt-arch: 'gcc_64'
             cmake-generator: 'Unix Makefiles'
           - os: macos-latest
-            qt-version: '6.9.0'
+            qt-version: '6.8.2'
             qt-arch: 'clang_64'
             cmake-generator: 'Unix Makefiles'
           - os: windows-latest
-            qt-version: '6.9.0'
+            qt-version: '6.8.2'
             qt-arch: 'mingw_64'
 
     steps:
