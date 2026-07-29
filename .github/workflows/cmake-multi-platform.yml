@@ -43,7 +43,7 @@ jobs:
             c_compiler: cl
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install dependencies (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
@@ -67,7 +67,7 @@ jobs:
 
       - name: Cache vcpkg packages (Windows)
         if: matrix.os == 'windows-latest'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ${{ github.workspace }}/vcpkg/installed
@@ -138,7 +138,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           submodules: false
 
@@ -197,7 +197,7 @@ jobs:
 
       - name: Upload to Codecov
         timeout-minutes: 3
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           files: ${{ github.workspace }}/build-coverage/coverage.xml
           fail_ci_if_error: false
@@ -228,7 +228,7 @@ jobs:
             cmake-generator: 'Ninja'
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
@@ -262,7 +262,7 @@ jobs:
 
       - name: Cache vcpkg packages (Desktop Windows)
         if: matrix.os == 'windows-latest'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ${{ github.workspace }}/vcpkg/installed
@@ -310,7 +310,7 @@ jobs:
 
       - name: Upload artifacts (Unix)
         if: runner.os != 'Windows'
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v8
         timeout-minutes: 3
         with:
           name: falcon-desktop-${{ matrix.os }}
@@ -319,7 +319,7 @@ jobs:
 
       - name: Upload artifacts (Windows)
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v8
         timeout-minutes: 3
         with:
           name: falcon-desktop-${{ matrix.os }}
