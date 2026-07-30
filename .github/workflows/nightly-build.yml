@@ -113,7 +113,7 @@ jobs:
           echo "Display version: ${DISPLAY_VERSION}"
 
       - name: Configure CMake
-        timeout-minutes: 30
+        timeout-minutes: 60
         run: >
           cmake -B build-desktop
           -G "${{ matrix.cmake-generator }}"
