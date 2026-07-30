@@ -265,7 +265,7 @@ jobs:
       - name: Install vcpkg dependencies
         timeout-minutes: 30
         run: |
-          ./vcpkg/vcpkg install --triplet ${{ matrix.vcpkg-triplet }} --feature-flags="manifests"
+          ./vcpkg/vcpkg install --triplet ${{ matrix.vcpkg-triplet }} --x-manifest-root=${{ github.workspace }}
 
       - name: Configure CMake (Unix)
         if: runner.os != 'Windows'
