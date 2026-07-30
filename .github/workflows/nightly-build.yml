@@ -103,7 +103,7 @@ jobs:
       - name: Install vcpkg dependencies
         timeout-minutes: 30
         run: |
-          ./vcpkg/vcpkg install --triplet ${{ matrix.vcpkg-triplet }}
+          ./vcpkg/vcpkg install --triplet ${{ matrix.vcpkg-triplet }} --feature-flags="manifests"
 
       - name: Get version string
         id: version
