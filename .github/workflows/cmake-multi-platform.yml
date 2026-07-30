@@ -232,13 +232,13 @@ jobs:
         timeout-minutes: 10
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libgl1-mesa-dev libcurl4-openssl-dev autoconf autoconf-archive automake libtool
+          sudo apt-get install -y build-essential libgl1-mesa-dev libcurl4-openssl-dev autoconf autoconf-archive automake libtool libltdl-dev
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         timeout-minutes: 10
         run: |
-          brew install cmake ninja curl 2>/dev/null || brew upgrade cmake ninja curl 2>/dev/null || true
+          brew install cmake ninja curl autoconf automake libtool 2>/dev/null || brew upgrade cmake ninja curl autoconf automake libtool 2>/dev/null || true
 
       - name: Install dependencies (Windows)
         if: matrix.os == 'windows-latest'

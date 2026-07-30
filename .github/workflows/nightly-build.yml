@@ -63,7 +63,8 @@ jobs:
             autoconf \
             autoconf-archive \
             automake \
-            libtool
+            libtool \
+            libltdl-dev
 
           # 安装 linuxdeploy
           wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
@@ -79,7 +80,7 @@ jobs:
         if: matrix.os == 'macos-latest'
         timeout-minutes: 10
         run: |
-          brew install cmake ninja curl create-dmg 2>/dev/null || brew upgrade cmake ninja curl create-dmg 2>/dev/null || true
+          brew install cmake ninja curl create-dmg autoconf automake libtool 2>/dev/null || brew upgrade cmake ninja curl create-dmg autoconf automake libtool 2>/dev/null || true
 
       - name: Install dependencies (Windows)
         if: matrix.os == 'windows-latest'
