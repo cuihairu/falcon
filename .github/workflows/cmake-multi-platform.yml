@@ -262,14 +262,9 @@ jobs:
           restore-keys: |
             vcpkg-desktop-${{ matrix.os }}-
 
-      - name: Install vcpkg dependencies
-        timeout-minutes: 30
-        run: |
-          ./vcpkg/vcpkg install --triplet ${{ matrix.vcpkg-triplet }} --x-manifest-root=${{ github.workspace }}
-
       - name: Configure CMake (Unix)
         if: runner.os != 'Windows'
-        timeout-minutes: 10
+        timeout-minutes: 30
         run: >
           cmake -B ${{ github.workspace }}/build-desktop
           -G "${{ matrix.cmake-generator }}"
