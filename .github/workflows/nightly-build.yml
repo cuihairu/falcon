@@ -59,7 +59,11 @@ jobs:
             libxcb-xinerama0 \
             libxcb-cursor0 \
             patchelf \
-            wget
+            wget \
+            autoconf \
+            autoconf-archive \
+            automake \
+            libtool
 
           # 安装 linuxdeploy
           wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
