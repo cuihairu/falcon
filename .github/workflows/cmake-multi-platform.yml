@@ -207,7 +207,7 @@ jobs:
   desktop-build:
     name: Desktop Application (Qt6)
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     strategy:
       fail-fast: false
@@ -215,70 +215,66 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         include:
           - os: ubuntu-latest
-            qt-version: '6.11.1'
-            qt-arch: 'gcc_64'
+            vcpkg-triplet: 'x64-linux'
             cmake-generator: 'Unix Makefiles'
           - os: macos-latest
-            qt-version: '6.11.1'
-            qt-arch: 'clang_64'
+            vcpkg-triplet: 'arm64-osx'
             cmake-generator: 'Unix Makefiles'
           - os: windows-latest
-            qt-version: '6.11.1'
-            qt-arch: 'mingw_64'
+            vcpkg-triplet: 'x64-windows'
             cmake-generator: 'Ninja'
 
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install Qt
-        uses: jurplel/install-qt-action@v4
-        timeout-minutes: 10
-        with:
-          version: ${{ matrix.qt-version }}
-          cache: true
-
       - name: Install dependencies (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
-        timeout-minutes: 5
+        timeout-minutes: 10
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential libgl1-mesa-dev libcurl4-openssl-dev
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
-        timeout-minutes: 5
+        timeout-minutes: 10
         run: |
           brew install cmake ninja curl 2>/dev/null || brew upgrade cmake ninja curl 2>/dev/null || true
 
       - name: Install dependencies (Windows)
         if: matrix.os == 'windows-latest'
-        timeout-minutes: 20
+        timeout-minutes: 10
         run: |
-          choco install cmake ninja curl
-          # 安装 vcpkg 并使用项目中的 vcpkg.json 安装依赖
-          git clone https://github.com/Microsoft/vcpkg.git
-          .\vcpkg\bootstrap-vcpkg.bat
-          .\vcpkg\vcpkg install --triplet x64-windows
+          choco install cmake ninja curl -y
 
-      - name: Cache vcpkg packages (Desktop Windows)
-        if: matrix.os == 'windows-latest'
+      - name: Setup vcpkg
+        timeout-minutes: 5
+        run: |
+          git clone https://github.com/Microsoft/vcpkg.git
+          ./vcpkg/bootstrap-vcpkg.sh || ./vcpkg/bootstrap-vcpkg.bat
+
+      - name: Cache vcpkg packages
         uses: actions/cache@v5
         with:
           path: |
             ${{ github.workspace }}/vcpkg/installed
             ${{ github.workspace }}/vcpkg/packages
-          key: vcpkg-desktop-windows-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
+          key: vcpkg-desktop-${{ matrix.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
           restore-keys: |
-            vcpkg-desktop-windows-
+            vcpkg-desktop-${{ matrix.os }}-
+
+      - name: Install vcpkg dependencies
+        timeout-minutes: 30
+        run: |
+          ./vcpkg/vcpkg install --triplet ${{ matrix.vcpkg-triplet }}
 
       - name: Configure CMake (Unix)
         if: runner.os != 'Windows'
-        timeout-minutes: 5
+        timeout-minutes: 10
         run: >
           cmake -B ${{ github.workspace }}/build-desktop
           -G "${{ matrix.cmake-generator }}"
           -DCMAKE_BUILD_TYPE=Release
-          -DCMAKE_PREFIX_PATH="${Qt6_DIR}"
+          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
           -DFALCON_BUILD_TESTS=OFF
           -DFALCON_BUILD_CLI=OFF
           -DFALCON_BUILD_DESKTOP=ON
@@ -290,11 +286,12 @@ jobs:
 
       - name: Configure CMake (Windows)
         if: runner.os == 'Windows'
-        timeout-minutes: 20
+        timeout-minutes: 10
         run: >
           cmake -B ${{ github.workspace }}/build-desktop
-          -DCMAKE_PREFIX_PATH="${Env:Qt6_DIR}"
-          -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake"
+          -G "${{ matrix.cmake-generator }}"
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
           -DFALCON_BUILD_TESTS=OFF
           -DFALCON_BUILD_CLI=OFF
           -DFALCON_BUILD_DESKTOP=ON
@@ -305,7 +302,7 @@ jobs:
           -S ${{ github.workspace }}
 
       - name: Build
-        timeout-minutes: 15
+        timeout-minutes: 20
         run: cmake --build ${{ github.workspace }}/build-desktop --config Release --parallel
 
       - name: Upload artifacts (Unix)

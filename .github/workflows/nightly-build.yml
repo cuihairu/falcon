@@ -18,8 +18,7 @@ jobs:
         include:
           - os: ubuntu-latest
             os_name: linux
-            qt-version: '6.11.1'
-            qt-arch: 'gcc_64'
+            vcpkg-triplet: 'x64-linux'
             cmake-generator: 'Unix Makefiles'
             artifact-name: 'falcon-desktop-linux'
             binary-name: 'falcon-desktop'
@@ -27,8 +26,7 @@ jobs:
             package-extension: '.tar.gz'
           - os: macos-latest
             os_name: macos
-            qt-version: '6.11.1'
-            qt-arch: 'clang_64'
+            vcpkg-triplet: 'arm64-osx'
             cmake-generator: 'Unix Makefiles'
             artifact-name: 'falcon-desktop-macos'
             binary-name: 'falcon-desktop'
@@ -36,8 +34,7 @@ jobs:
             package-extension: '.tar.gz'
           - os: windows-latest
             os_name: windows
-            qt-version: '6.11.1'
-            qt-arch: 'mingw_64'
+            vcpkg-triplet: 'x64-windows'
             cmake-generator: 'Ninja'
             artifact-name: 'falcon-desktop-windows'
             binary-name: 'falcon-desktop.exe'
@@ -48,13 +45,6 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # 获取完整历史用于版本信息
-
-      - name: Install Qt
-        uses: jurplel/install-qt-action@v4
-        timeout-minutes: 15
-        with:
-          version: ${{ matrix.qt-version }}
-          cache: true
 
       - name: Install dependencies (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
@@ -89,30 +79,31 @@ jobs:
 
       - name: Install dependencies (Windows)
         if: matrix.os == 'windows-latest'
-        timeout-minutes: 30
+        timeout-minutes: 10
         shell: pwsh
         run: |
           choco install cmake ninja curl -y
 
-          # 克隆 vcpkg 到不同目录以避免 manifest 模式
-          git clone https://github.com/Microsoft/vcpkg.git C:\vcpkg
-          cd C:\vcpkg
-          .\bootstrap-vcpkg.bat
-          .\vcpkg install curl:x64-windows
-
-          # 设置环境变量
-          echo "VCPKG_INSTALLATION_ROOT=C:\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Setup vcpkg
+        timeout-minutes: 5
+        run: |
+          git clone https://github.com/Microsoft/vcpkg.git
+          ./vcpkg/bootstrap-vcpkg.sh || ./vcpkg/bootstrap-vcpkg.bat
 
       - name: Cache vcpkg packages
-        if: matrix.os == 'windows-latest'
         uses: actions/cache@v5
         with:
           path: |
-            C:\vcpkg\installed
-            C:\vcpkg\packages
-          key: vcpkg-windows-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
+            ${{ github.workspace }}/vcpkg/installed
+            ${{ github.workspace }}/vcpkg/packages
+          key: vcpkg-nightly-${{ matrix.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
           restore-keys: |
-            vcpkg-windows-
+            vcpkg-nightly-${{ matrix.os }}-
+
+      - name: Install vcpkg dependencies
+        timeout-minutes: 30
+        run: |
+          ./vcpkg/vcpkg install --triplet ${{ matrix.vcpkg-triplet }}
 
       - name: Get version string
         id: version
@@ -126,33 +117,13 @@ jobs:
           echo "version=nightly" >> "$GITHUB_OUTPUT"
           echo "Display version: ${DISPLAY_VERSION}"
 
-      - name: Configure CMake (Unix)
-        if: runner.os != 'Windows'
-        timeout-minutes: 10
+      - name: Configure CMake
+        timeout-minutes: 15
         run: >
           cmake -B build-desktop
           -G "${{ matrix.cmake-generator }}"
           -DCMAKE_BUILD_TYPE=Release
-          -DCMAKE_PREFIX_PATH="${Qt6_DIR}"
-          -DFALCON_BUILD_TESTS=OFF
-          -DFALCON_BUILD_CLI=ON
-          -DFALCON_BUILD_DESKTOP=ON
-          -DFALCON_BUILD_DAEMON=ON
-          -DFALCON_BUILD_EXAMPLES=OFF
-          -DFALCON_ENABLE_HTTP=ON
-          -DFALCON_ENABLE_FTP=ON
-          -DFALCON_ENABLE_BITTORRENT=ON
-          -DFALCON_ENABLE_CLOUD_STORAGE=ON
-          -DFALCON_ENABLE_RESOURCE_BROWSER=ON
-
-      - name: Configure CMake (Windows)
-        if: runner.os == 'Windows'
-        timeout-minutes: 30
-        run: >
-          cmake -B build-desktop
-          -G "${{ matrix.cmake-generator }}"
-          -DCMAKE_PREFIX_PATH="${Env:Qt6_DIR}"
-          -DCMAKE_TOOLCHAIN_FILE="C:/vcpkg/scripts/buildsystems/vcpkg.cmake"
+          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
           -DFALCON_BUILD_TESTS=OFF
           -DFALCON_BUILD_CLI=ON
           -DFALCON_BUILD_DESKTOP=ON
