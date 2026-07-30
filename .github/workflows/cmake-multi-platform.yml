@@ -207,7 +207,7 @@ jobs:
   desktop-build:
     name: Desktop Application (Qt6)
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 30
 
     strategy:
       fail-fast: false
@@ -215,38 +215,48 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         include:
           - os: ubuntu-latest
-            vcpkg-triplet: 'x64-linux'
+            qt-version: '6.8.2'
+            qt-arch: 'gcc_64'
             cmake-generator: 'Unix Makefiles'
           - os: macos-latest
-            vcpkg-triplet: 'arm64-osx'
+            qt-version: '6.8.2'
+            qt-arch: 'clang_64'
             cmake-generator: 'Unix Makefiles'
           - os: windows-latest
-            vcpkg-triplet: 'x64-windows'
+            qt-version: '6.8.2'
+            qt-arch: 'mingw_64'
             cmake-generator: 'Ninja'
 
     steps:
       - uses: actions/checkout@v7
 
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        timeout-minutes: 15
+        with:
+          version: ${{ matrix.qt-version }}
+          cache: true
+
       - name: Install dependencies (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
-        timeout-minutes: 10
+        timeout-minutes: 5
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libgl1-mesa-dev libcurl4-openssl-dev autoconf autoconf-archive automake libtool libltdl-dev
+          sudo apt-get install -y build-essential libgl1-mesa-dev libcurl4-openssl-dev
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
-        timeout-minutes: 10
+        timeout-minutes: 5
         run: |
-          brew install cmake ninja curl autoconf automake libtool 2>/dev/null || brew upgrade cmake ninja curl autoconf automake libtool 2>/dev/null || true
+          brew install cmake ninja curl 2>/dev/null || brew upgrade cmake ninja curl 2>/dev/null || true
 
       - name: Install dependencies (Windows)
         if: matrix.os == 'windows-latest'
-        timeout-minutes: 10
+        timeout-minutes: 5
         run: |
           choco install cmake ninja curl -y
 
-      - name: Setup vcpkg
+      - name: Setup vcpkg for non-Qt dependencies
         timeout-minutes: 5
         run: |
           git clone https://github.com/Microsoft/vcpkg.git
@@ -258,20 +268,18 @@ jobs:
           path: |
             ${{ github.workspace }}/vcpkg/installed
             ${{ github.workspace }}/vcpkg/packages
-          key: vcpkg-desktop-${{ matrix.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
+          key: vcpkg-desktop-${{ matrix.os }}-${{ hashFiles('vcpkg.json') }}
           restore-keys: |
             vcpkg-desktop-${{ matrix.os }}-
 
       - name: Configure CMake (Unix)
         if: runner.os != 'Windows'
-        timeout-minutes: 60
+        timeout-minutes: 10
         run: >
           cmake -B ${{ github.workspace }}/build-desktop
           -G "${{ matrix.cmake-generator }}"
           -DCMAKE_BUILD_TYPE=Release
-          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
-          -DVCPKG_MANIFEST_MODE=ON
-          -DVCPKG_MANIFEST_FEATURES=desktop
+          -DCMAKE_PREFIX_PATH="${Qt6_DIR}"
           -DFALCON_BUILD_TESTS=OFF
           -DFALCON_BUILD_CLI=OFF
           -DFALCON_BUILD_DESKTOP=ON
@@ -283,14 +291,12 @@ jobs:
 
       - name: Configure CMake (Windows)
         if: runner.os == 'Windows'
-        timeout-minutes: 60
+        timeout-minutes: 10
         run: >
           cmake -B ${{ github.workspace }}/build-desktop
           -G "${{ matrix.cmake-generator }}"
           -DCMAKE_BUILD_TYPE=Release
-          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
-          -DVCPKG_MANIFEST_MODE=ON
-          -DVCPKG_MANIFEST_FEATURES=desktop
+          -DCMAKE_PREFIX_PATH="${Env:Qt6_DIR}"
           -DFALCON_BUILD_TESTS=OFF
           -DFALCON_BUILD_CLI=OFF
           -DFALCON_BUILD_DESKTOP=ON
@@ -301,7 +307,7 @@ jobs:
           -S ${{ github.workspace }}
 
       - name: Build
-        timeout-minutes: 20
+        timeout-minutes: 15
         run: cmake --build ${{ github.workspace }}/build-desktop --config Release --parallel
 
       - name: Upload artifacts (Unix)
