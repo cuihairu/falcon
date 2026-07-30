@@ -119,6 +119,8 @@ jobs:
           -G "${{ matrix.cmake-generator }}"
           -DCMAKE_BUILD_TYPE=Release
           -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+          -DVCPKG_MANIFEST_MODE=ON
+          -DVCPKG_MANIFEST_FEATURES=desktop
           -DFALCON_BUILD_TESTS=OFF
           -DFALCON_BUILD_CLI=ON
           -DFALCON_BUILD_DESKTOP=ON
