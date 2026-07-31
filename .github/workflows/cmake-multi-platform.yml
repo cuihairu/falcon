@@ -207,48 +207,64 @@ jobs:
   desktop-build:
     name: Desktop Application (Qt6)
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 120
 
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-15, windows-latest]
         include:
           - os: ubuntu-latest
-            qt-version: '6.9.0'
-            qt-arch: 'gcc_64'
+            vcpkg-triplet: 'x64-linux'
             cmake-generator: 'Unix Makefiles'
-          - os: macos-latest
-            qt-version: '6.9.0'
-            qt-arch: 'clang_64'
+          - os: macos-15
+            vcpkg-triplet: 'arm64-osx'
             cmake-generator: 'Unix Makefiles'
           - os: windows-latest
-            qt-version: '6.9.0'
-            qt-arch: 'mingw_64'
-            cmake-generator: 'Ninja'
+            vcpkg-triplet: 'x64-windows'
 
     steps:
       - uses: actions/checkout@v7
-
-      - name: Install Qt
-        uses: jurplel/install-qt-action@v4
-        timeout-minutes: 15
-        with:
-          version: ${{ matrix.qt-version }}
-          cache: true
 
       - name: Install dependencies (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
         timeout-minutes: 5
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libgl1-mesa-dev libcurl4-openssl-dev
+          sudo apt-get install -y \
+            build-essential \
+            autoconf \
+            autoconf-archive \
+            automake \
+            libtool \
+            libcurl4-openssl-dev \
+            libgl1-mesa-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcb1-dev \
+            libxcb-cursor-dev \
+            libxcb-icccm4-dev \
+            libxcb-image0-dev \
+            libxcb-keysyms1-dev \
+            libxcb-randr0-dev \
+            libxcb-render0-dev \
+            libxcb-render-util0-dev \
+            libxcb-shape0-dev \
+            libxcb-shm0-dev \
+            libxcb-sync-dev \
+            libxcb-util-dev \
+            libxcb-xfixes0-dev \
+            libxcb-xinerama0-dev \
+            libxcb-xkb-dev \
+            libxext-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         timeout-minutes: 5
         run: |
-          brew install cmake ninja curl 2>/dev/null || brew upgrade cmake ninja curl 2>/dev/null || true
+          brew install cmake ninja curl autoconf autoconf-archive automake libtool 2>/dev/null || brew upgrade cmake ninja curl autoconf autoconf-archive automake libtool 2>/dev/null || true
 
       - name: Install dependencies (Windows)
         if: matrix.os == 'windows-latest'
@@ -256,11 +272,20 @@ jobs:
         run: |
           choco install cmake ninja curl -y
 
-      - name: Setup vcpkg for non-Qt dependencies
-        timeout-minutes: 5
+      - name: Setup vcpkg (Unix)
+        if: runner.os != 'Windows'
+        timeout-minutes: 10
         run: |
           git clone https://github.com/Microsoft/vcpkg.git
-          ./vcpkg/bootstrap-vcpkg.sh || ./vcpkg/bootstrap-vcpkg.bat
+          ./vcpkg/bootstrap-vcpkg.sh
+
+      - name: Setup vcpkg (Windows)
+        if: runner.os == 'Windows'
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          git clone https://github.com/Microsoft/vcpkg.git
+          .\vcpkg\bootstrap-vcpkg.bat
 
       - name: Cache vcpkg packages
         uses: actions/cache@v5
@@ -268,18 +293,21 @@ jobs:
           path: |
             ${{ github.workspace }}/vcpkg/installed
             ${{ github.workspace }}/vcpkg/packages
-          key: vcpkg-desktop-${{ matrix.os }}-${{ hashFiles('vcpkg.json') }}
+            ${{ github.workspace }}/vcpkg/downloads
+          key: vcpkg-desktop-${{ matrix.vcpkg-triplet }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
           restore-keys: |
-            vcpkg-desktop-${{ matrix.os }}-
+            vcpkg-desktop-${{ matrix.vcpkg-triplet }}-
 
       - name: Configure CMake (Unix)
         if: runner.os != 'Windows'
-        timeout-minutes: 10
+        timeout-minutes: 60
         run: >
           cmake -B ${{ github.workspace }}/build-desktop
           -G "${{ matrix.cmake-generator }}"
           -DCMAKE_BUILD_TYPE=Release
-          -DCMAKE_PREFIX_PATH="${Qt6_DIR}"
+          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+          -DVCPKG_TARGET_TRIPLET=${{ matrix.vcpkg-triplet }}
+          -DVCPKG_MANIFEST_FEATURES=desktop
           -DFALCON_BUILD_TESTS=OFF
           -DFALCON_BUILD_CLI=OFF
           -DFALCON_BUILD_DESKTOP=ON
@@ -291,12 +319,13 @@ jobs:
 
       - name: Configure CMake (Windows)
         if: runner.os == 'Windows'
-        timeout-minutes: 10
+        timeout-minutes: 60
         run: >
           cmake -B ${{ github.workspace }}/build-desktop
-          -G "${{ matrix.cmake-generator }}"
           -DCMAKE_BUILD_TYPE=Release
-          -DCMAKE_PREFIX_PATH="${Env:Qt6_DIR}"
+          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+          -DVCPKG_TARGET_TRIPLET=${{ matrix.vcpkg-triplet }}
+          -DVCPKG_MANIFEST_FEATURES=desktop
           -DFALCON_BUILD_TESTS=OFF
           -DFALCON_BUILD_CLI=OFF
           -DFALCON_BUILD_DESKTOP=ON
@@ -307,7 +336,7 @@ jobs:
           -S ${{ github.workspace }}
 
       - name: Build
-        timeout-minutes: 15
+        timeout-minutes: 30
         run: cmake --build ${{ github.workspace }}/build-desktop --config Release --parallel
 
       - name: Upload artifacts (Unix)

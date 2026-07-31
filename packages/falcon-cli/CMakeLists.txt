@@ -20,6 +20,7 @@ target_include_directories(falcon-cli PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 target_link_libraries(falcon-cli
     PRIVATE
+        Falcon::core
         Falcon::protocols
 )
 

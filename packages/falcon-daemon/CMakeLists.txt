@@ -69,6 +69,7 @@ if(nlohmann_json_FOUND)
 
     target_link_libraries(falcon_daemon_rpc
         PUBLIC
+            Falcon::core
             Falcon::protocols
             nlohmann_json::nlohmann_json
             # gRPC::grpc++  # 待添加

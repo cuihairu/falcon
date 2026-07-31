@@ -18,17 +18,15 @@ jobs:
         include:
           - os: ubuntu-latest
             os_name: linux
-            qt-version: '6.9.0'
-            qt-arch: 'gcc_64'
+            vcpkg-triplet: 'x64-linux'
             cmake-generator: 'Unix Makefiles'
             artifact-name: 'falcon-desktop-linux'
             binary-name: 'falcon-desktop'
             binary-path: 'build-desktop/bin'
             package-extension: '.tar.gz'
-          - os: macos-latest
+          - os: macos-15
             os_name: macos
-            qt-version: '6.9.0'
-            qt-arch: 'clang_64'
+            vcpkg-triplet: 'arm64-osx'
             cmake-generator: 'Unix Makefiles'
             artifact-name: 'falcon-desktop-macos'
             binary-name: 'falcon-desktop'
@@ -36,9 +34,7 @@ jobs:
             package-extension: '.tar.gz'
           - os: windows-latest
             os_name: windows
-            qt-version: '6.9.0'
-            qt-arch: 'mingw_64'
-            cmake-generator: 'Ninja'
+            vcpkg-triplet: 'x64-windows'
             artifact-name: 'falcon-desktop-windows'
             binary-name: 'falcon-desktop.exe'
             binary-path: 'build-desktop/bin/Release'
@@ -49,13 +45,6 @@ jobs:
         with:
           fetch-depth: 0  # 获取完整历史用于版本信息
 
-      - name: Install Qt
-        uses: jurplel/install-qt-action@v4
-        timeout-minutes: 15
-        with:
-          version: ${{ matrix.qt-version }}
-          cache: true
-
       - name: Install dependencies (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
         timeout-minutes: 15
@@ -63,11 +52,35 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             build-essential \
+            autoconf \
+            autoconf-archive \
+            automake \
+            libtool \
             libgl1-mesa-dev \
             libcurl4-openssl-dev \
             libssl-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcb1-dev \
+            libxcb-cursor-dev \
+            libxcb-icccm4-dev \
+            libxcb-image0-dev \
+            libxcb-keysyms1-dev \
+            libxcb-randr0-dev \
+            libxcb-render0-dev \
+            libxcb-render-util0-dev \
+            libxcb-shape0-dev \
+            libxcb-shm0-dev \
+            libxcb-sync-dev \
+            libxcb-util-dev \
+            libxcb-xfixes0-dev \
             libxcb-xinerama0 \
+            libxcb-xinerama0-dev \
+            libxcb-xkb-dev \
+            libxext-dev \
             libxcb-cursor0 \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
             patchelf \
             wget
 
@@ -82,10 +95,10 @@ jobs:
           sudo mv linuxdeploy-plugin-qt-x86_64.AppImage /usr/local/bin/
 
       - name: Install dependencies (macOS)
-        if: matrix.os == 'macos-latest'
+        if: runner.os == 'macOS'
         timeout-minutes: 10
         run: |
-          brew install cmake ninja curl create-dmg 2>/dev/null || brew upgrade cmake ninja curl create-dmg 2>/dev/null || true
+          brew install cmake ninja curl create-dmg autoconf autoconf-archive automake libtool 2>/dev/null || brew upgrade cmake ninja curl create-dmg autoconf autoconf-archive automake libtool 2>/dev/null || true
 
       - name: Install dependencies (Windows)
         if: matrix.os == 'windows-latest'
@@ -94,11 +107,20 @@ jobs:
         run: |
           choco install cmake ninja curl -y
 
-      - name: Setup vcpkg for non-Qt dependencies
-        timeout-minutes: 5
+      - name: Setup vcpkg (Unix)
+        if: runner.os != 'Windows'
+        timeout-minutes: 10
         run: |
           git clone https://github.com/Microsoft/vcpkg.git
-          ./vcpkg/bootstrap-vcpkg.sh || ./vcpkg/bootstrap-vcpkg.bat
+          ./vcpkg/bootstrap-vcpkg.sh
+
+      - name: Setup vcpkg (Windows)
+        if: runner.os == 'Windows'
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          git clone https://github.com/Microsoft/vcpkg.git
+          .\vcpkg\bootstrap-vcpkg.bat
 
       - name: Cache vcpkg packages
         uses: actions/cache@v5
@@ -106,9 +128,10 @@ jobs:
           path: |
             ${{ github.workspace }}/vcpkg/installed
             ${{ github.workspace }}/vcpkg/packages
-          key: vcpkg-nightly-${{ matrix.os }}-${{ hashFiles('vcpkg.json') }}
+            ${{ github.workspace }}/vcpkg/downloads
+          key: vcpkg-nightly-${{ matrix.vcpkg-triplet }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
           restore-keys: |
-            vcpkg-nightly-${{ matrix.os }}-
+            vcpkg-nightly-${{ matrix.vcpkg-triplet }}-
 
       - name: Get version string
         id: version
@@ -122,13 +145,36 @@ jobs:
           echo "version=nightly" >> "$GITHUB_OUTPUT"
           echo "Display version: ${DISPLAY_VERSION}"
 
-      - name: Configure CMake
-        timeout-minutes: 15
+      - name: Configure CMake (Unix)
+        if: runner.os != 'Windows'
+        timeout-minutes: 60
         run: >
           cmake -B build-desktop
           -G "${{ matrix.cmake-generator }}"
           -DCMAKE_BUILD_TYPE=Release
-          -DCMAKE_PREFIX_PATH="${Qt6_DIR}"
+          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+          -DVCPKG_TARGET_TRIPLET=${{ matrix.vcpkg-triplet }}
+          -DVCPKG_MANIFEST_FEATURES=desktop
+          -DFALCON_BUILD_TESTS=OFF
+          -DFALCON_BUILD_CLI=ON
+          -DFALCON_BUILD_DESKTOP=ON
+          -DFALCON_BUILD_DAEMON=ON
+          -DFALCON_BUILD_EXAMPLES=OFF
+          -DFALCON_ENABLE_HTTP=ON
+          -DFALCON_ENABLE_FTP=ON
+          -DFALCON_ENABLE_BITTORRENT=ON
+          -DFALCON_ENABLE_CLOUD_STORAGE=ON
+          -DFALCON_ENABLE_RESOURCE_BROWSER=ON
+
+      - name: Configure CMake (Windows)
+        if: runner.os == 'Windows'
+        timeout-minutes: 60
+        run: >
+          cmake -B build-desktop
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+          -DVCPKG_TARGET_TRIPLET=${{ matrix.vcpkg-triplet }}
+          -DVCPKG_MANIFEST_FEATURES=desktop
           -DFALCON_BUILD_TESTS=OFF
           -DFALCON_BUILD_CLI=ON
           -DFALCON_BUILD_DESKTOP=ON
@@ -316,11 +362,11 @@ jobs:
           Copy-Item falcon-cli.exe falcon-desktop/ -ErrorAction SilentlyContinue
 
           # 复制 vcpkg DLL
-          Copy-Item "C:\vcpkg\installed\x64-windows\bin\*.dll" falcon-desktop/ -ErrorAction SilentlyContinue
+          Copy-Item "${{ github.workspace }}\vcpkg\installed\x64-windows\bin\*.dll" falcon-desktop/ -ErrorAction SilentlyContinue
 
           # 使用 windeployqt 部署 Qt 依赖
-          $qtDir = if ($Env:Qt6_DIR) { $Env:Qt6_DIR } else { $Env:QT_ROOT_DIR }
-          $windeployqt = Join-Path $qtDir "bin\windeployqt.exe"
+          $qtDir = "${{ github.workspace }}\vcpkg\installed\${{ matrix.vcpkg-triplet }}"
+          $windeployqt = Join-Path $qtDir "tools\Qt6\bin\windeployqt.exe"
           & $windeployqt `
             --release `
             --no-translations `
