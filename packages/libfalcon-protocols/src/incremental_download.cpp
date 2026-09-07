@@ -11,7 +11,12 @@
 #include <sstream>
 #include <algorithm>
 #include <iomanip>
+#include <cctype>
 #include <cstring>
+
+#ifdef FALCON_USE_CURL
+#include <curl/curl.h>
+#endif
 
 #if defined(FALCON_USE_OPENSSL) || defined(FALCON_HAS_OPENSSL)
 #include <openssl/sha.h>
@@ -19,6 +24,70 @@
 #endif
 
 namespace falcon {
+
+namespace {
+
+#ifdef FALCON_USE_CURL
+std::size_t curl_write_string_cb(char* ptr, std::size_t size, std::size_t nmemb,
+                                 void* userdata) {
+    auto* out = static_cast<std::string*>(userdata);
+    out->append(ptr, size * nmemb);
+    return size * nmemb;
+}
+#endif
+
+/// 十六进制串校验（偶数长度 + 全部为十六进制字符）
+bool is_hex_string(const std::string& s) {
+    if (s.empty() || (s.size() % 2) != 0) {
+        return false;
+    }
+    return std::all_of(s.begin(), s.end(), [](unsigned char c) {
+        return std::isxdigit(c) != 0;
+    });
+}
+
+/// 去除行尾 \r 与首尾空白
+std::string trim_line(const std::string& line) {
+    std::size_t begin = 0;
+    std::size_t end = line.size();
+    while (end > begin && (line[end - 1] == '\r' || line[end - 1] == ' ' ||
+                           line[end - 1] == '\t')) {
+        --end;
+    }
+    while (begin < end && (line[begin] == ' ' || line[begin] == '\t')) {
+        ++begin;
+    }
+    return line.substr(begin, end - begin);
+}
+
+/// ASCII 小写化
+std::string to_lower_copy(std::string s) {
+    for (auto& c : s) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return s;
+}
+
+/// 解析元数据行 "# key: value"（key 小写化；'#' 前缀与空白被剥离）
+bool parse_metadata_line(const std::string& line, std::string& key, std::string& value) {
+    std::size_t begin = 0;
+    if (begin < line.size() && line[begin] == '#') {
+        ++begin;
+    }
+    while (begin < line.size() && (line[begin] == ' ' || line[begin] == '\t')) {
+        ++begin;
+    }
+
+    const auto colon = line.find(':', begin);
+    if (colon == std::string::npos) {
+        return false;
+    }
+    key = to_lower_copy(line.substr(begin, colon - begin));
+    value = trim_line(line.substr(colon + 1));
+    return !key.empty();
+}
+
+} // namespace
 
 // ============================================================================
 // IncrementalDownloader 实现
@@ -28,6 +97,108 @@ IncrementalDownloader::IncrementalDownloader() {
 }
 
 IncrementalDownloader::~IncrementalDownloader() {
+}
+
+//==============================================================================
+// 哈希列表序列化 / 解析
+//==============================================================================
+
+std::string IncrementalDownloader::serializeHashList(
+    const std::vector<ChunkInfo>& chunks,
+    uint64_t chunkSize,
+    const std::string& algorithm,
+    uint64_t fileSize) {
+    std::ostringstream ss;
+    ss << "# falcon-hash-list v1\n";
+    ss << "# chunkSize: " << chunkSize << "\n";
+    ss << "# algorithm: " << algorithm << "\n";
+    ss << "# fileSize: " << fileSize << "\n";
+    ss << "# chunks: " << chunks.size() << "\n";
+    for (const auto& chunk : chunks) {
+        ss << chunk.hash << "\n";
+    }
+    return ss.str();
+}
+
+std::vector<ChunkInfo> IncrementalDownloader::parseHashList(
+    const std::string& text,
+    uint64_t defaultChunkSize,
+    const std::string& defaultAlgorithm) {
+    uint64_t chunk_size = defaultChunkSize;
+    uint64_t file_size = 0;
+    bool has_file_size = false;
+    uint64_t expected_chunks = 0;
+    std::vector<std::string> hashes;
+
+    std::istringstream iss(text);
+    std::string line;
+    while (std::getline(iss, line)) {
+        const std::string trimmed = trim_line(line);
+        if (trimmed.empty()) {
+            continue;
+        }
+
+        if (trimmed[0] == '#') {
+            std::string key;
+            std::string value;
+            if (!parse_metadata_line(trimmed, key, value)) {
+                continue;  // 注释行
+            }
+            try {
+                if (key == "chunksize") {
+                    const uint64_t v = std::stoull(value);
+                    if (v > 0) chunk_size = v;
+                } else if (key == "algorithm") {
+                    // 调用方的 defaultAlgorithm 是期望算法（与本地计算一致），
+                    // 列表声明了不同算法则两者不可比较
+                    if (!value.empty() &&
+                        to_lower_copy(value) != to_lower_copy(defaultAlgorithm)) {
+                        return {};
+                    }
+                } else if (key == "filesize") {
+                    file_size = std::stoull(value);
+                    has_file_size = true;
+                } else if (key == "chunks") {
+                    expected_chunks = std::stoull(value);
+                }
+            } catch (const std::exception&) {
+                return {};  // 元数据数值非法 → 列表无效
+            }
+            continue;
+        }
+
+        // 哈希行：严格校验，任何非法行都使整个列表无效
+        if (!is_hex_string(trimmed)) {
+            return {};
+        }
+        hashes.push_back(trimmed);
+    }
+
+    if (hashes.empty()) {
+        return {};
+    }
+    if (expected_chunks > 0 && hashes.size() != expected_chunks) {
+        return {};
+    }
+    if (chunk_size == 0) {
+        return {};
+    }
+
+    std::vector<ChunkInfo> chunks;
+    chunks.reserve(hashes.size());
+    for (std::size_t i = 0; i < hashes.size(); ++i) {
+        ChunkInfo info;
+        info.offset = static_cast<uint64_t>(i) * chunk_size;
+        info.size = chunk_size;
+        // 最后一块按实际文件大小收缩（元数据提供 fileSize 时）
+        if (has_file_size && file_size > info.offset) {
+            info.size = std::min(chunk_size, file_size - info.offset);
+        }
+        info.hash = hashes[i];
+        info.changed = false;
+        chunks.push_back(std::move(info));
+    }
+    return chunks;
 }
 
 std::string IncrementalDownloader::calculateHash(const std::string& data,
@@ -141,13 +312,61 @@ std::vector<ChunkInfo> IncrementalDownloader::downloadRemoteHashList(
     uint64_t chunkSize,
     const std::string& algorithm) {
 
-    // 这里需要使用 HTTP 插件下载远程文件并计算哈希列表（待实现）
+#ifdef FALCON_USE_CURL
+    // 哈希列表 URL 约定：<file url>.falconhash
+    const std::string list_url = url + ".falconhash";
+    std::string text;
+    if (!http_get(list_url, text)) {
+        FALCON_LOG_WARN("Failed to download hash list: {}", list_url);
+        return {};
+    }
+
+    auto chunks = parseHashList(text, chunkSize, algorithm);
+    if (chunks.empty()) {
+        FALCON_LOG_WARN("Invalid or mismatching hash list: {}", list_url);
+    }
+    return chunks;
+#else
     (void)url;
     (void)chunkSize;
     (void)algorithm;
-
-    FALCON_LOG_WARN("Remote hash list download not implemented");
+    FALCON_LOG_WARN("Remote hash list download requires libcurl (FALCON_USE_CURL)");
     return {};
+#endif
+}
+
+bool IncrementalDownloader::http_get(const std::string& url, std::string& out) {
+#ifdef FALCON_USE_CURL
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        return false;
+    }
+
+    out.clear();
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_string_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &out);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    // 增量比较不应长时间挂起：连接与总时长兜底
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
+
+    const CURLcode res = curl_easy_perform(curl);
+    curl_easy_cleanup(curl);
+
+    if (res != CURLE_OK) {
+        FALCON_LOG_WARN("HTTP GET failed: {} ({})", url, curl_easy_strerror(res));
+        return false;
+    }
+    return !out.empty() || res == CURLE_OK;
+#else
+    (void)url;
+    (void)out;
+    FALCON_LOG_WARN("HTTP support requires libcurl (FALCON_USE_CURL)");
+    return false;
+#endif
 }
 
 std::vector<ChunkInfo> IncrementalDownloader::compareHashLists(
@@ -235,13 +454,54 @@ std::vector<uint8_t> IncrementalDownloader::downloadRange(
     uint64_t offset,
     uint64_t size) {
 
-    // 这里需要使用 HTTP 插件的 Range 请求（待实现）
+#ifdef FALCON_USE_CURL
+    if (size == 0) {
+        return {};
+    }
+
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        return {};
+    }
+
+    // CURLOPT_RANGE 的值是 Range 头的字节范围（curl 自动添加 "Range: " 前缀）
+    const std::string range =
+        std::to_string(offset) + "-" + std::to_string(offset + size - 1);
+    std::string out;
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_RANGE, range.c_str());
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_string_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &out);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 120L);
+
+    const CURLcode res = curl_easy_perform(curl);
+    curl_easy_cleanup(curl);
+
+    if (res != CURLE_OK) {
+        FALCON_LOG_WARN("Range download failed: {} [{}] ({})",
+                        url, range, curl_easy_strerror(res));
+        return {};
+    }
+    if (out.size() != size) {
+        FALCON_LOG_WARN("Range download size mismatch: {} [{}] expected {} got {}",
+                        url, range, size, out.size());
+        return {};
+    }
+
+    return std::vector<uint8_t>(out.begin(), out.end());
+#else
+    // 无 libcurl 时无法发起 HTTP 请求
     (void)url;
     (void)offset;
     (void)size;
 
-    FALCON_LOG_WARN("Range download not implemented");
+    FALCON_LOG_WARN("Range download requires libcurl (FALCON_USE_CURL)");
     return {};
+#endif
 }
 
 bool IncrementalDownloader::downloadChanged(const FileDiff& diff,
@@ -250,13 +510,16 @@ bool IncrementalDownloader::downloadChanged(const FileDiff& diff,
     FALCON_LOG_INFO("Downloading changed parts: {} bytes of {} total",
                    diff.totalChanged, diff.remoteSize);
 
-    // 读取本地文件
+    // 读取本地文件（本地比远程大时只读取能容纳的部分，防止越界）
     std::vector<uint8_t> localData(diff.remoteSize);
 
     std::ifstream inFile(diff.localPath, std::ios::binary);
     if (inFile.is_open()) {
-        inFile.read(reinterpret_cast<char*>(localData.data()),
-                    static_cast<std::streamsize>(diff.localSize));
+        const uint64_t readable = std::min(diff.localSize, diff.remoteSize);
+        if (readable > 0) {
+            inFile.read(reinterpret_cast<char*>(localData.data()),
+                        static_cast<std::streamsize>(readable));
+        }
         inFile.close();
     }
 

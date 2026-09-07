@@ -51,6 +51,22 @@ struct FileDiff {
 };
 
 /**
+ * @brief 哈希列表文本格式（.falconhash 文件）：
+ *
+ *   # falcon-hash-list v1
+ *   # chunkSize: 1048576
+ *   # algorithm: sha256
+ *   # fileSize: 12345678
+ *   # chunks: 12
+ *   <hex hash line 1>
+ *   <hex hash line 2>
+ *   ...
+ *
+ * 以 '#' 开头的行是元数据；其余非空行为按分块顺序排列的十六进制哈希。
+ * compare() 使用的哈希列表 URL 约定为 <file url> + ".falconhash"。
+ */
+
+/**
  * @class IncrementalDownloader
  * @brief 增量下载器
  *
@@ -97,6 +113,9 @@ public:
 
     /**
      * @brief 比较本地和远程文件
+     *
+     * 远程哈希列表从 <remoteUrl> + ".falconhash" 获取；获取失败或列表
+     * 无效时回退为全量下载建议（diff.chunks 为空）。
      */
     FileDiff compare(const std::string& localPath,
                     const std::string& remoteUrl,
@@ -128,6 +147,39 @@ public:
     bool verifyFile(const std::string& filePath,
                    const std::string& expectedHash);
 
+    /**
+     * @brief 将哈希列表序列化为文本格式
+     *
+     * 输出可直接部署为服务端的 .falconhash 文件，供
+     * downloadRemoteHashList 消费。
+     *
+     * @param chunks 分块哈希（来自 generateHashList）
+     * @param chunkSize 分块大小
+     * @param algorithm 哈希算法名
+     * @param fileSize 文件总大小（用于计算最后一块的实际大小）
+     * @return 文本内容
+     */
+    static std::string serializeHashList(const std::vector<ChunkInfo>& chunks,
+                                         uint64_t chunkSize,
+                                         const std::string& algorithm,
+                                         uint64_t fileSize);
+
+    /**
+     * @brief 解析哈希列表文本
+     *
+     * 元数据行可覆盖默认参数；哈希行必须是偶数长度的十六进制串。
+     * 校验失败（无哈希行 / chunks 计数不符 / 哈希格式非法 /
+     * 算法与 defaultAlgorithm 不一致）返回空列表。
+     *
+     * @param text 哈希列表文本
+     * @param defaultChunkSize 元数据缺失时的分块大小
+     * @param defaultAlgorithm 期望的哈希算法（不一致视为列表无效）
+     * @return 分块信息列表（changed 均为 false）
+     */
+    static std::vector<ChunkInfo> parseHashList(const std::string& text,
+                                                uint64_t defaultChunkSize,
+                                                const std::string& defaultAlgorithm);
+
 private:
 
     /**
@@ -145,6 +197,9 @@ private:
 
     /**
      * @brief 下载远程文件的哈希列表
+     *
+     * 实际请求 <url> + ".falconhash"；解析结果与传入的 chunkSize /
+     * algorithm 约束不匹配时返回空。
      */
     std::vector<ChunkInfo> downloadRemoteHashList(const std::string& url,
                                                   uint64_t chunkSize,
@@ -158,11 +213,17 @@ private:
         const std::vector<ChunkInfo>& remote);
 
     /**
-     * @brief 下载指定范围的数据
+     * @brief 下载指定范围的数据（HTTP Range 请求）
      */
     std::vector<uint8_t> downloadRange(const std::string& url,
                                       uint64_t offset,
                                       uint64_t size);
+
+    /**
+     * @brief 阻塞式 HTTP GET（libcurl 可用时）
+     * @return true 成功且 out 非空
+     */
+    bool http_get(const std::string& url, std::string& out);
 
     /**
      * @brief 合并文件

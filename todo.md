@@ -1230,6 +1230,49 @@ feature 候选：
 - ✅ ctest 1400/1400 连续 3 轮全部通过（新增 9 个测试）
 - ✅ 全量构建零警告（标准 + BT 启用构建）
 
+### 2026-09-07 - 增量下载功能实现（远程哈希列表 + Range 下载）
+
+**目标（来自「未完成事项」#5）：**
+- 实现 `IncrementalDownloader::downloadRemoteHashList` 与
+  `downloadRange` 的真实逻辑，打通 compare → downloadChanged 全流程
+
+**核心实现：**
+- ✅ `http_get(url, out)`：阻塞式 libcurl GET（FALCON_USE_CURL 守卫；
+  连接 10s / 总时长 60-120s 兜底超时，FOLLOWLOCATION + FAILONERROR）
+- ✅ `downloadRange(url, offset, size)`：`CURLOPT_RANGE` 执行 HTTP Range
+  请求；响应字节数必须与请求长度一致（不符返回空）。
+  **修复**：CURLOPT_RANGE 的值是原始字节范围（`"1024-2047"`），curl 自动
+  添加 `Range: ` 前缀——传 `"bytes=..."` 会产生 `Range: bytes=bytes=...`
+- ✅ `downloadRemoteHashList(url, ...)`：按约定请求 `<file url>.falconhash`
+  并解析；哈希列表文本格式：
+  ```
+  # falcon-hash-list v1
+  # chunkSize: <n> / # algorithm: <alg> / # fileSize: <n> / # chunks: <n>
+  <hex hash 行，按分块顺序>
+  ```
+- ✅ `serializeHashList()`（公共静态）：generateHashList 结果 → 文本，
+  可部署为服务端 .falconhash 文件
+- ✅ `parseHashList()`（公共静态）：严格校验——哈希行必须为偶数长度
+  十六进制；`chunks` 计数与哈希行数一致；algorithm 与调用方期望一致
+  （不一致 → 不可比较 → 空列表）；fileSize 元数据收缩最后一块实际大小
+- ✅ `downloadChanged` 本地读取越界修复：localSize > remoteSize 时
+  clamp 到可容纳字节数（此前 read 会越界）
+- ✅ 无 libcurl 构建保持优雅回退（警告 + 空结果）
+
+**测试（新增 5 个，共 13 个通过）：**
+- ✅ 哈希列表序列化/解析往返（元数据覆盖默认参数、末块收缩）
+- ✅ 损坏列表拒绝：非法 hex / 奇数长度 / chunks 计数不符 / 算法不匹配
+- ✅ 端到端：本地服务器（/file.bin 支持 Range、/file.bin.falconhash），
+  compare 精确识别唯一变化分块（1024/2500 = 40.96%），
+  downloadChanged 输出与远程内容逐字节一致
+- ✅ 无变化场景（totalChanged=0）与本地文件缺失场景（全量下载）
+- ✅ `Compare_Integration` 的 example.com 改为立即拒绝的回环端口
+  （保持离线快速失败）
+
+**验证：**
+- ✅ ctest 1406/1406 连续 3 轮全部通过
+- ✅ 全量构建零警告（标准 + BT 启用构建）
+
 ## 未完成事项（代码内 TODO 对应的架构级待办）
 
 1. **日志库迁移**（`logger.hpp`）：当前为手写流式 logger + FALCON_LOG_*
@@ -1239,6 +1282,6 @@ feature 候选：
 3. **DHT 迭代查找**（`dht_node.cpp:performLookup`）：应按 Kademlia 迭代逼近
    （用响应中更近节点继续查询），当前仅查最接近的 8 个节点一轮
 4. ~~**V2 引擎多连接分段下载**~~ ✅ 已完成（2026-09-07，见上方条目）
-5. **增量下载远程哈希列表/Range 下载**（`incremental_download.cpp`）：
-   downloadRemoteHashList/downloadRange 为空实现
+5. ~~**增量下载远程哈希列表/Range 下载**~~ ✅ 已完成（2026-09-07，见上方条目；
+   剩余可选增强：rsync rolling-hash 算法、增量结果端到端哈希校验）
 
