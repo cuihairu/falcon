@@ -809,71 +809,27 @@ bool HttpResponseCommand::handle_redirect() {
 bool HttpResponseCommand::determine_download_strategy(DownloadEngineV2* engine) {
     if (!engine) return false;
 
-    // 单连接下载：后续可按 Accept-Ranges + min_segment_size 切换多连接
+    // 单连接下载：在当前连接上顺序接收完整 body。
+    //
+    // 注意：V2 引擎暂不支持多连接分段下载。此前的实现在此处分段，但只
+    // 调度了第 0 段（长度 segment_size），其余分段的连接命令创建后即被
+    // 丢弃，导致文件被截断却仍标记为 Completed；且 write_to_segment 是
+    // 顺序写、不支持按 offset 定位，多段并发写同一 ofstream 也会交错损坏。
+    // 后续实现多连接时需：每段独立连接 + 按 offset 定位写入（或段文件
+    // 最后合并），再按 Accept-Ranges + min_segment_size 启用。
     if (accepts_range_ && content_length_ > options_.min_segment_size) {
-        FALCON_LOG_INFO_STREAM("支持分段下载，启用多线程模式");
-
-        // 计算分段数量
-        const size_t max_connections = options_.max_connections;
-        const Bytes computed_segment_size = content_length_ / max_connections;
-        const Bytes min_segment_size = static_cast<Bytes>(options_.min_segment_size);
-        const Bytes segment_size = std::max(min_segment_size, computed_segment_size);
-
-        size_t num_segments = (content_length_ + segment_size - 1) / segment_size;
-        if (num_segments > max_connections) {
-            num_segments = max_connections;
-        }
-
-        FALCON_LOG_INFO_STREAM("分段数: " << num_segments << ", 每段大小: " << segment_size);
-
-        // 为每个分段创建下载命令
-        for (size_t i = 0; i < num_segments; ++i) {
-            Bytes offset = i * segment_size;
-            Bytes length = segment_size;
-            if (offset + length > content_length_) {
-                length = content_length_ - offset;
-            }
-
-            // 第一个分段使用已有的初始数据
-            std::string initial_data;
-            SegmentId segment_id = static_cast<SegmentId>(i);
-            if (i == 0) {
-                initial_data = initial_body_;
-            }
-
-            auto download_cmd = std::make_unique<HttpDownloadCommand>(
-                get_task_id(),
-                socket_fd_,
-                http_response_,
-                segment_id,
-                offset,
-                length,
-                initial_data
-            );
-
-            // 第一个分段直接调度，其他分段需要创建新连接
-            if (i == 0) {
-                schedule_next(engine, std::move(download_cmd));
-            } else {
-                // 为其他分段创建新连接
-                auto new_conn_cmd = std::make_unique<HttpInitiateConnectionCommand>(
-                    get_task_id(), http_request_->url(), options_);
-                // 注意：这里需要将新连接命令和下载命令关联起来
-                // 简化实现：暂只支持单线程下载
-                FALCON_LOG_WARN_STREAM("多线程下载暂未完全实现，使用单线程模式");
-            }
-        }
+        FALCON_LOG_INFO_STREAM("服务器支持分段下载（V2 暂按单连接处理）");
     } else {
         FALCON_LOG_INFO_STREAM("单线程下载模式");
-        schedule_next(engine,
-                      std::make_unique<HttpDownloadCommand>(get_task_id(),
-                                                           socket_fd_,
-                                                           http_response_,
-                                                           /*segment_id=*/0,
-                                                           /*offset=*/0,
-                                                           content_length_,
-                                                           initial_body_));
     }
+    schedule_next(engine,
+                  std::make_unique<HttpDownloadCommand>(get_task_id(),
+                                                        socket_fd_,
+                                                        http_response_,
+                                                        /*segment_id=*/0,
+                                                        /*offset=*/0,
+                                                        content_length_,
+                                                        initial_body_));
     return true;
 }
 

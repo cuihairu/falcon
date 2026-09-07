@@ -26,8 +26,9 @@
 #include <chrono>
 #include <unordered_map>
 
-// 前向声明（全局命名空间）：测试夹具需访问 private cleanup_completed_commands 以验证超时清理
+// 前向声明（全局命名空间）：测试夹具需访问 private 成员以驱动命令执行/验证超时清理
 class DownloadEngineV2Test;
+class HttpCommandsCoverageTest;
 
 namespace falcon {
 
@@ -69,6 +70,8 @@ public:
 
     // 允许单元测试夹具直接驱动 private cleanup_completed_commands
     friend class ::DownloadEngineV2Test;
+    // 允许 HTTP 命令覆盖测试夹具直接驱动 execute_commands 验证调度结果
+    friend class ::HttpCommandsCoverageTest;
 
     // 禁止拷贝和移动
     DownloadEngineV2(const DownloadEngineV2&) = delete;

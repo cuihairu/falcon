@@ -393,6 +393,19 @@ protected:
 
     std::string test_dir_;
 
+    // TEST_F 测试体位于派生类中，友元关系不继承；通过夹具成员函数
+    // 间接驱动 private 成员（夹具本身是引擎的 friend）
+    void drive_engine_commands(DownloadEngineV2& engine) {
+        engine.execute_commands();
+    }
+
+    // 模拟 run() 主循环的一轮迭代：poll 触发就绪回调（恢复挂起的命令
+    // 重新入队），随后执行命令队列
+    void drive_engine_events(DownloadEngineV2& engine, int timeout_ms = 100) {
+        engine.event_poll_->poll(timeout_ms);
+        engine.execute_commands();
+    }
+
     static std::atomic<unsigned> counter_;
 };
 
@@ -553,9 +566,14 @@ TEST_F(HttpCommandsCoverageTest, Response200SchedulesDownloadCommand) {
     EXPECT_FALSE(cmd.accepts_range());
 }
 
-TEST_F(HttpCommandsCoverageTest, Response200WithAcceptRangesUsesSegments) {
+TEST_F(HttpCommandsCoverageTest, Response200WithAcceptRangesDownloadsFullBody) {
     EngineConfigV2 config;
     DownloadEngineV2 engine(config);
+
+    const std::string out_path = test_dir_ + "/accept_ranges.bin";
+    TaskHandle handle = make_engine_task(engine, out_path);
+    ASSERT_NE(handle.group, nullptr);
+    ASSERT_NE(handle.task, nullptr);
 
     auto [fd0, fd1] = make_socket_pair_nb();
     ASSERT_GE(fd0, 0);
@@ -563,25 +581,41 @@ TEST_F(HttpCommandsCoverageTest, Response200WithAcceptRangesUsesSegments) {
     ScopedFd guard0(fd0);
     ScopedFd guard1(fd1);
 
-    const std::string raw =
+    // 只写响应头：body 分两批到达，确定性复现「下载提前完成导致截断」
+    const std::string headers =
         "HTTP/1.1 200 OK\r\n"
         "Accept-Ranges: bytes\r\n"
         "Content-Length: 16\r\n"
-        "\r\n"
-        "0123";
-    ASSERT_TRUE(write_all(fd1, raw));
+        "\r\n";
+    ASSERT_TRUE(write_all(fd1, headers));
 
     DownloadOptions options;
-    options.min_segment_size = 4;   // 强制走多分段分支
+    options.min_segment_size = 4;   // 远小于 content_length，旧代码会走分段分支
     options.max_connections = 2;
     auto request = std::make_shared<HttpRequest>();
-    HttpResponseCommand cmd(9999, fd0, request, options);
+    HttpResponseCommand cmd(handle.id, fd0, request, options);
 
     EXPECT_TRUE(cmd.execute(&engine));
     EXPECT_EQ(cmd.status(), CommandStatus::COMPLETED);
     EXPECT_TRUE(cmd.accepts_range());
     EXPECT_TRUE(cmd.supports_resume());
     EXPECT_EQ(cmd.content_length(), 16);
+
+    // 第一批 body（8 字节，恰好等于旧分段分支的 segment_size）
+    ASSERT_TRUE(write_all(fd1, "01234567"));
+    drive_engine_commands(engine);
+
+    // 关键断言：body 未到齐，任务绝不能提前 Completed。
+    // 旧代码：第 0 段 length=segment_size=8，收满 8 字节即 Completed（截断）
+    EXPECT_EQ(handle.task->status(), TaskStatus::Downloading);
+
+    // 第二批 body + 对端关闭：挂起的下载命令经事件回调恢复并完成
+    ASSERT_TRUE(write_all(fd1, "89ABCDEF"));
+    guard1.reset();  // 关闭写端
+    drive_engine_events(engine);
+
+    EXPECT_EQ(handle.task->status(), TaskStatus::Completed);
+    EXPECT_EQ(read_file_content(out_path), "0123456789ABCDEF");
 }
 
 TEST_F(HttpCommandsCoverageTest, ResponseRedirect302FailsTask) {

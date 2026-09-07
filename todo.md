@@ -1084,3 +1084,35 @@ feature 候选：
 - `DownloadEngineTest.EventListener` 在高并行负载下偶发失败（单独运行稳定通过），
   属既有的时序敏感测试，非本次改动引入
 
+### 2026-09-07 - 修复 V2 引擎 HTTP 分段分支文件截断 bug
+
+**问题（严重，数据损坏）：**
+- `HttpResponseCommand::process_response` 中，当 `Accept-Ranges: bytes` 且
+  `content_length_ > min_segment_size` 时进入「多线程分段」分支，但该分支只
+  调度了第 0 段（长度 `segment_size`），其余分段的连接命令创建后直接丢弃：
+  - 下载到 `segment_size` 字节即触发完成判定（`check_completion`），
+    **文件被截断却标记为 Completed**
+  - 即使不截断，后续收到的数据仍会被 `write_to_segment` 全量顺序写入
+    （不按 offset 定位），多段并发写同一 `ofstream` 也会交错损坏
+
+**修复：**
+- ✅ V2 引擎 HTTP 下载统一走单连接完整 body（`length=content_length_`），
+  与分支前注释「单连接下载」的设计意图一致
+- ✅ `accepts_range_` 保留为元数据（断点续传能力探测），不再用于调度分段
+- ✅ 代码注释说明多连接分段的前置条件：每段独立连接 + 按 offset 定位写入
+  （或段文件最后合并）
+
+**测试（回归保护）：**
+- ✅ 原 `Response200WithAcceptRangesUsesSegments` 只断言标志位，无法捕获截断；
+  重写为 `Response200WithAcceptRangesDownloadsFullBody`：
+  - 响应头与 body 分批投递（socketpair），第一批恰为旧分支的 `segment_size`
+  - 关键断言：body 未到齐时任务必须仍是 `Downloading`（旧代码此处置信 Completed）
+  - 第二批 + 对端关闭后经事件回调恢复命令，最终断言文件内容完整
+- ✅ 已验证：回滚修复后该测试稳定失败，应用修复后通过
+- ✅ 测试基建：`HttpCommandsCoverageTest` 夹具作为 `DownloadEngineV2` 友元
+  （头文件前向声明），通过夹具成员函数驱动 private `execute_commands()` 与
+  `event_poll_->poll()`——gtest TEST_F 测试体位于派生类，友元不继承
+
+**验证：**
+- ✅ ctest 1391/1391 全部通过
+
