@@ -13,6 +13,7 @@
 
 #include <falcon/protocols/commands/command.hpp>
 #include <falcon/download_options.hpp>
+#include <falcon/download_task.hpp>
 #include <falcon/protocols/http/http_request.hpp>
 #include <falcon/protocols/net/socket_pool.hpp>
 #include <memory>
@@ -28,6 +29,8 @@ namespace falcon {
 
 // 前向声明
 class DownloadEngineV2;
+class RequestGroup;
+class DownloadTask;
 
 namespace net {
 class PooledSocket;
@@ -44,6 +47,32 @@ enum class HttpConnectionState {
     RECEIVING,
     COMPLETE
 };
+
+/**
+ * @brief HTTP 分段范围（多连接分段下载）
+ */
+struct HttpSegmentRange {
+    Bytes offset = 0;  ///< 段起始偏移（含）
+    Bytes length = 0;  ///< 段长度
+};
+
+/**
+ * @brief 计算多连接分段下载的分段计划
+ *
+ * 参考 SegmentDownloader::initialize_segments 的等分策略：
+ * - 段数不超过 max_connections，且不超过 content_length / min_segment_size
+ *   （保证每段平均长度不低于最小分段大小）
+ * - 不足一个最小分段的剩余部分并入最后一段
+ *
+ * @param content_length 文件总大小（>0）
+ * @param min_segment_size 最小分段大小
+ * @param max_connections 最大连接数
+ * @return 分段列表（至少 1 个元素，恰好覆盖 [0, content_length)）
+ */
+std::vector<HttpSegmentRange> compute_http_segment_ranges(
+    Bytes content_length,
+    Bytes min_segment_size,
+    std::size_t max_connections);
 
 /**
  * @brief HTTP 连接初始化命令
@@ -112,6 +141,38 @@ public:
         return connection_state_;
     }
 
+    /**
+     * @brief 将本连接标记为多连接分段的第 segment_id 段
+     *
+     * 设置后 prepare_http_request() 会附加 Range 请求头，
+     * 后续响应命令按 (segment_id, offset, length) 调度该段的下载命令。
+     *
+     * @param segment_id 分段编号（>0）
+     * @param offset 段起始偏移
+     * @param length 段长度
+     */
+    void set_range(SegmentId segment_id, Bytes offset, Bytes length);
+
+    /**
+     * @brief 是否为分段连接
+     */
+    bool has_range() const noexcept { return has_range_; }
+
+    /**
+     * @brief 获取分段编号
+     */
+    SegmentId range_segment_id() const noexcept { return range_segment_id_; }
+
+    /**
+     * @brief 获取段起始偏移
+     */
+    Bytes range_offset() const noexcept { return range_offset_; }
+
+    /**
+     * @brief 获取段长度
+     */
+    Bytes range_length() const noexcept { return range_length_; }
+
 private:
     bool resolve_host(const std::string& host, std::string& ip);
     bool create_socket();
@@ -119,6 +180,7 @@ private:
     bool setup_tls();  // 始终声明，实现根据 FALCON_ENABLE_OPENSSL 条件编译
     bool prepare_http_request();
     ExecutionResult send_http_request(DownloadEngineV2* engine);
+    void notify_segment_failure(DownloadEngineV2* engine, const std::string& reason);
 
     std::string url_;
     DownloadOptions options_;
@@ -130,6 +192,12 @@ private:
     std::string path_ = "/";
     uint16_t port_ = 80;
     bool use_https_ = false;
+
+    // 多连接分段信息（初始连接无 Range；段 1..N-1 的连接带 Range）
+    bool has_range_ = false;
+    SegmentId range_segment_id_ = 0;
+    Bytes range_offset_ = 0;
+    Bytes range_length_ = 0;
 
     std::string resolved_ip_;
     bool connect_in_progress_ = false;
@@ -167,6 +235,11 @@ public:
      * @param options 下载选项
      * @param ssl_conn SSL 连接（HTTPS 时使用）
      * @param use_https 是否使用 HTTPS
+     * @param source_url 原始完整 URL（多连接分段时为段 1..N-1 创建新连接用；
+     *                   空串表示不启用多连接）
+     * @param segment_id 分段编号（0 = 初始连接）
+     * @param range_offset 分段起始偏移（segment_id > 0 时有效）
+     * @param range_length 分段长度（segment_id > 0 时有效）
      */
     HttpResponseCommand(TaskId task_id,
                         int socket_fd,
@@ -175,7 +248,11 @@ public:
 #ifdef FALCON_ENABLE_OPENSSL
                         void* ssl_conn = nullptr,
 #endif
-                        bool use_https = false);
+                        bool use_https = false,
+                        std::string source_url = {},
+                        SegmentId segment_id = 0,
+                        Bytes range_offset = 0,
+                        Bytes range_length = 0);
 
     ~HttpResponseCommand() override;
 
@@ -234,6 +311,13 @@ public:
         return accepts_range_;
     }
 
+    /**
+     * @brief 是否为多连接分段中的响应（segment_id > 0）
+     */
+    bool is_segment_response() const noexcept {
+        return segment_id_ > 0;
+    }
+
 private:
     ExecutionResult receive_response_headers(DownloadEngineV2* engine);
     bool parse_headers();
@@ -241,11 +325,19 @@ private:
     bool parse_header_line(const std::string& line);
     bool handle_redirect();
     bool determine_download_strategy(DownloadEngineV2* engine);
+    bool schedule_multi_segment_download(DownloadEngineV2* engine);
+    bool validate_segment_response() const;
 
     int socket_fd_;
     std::shared_ptr<HttpRequest> http_request_;
     std::shared_ptr<HttpResponse> http_response_;
     const DownloadOptions& options_;  // 引用下载选项
+
+    // 多连接分段信息
+    std::string source_url_;       ///< 原始完整 URL（空 = 不启用多连接）
+    SegmentId segment_id_ = 0;     ///< 分段编号（0 = 初始连接）
+    Bytes range_offset_ = 0;       ///< 分段起始偏移
+    Bytes range_length_ = 0;       ///< 分段长度
 
     // TLS/HTTPS 支持
     bool use_https_ = false;
@@ -357,11 +449,16 @@ private:
     bool handle_chunked_encoding(const char* data, std::size_t size, DownloadEngineV2* engine);
     void update_progress();
     bool check_completion();
+    void complete_group_if_all_segments_done(RequestGroup& group,
+                                             const DownloadTask::Ptr& task,
+                                             bool success);
+    void fail_group_on_segment_error(RequestGroup& group,
+                                     const DownloadTask::Ptr& task);
 
     int socket_fd_;
     std::shared_ptr<HttpResponse> http_response_;
     SegmentId segment_id_;
-    [[maybe_unused]] Bytes offset_;          // 当前分段在文件中的起始偏移
+    Bytes offset_;                          // 当前分段在文件中的起始偏移
     Bytes length_;          // 分段长度（0 表示到末尾）
     [[maybe_unused]] Bytes current_offset_;  // 当前写入位置
 

@@ -1173,6 +1173,63 @@ feature 候选：
 - ✅ 全量构建零警告（标准构建 + BT 启用构建）
 - ✅ ctest 1391/1391 连续 5 轮全部通过（两个偶发失败根因均已修复）
 
+### 2026-09-07 - V2 引擎多连接分段下载实现
+
+**目标（来自「未完成事项」#4）：**
+- V2 引擎 HTTP 下载在服务器支持 Range 时启用多连接分段下载：
+  每段独立连接 + 按 offset 定位写入，替代此前的恒单连接模式
+
+**核心机制（aria2 风格命令链）：**
+- ✅ 分段计划 `compute_http_segment_ranges()`（公共 API，可单测）：
+  段数 clamp 到 [1, max_connections] 且不超过 content/min_segment_size
+  （每段平均长度不低于最小分段大小），余数并入最后一段——与
+  SegmentDownloader 的等分策略一致
+- ✅ `HttpInitiateConnectionCommand::set_range(segment_id, offset, length)`：
+  分段连接在 `prepare_http_request()` 附加 `Range: bytes=A-B` 头，
+  并把分段信息传递给响应命令
+- ✅ `HttpResponseCommand` 分段分支：段 1..N-1 的响应必须为
+  **206 Partial Content** 且 `Content-Length == 计划段长`
+  （服务器忽略 Range 返回 200 或长度不符 → 该段判定失败，防止数据错位）
+- ✅ `HttpResponseCommand::schedule_multi_segment_download()`：段 0 复用
+  当前连接，段 1..N-1 各自创建新连接命令（每连接携带原始 URL）
+- ✅ `HttpDownloadCommand` 定位写入：段 >0 以
+  `in|out` 模式打开（不截断），每次写入前 `seekp(offset + downloaded)`；
+  **越界保护**：超出计划段长的数据被丢弃（同时惠及单连接模式——
+  服务器超额发送不再写入文件）
+- ✅ 完成门控：`RequestGroup` 新增分段跟踪器
+  （`begin_multi_segment/finish_segment/has_segment_failure`，互斥保护）。
+  仅当全部分段结束且无失败时置任务 Completed/组 COMPLETED；
+  任一分段失败立即置任务 Failed/组 FAILED，其余分段静默退出
+  （不覆盖终态）
+- ✅ 进度聚合：多连接模式下任务进度 = `group->downloaded_bytes() /
+  file_info().total_size`（段内局部进度不再误报为任务进度）
+- ✅ 失败传播：分段连接的连接/TLS/发送失败经
+  `notify_segment_failure()` 传播到任务与组
+
+**兼容性说明：**
+- `HttpResponseCommand` 新参数均为带默认值的可选参数，既有调用点不变
+- 单连接回退路径完整保留：不接受 Range / 文件小于 min_segment×N /
+  max_connections<=1 / 手工构造的响应命令（无 source_url）均走单连接
+- 既有回归测试 `Response200WithAcceptRangesDownloadsFullBody` 因
+  source_url 为空自动走单连接路径，仍验证截断防护
+
+**测试（9 个新增）：**
+- ✅ 分段计划 5 个：等分/余数并入末段/min_segment 钳制/退化输入
+- ✅ 定位写入 2 个：预置文件 + offset 写入、分批到达（park/恢复链路）
+- ✅ 越界保护 1 个：段长 8 收到 16 字节，多余 8 字节丢弃
+- ✅ 端到端 1 个：本地 206 Range 服务器（支持 `Range: bytes=A-B` 解析、
+  200 全量 + Accept-Ranges、206 切片）+ `engine.run()` 完整事件循环，
+  验证 4 连接并发下载 16KB 文件内容与原数据逐字节一致
+
+**顺带修复（测试基建 use-after-free）：**
+- `download_engine_v2_run_test.cpp` 的 `InstantCommand/SocketWaitCommand/
+  RequeueCommand` 在 `run()` 期间被引擎弹出销毁，测试仍持有裸指针断言
+  （读悬垂内存得到垃圾值）。改为 `shared_ptr<atomic<int>>` 共享计数器
+
+**验证：**
+- ✅ ctest 1400/1400 连续 3 轮全部通过（新增 9 个测试）
+- ✅ 全量构建零警告（标准 + BT 启用构建）
+
 ## 未完成事项（代码内 TODO 对应的架构级待办）
 
 1. **日志库迁移**（`logger.hpp`）：当前为手写流式 logger + FALCON_LOG_*
@@ -1181,8 +1238,7 @@ feature 候选：
    需在 receiveLoop 收到响应后上报；当前为同步单轮查询
 3. **DHT 迭代查找**（`dht_node.cpp:performLookup`）：应按 Kademlia 迭代逼近
    （用响应中更近节点继续查询），当前仅查最接近的 8 个节点一轮
-4. **V2 引擎多连接分段下载**（`http_commands.cpp`）：需每段独立连接 +
-   按 offset 定位写入（或段文件合并），当前 V2 恒为单连接完整下载
+4. ~~**V2 引擎多连接分段下载**~~ ✅ 已完成（2026-09-07，见上方条目）
 5. **增量下载远程哈希列表/Range 下载**（`incremental_download.cpp`）：
    downloadRemoteHashList/downloadRange 为空实现
 

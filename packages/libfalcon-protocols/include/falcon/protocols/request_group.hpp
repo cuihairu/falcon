@@ -16,6 +16,7 @@
 #include <falcon/protocols/commands/command.hpp>
 
 #include <memory>
+#include <mutex>
 #include <vector>
 #include <string>
 #include <map>
@@ -236,6 +237,35 @@ public:
         downloaded_bytes_ += bytes;
     }
 
+    // ------------------------------------------------------------------
+    // 多连接分段下载状态（V2 引擎）
+    // ------------------------------------------------------------------
+
+    /**
+     * @brief 是否处于多分段下载模式
+     */
+    bool is_multi_segment() const;
+
+    /**
+     * @brief 进入多分段模式
+     *
+     * @param total_segments 分段总数（>1）
+     */
+    void begin_multi_segment(std::size_t total_segments);
+
+    /**
+     * @brief 记录一个分段结束
+     *
+     * @param success 该分段是否成功
+     * @return true 所有分段均已结束（此后由调用方设置任务/组终态）
+     */
+    bool finish_segment(bool success);
+
+    /**
+     * @brief 是否存在已失败的分段
+     */
+    bool has_segment_failure() const;
+
 private:
     TaskId id_;
     RequestGroupStatus status_ = RequestGroupStatus::WAITING;
@@ -249,6 +279,12 @@ private:
     // 下载状态
     Bytes downloaded_bytes_ = 0;
     std::string error_message_;
+
+    // 多分段下载跟踪（多连接模式；单段模式 total_ == 0）
+    mutable std::mutex segment_mutex_;
+    std::size_t segment_total_ = 0;
+    std::size_t segment_finished_ = 0;
+    bool segment_failure_ = false;
 
     // 空文件引用（用于 files_ 为空的情况）
     static FileInfo empty_file_;

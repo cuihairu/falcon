@@ -1021,3 +1021,365 @@ TEST_F(HttpCommandsCoverageTest, RetryWithinLimitReportsShouldRetry) {
     EXPECT_TRUE(cmd.should_retry());
     EXPECT_EQ(cmd.retry_count(), 4);
 }
+
+//==============================================================================
+// 多连接分段下载
+//==============================================================================
+
+TEST_F(HttpCommandsCoverageTest, ComputeSegmentRangesBasicSplit) {
+    // 16 字节、最小段 4、2 连接：等分为 2 段各 8 字节
+    const auto ranges = compute_http_segment_ranges(16, 4, 2);
+    ASSERT_EQ(ranges.size(), std::size_t{2});
+    EXPECT_EQ(ranges[0].offset, 0u);
+    EXPECT_EQ(ranges[0].length, 8u);
+    EXPECT_EQ(ranges[1].offset, 8u);
+    EXPECT_EQ(ranges[1].length, 8u);
+}
+
+TEST_F(HttpCommandsCoverageTest, RemainderMergedIntoLastSegment) {
+    // 10 字节、最小段 4：最多拆 2 段（10/4=2），各 5 字节
+    const auto ranges = compute_http_segment_ranges(10, 4, 4);
+    ASSERT_EQ(ranges.size(), std::size_t{2});
+    EXPECT_EQ(ranges[0].offset, 0u);
+    EXPECT_EQ(ranges[0].length, 5u);
+    EXPECT_EQ(ranges[1].offset, 5u);
+    EXPECT_EQ(ranges[1].length, 5u);
+}
+
+TEST_F(HttpCommandsCoverageTest, ClampedByMinSegmentSize) {
+    // 略大于最小段：每段平均长度不低于 min_segment → 不拆分
+    const auto ranges = compute_http_segment_ranges(1024 * 1024 + 1, 1024 * 1024, 4);
+    ASSERT_EQ(ranges.size(), std::size_t{1});
+    EXPECT_EQ(ranges[0].offset, 0u);
+    EXPECT_EQ(ranges[0].length, 1024 * 1024 + 1);
+}
+
+TEST_F(HttpCommandsCoverageTest, RemainderGoesToLastSegment) {
+    // 1025 字节、2 连接：前段 512，末段 513（余数并入最后一段）
+    const auto ranges = compute_http_segment_ranges(1025, 1, 2);
+    ASSERT_EQ(ranges.size(), std::size_t{2});
+    EXPECT_EQ(ranges[0].offset, 0u);
+    EXPECT_EQ(ranges[0].length, 512u);
+    EXPECT_EQ(ranges[1].offset, 512u);
+    EXPECT_EQ(ranges[1].length, 513u);
+}
+
+TEST_F(HttpCommandsCoverageTest, DegenerateInputs) {
+    EXPECT_TRUE(compute_http_segment_ranges(0, 1024, 4).empty());
+    EXPECT_TRUE(compute_http_segment_ranges(100, 1024, 0).empty());
+
+    // 单段回退：覆盖完整范围
+    const auto single = compute_http_segment_ranges(7, 1024, 4);
+    ASSERT_EQ(single.size(), std::size_t{1});
+    EXPECT_EQ(single[0].offset, 0u);
+    EXPECT_EQ(single[0].length, 7u);
+}
+
+TEST_F(HttpCommandsCoverageTest, PositionedSegmentWriteAppendsAtOffset) {
+    EngineConfigV2 config;
+    DownloadEngineV2 engine(config);
+
+    const std::string out_path = test_dir_ + "/positioned.bin";
+    TaskHandle handle = make_engine_task(engine, out_path);
+    ASSERT_NE(handle.group, nullptr);
+    ASSERT_NE(handle.task, nullptr);
+
+    // 首段先写入前 8 字节（模拟段 0 已完成）
+    {
+        std::ofstream seed(out_path, std::ios::binary | std::ios::trunc);
+        seed << "01234567";
+    }
+
+    auto [fd0, fd1] = make_socket_pair_nb();
+    ASSERT_GE(fd0, 0);
+    ASSERT_GE(fd1, 0);
+    ScopedFd guard0(fd0);
+
+    // 段 1（offset=8, length=8）：初始数据即全部段数据，随后对端关闭
+    CLOSE_SOCKET(fd1);
+
+    auto response = std::make_shared<HttpResponse>();
+    HttpDownloadCommand cmd(handle.id, fd0, response,
+                            /*segment_id=*/1, /*offset=*/8, /*length=*/8,
+                            /*initial_data=*/"89ABCDEF");
+
+    EXPECT_TRUE(cmd.execute(&engine));
+    EXPECT_TRUE(cmd.is_complete());
+    EXPECT_EQ(read_file_content(out_path), "0123456789ABCDEF");
+}
+
+TEST_F(HttpCommandsCoverageTest, PositionedSegmentWriteInBatches) {
+    EngineConfigV2 config;
+    DownloadEngineV2 engine(config);
+
+    const std::string out_path = test_dir_ + "/positioned_batches.bin";
+    TaskHandle handle = make_engine_task(engine, out_path);
+    ASSERT_NE(handle.group, nullptr);
+    ASSERT_NE(handle.task, nullptr);
+
+    {
+        std::ofstream seed(out_path, std::ios::binary | std::ios::trunc);
+        seed << "AAAABBBB";
+    }
+
+    auto [fd0, fd1] = make_socket_pair_nb();
+    ASSERT_GE(fd0, 0);
+    ASSERT_GE(fd1, 0);
+    ScopedFd guard0(fd0);
+    ScopedFd guard1(fd1);
+
+    auto response = std::make_shared<HttpResponse>();
+    HttpDownloadCommand cmd(handle.id, fd0, response,
+                            /*segment_id=*/2, /*offset=*/8, /*length=*/8);
+
+    // 第一批 4 字节（offset 8..11）
+    ASSERT_TRUE(write_all(fd1, "CCCC"));
+    EXPECT_FALSE(cmd.execute(&engine));  // 未完成 → 等待 socket
+    EXPECT_EQ(cmd.downloaded_bytes(), 4u);
+
+    // 第二批 4 字节后对端关闭（offset 12..15）
+    ASSERT_TRUE(write_all(fd1, "DDDD"));
+    guard1.reset();
+    EXPECT_TRUE(cmd.execute(&engine));
+    EXPECT_TRUE(cmd.is_complete());
+    EXPECT_EQ(read_file_content(out_path), "AAAABBBBCCCCDDDD");
+}
+
+TEST_F(HttpCommandsCoverageTest, SegmentOverrunDataIsDropped) {
+    EngineConfigV2 config;
+    DownloadEngineV2 engine(config);
+
+    const std::string out_path = test_dir_ + "/overrun.bin";
+    TaskHandle handle = make_engine_task(engine, out_path);
+    ASSERT_NE(handle.group, nullptr);
+    ASSERT_NE(handle.task, nullptr);
+
+    {
+        std::ofstream seed(out_path, std::ios::binary | std::ios::trunc);
+        seed << "01234567";
+    }
+
+    auto [fd0, fd1] = make_socket_pair_nb();
+    ASSERT_GE(fd0, 0);
+    ASSERT_GE(fd1, 0);
+    ScopedFd guard0(fd0);
+
+    // 段长 8，但服务器发送 16 字节：多余的 8 字节必须被丢弃
+    CLOSE_SOCKET(fd1);
+
+    auto response = std::make_shared<HttpResponse>();
+    HttpDownloadCommand cmd(handle.id, fd0, response,
+                            /*segment_id=*/1, /*offset=*/8, /*length=*/8,
+                            /*initial_data=*/"89ABCDEFXXXXXXXX");
+
+    EXPECT_TRUE(cmd.execute(&engine));
+    EXPECT_TRUE(cmd.is_complete());
+    EXPECT_EQ(cmd.downloaded_bytes(), 8u);
+    // 越界数据不会写入文件
+    EXPECT_EQ(read_file_content(out_path), "0123456789ABCDEF");
+}
+
+//==============================================================================
+// 端到端：本地 Range 服务器 + 引擎完整事件循环
+//==============================================================================
+
+namespace {
+
+/// 支持 Range 请求的极简本地 HTTP 服务器（同步逐连接处理）
+class RangeTestServer {
+public:
+    bool start(const std::string& body, int expected_connections) {
+        body_ = body;
+        expected_ = expected_connections;
+
+        listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (listen_fd_ < 0) return false;
+
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = 0;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 ||
+            ::listen(listen_fd_, 8) != 0) {
+            ::close(listen_fd_);
+            listen_fd_ = -1;
+            return false;
+        }
+
+        sockaddr_in bound{};
+        socklen_t len = sizeof(bound);
+        if (::getsockname(listen_fd_, reinterpret_cast<sockaddr*>(&bound), &len) != 0) {
+            stop();
+            return false;
+        }
+        port_ = ntohs(bound.sin_port);
+
+        thread_ = std::thread([this] { serve_loop(); });
+        return true;
+    }
+
+    uint16_t port() const { return port_; }
+    int connections_served() const { return served_.load(); }
+
+    void stop() {
+        if (listen_fd_ >= 0) {
+            ::close(listen_fd_);
+            listen_fd_ = -1;
+        }
+        if (thread_.joinable()) {
+            thread_.join();
+        }
+    }
+
+    ~RangeTestServer() { stop(); }
+
+private:
+    void serve_loop() {
+        while (served_.load() < expected_) {
+            struct pollfd pfd;
+            pfd.fd = listen_fd_;
+            pfd.events = POLLIN;
+            pfd.revents = 0;
+            const int ready = ::poll(&pfd, 1, 5000);
+            if (ready <= 0) return;  // 超时或错误：退出，由测试超时兜底
+
+            const int conn = ::accept(listen_fd_, nullptr, nullptr);
+            if (conn < 0) return;
+            handle_connection(conn);
+            served_.fetch_add(1);
+        }
+    }
+
+    void handle_connection(int conn) {
+        // 读取请求头
+        std::string request;
+        char buf[4096];
+        while (request.find("\r\n\r\n") == std::string::npos) {
+            const ssize_t n = ::recv(conn, buf, sizeof(buf), 0);
+            if (n <= 0) {
+                ::close(conn);
+                return;
+            }
+            request.append(buf, static_cast<std::size_t>(n));
+        }
+
+        // 解析 Range: bytes=A-B
+        Bytes range_start = 0;
+        Bytes range_end = 0;
+        const std::string marker = "Range: bytes=";
+        const auto pos = request.find(marker);
+        const bool has_range = pos != std::string::npos;
+        if (has_range) {
+            const std::string range_value =
+                request.substr(pos + marker.size(),
+                               request.find("\r\n", pos) - (pos + marker.size()));
+            const auto dash = range_value.find('-');
+            range_start = std::stoull(range_value.substr(0, dash));
+            range_end = std::stoull(range_value.substr(dash + 1));
+        }
+
+        std::string response;
+        if (!has_range) {
+            response = "HTTP/1.1 200 OK\r\n"
+                       "Accept-Ranges: bytes\r\n"
+                       "Content-Length: " + std::to_string(body_.size()) + "\r\n"
+                       "Connection: close\r\n\r\n" + body_;
+        } else {
+            const Bytes slice_len = range_end - range_start + 1;
+            response = "HTTP/1.1 206 Partial Content\r\n"
+                       "Content-Range: bytes " + std::to_string(range_start) + "-" +
+                           std::to_string(range_end) + "/" +
+                           std::to_string(body_.size()) + "\r\n"
+                       "Content-Length: " + std::to_string(slice_len) + "\r\n"
+                       "Connection: close\r\n\r\n" +
+                       body_.substr(static_cast<std::size_t>(range_start),
+                                    static_cast<std::size_t>(slice_len));
+        }
+
+        std::size_t off = 0;
+        while (off < response.size()) {
+            const ssize_t n = ::send(conn, response.data() + off, response.size() - off, 0);
+            if (n <= 0) break;
+            off += static_cast<std::size_t>(n);
+        }
+        // 优雅关闭写方向，等待对端读完
+        ::shutdown(conn, SHUT_WR);
+        while (::recv(conn, buf, sizeof(buf), 0) > 0) {}
+        ::close(conn);
+    }
+
+    std::string body_;
+    int expected_ = 0;
+    int listen_fd_ = -1;
+    uint16_t port_ = 0;
+    std::atomic<int> served_{0};
+    std::thread thread_;
+};
+
+/// 生成确定性测试数据（避免全零导致偏移错误无法察觉）
+std::string make_pattern_body(std::size_t size) {
+    std::string body;
+    body.reserve(size);
+    for (std::size_t i = 0; i < size; ++i) {
+        body.push_back(static_cast<char>((i * 31 + 7) % 251));
+    }
+    return body;
+}
+
+} // namespace
+
+TEST_F(HttpCommandsCoverageTest, EndToEndMultiSegmentDownload) {
+    // 16KB body、min_segment 1024、4 连接 → 4 段各 4096 字节
+    const std::string body = make_pattern_body(16384);
+
+    RangeTestServer server;
+    ASSERT_TRUE(server.start(body, /*expected_connections=*/4));
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    const std::string out_path = test_dir_ + "/multi_segment.bin";
+    DownloadOptions options;
+    options.output_filename = out_path;
+    options.max_connections = 4;
+    options.min_segment_size = 1024;
+
+    const TaskId task_id =
+        engine.add_download("http://127.0.0.1:" + std::to_string(server.port()) +
+                                "/multi-segment.bin",
+                            options);
+    ASSERT_GT(task_id, 0u);
+
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    std::thread runner([&engine] { engine.run(); });
+
+    // 等待任务完成（10s 超时）
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    bool completed = false;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (group->status() == RequestGroupStatus::COMPLETED) {
+            completed = true;
+            break;
+        }
+        if (group->status() == RequestGroupStatus::FAILED) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    if (!completed) {
+        engine.force_shutdown();
+    }
+    runner.join();
+
+    ASSERT_TRUE(completed) << "下载未在超时内完成，组状态: " << static_cast<int>(group->status());
+    EXPECT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+    EXPECT_EQ(group->downloaded_bytes(), body.size());
+    // 所有 4 个连接都被使用（1 个初始 + 3 个分段连接）
+    EXPECT_EQ(server.connections_served(), 4);
+    // 文件内容完整且按偏移正确拼装
+    EXPECT_EQ(read_file_content(out_path), body);
+}

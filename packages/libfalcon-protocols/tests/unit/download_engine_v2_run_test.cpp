@@ -138,32 +138,35 @@ private:
 };
 
 /// 立即完成的普通命令
+///
+/// 注意：命令对象在 run() 执行期间被引擎弹出并销毁，测试断言必须通过
+/// 共享计数器读取结果，不能持有指向命令对象的裸指针（use-after-free）
 class InstantCommand : public AbstractCommand {
 public:
-    InstantCommand() : AbstractCommand(0) {}
+    explicit InstantCommand(std::shared_ptr<std::atomic<int>> counter)
+        : AbstractCommand(0), counter_(std::move(counter)) {}
     bool execute(DownloadEngineV2*) override {
-        executions_++;
+        counter_->fetch_add(1);
         return handle_result(ExecutionResult::OK);
     }
     const char* name() const override { return "InstantCommand"; }
-    int executions() const { return executions_.load(); }
 
 private:
-    std::atomic<int> executions_{0};
+    std::shared_ptr<std::atomic<int>> counter_;
 };
 
 /// 挂起命令：第一次执行注册 socket 读事件并等待；事件就绪后第二次执行完成并关闭引擎
 class SocketWaitCommand : public AbstractCommand {
 public:
-    explicit SocketWaitCommand(int fd)
-        : AbstractCommand(0), fd_(fd) {}
+    SocketWaitCommand(int fd, std::shared_ptr<std::atomic<int>> counter)
+        : AbstractCommand(0), fd_(fd), counter_(std::move(counter)) {}
 
     bool execute(DownloadEngineV2* engine) override {
-        executions_++;
+        counter_->fetch_add(1);
         if (!engine) {
             return handle_result(ExecutionResult::ERROR_OCCURRED);
         }
-        if (executions_.load() == 1) {
+        if (counter_->load() == 1) {
             if (!engine->register_socket_event(
                     fd_, static_cast<int>(net::IOEvent::READ), id())) {
                 return handle_result(ExecutionResult::ERROR_OCCURRED);
@@ -176,22 +179,21 @@ public:
     }
 
     const char* name() const override { return "SocketWaitCommand"; }
-    int executions() const { return executions_.load(); }
 
 private:
     int fd_;
-    std::atomic<int> executions_{0};
+    std::shared_ptr<std::atomic<int>> counter_;
 };
 
 /// 无事件注册的重试命令：前 N 次返回 false（引擎应重新入队），随后完成
 class RequeueCommand : public AbstractCommand {
 public:
-    explicit RequeueCommand(int false_rounds)
-        : AbstractCommand(0), false_rounds_(false_rounds) {}
+    RequeueCommand(int false_rounds, std::shared_ptr<std::atomic<int>> counter)
+        : AbstractCommand(0), false_rounds_(false_rounds), counter_(std::move(counter)) {}
 
     bool execute(DownloadEngineV2* engine) override {
-        executions_++;
-        if (executions_.load() <= false_rounds_) {
+        const int executions = counter_->fetch_add(1) + 1;
+        if (executions <= false_rounds_) {
             mark_active();
             return false;  // 未注册 socket 事件 → 引擎应重新入队
         }
@@ -202,11 +204,10 @@ public:
     }
 
     const char* name() const override { return "RequeueCommand"; }
-    int executions() const { return executions_.load(); }
 
 private:
     int false_rounds_;
-    std::atomic<int> executions_{0};
+    std::shared_ptr<std::atomic<int>> counter_;
 };
 
 /// 运行期添加任务的例程命令：首次执行 add_download，随后关闭引擎
@@ -270,15 +271,14 @@ TEST(DownloadEngineV2RunTest, RunShutdownByRoutineCommand) {
     CountdownShutdownRoutine* routine_ptr = routine.get();
     engine.add_routine_command(std::move(routine));
 
-    auto instant = std::make_unique<InstantCommand>();
-    InstantCommand* instant_ptr = instant.get();
-    engine.add_command(std::move(instant));
+    auto instant_counter = std::make_shared<std::atomic<int>>(0);
+    engine.add_command(std::make_unique<InstantCommand>(instant_counter));
 
     engine.run();
 
     // 例程命令在循环中被周期执行；普通命令被执行一次后出队
     EXPECT_GE(routine_ptr->executions(), 3);
-    EXPECT_EQ(instant_ptr->executions(), 1);
+    EXPECT_EQ(instant_counter->load(), 1);
     EXPECT_TRUE(engine.is_shutdown_requested());
 }
 
@@ -304,14 +304,13 @@ TEST(DownloadEngineV2RunTest, RunResumesParkedCommandOnSocketEvent) {
     ASSERT_GT(write(pair[1], payload, sizeof(payload)), 0);
 #endif
 
-    auto cmd = std::make_unique<SocketWaitCommand>(pair[0]);
-    SocketWaitCommand* cmd_ptr = cmd.get();
-    engine.add_command(std::move(cmd));
+    auto cmd_counter = std::make_shared<std::atomic<int>>(0);
+    engine.add_command(std::make_unique<SocketWaitCommand>(pair[0], cmd_counter));
 
     engine.run();
 
     // 第一次执行挂起 → 事件回调恢复 → 第二次执行完成
-    EXPECT_EQ(cmd_ptr->executions(), 2);
+    EXPECT_EQ(cmd_counter->load(), 2);
 
     CLOSE_SOCKET(pair[0]);
     CLOSE_SOCKET(pair[1]);
@@ -327,15 +326,14 @@ TEST(DownloadEngineV2RunTest, RunParksCommandWithoutEventForeverUntilDone) {
     CountdownShutdownRoutine* routine_ptr = routine.get();
     engine.add_routine_command(std::move(routine));
 
-    auto cmd = std::make_unique<RequeueCommand>(2);
-    RequeueCommand* cmd_ptr = cmd.get();
-    engine.add_command(std::move(cmd));
+    auto cmd_counter = std::make_shared<std::atomic<int>>(0);
+    engine.add_command(std::make_unique<RequeueCommand>(2, cmd_counter));
 
     engine.run();
 
     // 未注册事件的等待命令会被重新入队，直到自身完成
     EXPECT_GE(routine_ptr->executions(), 3);
-    EXPECT_EQ(cmd_ptr->executions(), 3);
+    EXPECT_EQ(cmd_counter->load(), 3);
 }
 
 //==============================================================================

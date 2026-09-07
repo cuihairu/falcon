@@ -41,6 +41,7 @@ typedef SSIZE_T ssize_t;
 
 #include <errno.h>
 
+#include <algorithm>
 #include <chrono>
 #include <thread>
 #include <cstring>
@@ -49,6 +50,45 @@ typedef SSIZE_T ssize_t;
 #include <cctype>
 
 namespace falcon {
+
+//==============================================================================
+// 多连接分段计划
+//==============================================================================
+
+std::vector<HttpSegmentRange> compute_http_segment_ranges(
+    Bytes content_length,
+    Bytes min_segment_size,
+    std::size_t max_connections) {
+    std::vector<HttpSegmentRange> ranges;
+    if (content_length == 0 || max_connections == 0) {
+        return ranges;
+    }
+
+    // 段数上限：不超过 max_connections，也不超过 content/min_segment
+    //（保证每段平均长度不低于最小分段大小，参考 SegmentDownloader 的
+    // min_segments/max_segments clamp 逻辑）
+    Bytes max_by_min = content_length / std::max<Bytes>(min_segment_size, 1);
+    if (max_by_min == 0) max_by_min = 1;
+    std::size_t num_segments = static_cast<std::size_t>(
+        std::min<Bytes>(static_cast<Bytes>(max_connections), max_by_min));
+    if (num_segments < 1) num_segments = 1;
+
+    // 等分，余数并入最后一段（与 SegmentDownloader 一致）
+    const Bytes base = content_length / num_segments;
+    const Bytes remainder = content_length % num_segments;
+
+    ranges.reserve(num_segments);
+    Bytes offset = 0;
+    for (std::size_t i = 0; i < num_segments; ++i) {
+        Bytes length = base;
+        if (i == num_segments - 1) {
+            length += remainder;
+        }
+        ranges.push_back({offset, length});
+        offset += length;
+    }
+    return ranges;
+}
 
 namespace {
 
@@ -169,12 +209,14 @@ bool HttpInitiateConnectionCommand::execute(DownloadEngineV2* engine) {
                 // 步骤 1: 创建 Socket
                 if (!create_socket()) {
                     FALCON_LOG_ERROR_STREAM("创建 Socket 失败");
+                    notify_segment_failure(engine, "Failed to create socket");
                     return handle_result(ExecutionResult::ERROR_OCCURRED);
                 }
 
                 // 步骤 2: 开始连接
                 if (!connect_socket()) {
                     FALCON_LOG_ERROR_STREAM("连接失败: " << host_);
+                    notify_segment_failure(engine, "Failed to connect: " + host_);
                     return handle_result(ExecutionResult::ERROR_OCCURRED);
                 }
 
@@ -192,6 +234,7 @@ bool HttpInitiateConnectionCommand::execute(DownloadEngineV2* engine) {
                 if (use_https_) {
                     if (!setup_tls()) {
                         FALCON_LOG_ERROR_STREAM("TLS 握手失败: " << host_);
+                        notify_segment_failure(engine, "TLS handshake failed: " + host_);
                         close_socket_fd(socket_fd_);
                         socket_fd_ = -1;
                         return handle_result(ExecutionResult::ERROR_OCCURRED);
@@ -201,13 +244,20 @@ bool HttpInitiateConnectionCommand::execute(DownloadEngineV2* engine) {
                 // 如果没有 OpenSSL，HTTPS 不可用
                 if (use_https_) {
                     FALCON_LOG_ERROR_STREAM("HTTPS 支持需要启用 OpenSSL");
+                    notify_segment_failure(engine, "HTTPS support requires OpenSSL");
                     close_socket_fd(socket_fd_);
                     socket_fd_ = -1;
                     return handle_result(ExecutionResult::ERROR_OCCURRED);
                 }
 #endif
 
-                return handle_result(send_http_request(engine));
+                {
+                    auto res = send_http_request(engine);
+                    if (res == ExecutionResult::ERROR_OCCURRED) {
+                        notify_segment_failure(engine, "Failed to send HTTP request");
+                    }
+                    return handle_result(res);
+                }
 
             case HttpConnectionState::CONNECTING:
                 // 检查连接是否完成（使用 getsockopt SO_ERROR）
@@ -220,10 +270,12 @@ bool HttpInitiateConnectionCommand::execute(DownloadEngineV2* engine) {
                     socklen_t len = sizeof(error);
                     if (getsockopt(socket_fd_, SOL_SOCKET, SO_ERROR, &error, &len) < 0) {
 #endif
+                        notify_segment_failure(engine, "getsockopt(SO_ERROR) failed");
                         return handle_result(ExecutionResult::ERROR_OCCURRED);
                     }
                     if (error != 0) {
                         FALCON_LOG_ERROR_STREAM("连接失败: " << strerror(error));
+                        notify_segment_failure(engine, std::string("Connect failed: ") + strerror(error));
                         close_socket_fd(socket_fd_);
                         socket_fd_ = -1;
                         return handle_result(ExecutionResult::ERROR_OCCURRED);
@@ -237,6 +289,7 @@ bool HttpInitiateConnectionCommand::execute(DownloadEngineV2* engine) {
                 if (use_https_) {
                     if (!setup_tls()) {
                         FALCON_LOG_ERROR_STREAM("TLS 握手失败: " << host_);
+                        notify_segment_failure(engine, "TLS handshake failed: " + host_);
                         close_socket_fd(socket_fd_);
                         socket_fd_ = -1;
                         return handle_result(ExecutionResult::ERROR_OCCURRED);
@@ -246,13 +299,20 @@ bool HttpInitiateConnectionCommand::execute(DownloadEngineV2* engine) {
                 // 如果没有 OpenSSL，HTTPS 不可用
                 if (use_https_) {
                     FALCON_LOG_ERROR_STREAM("HTTPS 支持需要启用 OpenSSL");
+                    notify_segment_failure(engine, "HTTPS support requires OpenSSL");
                     close_socket_fd(socket_fd_);
                     socket_fd_ = -1;
                     return handle_result(ExecutionResult::ERROR_OCCURRED);
                 }
 #endif
 
-                return handle_result(send_http_request(engine));
+                {
+                    auto res = send_http_request(engine);
+                    if (res == ExecutionResult::ERROR_OCCURRED) {
+                        notify_segment_failure(engine, "Failed to send HTTP request");
+                    }
+                    return handle_result(res);
+                }
 
             default:
                 return handle_result(ExecutionResult::ERROR_OCCURRED);
@@ -495,6 +555,16 @@ bool HttpInitiateConnectionCommand::prepare_http_request() {
     http_request_->set_header("Accept", "*/*");
     http_request_->set_header("Connection", "close");
 
+    // 多连接分段：非首段连接携带 Range 请求头
+    if (has_range_) {
+        const Bytes range_end = range_offset_ + range_length_ - 1;
+        http_request_->set_header(
+            "Range",
+            "bytes=" + std::to_string(range_offset_) + "-" + std::to_string(range_end));
+        FALCON_LOG_DEBUG_STREAM("分段 " << range_segment_id_ << " 请求范围: bytes="
+                                << range_offset_ << "-" << range_end);
+    }
+
     if (!options_.referer.empty()) {
         http_request_->set_header("Referer", options_.referer);
     }
@@ -563,7 +633,8 @@ AbstractCommand::ExecutionResult HttpInitiateConnectionCommand::send_http_reques
     connection_state_ = HttpConnectionState::REQUEST_SENT;
 
     // 发送完成，进入响应阶段
-    // 注意：如果是 HTTPS，需要传递 SSL 连接对象
+    // 注意：如果是 HTTPS，需要传递 SSL 连接对象；
+    // 分段连接需携带 URL 与分段信息，供响应命令按该段范围调度下载命令
     schedule_next(engine,
                   std::make_unique<HttpResponseCommand>(get_task_id(),
                                                        socket_fd_,
@@ -572,8 +643,44 @@ AbstractCommand::ExecutionResult HttpInitiateConnectionCommand::send_http_reques
 #ifdef FALCON_ENABLE_OPENSSL
                                                        ssl_conn_,
 #endif
-                                                       use_https_));
+                                                       use_https_,
+                                                       url_,
+                                                       range_segment_id_,
+                                                       range_offset_,
+                                                       range_length_));
     return ExecutionResult::OK;
+}
+
+void HttpInitiateConnectionCommand::set_range(SegmentId segment_id,
+                                              Bytes offset,
+                                              Bytes length) {
+    has_range_ = true;
+    range_segment_id_ = segment_id;
+    range_offset_ = offset;
+    range_length_ = length;
+}
+
+void HttpInitiateConnectionCommand::notify_segment_failure(DownloadEngineV2* engine,
+                                                           const std::string& reason) {
+    if (!has_range_ || !engine) {
+        return;
+    }
+    auto* man = engine->request_group_man();
+    auto* group = man ? man->find_group(get_task_id()) : nullptr;
+    if (!group) {
+        return;
+    }
+    group->finish_segment(false);
+    group->set_error_message(reason);
+    group->set_status(RequestGroupStatus::FAILED);
+    if (auto task = group->download_task()) {
+        if (task->error_message().empty()) {
+            task->set_error(reason);
+        }
+        task->set_status(TaskStatus::Failed);
+    }
+    close_socket_fd(socket_fd_);
+    socket_fd_ = -1;
 }
 
 //==============================================================================
@@ -588,11 +695,19 @@ HttpResponseCommand::HttpResponseCommand(
 #ifdef FALCON_ENABLE_OPENSSL
     , void* ssl_conn
 #endif
-    , bool use_https)
+    , bool use_https,
+    std::string source_url,
+    SegmentId segment_id,
+    Bytes range_offset,
+    Bytes range_length)
     : AbstractCommand(task_id)
     , socket_fd_(socket_fd)
     , http_request_(std::move(request))
     , options_(options)
+    , source_url_(std::move(source_url))
+    , segment_id_(segment_id)
+    , range_offset_(range_offset)
+    , range_length_(range_length)
     , use_https_(use_https)
 #ifdef FALCON_ENABLE_OPENSSL
     , ssl_conn_(ssl_conn)
@@ -617,6 +732,9 @@ bool HttpResponseCommand::execute(DownloadEngineV2* engine) {
             task->set_status(TaskStatus::Failed);
         }
         if (group) {
+            if (group->is_multi_segment()) {
+                group->finish_segment(false);
+            }
             group->set_error_message(msg);
             group->set_status(RequestGroupStatus::FAILED);
         }
@@ -647,7 +765,15 @@ bool HttpResponseCommand::execute(DownloadEngineV2* engine) {
         return fail("Unexpected HTTP status: " + std::to_string(status_code_));
     }
 
-    if (task && content_length_ > 0) {
+    // 多连接分段的响应（非首段）必须为 206 且长度与计划一致
+    if (segment_id_ > 0 && !validate_segment_response()) {
+        return fail("Segment " + std::to_string(segment_id_) +
+                    " response rejected (status " + std::to_string(status_code_) +
+                    ", length " + std::to_string(content_length_) + ")");
+    }
+
+    // 总量设置：仅初始连接执行（分段响应的 Content-Length 是段长而非文件长）
+    if (task && content_length_ > 0 && segment_id_ == 0) {
         task->update_progress(task->downloaded_bytes(), content_length_, 0);
     }
 
@@ -805,22 +931,88 @@ bool HttpResponseCommand::handle_redirect() {
     return true;
 }
 
+bool HttpResponseCommand::validate_segment_response() const {
+    // 分段连接期望 206 Partial Content；若服务器忽略 Range 返回 200，
+    // 该响应体是完整文件，写入段偏移会破坏其他分段的数据
+    if (status_code_ != 206) {
+        return false;
+    }
+    // 实际段长必须与计划一致，防止越界覆盖相邻分段
+    return content_length_ == range_length_;
+}
+
+bool HttpResponseCommand::schedule_multi_segment_download(DownloadEngineV2* engine) {
+    const auto plan = compute_http_segment_ranges(
+        content_length_,
+        static_cast<Bytes>(options_.min_segment_size),
+        options_.max_connections);
+    if (plan.size() <= 1) {
+        return false;  // 无法拆分，回退单连接
+    }
+
+    auto* group_man = engine->request_group_man();
+    auto* group = group_man ? group_man->find_group(get_task_id()) : nullptr;
+    if (!group) {
+        return false;
+    }
+
+    FALCON_LOG_INFO_STREAM("启用多连接分段下载: " << plan.size() << " 个分段, 文件大小 "
+                          << content_length_);
+    group->begin_multi_segment(plan.size());
+    group->set_total_size(content_length_);
+
+    // 段 0：复用当前连接（服务器对该连接的 200/206 响应体按计划长度截取）
+    schedule_next(engine,
+                  std::make_unique<HttpDownloadCommand>(get_task_id(),
+                                                        socket_fd_,
+                                                        http_response_,
+                                                        /*segment_id=*/0,
+                                                        /*offset=*/0,
+                                                        plan[0].length,
+                                                        initial_body_));
+
+    // 段 1..N-1：每段独立连接 + Range 请求
+    for (std::size_t i = 1; i < plan.size(); ++i) {
+        auto conn = std::make_unique<HttpInitiateConnectionCommand>(
+            get_task_id(), source_url_, options_);
+        conn->set_range(static_cast<SegmentId>(i), plan[i].offset, plan[i].length);
+        schedule_next(engine, std::move(conn));
+    }
+    return true;
+}
+
 bool HttpResponseCommand::determine_download_strategy(DownloadEngineV2* engine) {
     if (!engine) return false;
 
-    // 单连接下载：在当前连接上顺序接收完整 body。
-    //
-    // 注意：V2 引擎暂不支持多连接分段下载。此前的实现在此处分段，但只
-    // 调度了第 0 段（长度 segment_size），其余分段的连接命令创建后即被
-    // 丢弃，导致文件被截断却仍标记为 Completed；且 write_to_segment 是
-    // 顺序写、不支持按 offset 定位，多段并发写同一 ofstream 也会交错损坏。
-    // 后续实现多连接时需：每段独立连接 + 按 offset 定位写入（或段文件
-    // 最后合并），再按 Accept-Ranges + min_segment_size 启用。
-    if (accepts_range_ && content_length_ > options_.min_segment_size) {
-        FALCON_LOG_INFO_STREAM("服务器支持分段下载（V2 暂按单连接处理）");
+    // 分段连接（段 1..N-1）的响应：按该段范围调度下载命令，
+    // 不再产生新的分段/连接
+    if (segment_id_ > 0) {
+        schedule_next(engine,
+                      std::make_unique<HttpDownloadCommand>(get_task_id(),
+                                                            socket_fd_,
+                                                            http_response_,
+                                                            segment_id_,
+                                                            range_offset_,
+                                                            range_length_,
+                                                            initial_body_));
+        return true;
+    }
+
+    // 多连接分段：服务器支持 Range、文件足够大、允许多连接、
+    // 且本命令持有原始 URL（可为其余分段建立新连接）
+    if (accepts_range_ && content_length_ > options_.min_segment_size &&
+        options_.max_connections > 1 && !source_url_.empty()) {
+        if (schedule_multi_segment_download(engine)) {
+            return true;
+        }
+        // 拆分失败或未启用时回退到单连接
+        FALCON_LOG_INFO_STREAM("多连接分段不可用，回退单连接下载");
+    } else if (accepts_range_ && content_length_ > options_.min_segment_size) {
+        FALCON_LOG_INFO_STREAM("服务器支持分段下载（单连接模式）");
     } else {
         FALCON_LOG_INFO_STREAM("单线程下载模式");
     }
+
     schedule_next(engine,
                   std::make_unique<HttpDownloadCommand>(get_task_id(),
                                                         socket_fd_,
@@ -899,6 +1091,13 @@ bool HttpDownloadCommand::execute(DownloadEngineV2* engine) {
         return handle_result(ExecutionResult::OK);
     }
 
+    // 任务已被判定失败（如其他分段出错）：静默退出，不覆盖终态
+    if (group->status() == RequestGroupStatus::FAILED) {
+        close_socket_fd(socket_fd_);
+        socket_fd_ = -1;
+        return handle_result(ExecutionResult::OK);
+    }
+
     auto task = group->download_task();
     if (!task) {
         group->set_error_message("V2 HttpDownload 缺少 DownloadTask");
@@ -910,7 +1109,14 @@ bool HttpDownloadCommand::execute(DownloadEngineV2* engine) {
 
     if (!file_opened_) {
         const auto& out_path = task->output_path();
-        output_.open(out_path, std::ios::binary | std::ios::trunc);
+        if (segment_id_ == 0) {
+            // 首段/单连接模式：创建（截断）文件
+            output_.open(out_path, std::ios::binary | std::ios::trunc);
+        } else {
+            // 多连接分段：文件由首段创建，本段按偏移定位写入
+            //（各 ofstream 独立维护写位置，不会互相干扰）
+            output_.open(out_path, std::ios::binary | std::ios::in | std::ios::out);
+        }
         if (!output_) {
             task->set_error("Failed to open output file: " + out_path);
             task->set_status(TaskStatus::Failed);
@@ -922,19 +1128,19 @@ bool HttpDownloadCommand::execute(DownloadEngineV2* engine) {
         }
         file_opened_ = true;
 
-        task->mark_started();
-        task->set_status(TaskStatus::Downloading);
-        if (length_ > 0) {
-            task->update_progress(0, length_, 0);
+        if (segment_id_ == 0) {
+            task->mark_started();
+            task->set_status(TaskStatus::Downloading);
+            if (length_ > 0 && !group->is_multi_segment()) {
+                task->update_progress(0, length_, 0);
+            }
         }
     }
 
     if (!initial_written_ && !initial_data_.empty()) {
         if (!write_to_segment(initial_data_.data(), initial_data_.size(), engine)) {
             task->set_error("Failed to write initial body bytes");
-            task->set_status(TaskStatus::Failed);
-            group->set_error_message(task->error_message());
-            group->set_status(RequestGroupStatus::FAILED);
+            fail_group_on_segment_error(*group, task);
             close_socket_fd(socket_fd_);
             socket_fd_ = -1;
             return handle_result(ExecutionResult::ERROR_OCCURRED);
@@ -949,8 +1155,7 @@ bool HttpDownloadCommand::execute(DownloadEngineV2* engine) {
         output_.close();
         close_socket_fd(socket_fd_);
         socket_fd_ = -1;
-        task->set_status(TaskStatus::Completed);
-        group->set_status(RequestGroupStatus::COMPLETED);
+        complete_group_if_all_segments_done(*group, task, true);
         return handle_result(ExecutionResult::OK);
     }
 
@@ -962,9 +1167,7 @@ bool HttpDownloadCommand::execute(DownloadEngineV2* engine) {
         if (task->error_message().empty()) {
             task->set_error("Socket recv failed");
         }
-        task->set_status(TaskStatus::Failed);
-        group->set_error_message(task->error_message());
-        group->set_status(RequestGroupStatus::FAILED);
+        fail_group_on_segment_error(*group, task);
         return handle_result(ExecutionResult::ERROR_OCCURRED);
     }
 
@@ -972,8 +1175,7 @@ bool HttpDownloadCommand::execute(DownloadEngineV2* engine) {
         output_.close();
         close_socket_fd(socket_fd_);
         socket_fd_ = -1;
-        task->set_status(TaskStatus::Completed);
-        group->set_status(RequestGroupStatus::COMPLETED);
+        complete_group_if_all_segments_done(*group, task, true);
         return handle_result(ExecutionResult::OK);
     }
 
@@ -983,6 +1185,35 @@ bool HttpDownloadCommand::execute(DownloadEngineV2* engine) {
 
     update_progress();
     return false;
+}
+
+void HttpDownloadCommand::complete_group_if_all_segments_done(
+    RequestGroup& group, const DownloadTask::Ptr& task, bool success) {
+    // 单段模式：本段结束即任务完成（保持既有行为）
+    if (!group.is_multi_segment()) {
+        if (success) {
+            task->set_status(TaskStatus::Completed);
+            group.set_status(RequestGroupStatus::COMPLETED);
+        }
+        return;
+    }
+
+    // 多分段模式：仅当全部分段结束且无失败时才置完成；
+    // 失败已在 fail_group_on_segment_error 中立即置失败
+    if (group.finish_segment(success) && !group.has_segment_failure()) {
+        task->set_status(TaskStatus::Completed);
+        group.set_status(RequestGroupStatus::COMPLETED);
+    }
+}
+
+void HttpDownloadCommand::fail_group_on_segment_error(RequestGroup& group,
+                                                      const DownloadTask::Ptr& task) {
+    if (group.is_multi_segment()) {
+        group.finish_segment(false);
+    }
+    group.set_error_message(task->error_message());
+    group.set_status(RequestGroupStatus::FAILED);
+    task->set_status(TaskStatus::Failed);
 }
 
 AbstractCommand::ExecutionResult HttpDownloadCommand::receive_data(DownloadEngineV2* engine) {
@@ -1031,32 +1262,68 @@ AbstractCommand::ExecutionResult HttpDownloadCommand::receive_data(DownloadEngin
 }
 
 bool HttpDownloadCommand::write_to_segment(const char* data,
-                                          std::size_t size,
-                                          DownloadEngineV2* engine) {
+                                           std::size_t size,
+                                           DownloadEngineV2* engine) {
     if (!file_opened_ || !output_) {
         return false;
     }
 
-    output_.write(data, static_cast<std::streamsize>(size));
+    // 越界保护：服务器发送的数据不能超过本段计划长度，
+    // 否则会覆盖相邻分段的数据（多连接模式）
+    std::size_t allowed = size;
+    if (length_ > 0) {
+        if (downloaded_bytes_ >= length_) {
+            // 本段已写满：丢弃越界数据（视为正常完成路径的一部分）
+            FALCON_LOG_WARN_STREAM("分段 " << segment_id_ << " 收到越界数据 "
+                                   << size << " 字节，已丢弃");
+            return true;
+        }
+        const Bytes capacity = length_ - downloaded_bytes_;
+        if (static_cast<Bytes>(size) > capacity) {
+            FALCON_LOG_WARN_STREAM("分段 " << segment_id_ << " 服务器越界发送，截断 "
+                                   << (size - static_cast<std::size_t>(capacity)) << " 字节");
+            allowed = static_cast<std::size_t>(capacity);
+        }
+    }
+    if (allowed == 0) {
+        return true;
+    }
+
+    // 定位写入：非首段按段偏移寻址（每个 ofstream 独立维护写位置）
+    if (segment_id_ != 0) {
+        output_.seekp(static_cast<std::streamoff>(offset_ + downloaded_bytes_));
+        if (!output_) {
+            return false;
+        }
+    }
+
+    output_.write(data, static_cast<std::streamsize>(allowed));
     if (!output_) {
         return false;
     }
 
-    downloaded_bytes_ += static_cast<Bytes>(size);
-    bytes_since_last_update_ += static_cast<Bytes>(size);
+    downloaded_bytes_ += static_cast<Bytes>(allowed);
+    bytes_since_last_update_ += static_cast<Bytes>(allowed);
 
     if (engine) {
         auto* group_man = engine->request_group_man();
         auto* group = group_man ? group_man->find_group(get_task_id()) : nullptr;
         if (group) {
-            group->add_downloaded_bytes(static_cast<Bytes>(size));
+            group->add_downloaded_bytes(static_cast<Bytes>(allowed));
             if (auto task = group->download_task()) {
-                task->update_progress(downloaded_bytes_, length_, download_speed_);
+                if (group->is_multi_segment()) {
+                    // 多连接模式：任务进度为全组聚合值
+                    task->update_progress(group->downloaded_bytes(),
+                                          group->file_info().total_size,
+                                          download_speed_);
+                } else {
+                    task->update_progress(downloaded_bytes_, length_, download_speed_);
+                }
             }
         }
     }
 
-    FALCON_LOG_DEBUG_STREAM("写入 " << size << " 字节到分段 " << segment_id_);
+    FALCON_LOG_DEBUG_STREAM("写入 " << allowed << " 字节到分段 " << segment_id_);
     return true;
 }
 

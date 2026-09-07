@@ -195,6 +195,41 @@ DownloadTask::Ptr RequestGroup::download_task() const noexcept {
 }
 
 //==============================================================================
+// 多分段下载跟踪
+//==============================================================================
+
+bool RequestGroup::is_multi_segment() const {
+    std::lock_guard<std::mutex> lock(segment_mutex_);
+    return segment_total_ > 0;
+}
+
+void RequestGroup::begin_multi_segment(std::size_t total_segments) {
+    std::lock_guard<std::mutex> lock(segment_mutex_);
+    segment_total_ = total_segments;
+    segment_finished_ = 0;
+    segment_failure_ = false;
+    FALCON_LOG_INFO_STREAM("多分段下载开始: id=" << id_ << ", 分段数=" << total_segments);
+}
+
+bool RequestGroup::finish_segment(bool success) {
+    std::lock_guard<std::mutex> lock(segment_mutex_);
+    if (segment_total_ == 0) {
+        // 单段模式：唯一分段即全部
+        return true;
+    }
+    if (!success) {
+        segment_failure_ = true;
+    }
+    ++segment_finished_;
+    return segment_finished_ >= segment_total_;
+}
+
+bool RequestGroup::has_segment_failure() const {
+    std::lock_guard<std::mutex> lock(segment_mutex_);
+    return segment_failure_;
+}
+
+//==============================================================================
 // RequestGroupMan 实现
 //==============================================================================
 
