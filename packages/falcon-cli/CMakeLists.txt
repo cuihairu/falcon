@@ -22,6 +22,8 @@ target_link_libraries(falcon-cli
     PRIVATE
         Falcon::core
         Falcon::protocols
+        # 强制纳入内置协议强符号定义（见 libfalcon-protocols/CMakeLists.txt 锚点说明）
+        Falcon::builtin_protocol_handlers
 )
 
 # Link nlohmann_json if available

@@ -55,6 +55,10 @@ add_executable(falcon_protocols_tests
     unit/socket_pool_test.cpp
     unit/cloud_protocols_test.cpp
     unit/builtin_protocol_handlers_test.cpp
+    unit/http_commands_coverage_test.cpp
+    unit/event_poll_poll_test.cpp
+    unit/download_engine_v2_run_test.cpp
+    unit/coverage_supplement_test.cpp
 )
 
 # download_engine_v2_test uses POSIX pipe/close, skip on Windows

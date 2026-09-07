@@ -216,10 +216,17 @@ public:
 
     /**
      * @brief 获取池中连接数量
+     *
+     * 统计所有 key 下的连接总数（同一服务器可池化多条连接），
+     * 空 key 条目不计入。
      */
     std::size_t size() const {
         std::lock_guard<std::mutex> lock(mutex_);
-        return pool_.size();
+        std::size_t total = 0;
+        for (const auto& entry : pool_) {
+            total += entry.second.size();
+        }
+        return total;
     }
 
     /**
@@ -300,6 +307,11 @@ inline std::shared_ptr<PooledSocket> SocketPool::find_available(const SocketKey&
         auto socket = std::move(candidate);
         sit = sockets.erase(sit);
         return socket;
+    }
+
+    // 所有连接均无效：清理空 key 条目，避免 map 残留导致 size() 虚高
+    if (sockets.empty()) {
+        pool_.erase(it);
     }
 
     return nullptr;

@@ -1042,3 +1042,45 @@ feature 候选：
   抽象的存量代码
 - DRY：所有超时清理逻辑集中在 `cleanup_completed_commands`，主循环只负责调用
 
+### 2026-09-07 - 覆盖率测试套件收尾与真实缺陷修复
+
+**背景：**
+- 上一会话为 CLI/Daemon/Protocols/Drives 补充了大量覆盖率测试（11 个新测试文件 +
+  对应 CMake 注册），并顺带做了若干小修复（builtin 协议锚点对象库、socket_pool
+  size() 语义、json_rpc multicall 校验、CLI -C 指定默认配置输出路径等）
+- 全套构建后 ctest 有 11 个失败，本次逐一定位并修复
+
+**测试基建修复（测试代码自身缺陷）：**
+- ✅ CLI 集成测试管道泄漏：`exec_child` 未关闭子进程继承的 `in_pipe[1]` 写端，
+  导致 `-i -`（stdin 读 URL）永远读不到 EOF、子进程挂起 48s 后被 SIGKILL。
+  修复：所有管道 fd 在 fork 前设置 `FD_CLOEXEC`（dup2 目标 fd 不继承 CLOEXEC，
+  execve 后未用端自动关闭）
+- ✅ 批量下载断言错位：失败汇总行 `N FAILED` 实际输出在 stdout（generate_summary），
+  每任务 `FAIL <url>` 在 stderr；修正断言流归属
+- ✅ 取消路径测试前提不成立：连接拒绝（127.0.0.1:1）立即失败不重试，无法构造
+  「长时间运行的下载」。新增 `open_stall_listener()`（listen 后永不 accept 的
+  停滞服务器），让 SIGINT / 交互 q 键取消测试有真实的进行中任务可取消
+- ✅ `DaemonizeSuccessAndSignals`：子进程分支直接 `std::exit(0)` 跳过局部
+  `DaemonManager` 析构，pid 文件永不删除。修复：子进程逻辑收进
+  `run_daemonize_success_probe()` 函数，依赖作用域结束触发析构
+- ✅ `AddUriReturnsGidAndTellStatusReflectsOptions` 竞态：addUri 立即 start_task，
+  StubHandler 瞬时完成（100/100），tellStatus 与引擎工作线程存在时序竞态。
+  修复：轮询等待终态后断言 `complete` + 100/100
+
+**真实产品缺陷修复：**
+- ✅ falcon-daemon 前台模式 SIGTERM 无法优雅退出
+  - 根因：`setup_signal_handlers()` 仅在 `daemonize()` 内调用；前台模式
+    （未守护化）从不安装信号处理器，SIGTERM 按默认行为直接杀死进程
+  - 修复：`setup_signal_handlers()` 提升为 public（头文件补充说明注释），
+    main.cpp 在前台分支进入 run() 前显式调用
+  - 影响：前台运行下 SIGTERM/SIGINT 现在走 `stop()` → run 循环退出 →
+    stop 回调 → exit 0，与守护模式行为一致
+
+**验证：**
+- ✅ build-cov 全量构建通过
+- ✅ ctest 1391/1391 全部通过（连续两轮）
+
+**已知问题（未处理）：**
+- `DownloadEngineTest.EventListener` 在高并行负载下偶发失败（单独运行稳定通过），
+  属既有的时序敏感测试，非本次改动引入
+

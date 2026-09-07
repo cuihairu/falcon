@@ -620,10 +620,12 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    // 创建默认配置文件
+    // 创建默认配置文件（若通过 -C/--config 显式指定路径，则写入该路径）
     if (args.create_default_config) {
 #ifdef FALCON_USE_JSON
-        std::string path = falcon::cli::ConfigLoader::get_default_config_path();
+        std::string path = args.config_file.empty()
+                               ? falcon::cli::ConfigLoader::get_default_config_path()
+                               : args.config_file;
         if (falcon::cli::ConfigLoader::create_default_config(path)) {
             std::cout << "Default config created at: " << path << "\n";
             return 0;

@@ -50,6 +50,7 @@ set(FALCON_DRIVES_TEST_SOURCES)
 if(FALCON_ENABLE_CLOUD_STORAGE)
     list(APPEND FALCON_DRIVES_TEST_SOURCES
         unit/cloud_storage_test.cpp
+        unit/cloud_storage_coverage_test.cpp
     )
 endif()
 
@@ -57,6 +58,7 @@ if(FALCON_ENABLE_RESOURCE_SEARCH)
     list(APPEND FALCON_DRIVES_TEST_SOURCES
         unit/search_basic_test.cpp
         unit/resource_search_test.cpp
+        unit/resource_search_coverage_test.cpp
     )
 endif()
 

@@ -21,7 +21,6 @@ add_library(falcon_protocols
     src/net/event_poll_poll.cpp
     src/net/event_poll_factory.cpp
     src/net/socket_pool.cpp
-    src/builtin_protocol_handlers.cpp
 )
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -168,6 +167,50 @@ if(FALCON_ENABLE_HLS)
         target_compile_definitions(falcon_protocols PRIVATE FALCON_HLS_NO_JSON)
     endif()
 endif()
+
+# ============================================================================
+# 内置协议处理器注册锚点（对象库）
+#
+# register_builtin_protocol_handlers 的强符号定义必须以目标文件形式进入
+# 最终链接，否则静态库场景下 core 中的弱符号 stub 可能优先被解析，
+# 导致可执行文件（CLI/Daemon）拿不到任何内置协议处理器。
+# 需要内置协议的可执行文件除链接 Falcon::protocols 外，
+# 还应链接 falcon_builtin_protocol_handlers 以强制纳入强符号定义。
+# ============================================================================
+
+add_library(falcon_builtin_protocol_handlers OBJECT
+    src/builtin_protocol_handlers.cpp
+)
+add_library(Falcon::builtin_protocol_handlers ALIAS falcon_builtin_protocol_handlers)
+
+target_compile_features(falcon_builtin_protocol_handlers PRIVATE cxx_std_17)
+
+target_link_libraries(falcon_builtin_protocol_handlers
+    PRIVATE
+        falcon_core
+)
+
+target_include_directories(falcon_builtin_protocol_handlers
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+if(WIN32)
+    target_compile_definitions(falcon_builtin_protocol_handlers PRIVATE NOMINMAX)
+endif()
+
+# 镜像 falcon_protocols 的插件编译宏，保证强符号与库内编译结果一致
+get_target_property(FALCON_PROTO_COMPILE_DEFS falcon_protocols COMPILE_DEFINITIONS)
+if(FALCON_PROTO_COMPILE_DEFS)
+    target_compile_definitions(falcon_builtin_protocol_handlers
+        PRIVATE ${FALCON_PROTO_COMPILE_DEFS}
+    )
+endif()
+
+# 对象同时进入 falcon_protocols 归档，保持库内容不变
+target_sources(falcon_protocols PRIVATE
+    $<TARGET_OBJECTS:falcon_builtin_protocol_handlers>
+)
 
 # ============================================================================
 # Installation rules

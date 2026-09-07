@@ -256,10 +256,11 @@ void DownloadEngineV2::execute_commands() {
         bool parked = false;
         {
             std::lock_guard<std::mutex> lock(socket_map_mutex_);
-            auto it = socket_wait_map_.find(command->id());
+            const CommandId cmd_id = command->id();
+            auto it = socket_wait_map_.find(cmd_id);
             if (it != socket_wait_map_.end()) {
-                waiting_commands_[command->id()] = std::move(command);
-                waiting_command_times_[command->id()] = std::chrono::steady_clock::now();
+                waiting_commands_[cmd_id] = std::move(command);
+                waiting_command_times_[cmd_id] = std::chrono::steady_clock::now();
                 parked = true;
             }
         }

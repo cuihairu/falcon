@@ -192,6 +192,10 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
             // After daemonize, we're in the background
+        } else {
+            // 前台模式：daemonize() 未被调用，需显式安装信号处理器，
+            // 否则 SIGTERM 按默认行为直接杀死进程，无法优雅退出（exit 0）。
+            daemon_manager.setup_signal_handlers();
         }
 
         // Create download engine

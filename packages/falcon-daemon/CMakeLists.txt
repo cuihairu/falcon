@@ -94,6 +94,8 @@ if(nlohmann_json_FOUND)
     target_link_libraries(falcon-daemon
         PRIVATE
             falcon_daemon_rpc
+            # 强制纳入内置协议强符号定义（见 libfalcon-protocols/CMakeLists.txt 锚点说明）
+            Falcon::builtin_protocol_handlers
     )
 
     # Link task storage if available

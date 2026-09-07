@@ -555,7 +555,9 @@ JsonRpcServer::HttpResponse JsonRpcServer::handle_jsonrpc(const std::string& bod
                 }
                 json results = json::array();
                 for (const auto& call : p[0]) {
-                    if (!call.is_object()) {
+                    // 非对象或缺失字符串 methodName 的条目不是合法调用（JSON-RPC 2.0）
+                    if (!call.is_object() || !call.contains("methodName") ||
+                        !call["methodName"].is_string()) {
                         results.push_back(json{{"code", -32600}, {"message", "Invalid Request"}});
                         continue;
                     }

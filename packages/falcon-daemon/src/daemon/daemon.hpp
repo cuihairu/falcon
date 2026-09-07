@@ -173,6 +173,15 @@ public:
      */
     static DaemonManager* get_instance();
 
+    /**
+     * @brief 设置信号处理器（SIGTERM/SIGINT 停止，SIGHUP 重载）
+     *
+     * daemonize() 内部会自动调用；前台运行模式（未守护化）下，
+     * 调用方需在进入 run() 主循环前显式调用本方法，
+     * 否则 SIGTERM 将按默认行为直接杀死进程而无法优雅退出。
+     */
+    void setup_signal_handlers();
+
 #ifdef _WIN32
     bool run_as_service();
     bool install_service(const std::string& binary_path,
@@ -202,11 +211,6 @@ private:
      * @brief 删除 PID 文件
      */
     void remove_pid_file();
-
-    /**
-     * @brief 设置信号处理器
-     */
-    void setup_signal_handlers();
 
     /**
      * @brief 重定向标准 I/O
