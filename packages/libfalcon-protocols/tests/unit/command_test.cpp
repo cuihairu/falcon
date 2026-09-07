@@ -712,7 +712,7 @@ TEST(CommandConcurrency, ConcurrentCommandExecution) {
 
     for (int i = 0; i < num_commands; ++i) {
         threads.emplace_back([&, i]() {
-            if (commands[i]->execute(&engine)) {
+            if (commands[static_cast<std::size_t>(i)]->execute(&engine)) {
                 success_count++;
             }
         });

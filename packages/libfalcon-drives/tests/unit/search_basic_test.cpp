@@ -35,7 +35,7 @@ public:
             result.size = i * 100 * 1024 * 1024; // 100MB increments
             result.seeds = static_cast<int>((query.limit - i) * 2);
             result.peers = static_cast<int>((query.limit - i) * 3);
-            result.confidence = 0.5 + (i * 0.05);
+            result.confidence = 0.5 + (static_cast<double>(i) * 0.05);
 
             // 应用过滤条件
             if (query.min_size > 0 && result.size < query.min_size) continue;

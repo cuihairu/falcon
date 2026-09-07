@@ -23,7 +23,7 @@ TEST(CoreIsolationTest, DownloadEngineCreatesWithoutProtocols) {
 
     // Without any protocol handler registered, add_task should throw
     // for an unsupported URL.
-    EXPECT_THROW(engine.add_task("http://example.com/file.zip"),
+    EXPECT_THROW(static_cast<void>(engine.add_task("http://example.com/file.zip")),
                  falcon::UnsupportedProtocolException);
 }
 

@@ -558,7 +558,7 @@ TEST(TaskManagerPersistenceMultiple, MultipleTasks) {
     ASSERT_TRUE(tm2.load_state(state_path.string()));
 
     for (int i = 1; i <= 10; i++) {
-        auto loaded = tm2.get_task(i);
+        auto loaded = tm2.get_task(static_cast<falcon::TaskId>(i));
         ASSERT_NE(loaded, nullptr);
         EXPECT_EQ(loaded->status(), falcon::TaskStatus::Pending);
     }

@@ -769,7 +769,7 @@ TEST(RequestGroupManConcurrency, ConcurrentAddRemove) {
     for (int i = 0; i < NUM_THREADS; ++i) {
         threads.emplace_back([&manager, &add_count, i]() {
             for (int j = 0; j < OPERATIONS_PER_THREAD; ++j) {
-                TaskId id = i * OPERATIONS_PER_THREAD + j + 1;
+                TaskId id = static_cast<TaskId>(i * OPERATIONS_PER_THREAD + j + 1);
                 std::vector<std::string> urls = {"http://example.com/file" + std::to_string(id) + ".zip"};
                 DownloadOptions options;
                 auto group = std::make_unique<RequestGroup>(id, urls, options);

@@ -140,7 +140,7 @@ TEST(CommonUtilsTest, ProgressInfoCalculations) {
     info.total_bytes = 1024;
     info.speed = 256;
 
-    info.progress = static_cast<float>(info.downloaded_bytes) / info.total_bytes;
+    info.progress = static_cast<float>(info.downloaded_bytes) / static_cast<float>(info.total_bytes);
 
     EXPECT_EQ(info.task_id, 123);
     EXPECT_EQ(info.downloaded_bytes, 512);
@@ -156,7 +156,7 @@ TEST(CommonUtilsTest, ProgressInfoZeroTotal) {
 
     // 避免除以零
     if (info.total_bytes > 0) {
-        info.progress = static_cast<float>(info.downloaded_bytes) / info.total_bytes;
+        info.progress = static_cast<float>(info.downloaded_bytes) / static_cast<float>(info.total_bytes);
     }
 
     EXPECT_FLOAT_EQ(info.progress, 0.0f);
@@ -374,7 +374,7 @@ TEST(CommonUtilsTest, NumericCalculations) {
     // 测试进度计算
     uint64_t downloaded = 512;
     uint64_t total = 1024;
-    float progress = static_cast<float>(downloaded) / total;
+    float progress = static_cast<float>(downloaded) / static_cast<float>(total);
 
     EXPECT_FLOAT_EQ(progress, 0.5f);
 
@@ -385,12 +385,9 @@ TEST(CommonUtilsTest, NumericCalculations) {
 
     EXPECT_EQ(estimated_seconds, 2);
 
-    // 测试除以零的情况 - 使用变量避免编译时常量求值
-    int zero = 0;
-    int numerator = 1;
     // 注意：整数除以零在 C++ 中是未定义行为，某些编译器会直接报错
     // 跳过此测试或使用其他方式验证
-    // EXPECT_THROW(auto result = numerator / zero;, std::exception);
+    // EXPECT_THROW(auto result = 1 / 0;, std::exception);
 }
 
 TEST(CommonUtilsTest, LargeNumericValues) {

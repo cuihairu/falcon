@@ -575,6 +575,8 @@ TEST(SegmentDownloaderConcurrency, ConcurrentProgressQueries) {
                 float progress = downloader.progress();
                 Bytes speed = downloader.speed();
                 Bytes downloaded = downloader.downloaded_bytes();
+                static_cast<void>(speed);
+                static_cast<void>(downloaded);
 
                 // Progress should be valid
                 EXPECT_GE(progress, 0.0f);
@@ -620,7 +622,8 @@ TEST(SegmentDownloaderResume, ResumePartialDownload) {
         if (seg_file.is_open()) {
             // Write partial data
             std::vector<uint8_t> data(512, static_cast<uint8_t>(i));
-            seg_file.write(reinterpret_cast<const char*>(data.data()), data.size());
+            seg_file.write(reinterpret_cast<const char*>(data.data()),
+                           static_cast<std::streamsize>(data.size()));
         }
     }
 

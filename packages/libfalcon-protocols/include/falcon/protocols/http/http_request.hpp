@@ -1,6 +1,6 @@
 /**
  * @file http_request.hpp
- * @brief HTTP 请求类占位实现
+ * @brief V2 引擎 HTTP 命令使用的请求/响应数据载体
  * @author Falcon Team
  * @date 2025-12-24
  */
@@ -15,9 +15,10 @@
 namespace falcon {
 
 /**
- * @brief HTTP 请求类（占位实现）
+ * @brief HTTP 请求描述
  *
- * TODO: 完整实现 HTTP 请求构建
+ * 携带请求行要素（方法、目标、头部）；HttpInitiateConnectionCommand
+ * 使用 to_string() 生成发送到 socket 的请求报文。
  */
 class HttpRequest {
 public:
@@ -56,9 +57,10 @@ private:
 };
 
 /**
- * @brief HTTP 响应类（占位实现）
+ * @brief HTTP 响应数据
  *
- * TODO: 完整实现 HTTP 响应解析
+ * 由 HttpResponseCommand::parse_headers() 在收到响应后填充
+ * 状态行与头部；HttpDownloadCommand 依据其中内容决定后续行为。
  */
 class HttpResponse {
 public:

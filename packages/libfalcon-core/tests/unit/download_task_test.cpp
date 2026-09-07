@@ -342,7 +342,7 @@ TEST_F(DownloadTaskTest, ConcurrentStatusModification) {
     // 多个线程尝试修改状态
     for (int i = 0; i < 10; ++i) {
         threads.emplace_back([task, i]() {
-            task->update_progress(i * 100, 1000, 100);
+            task->update_progress(static_cast<Bytes>(i * 100), 1000, 100);
         });
     }
 
@@ -388,7 +388,6 @@ TEST_F(DownloadTaskTest, OutputPathCombination) {
     auto task = std::make_shared<DownloadTask>(30, "https://example.com/test.zip", options);
 
     // 如果没有显式设置输出路径，应该使用 options 中的路径
-    auto expected_path = "/tmp/downloads/test.zip";
     // 验证输出路径正确
 }
 
@@ -443,7 +442,6 @@ TEST_F(DownloadTaskTest, RemainingTimeEstimation) {
     task->update_progress(200, 1000, 100);
 
     auto remaining = task->estimated_remaining();
-    auto expected_seconds = (1000 - 200) / 100;  // 8 秒
 
     // 使用 std::chrono::duration_cast 正确转换时间单位
     auto remaining_seconds = std::chrono::duration_cast<std::chrono::seconds>(remaining);

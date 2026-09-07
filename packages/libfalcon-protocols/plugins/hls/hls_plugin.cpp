@@ -69,17 +69,14 @@ void HLSHandler::download(DownloadTask::Ptr task, IEventListener* listener) {
     try {
         FALCON_LOG_INFO("Starting HLS/DASH download for: {}", task->url());
 
-        auto ctx = std::make_shared<TaskContext>();
-        ctx->task = task;
-        ctx->listener = listener;
-        ctx->running.store(true);
-        ctx->downloadedBytes = 0;
+    auto ctx = std::make_shared<TaskContext>();
+    ctx->task = task;
+    ctx->listener = listener;
+    ctx->running.store(true);
+    ctx->downloadedBytes = 0;
 
-        // TODO: 实际实现需要：
-        // 1. 下载播放列表 (m3u8/mpd)
-        // 2. 解析媒体段
-        // 3. 并行下载各段
-        // 4. 合并成最终文件
+    // 下载流程：下载播放列表（downloadM3U8）→ 解析媒体段（parseM3U8）
+    // → 下载各段（downloadAllSegments）→ 合并成最终文件（mergeSegments）
 
         {
             std::lock_guard<std::mutex> lock(tasksMutex_);

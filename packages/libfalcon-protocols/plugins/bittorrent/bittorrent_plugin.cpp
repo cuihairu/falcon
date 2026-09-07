@@ -71,7 +71,7 @@ bool BitTorrentHandler::can_handle(const std::string& url) const {
 }
 
 FileInfo BitTorrentHandler::get_file_info(const std::string& url,
-                                          const DownloadOptions& options) {
+                                          [[maybe_unused]] const DownloadOptions& options) {
     FileInfo info;
     info.url = url;
     info.supports_resume = true;
@@ -141,12 +141,12 @@ FileInfo BitTorrentHandler::get_file_info(const std::string& url,
             info.filename = infoDict.at("name").strValue;
 
             if (infoDict.find("length") != infoDict.end()) {
-                info.total_size = infoDict.at("length").intValue;
+                info.total_size = static_cast<Bytes>(infoDict.at("length").intValue);
             } else {
                 // 多文件 torrent
                 uint64_t total = 0;
                 for (const auto& file : infoDict.at("files").listValue) {
-                    total += file.dictValue.at("length").intValue;
+                    total += static_cast<uint64_t>(file.dictValue.at("length").intValue);
                 }
                 info.total_size = total;
             }
@@ -628,7 +628,7 @@ std::string BitTorrentHandler::generateNodeId() {
     std::uniform_int_distribution<int> dis(0, 255);
 
     std::string nodeId(20, 0);
-    for (int i = 0; i < 20; ++i) {
+    for (std::size_t i = 0; i < nodeId.size(); ++i) {
         nodeId[i] = static_cast<char>(dis(gen));
     }
 

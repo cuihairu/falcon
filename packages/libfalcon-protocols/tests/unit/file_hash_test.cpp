@@ -702,7 +702,7 @@ TEST(FileHashConcurrency, ConcurrentHashCalculation) {
 
     for (int i = 0; i < num_threads; ++i) {
         threads.emplace_back([&, i]() {
-            results[i] = FileHasher::calculate(path, HashAlgorithm::SHA256);
+            results[static_cast<std::size_t>(i)] = FileHasher::calculate(path, HashAlgorithm::SHA256);
         });
     }
 
@@ -712,7 +712,7 @@ TEST(FileHashConcurrency, ConcurrentHashCalculation) {
 
     // 所有结果应该一致
     for (int i = 1; i < num_threads; ++i) {
-        EXPECT_EQ(results[0], results[i]);
+        EXPECT_EQ(results[0], results[static_cast<std::size_t>(i)]);
     }
 
     // 结果应该是有效的 SHA256 哈希
@@ -738,7 +738,7 @@ TEST(FileHashConcurrency, ConcurrentVerification) {
     for (int i = 0; i < num_threads; ++i) {
         threads.emplace_back([&, i]() {
             auto hash_result = FileHasher::verify(path, expected_hash, HashAlgorithm::MD5);
-            results[i] = hash_result.valid ? 1U : 0U;
+            results[static_cast<std::size_t>(i)] = hash_result.valid ? 1U : 0U;
         });
     }
 

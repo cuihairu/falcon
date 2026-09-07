@@ -613,10 +613,11 @@ TEST_F(SocketPoolCreateConnectionTest, CreateConnectionHighPortNumber) {
 TEST(SocketPoolErrorHandling, CreateConnectionAfterSocketCreationFailure) {
     SocketPool pool(std::chrono::seconds(30), 16);
 
-    // 尝试连接到无效地址，期望失败
+    // 尝试连接到无效地址，期望失败（端口用合法 uint16_t 值，
+    // 广播地址不可连接足以触发失败）
     SocketKey key;
     key.host = "255.255.255.255";
-    key.port = 99999;
+    key.port = 65535;
 
     auto socket = pool.create_connection(key);
 

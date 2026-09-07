@@ -219,8 +219,8 @@ TEST(VersionParsing, ParseEmptyString) {
 }
 
 TEST(VersionParsing, ParseVersionWithTooManyComponents) {
-    auto v = falcon::Version::parse("1.2.3.4");
-    // 取决于实现，可能解析前三个或失败
+    // 取决于实现，可能解析前三个或失败；只验证不崩溃
+    static_cast<void>(falcon::Version::parse("1.2.3.4"));
 }
 
 //==============================================================================

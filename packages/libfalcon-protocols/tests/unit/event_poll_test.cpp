@@ -626,7 +626,7 @@ TEST(EventPollError, ErrorEventHandling) {
     // 关闭对端，触发 HANGUP 事件
     CLOSE_SOCKET(fd1);
 
-    int events = poll->poll(100);
+    static_cast<void>(poll->poll(100));
     // 可能检测到 HANGUP 事件
 
     CLOSE_SOCKET(fd0);
@@ -643,8 +643,8 @@ TEST(EventPollError, InvalidEventMask) {
     auto callback = [](int fd, int events, void* user_data) {};
 
     // 无效的事件掩码（0）
-    bool result = poll->add_event(fd0, 0, callback);
     // 结果取决于实现，可能返回 false 或接受
+    static_cast<void>(poll->add_event(fd0, 0, callback));
 
     CLOSE_SOCKET(fd0);
     CLOSE_SOCKET(fd1);
@@ -714,7 +714,7 @@ TEST(EventPollConcurrency, ConcurrentPollCalls) {
     for (int i = 0; i < NUM_THREADS; ++i) {
         threads.emplace_back([&poll, &poll_count]() {
             for (int j = 0; j < 10; ++j) {
-                int events = poll->poll(10);
+                static_cast<void>(poll->poll(10));
                 poll_count++;
             }
         });
@@ -831,8 +831,8 @@ TEST(EventPollBoundary, AddSameFdTwice) {
 
     // 尝试再次添加同一个 fd
     // 结果取决于实现：可能返回 false 或覆盖原有事件
-    bool result = poll->add_event(fd0, static_cast<int>(IOEvent::WRITE), callback);
     // 验证不会崩溃
+    static_cast<void>(poll->add_event(fd0, static_cast<int>(IOEvent::WRITE), callback));
 
     CLOSE_SOCKET(fd0);
     CLOSE_SOCKET(fd1);
@@ -933,8 +933,8 @@ TEST(EventPollAPI, GetErrorInitiallyEmpty) {
     ASSERT_NE(poll, nullptr);
 
     // 初始时错误信息应该为空或"无错误"
-    const char* error = poll->get_error();
     // 验证不会崩溃
+    static_cast<void>(poll->get_error());
 }
 
 TEST(EventPollAPI, SizeAfterOperations) {
@@ -961,7 +961,7 @@ TEST(EventPollAPI, SizeAfterOperations) {
 
     // 移除 2 个
     for (int i = 0; i < 2; ++i) {
-        poll->remove_event(fds[i]);
+        poll->remove_event(fds[static_cast<std::size_t>(i)]);
     }
     EXPECT_EQ(poll->size(), 3);
 

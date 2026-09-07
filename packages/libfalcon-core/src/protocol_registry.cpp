@@ -7,6 +7,7 @@
 
 #include <falcon/protocol_registry.hpp>
 #include <algorithm>
+#include <shared_mutex>
 
 namespace falcon {
 
@@ -22,6 +23,7 @@ void ProtocolRegistry::register_handler(std::unique_ptr<IProtocolHandler> handle
     const std::string protocol = handler->protocol_name();
 
     // Check if handler for this protocol already exists
+    std::unique_lock<std::shared_mutex> lock(mutex_);
     auto it = handlers_.find(protocol);
     if (it != handlers_.end()) {
         // Replace existing handler
@@ -31,12 +33,17 @@ void ProtocolRegistry::register_handler(std::unique_ptr<IProtocolHandler> handle
     handlers_[protocol] = std::move(handler);
 }
 
-IProtocolHandler* ProtocolRegistry::get_handler(const std::string& protocol) const {
+IProtocolHandler* ProtocolRegistry::find_handler_unlocked(const std::string& protocol) const {
     auto it = handlers_.find(protocol);
     if (it != handlers_.end()) {
         return it->second.get();
     }
     return nullptr;
+}
+
+IProtocolHandler* ProtocolRegistry::get_handler(const std::string& protocol) const {
+    std::shared_lock<std::shared_mutex> lock(mutex_);
+    return find_handler_unlocked(protocol);
 }
 
 IProtocolHandler* ProtocolRegistry::get_handler_for_url(const std::string& url) const {
@@ -50,20 +57,25 @@ IProtocolHandler* ProtocolRegistry::get_handler_for_url(const std::string& url) 
             // Check for HLS streams
             if (url.find(".m3u8") != std::string::npos ||
                 url.find(".mpd") != std::string::npos) {
-                auto* hls_handler = get_handler("hls");
+                std::shared_lock<std::shared_mutex> lock(mutex_);
+                auto* hls_handler = find_handler_unlocked("hls");
                 if (hls_handler && hls_handler->can_handle(url)) {
                     return hls_handler;
                 }
             }
         }
 
-        auto* handler = get_handler(scheme);
-        if (handler) {
-            return handler;
+        {
+            std::shared_lock<std::shared_mutex> lock(mutex_);
+            auto* handler = find_handler_unlocked(scheme);
+            if (handler) {
+                return handler;
+            }
         }
     }
 
     // If scheme-based lookup fails, try all handlers
+    std::shared_lock<std::shared_mutex> lock(mutex_);
     for (const auto& pair : handlers_) {
         if (pair.second->can_handle(url)) {
             return pair.second.get();
@@ -79,10 +91,13 @@ void ProtocolRegistry::load_builtin_handlers() {
 
 std::vector<std::string> ProtocolRegistry::supported_protocols() const {
     std::vector<std::string> protocols;
-    protocols.reserve(handlers_.size());
 
-    for (const auto& pair : handlers_) {
-        protocols.push_back(pair.first);
+    {
+        std::shared_lock<std::shared_mutex> lock(mutex_);
+        protocols.reserve(handlers_.size());
+        for (const auto& pair : handlers_) {
+            protocols.push_back(pair.first);
+        }
     }
 
     std::sort(protocols.begin(), protocols.end());
@@ -92,11 +107,14 @@ std::vector<std::string> ProtocolRegistry::supported_protocols() const {
 std::vector<std::string> ProtocolRegistry::supported_schemes() const {
     std::vector<std::string> schemes;
 
-    for (const auto& pair : handlers_) {
-        auto handler_schemes = pair.second->supported_schemes();
-        schemes.insert(schemes.end(),
-                      handler_schemes.begin(),
-                      handler_schemes.end());
+    {
+        std::shared_lock<std::shared_mutex> lock(mutex_);
+        for (const auto& pair : handlers_) {
+            auto handler_schemes = pair.second->supported_schemes();
+            schemes.insert(schemes.end(),
+                          handler_schemes.begin(),
+                          handler_schemes.end());
+        }
     }
 
     // Sort and deduplicate
@@ -112,6 +130,7 @@ bool ProtocolRegistry::supports_url(const std::string& url) const {
 }
 
 size_t ProtocolRegistry::handler_count() const {
+    std::shared_lock<std::shared_mutex> lock(mutex_);
     return handlers_.size();
 }
 

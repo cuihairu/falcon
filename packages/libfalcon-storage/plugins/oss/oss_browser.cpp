@@ -199,7 +199,7 @@ public:
         return response;
     }
 
-    RemoteResource parse_oss_object(const json& obj, const ListOptions& options) {
+    RemoteResource parse_oss_object(const json& obj, [[maybe_unused]] const ListOptions& options) {
         RemoteResource res;
 
         if (obj.contains("Key")) {
@@ -315,7 +315,7 @@ public:
         unsigned char hmac[EVP_MAX_MD_SIZE];
         unsigned int hmac_len;
 
-        HMAC(EVP_sha1(), key.c_str(), key.length(),
+        HMAC(EVP_sha1(), key.c_str(), static_cast<int>(key.length()),
              (unsigned char*)data.c_str(), data.length(),
              hmac, &hmac_len);
 
@@ -323,7 +323,7 @@ public:
         BIO* b64 = BIO_new(BIO_f_base64());
         BIO* bmem = BIO_new(BIO_s_mem());
         b64 = BIO_push(b64, bmem);
-        BIO_write(b64, hmac, hmac_len);
+        BIO_write(b64, hmac, static_cast<int>(hmac_len));
         BIO_flush(b64);
 
         BUF_MEM* bptr;
@@ -502,7 +502,7 @@ RemoteResource OSSBrowser::get_resource_info(const std::string& path) {
     return info;
 }
 
-bool OSSBrowser::create_directory(const std::string& path, bool recursive) {
+bool OSSBrowser::create_directory(const std::string& path, [[maybe_unused]] bool recursive) {
     // OSS使用PUT操作创建目录对象
     std::string dir_path = path;
     if (dir_path.empty() || dir_path.back() != '/') {

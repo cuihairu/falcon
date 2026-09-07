@@ -137,7 +137,7 @@ public:
         return response;
     }
 
-    RemoteResource parse_s3_object(const json& obj, const ListOptions& options) {
+    RemoteResource parse_s3_object(const json& obj, [[maybe_unused]] const ListOptions& options) {
         RemoteResource res;
 
         if (obj.contains("Key")) {
@@ -452,7 +452,7 @@ RemoteResource S3Browser::get_resource_info(const std::string& path) {
     return info;
 }
 
-bool S3Browser::create_directory(const std::string& path, bool recursive) {
+bool S3Browser::create_directory(const std::string& path, [[maybe_unused]] bool recursive) {
     // S3使用PUT操作创建目录对象
     std::string dir_path = path;
     if (dir_path.back() != '/') {

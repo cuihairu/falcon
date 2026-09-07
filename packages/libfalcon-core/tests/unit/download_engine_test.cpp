@@ -100,7 +100,7 @@ TEST(DownloadEngineTest, AddTaskDefaultsWhenNoPathSegment) {
 
 TEST(DownloadEngineTest, UnsupportedUrlThrows) {
     falcon::DownloadEngine engine;
-    EXPECT_THROW(engine.add_task("noscheme", falcon::DownloadOptions{}), falcon::UnsupportedProtocolException);
+    EXPECT_THROW(static_cast<void>(engine.add_task("noscheme", falcon::DownloadOptions{})), falcon::UnsupportedProtocolException);
 }
 
 TEST(DownloadEngineTest, StartTaskCompletesWithTestHandler) {
@@ -466,7 +466,7 @@ TEST(DownloadEngineTest, EmptyUrl) {
     falcon::DownloadEngine engine;
     engine.register_handler(std::make_unique<TestProtocolHandler>());
 
-    EXPECT_THROW(engine.add_task("", falcon::DownloadOptions{}), std::exception);
+    EXPECT_THROW(static_cast<void>(engine.add_task("", falcon::DownloadOptions{})), std::exception);
 }
 
 // 新增：无效URL协议
@@ -474,7 +474,7 @@ TEST(DownloadEngineTest, InvalidProtocol) {
     falcon::DownloadEngine engine;
     engine.register_handler(std::make_unique<TestProtocolHandler>());
 
-    EXPECT_THROW(engine.add_task("invalid://example.com/file.bin", falcon::DownloadOptions{}),
+    EXPECT_THROW(static_cast<void>(engine.add_task("invalid://example.com/file.bin", falcon::DownloadOptions{})),
                  falcon::UnsupportedProtocolException);
 }
 
@@ -582,6 +582,14 @@ TEST(DownloadEngineTest, EventListener) {
 
     EXPECT_TRUE(engine.start_task(task->id()));
     EXPECT_TRUE(task->wait_for(std::chrono::seconds(2)));
+
+    // on_completed 经由 EventDispatcher 工作线程异步送达，可能晚于任务
+    // 进入终态；高并行负载下 wait_for 返回时事件可能尚未出队
+    const auto event_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (listener.complete_count.load() == 0 &&
+           std::chrono::steady_clock::now() < event_deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
 
     // 验证事件被触发
     EXPECT_GT(listener.complete_count.load(), 0);

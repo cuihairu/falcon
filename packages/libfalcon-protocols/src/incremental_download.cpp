@@ -98,7 +98,8 @@ std::vector<ChunkInfo> IncrementalDownloader::calculateChunkHashes(
     }
 
     file.seekg(0, std::ios::end);
-    uint64_t fileSize = file.tellg();
+    const auto end_pos = file.tellg();
+    uint64_t fileSize = end_pos >= 0 ? static_cast<uint64_t>(end_pos) : 0;
     file.seekg(0, std::ios::beg);
 
     uint64_t offset = 0;
@@ -108,7 +109,7 @@ std::vector<ChunkInfo> IncrementalDownloader::calculateChunkHashes(
         uint64_t currentChunkSize = std::min(chunkSize, remaining);
         std::vector<char> buffer(currentChunkSize);
 
-        file.read(buffer.data(), currentChunkSize);
+        file.read(buffer.data(), static_cast<std::streamsize>(currentChunkSize));
         if (!file) {
             FALCON_LOG_ERROR("Error reading file at offset {}", offset);
             break;
@@ -140,10 +141,11 @@ std::vector<ChunkInfo> IncrementalDownloader::downloadRemoteHashList(
     uint64_t chunkSize,
     const std::string& algorithm) {
 
-    // 这里需要使用 HTTP 插件下载远程文件
-    // 并计算哈希列表
+    // 这里需要使用 HTTP 插件下载远程文件并计算哈希列表（待实现）
+    (void)url;
+    (void)chunkSize;
+    (void)algorithm;
 
-    // 暂时返回空列表
     FALCON_LOG_WARN("Remote hash list download not implemented");
     return {};
 }
@@ -184,7 +186,8 @@ FileDiff IncrementalDownloader::compare(const std::string& localPath,
     // 获取本地文件大小
     std::ifstream localFile(localPath, std::ios::binary | std::ios::ate);
     if (localFile.is_open()) {
-        diff.localSize = localFile.tellg();
+        const auto end_pos = localFile.tellg();
+        diff.localSize = end_pos >= 0 ? static_cast<uint64_t>(end_pos) : 0;
         localFile.close();
     }
 
@@ -218,7 +221,7 @@ FileDiff IncrementalDownloader::compare(const std::string& localPath,
     }
 
     diff.ratio = diff.remoteSize > 0 ?
-        static_cast<double>(diff.totalChanged) / diff.remoteSize : 0.0;
+        static_cast<double>(diff.totalChanged) / static_cast<double>(diff.remoteSize) : 0.0;
 
     FALCON_LOG_INFO("File comparison complete: {} local, {} remote, {} changed ({:.1f}%)",
                    diff.localSize, diff.remoteSize, diff.totalChanged,
@@ -232,8 +235,11 @@ std::vector<uint8_t> IncrementalDownloader::downloadRange(
     uint64_t offset,
     uint64_t size) {
 
-    // 这里需要使用 HTTP 插件的 Range 请求
-    // 暂时返回空数据
+    // 这里需要使用 HTTP 插件的 Range 请求（待实现）
+    (void)url;
+    (void)offset;
+    (void)size;
+
     FALCON_LOG_WARN("Range download not implemented");
     return {};
 }
@@ -249,7 +255,8 @@ bool IncrementalDownloader::downloadChanged(const FileDiff& diff,
 
     std::ifstream inFile(diff.localPath, std::ios::binary);
     if (inFile.is_open()) {
-        inFile.read(reinterpret_cast<char*>(localData.data()), diff.localSize);
+        inFile.read(reinterpret_cast<char*>(localData.data()),
+                    static_cast<std::streamsize>(diff.localSize));
         inFile.close();
     }
 
@@ -284,7 +291,8 @@ bool IncrementalDownloader::downloadChanged(const FileDiff& diff,
         return false;
     }
 
-    outFile.write(reinterpret_cast<const char*>(localData.data()), diff.remoteSize);
+    outFile.write(reinterpret_cast<const char*>(localData.data()),
+                  static_cast<std::streamsize>(diff.remoteSize));
     outFile.close();
 
     FALCON_LOG_INFO("Incremental download completed: {}", outputPath);
@@ -297,12 +305,16 @@ bool IncrementalDownloader::applyPatch(const std::string& localPath,
     // 应用补丁数据
     FALCON_LOG_INFO("Applying patch to {}", localPath);
 
+    // 补丁格式解析待实现；当前仅回写本地内容
+    (void)patchData;
+
     // 读取本地文件
     std::vector<uint8_t> fileData(diff.remoteSize);
 
     std::ifstream inFile(localPath, std::ios::binary);
     if (inFile.is_open()) {
-        inFile.read(reinterpret_cast<char*>(fileData.data()), diff.localSize);
+        inFile.read(reinterpret_cast<char*>(fileData.data()),
+                    static_cast<std::streamsize>(diff.localSize));
         inFile.close();
     }
 
@@ -316,7 +328,8 @@ bool IncrementalDownloader::applyPatch(const std::string& localPath,
         return false;
     }
 
-    outFile.write(reinterpret_cast<const char*>(fileData.data()), fileData.size());
+    outFile.write(reinterpret_cast<const char*>(fileData.data()),
+                  static_cast<std::streamsize>(fileData.size()));
     outFile.close();
 
     FALCON_LOG_INFO("Patch applied successfully");
@@ -339,11 +352,12 @@ bool IncrementalDownloader::verifyFile(const std::string& filePath,
     }
 
     file.seekg(0, std::ios::end);
-    uint64_t fileSize = file.tellg();
+    const auto end_pos = file.tellg();
+    const uint64_t fileSize = end_pos >= 0 ? static_cast<uint64_t>(end_pos) : 0;
     file.seekg(0, std::ios::beg);
 
     std::string fileData(fileSize, '\0');
-    file.read(&fileData[0], fileSize);
+    file.read(&fileData[0], static_cast<std::streamsize>(fileSize));
     file.close();
 
     std::string actualHash = calculateHash(fileData, "sha256");
@@ -373,11 +387,13 @@ bool IncrementalDownloader::mergeFile(const std::string& localPath,
     }
 
     inFile.seekg(0, std::ios::end);
-    uint64_t fileSize = inFile.tellg();
+    const auto end_pos = inFile.tellg();
+    const uint64_t fileSize = end_pos >= 0 ? static_cast<uint64_t>(end_pos) : 0;
     inFile.seekg(0, std::ios::beg);
 
     std::vector<uint8_t> fileData(fileSize);
-    inFile.read(reinterpret_cast<char*>(fileData.data()), fileSize);
+    inFile.read(reinterpret_cast<char*>(fileData.data()),
+                static_cast<std::streamsize>(fileSize));
     inFile.close();
 
     // 合并变化的部分
@@ -399,7 +415,8 @@ bool IncrementalDownloader::mergeFile(const std::string& localPath,
         return false;
     }
 
-    outFile.write(reinterpret_cast<const char*>(fileData.data()), fileData.size());
+    outFile.write(reinterpret_cast<const char*>(fileData.data()),
+                  static_cast<std::streamsize>(fileData.size()));
     outFile.close();
 
     return true;

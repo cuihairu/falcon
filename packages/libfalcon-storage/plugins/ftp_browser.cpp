@@ -8,19 +8,7 @@
 #include <falcon/storage/ftp_browser.hpp>
 #include <falcon/logger.hpp>
 
-// Use spdlog for logging if available
-#ifdef FALCON_USE_SPDLOG
-#include <spdlog/spdlog.h>
-#define LOG_ERROR(msg, ...) spdlog::error(msg, ##__VA_ARGS__)
-#define LOG_WARN(msg, ...) spdlog::warn(msg, ##__VA_ARGS__)
-#define LOG_INFO(msg, ...) spdlog::info(msg, ##__VA_ARGS__)
-#else
-// Fallback to simple logger
-#include <iostream>
-#define LOG_ERROR(msg, ...) std::cerr << "[ERROR] " << msg << std::endl
-#define LOG_WARN(msg, ...) std::cerr << "[WARN] " << msg << std::endl
-#define LOG_INFO(msg, ...) std::cout << "[INFO] " << msg << std::endl
-#endif
+#include <falcon/logger.hpp>
 #include <curl/curl.h>
 #include <sstream>
 #include <algorithm>
@@ -117,7 +105,7 @@ public:
 
         CURLcode res = curl_easy_perform(curl_);
         if (res != CURLE_OK) {
-            LOG_ERROR("FTP LIST failed: {}", curl_easy_strerror(res));
+            FALCON_LOG_ERROR("FTP LIST failed: {}", curl_easy_strerror(res));
             return "";
         }
 
@@ -458,16 +446,16 @@ RemoteResource FTPBrowser::get_resource_info(const std::string& path) {
 
     CURLcode res = curl_easy_perform(p_impl_->curl_);
     if (res == CURLE_OK) {
-        curl_off_t size;
-        curl_easy_getinfo(p_impl_->curl_, CURLINFO_CONTENT_LENGTH_DOWNLOAD, &size);
-        info.size = static_cast<uint64_t>(size);
+        curl_off_t size = -1;
+        curl_easy_getinfo(p_impl_->curl_, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &size);
+        info.size = size >= 0 ? static_cast<uint64_t>(size) : 0;
         info.type = ResourceType::File;
     }
 
     return info;
 }
 
-bool FTPBrowser::create_directory(const std::string& path, bool recursive) {
+bool FTPBrowser::create_directory(const std::string& path, [[maybe_unused]] bool recursive) {
     std::string url = p_impl_->build_url(path);
 
     // 使用MKD命令创建目录
@@ -499,9 +487,10 @@ bool FTPBrowser::rename(const std::string& old_path, const std::string& new_path
     return res == CURLE_OK;
 }
 
-bool FTPBrowser::copy(const std::string& source_path, const std::string& dest_path) {
+bool FTPBrowser::copy([[maybe_unused]] const std::string& source_path,
+                      [[maybe_unused]] const std::string& dest_path) {
     // FTP不直接支持复制，需要先下载再上传
-    LOG_ERROR("FTP does not support direct copy operation");
+    FALCON_LOG_ERROR("FTP does not support direct copy operation");
     return false;
 }
 

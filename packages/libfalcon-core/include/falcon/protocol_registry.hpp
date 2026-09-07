@@ -10,6 +10,8 @@
 #include <string>
 #include <unordered_map>
 #include <memory>
+#include <mutex>
+#include <shared_mutex>
 #include <vector>
 #include <utility>
 
@@ -34,6 +36,9 @@ struct BuiltinProtocolInfo {
  *
  * Note: This is a static registry for built-in protocol handlers,
  * not a dynamic plugin system. All handlers are linked at compile time.
+ *
+ * @note 线程安全：所有公共方法均可并发调用（内部以 std::shared_mutex
+ *       保护 handlers_；读操作共享锁，写操作独占锁）。
  */
 class ProtocolRegistry {
 public:
@@ -107,6 +112,13 @@ public:
 private:
     /// Map of protocol name to handler
     std::unordered_map<std::string, std::unique_ptr<IProtocolHandler>> handlers_;
+
+    /// 保护 handlers_ 的读写锁（get_handler_for_url 内部递归查找，
+    /// 通过 *_unlocked 辅助函数在持锁状态下完成，避免重复加锁）
+    mutable std::shared_mutex mutex_;
+
+    /// 无锁查找：要求调用方已持有 mutex_（共享或独占）
+    IProtocolHandler* find_handler_unlocked(const std::string& protocol) const;
 };
 
 /**

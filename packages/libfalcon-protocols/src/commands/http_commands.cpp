@@ -52,6 +52,7 @@ namespace falcon {
 
 namespace {
 
+#ifdef _WIN32
 // memmem 不是标准 C/C++，Windows 没有，提供简单实现
 static const void* memmem_alt(const void* haystack, size_t haystack_len,
                               const void* needle, size_t needle_len) {
@@ -69,8 +70,6 @@ static const void* memmem_alt(const void* haystack, size_t haystack_len,
     return nullptr;
 }
 
-// 平台适配
-#ifdef _WIN32
 #define memmem(haystack, haystack_len, needle, needle_len) \
     memmem_alt(haystack, haystack_len, needle, needle_len)
 #endif
@@ -1083,7 +1082,7 @@ bool HttpDownloadCommand::handle_chunked_encoding(const char* data, std::size_t 
                 }
 
                 // 检查是否有 LF
-                std::size_t crlf_offset = crlf - ptr;
+                const std::size_t crlf_offset = static_cast<std::size_t>(crlf - ptr);
                 if (crlf_offset + 1 >= remaining || crlf[1] != '\n') {
                     chunk_size_str_.append(ptr, crlf_offset + 1);
                     ptr += crlf_offset + 1;

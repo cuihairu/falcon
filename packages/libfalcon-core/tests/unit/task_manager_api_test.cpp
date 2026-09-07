@@ -328,7 +328,7 @@ TEST_F(TaskManagerApiTest, ManyTasksStressTest) {
 
     for (int i = 0; i < count; ++i) {
         TaskId id = manager_->add_task(
-            make_task(i + 1, "https://host/" + std::to_string(i)));
+            make_task(static_cast<TaskId>(i + 1), "https://host/" + std::to_string(i)));
         ids.push_back(id);
     }
 

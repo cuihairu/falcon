@@ -140,7 +140,8 @@ TEST(EventDispatcherTest, ConcurrentDispatch) {
     for (int i = 0; i < thread_count; ++i) {
         threads.emplace_back([&, i]() {
             for (int j = 0; j < events_per_thread; ++j) {
-                falcon::TaskId task_id = i * events_per_thread + j;
+                falcon::TaskId task_id =
+                    static_cast<falcon::TaskId>(i * events_per_thread + j);
                 dispatcher.dispatch_status_changed(
                     task_id,
                     falcon::TaskStatus::Pending,
@@ -177,13 +178,13 @@ TEST(EventDispatcherTest, QueueFullHandling) {
     int dropped = 0;
     for (int i = 0; i < 100; ++i) {
         falcon::ProgressInfo info;
-        info.task_id = i;
-        info.downloaded_bytes = i;
+        info.task_id = static_cast<falcon::TaskId>(i);
+        info.downloaded_bytes = static_cast<falcon::Bytes>(i);
         info.total_bytes = 100;
         info.speed = 1;
         info.progress = static_cast<float>(i) / 100.0f;
 
-        dispatcher.dispatch_progress(i, info);
+        dispatcher.dispatch_progress(static_cast<falcon::TaskId>(i), info);
     }
 
     // 所有事件都应该被处理（因为 dispatch_progress 返回 void，不会丢弃）
@@ -215,7 +216,7 @@ TEST(EventDispatcherTest, MultipleListeners) {
     constexpr int event_count = 10;
     for (int i = 0; i < event_count; ++i) {
         dispatcher.dispatch_status_changed(
-            i,
+            static_cast<falcon::TaskId>(i),
             falcon::TaskStatus::Pending,
             falcon::TaskStatus::Downloading
         );
@@ -260,7 +261,7 @@ TEST(EventDispatcherTest, RemoveListener) {
     // 发送更多事件
     for (int i = 0; i < 10; ++i) {
         dispatcher.dispatch_status_changed(
-            i + 2,
+            static_cast<falcon::TaskId>(i + 2),
             falcon::TaskStatus::Pending,
             falcon::TaskStatus::Downloading
         );
@@ -289,7 +290,8 @@ TEST(EventDispatcherTest, ErrorEventDispatch) {
 
     constexpr int error_count = 5;
     for (int i = 0; i < error_count; ++i) {
-        dispatcher.dispatch_error(i, "Error message " + std::to_string(i));
+        dispatcher.dispatch_error(static_cast<falcon::TaskId>(i),
+                                  "Error message " + std::to_string(i));
     }
 
     EXPECT_TRUE(listener.wait_for_total(error_count,
@@ -316,13 +318,13 @@ TEST(EventDispatcherTest, PerformanceHighThroughput) {
 
     for (int i = 0; i < total_events; ++i) {
         falcon::ProgressInfo info;
-        info.task_id = i;
-        info.downloaded_bytes = i;
+        info.task_id = static_cast<falcon::TaskId>(i);
+        info.downloaded_bytes = static_cast<falcon::Bytes>(i);
         info.total_bytes = total_events;
         info.speed = 1000;
         info.progress = static_cast<float>(i) / total_events;
 
-        dispatcher.dispatch_progress(i, info);
+        dispatcher.dispatch_progress(static_cast<falcon::TaskId>(i), info);
     }
 
     auto end = std::chrono::high_resolution_clock::now();

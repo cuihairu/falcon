@@ -261,7 +261,7 @@ TEST(BrowserFormatterDetailed, MultipleFiles) {
         falcon::RemoteResource file;
         file.name = "file" + std::to_string(i) + ".txt";
         file.type = falcon::ResourceType::File;
-        file.size = i * 100;
+        file.size = static_cast<uint64_t>(i * 100);
         resources.push_back(file);
     }
 

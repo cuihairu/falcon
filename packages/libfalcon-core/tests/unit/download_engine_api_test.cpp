@@ -255,8 +255,8 @@ TEST(DownloadEngineApiTest, CancelAllWithTasks) {
     falcon::DownloadEngine engine;
     engine.register_handler(std::make_unique<QuickHandler>());
 
-    engine.add_task("quick://a.com/1");
-    engine.add_task("quick://b.com/2");
+    static_cast<void>(engine.add_task("quick://a.com/1"));
+    static_cast<void>(engine.add_task("quick://b.com/2"));
 
     engine.cancel_all();
     // All tasks should be cancelled

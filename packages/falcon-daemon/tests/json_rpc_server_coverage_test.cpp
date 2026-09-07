@@ -76,7 +76,15 @@ struct ScopedFd {
 static bool send_all(int fd, const std::string& data) {
     std::size_t off = 0;
     while (off < data.size()) {
-        recv_send_size_t n = ::send(fd, data.data() + off, static_cast<int>(data.size() - off), 0);
+        // POSIX send 的长度参数是 size_t，Windows 是 int
+        const auto chunk_len = static_cast<
+#ifdef _WIN32
+            int
+#else
+            std::size_t
+#endif
+            >(data.size() - off);
+        recv_send_size_t n = ::send(fd, data.data() + off, chunk_len, 0);
         if (n <= 0) return false;
         off += static_cast<std::size_t>(n);
     }

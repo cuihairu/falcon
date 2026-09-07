@@ -270,7 +270,7 @@ public:
         return "CosCommonRequest";
     }
 
-    RemoteResource parse_cos_object(const json& obj, const ListOptions& options) {
+    RemoteResource parse_cos_object(const json& obj, [[maybe_unused]] const ListOptions& options) {
         RemoteResource res;
 
         if (obj.contains("Key")) {
@@ -329,7 +329,7 @@ public:
     }
 
     std::string get_date(const std::string& timestamp) {
-        time_t ts = std::stoul(timestamp);
+        time_t ts = static_cast<time_t>(std::stoul(timestamp));
         struct tm* timeinfo = gmtime(&ts);
         char buffer[11];
         strftime(buffer, sizeof(buffer), "%Y-%m-%d", timeinfo);
@@ -417,7 +417,7 @@ public:
         unsigned char hash[EVP_MAX_MD_SIZE];
         unsigned int hash_len;
 
-        HMAC(EVP_sha256(), key.c_str(), key.length(),
+        HMAC(EVP_sha256(), key.c_str(), static_cast<int>(key.length()),
              (unsigned char*)data.c_str(), data.length(),
              hash, &hash_len);
 
@@ -591,7 +591,7 @@ RemoteResource COSBrowser::get_resource_info(const std::string& path) {
     return info;
 }
 
-bool COSBrowser::create_directory(const std::string& path, bool recursive) {
+bool COSBrowser::create_directory(const std::string& path, [[maybe_unused]] bool recursive) {
     // COS使用PUT操作创建目录对象
     std::string dir_path = path;
     if (dir_path.empty() || dir_path.back() != '/') {

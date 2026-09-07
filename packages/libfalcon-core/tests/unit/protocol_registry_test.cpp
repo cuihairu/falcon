@@ -345,9 +345,10 @@ TEST(ProtocolRegistryTest, EmptyProtocolName) {
     // 尝试注册空协议名插件
     manager.register_handler(std::move(plugin));
 
-    // 应该能注册，但可能返回 nullptr
+    // 记录当前行为：注册表按原样存储，可用空名取回
     auto* retrieved = manager.get_handler("");
-    // 验证行为
+    EXPECT_NE(retrieved, nullptr);
+    EXPECT_FALSE(retrieved->can_handle("http://example.com"));
 }
 
 // 新增：特殊字符在协议名中
@@ -372,8 +373,9 @@ TEST(ProtocolRegistryTest, CaseSensitivity) {
     auto* upper = manager.get_handler("HTTP");
     EXPECT_NE(upper, nullptr);
 
+    // 验证大小写敏感性：小写 "http" 不匹配大写注册名
     auto* lower = manager.get_handler("http");
-    // 验证大小写敏感性
+    EXPECT_EQ(lower, nullptr);
 }
 
 // 新增：大量插件注册压力测试

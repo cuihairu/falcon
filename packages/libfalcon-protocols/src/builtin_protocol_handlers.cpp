@@ -87,7 +87,7 @@ std::vector<BuiltinProtocolInfo> describe_builtin_protocols() {
     return protocols;
 }
 
-void register_builtin_protocol_handlers(ProtocolRegistry& registry) {
+void register_builtin_protocol_handlers([[maybe_unused]] ProtocolRegistry& registry) {
 #if defined(FALCON_ENABLE_HTTP_PLUGIN) || defined(FALCON_ENABLE_HTTP)
     registry.register_handler(protocols::create_http_handler());
 #endif

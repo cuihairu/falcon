@@ -1116,3 +1116,73 @@ feature 候选：
 **验证：**
 - ✅ ctest 1391/1391 全部通过
 
+### 2026-09-07 - 编译警告清零、TODO 治理与 ProtocolRegistry 并发修复
+
+**编译警告：87 → 0**（-Wall -Wextra -Wconversion -Wsign-conversion 全严格集，含 BT 启用构建）
+
+生产代码：
+- ✅ `incremental_download.cpp`：18 处 streamoff/streamsize 符号转换显式化；
+  占位函数未使用参数 `(void)` 化并注明待实现
+- ✅ `http_commands.cpp`：`memmem_alt` 包裹进 `#ifdef _WIN32`（仅 Windows 经宏
+  使用，Linux 下未使用告警）；块大小行偏移 ptrdiff_t → size_t 显式转换
+- ✅ `builtin_protocol_handlers.cpp`：`registry` 参数 `[[maybe_unused]]`
+  （全部插件宏裁剪时未使用）
+- ✅ storage 浏览器插件：cos/oss/s3 未使用参数 `[[maybe_unused]]`；
+  OpenSSL `HMAC`/`BIO_write` 的 int 参数显式转换；`time_t`/`std::stoul` 转换；
+  `ftp_browser.cpp` 废弃 API `CURLINFO_CONTENT_LENGTH_DOWNLOAD` →
+  `CURLINFO_CONTENT_LENGTH_DOWNLOAD_T`（负值 -1 视为未知大小）；
+  本地 `LOG_*(msg, ...)` 变参宏（无参调用触发 -Wc++20-extensions）统一替换
+  为项目 `FALCON_LOG_*`
+- ✅ bittorrent 插件：bencode `intValue`（int64_t）→ Bytes 显式转换（torrent
+  长度字段按规范非负）；节点 ID 生成循环改用 size_t 索引
+
+测试代码：
+- ✅ 未使用变量清理（common_utils/version/thread_pool/segment_downloader/
+  event_poll 等 12 处）
+- ✅ 6 处 `[[nodiscard]] add_task` 忽略返回值显式 `static_cast<void>`
+- ✅ `int` 迭代变量索引容器/赋值无符号字段的 ~25 处显式转换
+- ✅ `socket_pool_test` 端口 99999 溢出为 34463（测试意图缺陷）：改用合法
+  uint16_t 端口 65535，广播地址不可达本身即触发失败路径
+- ✅ `protocol_registry_test` 两处"取出后不断言"的变量改为真实行为断言
+
+**真实 bug 修复：ProtocolRegistry 并发数据竞争**
+- 根因：`register_handler` 及全部读方法无锁并发访问 `std::unordered_map`，
+  多线程注册时条目丢失（UB）。`ConcurrentPluginRegistration` 偶发
+  `handler_count()=9` 即此竞争所致
+- 修复：`std::shared_mutex`（读共享/写独占）+ `find_handler_unlocked` 内部
+  辅助函数——`get_handler_for_url` 内部递归查找在持锁状态下进行，
+  避免 shared_mutex 不可重入死锁；`protocol_name()` 在锁外调用（不在锁内
+  执行外部代码）
+- 头文件注明线程安全契约
+
+**真实 bug 修复：EventListener 测试竞态**
+- `on_completed` 经 EventDispatcher 工作线程异步送达（设计行为），测试在
+  `wait_for`（任务终态）后立即断言事件计数，高负载下事件尚未出队
+- 修复：改为带 2s 超时的轮询等待
+
+**TODO/FIXME 治理（6 处）：**
+- 删除 3 处过时标记：
+  - `http_request.hpp` ×2「占位实现/TODO 完整实现」——类功能完整
+    （请求构建 to_string/响应头存储），注释更新为真实职责
+  - `hls_plugin.cpp`「TODO 实际实现需要 4 步」——M3U8 下载全流程已实现
+    （downloadM3U8/downloadAllSegments/mergeSegments），改为流程说明注释
+- 保留 4 处真实待办并精确化（异步查找回调接线、Kademlia 迭代逼近、
+  spdlog 迁移），补充见下方「未完成事项」
+
+**验证：**
+- ✅ 全量构建零警告（标准构建 + BT 启用构建）
+- ✅ ctest 1391/1391 连续 5 轮全部通过（两个偶发失败根因均已修复）
+
+## 未完成事项（代码内 TODO 对应的架构级待办）
+
+1. **日志库迁移**（`logger.hpp`）：当前为手写流式 logger + FALCON_LOG_*
+   宏分发；迁移到 spdlog 需统一全部 FALCON_LOG_* 调用点并保留级别控制
+2. **DHT 异步查找**（`dht_node.cpp:findPeers/findNode`）：回调参数未接线，
+   需在 receiveLoop 收到响应后上报；当前为同步单轮查询
+3. **DHT 迭代查找**（`dht_node.cpp:performLookup`）：应按 Kademlia 迭代逼近
+   （用响应中更近节点继续查询），当前仅查最接近的 8 个节点一轮
+4. **V2 引擎多连接分段下载**（`http_commands.cpp`）：需每段独立连接 +
+   按 offset 定位写入（或段文件合并），当前 V2 恒为单连接完整下载
+5. **增量下载远程哈希列表/Range 下载**（`incremental_download.cpp`）：
+   downloadRemoteHashList/downloadRange 为空实现
+

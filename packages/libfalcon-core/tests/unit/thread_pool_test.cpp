@@ -55,9 +55,9 @@ TEST_F(ThreadPoolTest, SubmitMultipleTasks) {
         }));
     }
 
-    for (int i = 0; i < 100; ++i) {
+    for (size_t i = 0; i < futures.size(); ++i) {
         int result = futures[i].get();
-        EXPECT_EQ(result, i * 2);
+        EXPECT_EQ(result, static_cast<int>(i) * 2);
     }
 
     EXPECT_EQ(counter.load(), 100);
@@ -404,7 +404,6 @@ TEST_F(ThreadPoolTest, ThreadSafeStatusQuery) {
 
     // 在任务执行期间查询状态
     for (int i = 0; i < 10; ++i) {
-        size_t pending = pool_->pending();
         size_t size = pool_->size();
         EXPECT_GE(size, 0);
     }

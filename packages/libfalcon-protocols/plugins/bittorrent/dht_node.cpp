@@ -490,15 +490,19 @@ void DhtClient::addBootstrapNode(const std::string& ip, uint16_t port) {
     bootstrapNodes_.push_back(node);
 }
 
-void DhtClient::findPeers(const std::string& infoHash, FoundPeersCallback callback) {
+void DhtClient::findPeers(const std::string& infoHash,
+                          [[maybe_unused]] FoundPeersCallback callback) {
     // 解析 info_hash 为节点 ID
     auto targetId = DhtUtils::nodeIdFromString(infoHash);
 
-    // TODO: 实现异步查找
+    // TODO: 异步查找未实现——当前为同步单轮查询；完整实现需在
+    // receiveLoop 收到 get_peers 响应后调用 callback 上报发现的 peers
     performLookup(targetId, true, infoHash);
 }
 
-void DhtClient::findNode(const DhtNodeId& targetId, NodeFoundCallback callback) {
+void DhtClient::findNode(const DhtNodeId& targetId,
+                         [[maybe_unused]] NodeFoundCallback callback) {
+    // TODO: 同上，find_node 响应到达后应调用 callback 上报发现的节点
     performLookup(targetId, false);
 }
 
@@ -654,7 +658,9 @@ void DhtClient::performLookup(const DhtNodeId& target, bool isFindPeers, const s
         candidates = routingTable_.findClosestNodes(target, 8);
     }
 
-    // TODO: 实现完整的迭代查找
+    // TODO: 完整迭代查找未实现——当前仅对最接近的 8 个节点做单轮
+    // get_peers/find_node 查询；完整实现应按 Kademlia 迭代逼近，
+    // 用响应中发现的更近节点继续查询，直至候选耗尽
     for (const auto& node : candidates) {
         // 发送 find_node 或 get_peers 请求
         DhtMessage msg;
