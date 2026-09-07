@@ -6,8 +6,14 @@
 #include <string>
 #include <utility>
 
-// Simple logger implementation for now
-// TODO: Replace with proper logging library (spdlog)
+#ifdef FALCON_USE_SPDLOG
+#include <cstdio>
+#include <cstring>
+#include <memory>
+#include <mutex>
+#include <spdlog/spdlog.h>
+#include <spdlog/sinks/base_sink.h>
+#endif
 
 namespace falcon {
 
@@ -28,6 +34,147 @@ inline std::atomic<int>& global_log_level_storage() {
 inline LogLevel get_log_level() {
     return static_cast<LogLevel>(global_log_level_storage().load(std::memory_order_relaxed));
 }
+
+#ifdef FALCON_USE_SPDLOG
+//==============================================================================
+// spdlog 后端（vcpkg 构建默认启用：见 libfalcon-core/CMakeLists.txt）
+//
+// 设计要点：
+// - 公共接口（LogLevel / set_log_level / FALCON_LOG_* 宏）保持不变
+// - FMT 风格宏沿用 detail::format_log_message 预格式化（ostream 渲染任意
+//   类型参数），消息以纯文本 payload 进入 spdlog，避免 fmt 对非常规类型
+//   的编译期格式化要求，保持全部既有调用点的语义
+// - 自定义分流 sink 精确复刻旧输出格式："[LEVEL] message\n"，
+//   WARN 及以上 → stderr，其余 → stdout（每条消息立即 flush，同旧 endl）
+//==============================================================================
+
+/// falcon LogLevel → spdlog 级别映射
+inline spdlog::level::level_enum to_spdlog_level(LogLevel level) {
+    switch (level) {
+        case LogLevel::Off:   return spdlog::level::off;
+        case LogLevel::Error: return spdlog::level::err;
+        case LogLevel::Warn:  return spdlog::level::warn;
+        case LogLevel::Info:  return spdlog::level::info;
+        case LogLevel::Debug: return spdlog::level::debug;
+        case LogLevel::Trace: return spdlog::level::trace;
+    }
+    return spdlog::level::info;
+}
+
+class FalconConsoleSink final : public spdlog::sinks::base_sink<std::mutex> {
+protected:
+    void sink_it_(const spdlog::details::log_msg& msg) override {
+        FILE* out = msg.level >= spdlog::level::warn ? stderr : stdout;
+        const char* tag = level_tag(msg.level);
+        std::fwrite(tag, 1, std::strlen(tag), out);
+        if (msg.payload.size() > 0) {
+            std::fwrite(msg.payload.data(), 1, msg.payload.size(), out);
+        }
+        std::fputc('\n', out);
+        std::fflush(out);
+    }
+
+    void flush_() override {
+        std::fflush(stdout);
+        std::fflush(stderr);
+    }
+
+private:
+    static const char* level_tag(spdlog::level::level_enum level) {
+        switch (level) {
+            case spdlog::level::trace:    return "[TRACE] ";
+            case spdlog::level::debug:    return "[DEBUG] ";
+            case spdlog::level::info:     return "[INFO] ";
+            case spdlog::level::warn:     return "[WARN] ";
+            case spdlog::level::err:      return "[ERROR] ";
+            case spdlog::level::critical: return "[CRITICAL] ";
+            default:                      return "[OFF] ";
+        }
+    }
+};
+
+/// 全局共享 logger（FALCON_LOG_* 的后端；惰性创建，级别取自全局存储）
+inline std::shared_ptr<spdlog::logger>& falcon_logger_storage() {
+    static std::shared_ptr<spdlog::logger> instance = [] {
+        auto logger = std::make_shared<spdlog::logger>(
+            "falcon", std::make_shared<FalconConsoleSink>());
+        logger->set_level(to_spdlog_level(get_log_level()));
+        return logger;
+    }();
+    return instance;
+}
+
+/**
+ * @brief 获取全局 spdlog logger
+ *
+ * 供高级用法：附加自定义 sink、flush、注册错误处理等。
+ */
+inline const std::shared_ptr<spdlog::logger>& falcon_logger() {
+    return falcon_logger_storage();
+}
+
+inline void set_log_level(LogLevel level) {
+    global_log_level_storage().store(static_cast<int>(level), std::memory_order_relaxed);
+    if (auto logger = falcon_logger_storage()) {
+        logger->set_level(to_spdlog_level(level));
+    }
+}
+
+inline void set_log_level(int level) {
+    global_log_level_storage().store(level, std::memory_order_relaxed);
+    if (auto logger = falcon_logger_storage()) {
+        if (level < 0) {
+            logger->set_level(spdlog::level::off);
+        } else if (level > static_cast<int>(LogLevel::Trace)) {
+            logger->set_level(spdlog::level::trace);
+        } else {
+            logger->set_level(to_spdlog_level(static_cast<LogLevel>(level)));
+        }
+    }
+}
+
+// 日志输出函数（经 spdlog 分流 sink；消息作为纯文本数据传入，
+// 内含 '{' '}' 等字符不会被当作格式占位符）
+inline void log_info(const std::string& msg) {
+    if (static_cast<int>(get_log_level()) < static_cast<int>(LogLevel::Info)) {
+        return;
+    }
+    if (auto logger = falcon_logger_storage()) {
+        logger->log(spdlog::level::info, "{}", msg);
+    }
+}
+
+inline void log_debug(const std::string& msg) {
+    if (static_cast<int>(get_log_level()) < static_cast<int>(LogLevel::Debug)) {
+        return;
+    }
+    if (auto logger = falcon_logger_storage()) {
+        logger->log(spdlog::level::debug, "{}", msg);
+    }
+}
+
+inline void log_warn(const std::string& msg) {
+    if (static_cast<int>(get_log_level()) < static_cast<int>(LogLevel::Warn)) {
+        return;
+    }
+    if (auto logger = falcon_logger_storage()) {
+        logger->log(spdlog::level::warn, "{}", msg);
+    }
+}
+
+inline void log_error(const std::string& msg) {
+    if (static_cast<int>(get_log_level()) < static_cast<int>(LogLevel::Error)) {
+        return;
+    }
+    if (auto logger = falcon_logger_storage()) {
+        logger->log(spdlog::level::err, "{}", msg);
+    }
+}
+
+#else
+//==============================================================================
+// 内置回退后端（无 spdlog 的最小构建使用；行为与 spdlog 后端一致）
+//==============================================================================
 
 inline void set_log_level(LogLevel level) {
     global_log_level_storage().store(static_cast<int>(level), std::memory_order_relaxed);
@@ -65,6 +212,8 @@ inline void log_error(const std::string& msg) {
     }
     std::cerr << "[ERROR] " << msg << std::endl;
 }
+
+#endif  // FALCON_USE_SPDLOG
 
 namespace detail {
 
@@ -153,11 +302,15 @@ void log_errorf(const std::string& format, Args&&... args) {
 
 } // namespace falcon
 
+// STREAM 风格宏：先做级别快速判断（避免 ostringstream 开销），再经
+// log_* 输出（后端无关：spdlog 模式走 spdlog，回退模式走内置实现）
 #define FALCON_LOG_INFO_STREAM(msg)                                                  \
     do {                                                                             \
         if (static_cast<int>(::falcon::get_log_level()) >=                           \
             static_cast<int>(::falcon::LogLevel::Info)) {                            \
-            std::cout << "[INFO] " << msg << std::endl;                              \
+            std::ostringstream falcon_log_oss_;                                      \
+            falcon_log_oss_ << msg;                                                  \
+            ::falcon::log_info(falcon_log_oss_.str());                               \
         }                                                                            \
     } while (0)
 
@@ -167,7 +320,9 @@ void log_errorf(const std::string& format, Args&&... args) {
     do {                                                                             \
         if (static_cast<int>(::falcon::get_log_level()) >=                           \
             static_cast<int>(::falcon::LogLevel::Debug)) {                           \
-            std::cout << "[DEBUG] " << msg << std::endl;                             \
+            std::ostringstream falcon_log_oss_;                                      \
+            falcon_log_oss_ << msg;                                                  \
+            ::falcon::log_debug(falcon_log_oss_.str());                              \
         }                                                                            \
     } while (0)
 
@@ -177,7 +332,9 @@ void log_errorf(const std::string& format, Args&&... args) {
     do {                                                                             \
         if (static_cast<int>(::falcon::get_log_level()) >=                           \
             static_cast<int>(::falcon::LogLevel::Warn)) {                            \
-            std::cerr << "[WARN] " << msg << std::endl;                              \
+            std::ostringstream falcon_log_oss_;                                      \
+            falcon_log_oss_ << msg;                                                  \
+            ::falcon::log_warn(falcon_log_oss_.str());                               \
         }                                                                            \
     } while (0)
 
@@ -187,7 +344,9 @@ void log_errorf(const std::string& format, Args&&... args) {
     do {                                                                             \
         if (static_cast<int>(::falcon::get_log_level()) >=                           \
             static_cast<int>(::falcon::LogLevel::Error)) {                           \
-            std::cerr << "[ERROR] " << msg << std::endl;                             \
+            std::ostringstream falcon_log_oss_;                                      \
+            falcon_log_oss_ << msg;                                                  \
+            ::falcon::log_error(falcon_log_oss_.str());                              \
         }                                                                            \
     } while (0)
 

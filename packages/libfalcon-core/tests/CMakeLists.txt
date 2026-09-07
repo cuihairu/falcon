@@ -61,6 +61,7 @@ add_executable(falcon_core_tests
     unit/url_utils_test.cpp
     unit/common_utils_test.cpp
     unit/core_isolation_test.cpp
+    unit/logger_spdlog_test.cpp
 )
 
 target_link_libraries(falcon_core_tests

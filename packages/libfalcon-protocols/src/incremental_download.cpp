@@ -243,6 +243,7 @@ std::string IncrementalDownloader::calculateHash(const std::string& data,
 #else
     // Fallback: simple hash implementation when OpenSSL is not available
     // This is a simple XOR-based hash for placeholder purposes
+    (void)algorithm;
     FALCON_LOG_WARN("OpenSSL not available, using fallback hash implementation");
     uint32_t hash = 0;
     for (char c : data) {

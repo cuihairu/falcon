@@ -1273,10 +1273,59 @@ feature 候选：
 - ✅ ctest 1406/1406 连续 3 轮全部通过
 - ✅ 全量构建零警告（标准 + BT 启用构建）
 
+### 2026-09-07 - spdlog 日志后端迁移（logger.hpp）
+
+**目标（来自「未完成事项」#1）：**
+- 手写流式 logger + FALCON_LOG_* 宏迁移到 spdlog；
+  core 的 CMake 此前已 PUBLIC 链接 spdlog 并定义 `FALCON_USE_SPDLOG`
+  （vcpkg 构建下 spdlog_FOUND=true），但 logger.hpp 从未实现后端
+
+**迁移设计（接口零变更，调用点零改动）：**
+- ✅ 双后端结构：`#ifdef FALCON_USE_SPDLOG` → spdlog 后端；`#else` →
+  原手写实现原样保留（无 spdlog 的最小构建继续可用）
+- ✅ 公共接口完全不变：`LogLevel` / `get_log_level` / `set_log_level` /
+  `log_*` 函数 / `FALCON_LOG_*` 与 `FALCON_LOG_*_STREAM/FMT` 宏签名一致
+- ✅ 自定义 `FalconConsoleSink`（base_sink<std::mutex>）精确复刻旧输出：
+  `[LEVEL] message\n`（TRACE..CRITICAL 全大写），WARN 及以上 → stderr，
+  其余 → stdout，每条消息立即 flush（等价旧 `std::endl` 行为）
+- ✅ 消息以纯文本 payload 进入 spdlog：`logger->log(level, "{}", msg)`，
+  消息内含 `{}`/`{0}` 等字符按数据处理（有测试覆盖，不触发 fmt 错误）
+- ✅ FMT 风格宏沿用 `detail::format_log_message` 预格式化（ostream 渲染
+  任意类型参数的兼容层），避免 fmt 编译期格式化器要求破坏数百个调用点；
+  后续可按调用点逐个迁移到原生 fmt 语法
+- ✅ `set_log_level` 同步 spdlog logger 级别（含越界 int clamp：
+  <0 → off，>Trace → trace）
+- ✅ 新增 `falcon_logger()` 访问器（高级用法：附加 sink / flush）
+- ✅ STREAM 宏统一为「级别快速判断 → ostringstream → log_*」，
+  两种后端行为一致（旧实现绕过 log_* 直写流的重复逻辑消除）
+
+**顺带清理：**
+- ✅ `ftp_browser.cpp` / `s3_browser.cpp`：删除本地 `LOG_*(msg, ...)`
+  变参宏定义（调用点已迁移 FALCON_LOG_*，宏为死代码）；
+  printf 风格 `"…%s"` + 空参的调用点改为纯文本
+- ✅ `calculateHash` 无 OpenSSL 回退分支 `(void)algorithm`
+  （无 vcpkg 构建的警告）
+- ✅ 删除 `logger.hpp` 顶部的「TODO: Replace with spdlog」标记（本次完成）
+
+**测试（新增 5 个，spdlog 构建下编译）：**
+- ✅ `logger_spdlog_test.cpp`（callback_sink 捕获验证）：
+  宏/FMT/STREAM/log_* 全路由 spdlog、级别过滤全宏生效、
+  set_log_level 双向同步（含越界 clamp）、消息花括号按数据处理、
+  logger 命名与 sink 完整性；无 spdlog 构建编译占位测试
+- ✅ 运行时输出格式回归：daemon 前台输出 `[INFO] ` 前缀与旧版逐字符一致
+
+**验证：**
+- ✅ ctest 1411/1411 连续 3 轮全部通过（vcpkg/spdlog 路径）
+- ✅ 三种构建配置零警告：vcpkg（spdlog 后端）、vcpkg+BT、无 vcpkg
+  （回退后端 + 无 OpenSSL）
+- ✅ 安装导出：`FALCON_PACKAGE_NEEDS_SPDLOG` → Config.cmake 中
+  find_dependency(spdlog) 既有接线不变
+
 ## 未完成事项（代码内 TODO 对应的架构级待办）
 
-1. **日志库迁移**（`logger.hpp`）：当前为手写流式 logger + FALCON_LOG_*
-   宏分发；迁移到 spdlog 需统一全部 FALCON_LOG_* 调用点并保留级别控制
+1. ~~**日志库迁移**~~ ✅ 已完成（2026-09-07，见上方条目；
+   后续可选：FMT 风格调用点逐个迁移到 spdlog 原生 fmt 语法、
+   异步 sink / 文件轮转 sink 配置化）
 2. **DHT 异步查找**（`dht_node.cpp:findPeers/findNode`）：回调参数未接线，
    需在 receiveLoop 收到响应后上报；当前为同步单轮查询
 3. **DHT 迭代查找**（`dht_node.cpp:performLookup`）：应按 Kademlia 迭代逼近

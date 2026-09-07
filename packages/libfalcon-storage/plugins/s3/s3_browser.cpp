@@ -9,20 +9,6 @@
 #include <falcon/storage/cloud_url_protocols.hpp>
 #include <falcon/logger.hpp>
 
-// Use spdlog for logging if available
-#ifdef FALCON_USE_SPDLOG
-#include <spdlog/spdlog.h>
-#define LOG_ERROR(msg, ...) spdlog::error(msg, __VA_ARGS__)
-#define LOG_WARN(msg, ...) spdlog::warn(msg, __VA_ARGS__)
-#define LOG_INFO(msg, ...) spdlog::info(msg, __VA_ARGS__)
-#else
-// Fallback to simple logger
-#include <iostream>
-#define LOG_ERROR(msg, ...) std::cerr << "[ERROR] " << msg << std::endl
-#define LOG_WARN(msg, ...) std::cerr << "[WARN] " << msg << std::endl
-#define LOG_INFO(msg, ...) std::cout << "[INFO] " << msg << std::endl
-#endif
-
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
 #include <sstream>
@@ -97,7 +83,7 @@ public:
         // 添加AWS签名头部
         std::map<std::string, std::string> signed_headers = headers;
         if (config_.access_key_id.empty()) {
-            LOG_WARN("No AWS credentials provided%s", "");
+            FALCON_LOG_WARN("No AWS credentials provided");
         }
 
         // 简化签名（实际应使用AWS签名V4）
@@ -130,7 +116,7 @@ public:
         }
 
         if (res != CURLE_OK) {
-            LOG_ERROR("S3 request failed: {}", curl_easy_strerror(res));
+            FALCON_LOG_ERROR("S3 request failed: {}", curl_easy_strerror(res));
             return "";
         }
 
@@ -361,7 +347,7 @@ std::vector<RemoteResource> S3Browser::list_directory(
     std::string response = p_impl_->perform_s3_request("GET", list_url, {});
 
     if (response.empty()) {
-        LOG_ERROR("Failed to list S3 directory%s", "");
+        FALCON_LOG_ERROR("Failed to list S3 directory");
         return resources;
     }
 
@@ -402,7 +388,7 @@ std::vector<RemoteResource> S3Browser::list_directory(
         }
 
     } catch (const std::exception& e) {
-        LOG_ERROR("Failed to parse S3 response: {}", e.what());
+        FALCON_LOG_ERROR("Failed to parse S3 response: {}", e.what());
     }
 #endif
 
@@ -556,7 +542,7 @@ std::map<std::string, uint64_t> S3Browser::get_quota_info() {
             }
         }
     } catch (const std::exception& e) {
-        LOG_ERROR("Failed to parse quota info: {}", e.what());
+        FALCON_LOG_ERROR("Failed to parse quota info: {}", e.what());
     }
 #endif
 
