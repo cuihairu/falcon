@@ -146,9 +146,17 @@ public:
     /// @param bytes_per_second Speed limit (0 = unlimited)
     void set_global_speed_limit(BytesPerSecond bytes_per_second);
 
+    /// Get global speed limit
+    /// @return Speed limit in bytes/second (0 = unlimited)
+    [[nodiscard]] BytesPerSecond get_global_speed_limit() const;
+
     /// Set maximum concurrent tasks
     /// @param max_tasks Maximum number
     void set_max_concurrent_tasks(std::size_t max_tasks);
+
+    /// Get maximum concurrent tasks
+    /// @return Maximum number of concurrent tasks
+    [[nodiscard]] std::size_t get_max_concurrent_tasks() const;
 
     /// Adjust task priority
     /// @param id Task ID

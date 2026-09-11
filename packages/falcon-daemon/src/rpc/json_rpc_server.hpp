@@ -42,6 +42,10 @@ public:
 
     uint16_t port() const noexcept { return config_.listen_port; }
 
+    /// 注册进程级停机回调（aria2.forceShutdown / aria2.shutdown 触发）。
+    /// 回调在 RPC 工作线程上执行，实现方需能从任意线程安全地请求停机。
+    void set_shutdown_handler(std::function<void()> handler);
+
 private:
     void accept_loop();
     void handle_connection(int client_fd);
@@ -52,6 +56,8 @@ private:
     falcon::DownloadEngine* engine_ = nullptr;
     TaskStorage* storage_ = nullptr;
     JsonRpcServerConfig config_;
+    std::function<void()> shutdown_handler_;
+    std::string session_id_;
 
     std::atomic<bool> stop_requested_{false};
     std::thread accept_thread_;

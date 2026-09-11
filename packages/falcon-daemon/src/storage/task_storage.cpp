@@ -110,7 +110,19 @@ public:
         auto updated_ts = std::chrono::duration_cast<std::chrono::milliseconds>(
             record.updated_at.time_since_epoch()).count();
 
-        const char* sql = R"sql(
+        // record.id 有效时按其插入（daemon 的 RPC addUri 会把引擎任务 id
+        // 写入 record.id，storage 与引擎的 id 必须一致，否则后续
+        // update_status/delete_task 等按 id 的操作会落错行）；否则由
+        // SQLite 自增分配，保持原有调用方的行为。
+        const bool explicit_id = (record.id != INVALID_TASK_ID);
+        const char* sql = explicit_id
+            ? R"sql(
+            INSERT INTO tasks (id, url, output_path, status, progress, total_bytes,
+                               downloaded_bytes, speed, error_message, options_json,
+                               created_at, updated_at, completed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        )sql"
+            : R"sql(
             INSERT INTO tasks (url, output_path, status, progress, total_bytes,
                                downloaded_bytes, speed, error_message, options_json,
                                created_at, updated_at, completed_at)
@@ -124,15 +136,19 @@ public:
             return INVALID_TASK_ID;
         }
 
-        sqlite3_bind_text(stmt, 1, record.url.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(stmt, 2, record.output_path.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_int(stmt, 3, static_cast<int>(record.status));
-        sqlite3_bind_double(stmt, 4, record.progress);
-        sqlite3_bind_int64(stmt, 5, static_cast<sqlite3_int64>(record.total_bytes));
-        sqlite3_bind_int64(stmt, 6, static_cast<sqlite3_int64>(record.downloaded_bytes));
-        sqlite3_bind_int64(stmt, 7, static_cast<sqlite3_int64>(record.speed));
-        sqlite3_bind_text(stmt, 8, record.error_message.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(stmt, 9, options_json.dump().c_str(), -1, SQLITE_TRANSIENT);
+        int bind_index = 1;
+        if (explicit_id) {
+            sqlite3_bind_int64(stmt, bind_index++, static_cast<sqlite3_int64>(record.id));
+        }
+        sqlite3_bind_text(stmt, bind_index++, record.url.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, bind_index++, record.output_path.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(stmt, bind_index++, static_cast<int>(record.status));
+        sqlite3_bind_double(stmt, bind_index++, record.progress);
+        sqlite3_bind_int64(stmt, bind_index++, static_cast<sqlite3_int64>(record.total_bytes));
+        sqlite3_bind_int64(stmt, bind_index++, static_cast<sqlite3_int64>(record.downloaded_bytes));
+        sqlite3_bind_int64(stmt, bind_index++, static_cast<sqlite3_int64>(record.speed));
+        sqlite3_bind_text(stmt, bind_index++, record.error_message.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, bind_index++, options_json.dump().c_str(), -1, SQLITE_TRANSIENT);
         sqlite3_bind_int64(stmt, 10, created_ts);
         sqlite3_bind_int64(stmt, 11, updated_ts);
         sqlite3_bind_int64(stmt, 12, record.completed_at.has_value() ?

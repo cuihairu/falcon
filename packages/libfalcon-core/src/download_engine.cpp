@@ -278,6 +278,14 @@ public:
         task_manager_.set_max_concurrent_tasks(max_tasks);
     }
 
+    BytesPerSecond get_global_speed_limit() const {
+        return global_speed_limiter_.load();
+    }
+
+    std::size_t get_max_concurrent_tasks() const {
+        return task_manager_.get_max_concurrent_tasks();
+    }
+
     BytesPerSecond get_total_speed() const {
         auto stats = task_manager_.get_statistics();
         return stats.total_speed;
@@ -466,6 +474,14 @@ void DownloadEngine::set_global_speed_limit(BytesPerSecond bytes_per_second) {
 
 void DownloadEngine::set_max_concurrent_tasks(std::size_t max_tasks) {
     impl_->set_max_concurrent_tasks(max_tasks);
+}
+
+BytesPerSecond DownloadEngine::get_global_speed_limit() const {
+    return impl_->get_global_speed_limit();
+}
+
+std::size_t DownloadEngine::get_max_concurrent_tasks() const {
+    return impl_->get_max_concurrent_tasks();
 }
 
 BytesPerSecond DownloadEngine::get_total_speed() const {

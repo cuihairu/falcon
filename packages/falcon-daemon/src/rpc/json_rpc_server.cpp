@@ -15,9 +15,11 @@
 #include <cstring>
 #include <iomanip>
 #include <optional>
+#include <random>
 #include <sstream>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -130,8 +132,8 @@ static std::optional<falcon::TaskId> gid_to_task_id(const std::string& gid) {
     }
 }
 
-static std::string aria2_status_from_task(const falcon::DownloadTask& task) {
-    switch (task.status()) {
+static std::string aria2_status_from_task_status(falcon::TaskStatus status) {
+    switch (status) {
         case falcon::TaskStatus::Downloading:
         case falcon::TaskStatus::Preparing:
             return "active";
@@ -149,6 +151,64 @@ static std::string aria2_status_from_task(const falcon::DownloadTask& task) {
     return "error";
 }
 
+static std::string aria2_status_from_task(const falcon::DownloadTask& task) {
+    return aria2_status_from_task_status(task.status());
+}
+
+// aria2 风格的文件条目（tellStatus.files / getFiles 共用）
+static json files_json(const std::string& path, falcon::Bytes total,
+                       falcon::Bytes completed, const std::string& url,
+                       bool include_selected) {
+    json file{
+        {"path", path},
+        {"length", std::to_string(total)},
+        {"completedLength", std::to_string(completed)},
+        {"uris", json::array({json{{"uri", url}, {"status", "used"}}})},
+    };
+    if (include_selected) {
+        file["selected"] = "true";
+    }
+    return json::array({std::move(file)});
+}
+
+// 将任务的下载选项映射回 aria2 选项键（getOption / 便于客户端回显）
+static json download_options_to_json(const falcon::DownloadOptions& options) {
+    json out;
+    out["dir"] = options.output_directory;
+    out["out"] = options.output_filename;
+    out["user-agent"] = options.user_agent;
+    out["referer"] = options.referer;
+    out["load-cookies"] = options.cookie_file;
+    out["save-cookies"] = options.cookie_jar;
+    out["http-user"] = options.http_username;
+    out["http-passwd"] = options.http_password;
+    out["all-proxy"] = options.proxy;
+    out["all-proxy-user"] = options.proxy_username;
+    out["all-proxy-passwd"] = options.proxy_password;
+    out["check-certificate"] = options.verify_ssl ? "true" : "false";
+    out["max-tries"] = std::to_string(options.max_retries);
+    out["retry-wait"] = std::to_string(options.retry_delay_seconds);
+    out["max-connection-per-server"] = std::to_string(options.max_connections);
+    out["max-download-limit"] = std::to_string(options.speed_limit);
+    json headers = json::object();
+    for (const auto& [key, value] : options.headers) {
+        headers[key] = value;
+    }
+    out["header"] = std::move(headers);
+    return out;
+}
+
+// aria2 tellWaiting/tellStopped 的 offset/num 分页语义
+static json paginate_items(const std::vector<json>& items, int offset, int num) {
+    json out = json::array();
+    const int start = std::max(0, offset);
+    const int end = std::min<int>(static_cast<int>(items.size()), start + std::max(0, num));
+    for (int i = start; i < end; ++i) {
+        out.push_back(items[static_cast<std::size_t>(i)]);
+    }
+    return out;
+}
+
 static json task_to_status_json(const falcon::DownloadTask& task) {
     json out;
     out["gid"] = task_id_to_gid(task.id());
@@ -157,15 +217,48 @@ static json task_to_status_json(const falcon::DownloadTask& task) {
     out["completedLength"] = std::to_string(task.downloaded_bytes());
     out["downloadSpeed"] = std::to_string(task.speed());
     out["errorMessage"] = task.error_message();
-    out["files"] = json::array(
-        {json{
-            {"path", task.output_path()},
-            {"length", std::to_string(task.total_bytes())},
-            {"completedLength", std::to_string(task.downloaded_bytes())},
-            {"uris", json::array({json{{"uri", task.url()}}})},
-        }});
+    out["files"] = files_json(task.output_path(), task.total_bytes(),
+                              task.downloaded_bytes(), task.url(), false);
     return out;
 }
+
+#ifdef FALCON_HAS_SQLITE3
+// 引擎内任务（内存态）转状态 JSON；历史记录转状态 JSON
+static json task_record_to_status_json(const TaskRecord& record) {
+    json out;
+    out["gid"] = task_id_to_gid(record.id);
+    out["status"] = aria2_status_from_task_status(record.status);
+    out["totalLength"] = std::to_string(record.total_bytes);
+    out["completedLength"] = std::to_string(record.downloaded_bytes);
+    out["downloadSpeed"] = std::to_string(record.speed);
+    out["errorMessage"] = record.error_message;
+    out["files"] = files_json(record.output_path, record.total_bytes,
+                              record.downloaded_bytes, record.url, false);
+    return out;
+}
+
+// 收集 storage 中存在、但引擎当前不持有的记录（典型场景：重启后
+// 终态任务只保留在数据库中，引擎恢复时跳过终态）。引擎内任务以
+// 内存状态为准，通过 engine_ids 去重避免同一任务重复出现。
+static std::vector<TaskRecord> storage_extra_records(
+    TaskStorage* storage,
+    const std::vector<falcon::DownloadTask::Ptr>& engine_tasks,
+    const std::vector<falcon::TaskStatus>& statuses) {
+    std::unordered_set<falcon::TaskId> engine_ids;
+    for (const auto& task : engine_tasks) {
+        if (task) engine_ids.insert(task->id());
+    }
+    std::vector<TaskRecord> out;
+    for (auto status : statuses) {
+        for (auto& record : storage->get_tasks_by_status(status)) {
+            if (engine_ids.count(record.id) == 0) {
+                out.push_back(std::move(record));
+            }
+        }
+    }
+    return out;
+}
+#endif
 
 static json make_error(const json& id, int code, std::string message) {
     return json{
@@ -234,6 +327,10 @@ JsonRpcServer::~JsonRpcServer() {
     stop();
 }
 
+void JsonRpcServer::set_shutdown_handler(std::function<void()> handler) {
+    shutdown_handler_ = std::move(handler);
+}
+
 bool JsonRpcServer::start() {
     if (!engine_) {
         FALCON_LOG_ERROR_STREAM("JsonRpcServer start failed: engine is null");
@@ -295,6 +392,15 @@ bool JsonRpcServer::start() {
     }
 
     accept_thread_ = std::thread([this] { accept_loop(); });
+    // 每次 start() 生成新的会话 id（aria2.getSessionInfo 返回值）
+    {
+        std::random_device rd;
+        const std::uint64_t value =
+            (static_cast<std::uint64_t>(rd()) << 32) | static_cast<std::uint64_t>(rd());
+        std::ostringstream oss;
+        oss << std::hex << std::setw(16) << std::setfill('0') << value;
+        session_id_ = oss.str();
+    }
     FALCON_LOG_INFO_STREAM("JSON-RPC server listening on " << config_.bind_address << ":" << config_.listen_port);
     return true;
 }
@@ -536,14 +642,28 @@ JsonRpcServer::HttpResponse JsonRpcServer::handle_jsonrpc(const std::string& bod
                 return json::array({
                     "aria2.addUri",
                     "aria2.pause",
+                    "aria2.pauseAll",
+                    "aria2.forcePause",
                     "aria2.unpause",
+                    "aria2.unpauseAll",
                     "aria2.remove",
+                    "aria2.forceRemove",
+                    "aria2.forceShutdown",
                     "aria2.tellStatus",
                     "aria2.tellActive",
                     "aria2.tellWaiting",
                     "aria2.tellStopped",
+                    "aria2.getFiles",
+                    "aria2.getUris",
+                    "aria2.getOption",
+                    "aria2.getGlobalOption",
+                    "aria2.changeGlobalOption",
                     "aria2.getGlobalStat",
                     "aria2.getVersion",
+                    "aria2.getSessionInfo",
+                    "aria2.saveSession",
+                    "aria2.purgeDownloadResult",
+                    "aria2.removeDownloadResult",
                     "system.listMethods",
                     "system.multicall",
                 });
@@ -580,6 +700,127 @@ JsonRpcServer::HttpResponse JsonRpcServer::handle_jsonrpc(const std::string& bod
                 return out;
             }
 
+            if (m == "aria2.getSessionInfo") {
+                return json{{"sessionId", session_id_}};
+            }
+
+            // 会话通过 TaskStorage 持续落库，无需显式快照；
+            // 接受 aria2 的 filePath 参数但忽略
+            if (m == "aria2.saveSession") {
+                return "OK";
+            }
+
+            if (m == "aria2.pauseAll" || m == "aria2.unpauseAll") {
+#ifdef FALCON_HAS_SQLITE3
+                std::vector<falcon::TaskId> affected;
+                if (storage_) {
+                    // pause 对 Downloading 任务经 handler 异步生效，回读有竞态；
+                    // 先收集受影响任务，操作后按 aria2 语义直接落目标状态
+                    if (m == "aria2.pauseAll") {
+                        for (const auto& t : engine_->get_active_tasks()) {
+                            if (t) affected.push_back(t->id());
+                        }
+                    } else {
+                        for (const auto& t :
+                             engine_->get_tasks_by_status(falcon::TaskStatus::Paused)) {
+                            if (t) affected.push_back(t->id());
+                        }
+                    }
+                }
+#endif
+                if (m == "aria2.pauseAll") {
+                    engine_->pause_all();
+                } else {
+                    engine_->resume_all();
+                }
+#ifdef FALCON_HAS_SQLITE3
+                if (storage_) {
+                    if (m == "aria2.pauseAll") {
+                        for (auto id : affected) {
+                            storage_->update_status(id, TaskStatus::Paused);
+                        }
+                    } else {
+                        // 恢复经任务队列重新入队，RPC 返回时通常为 Pending，
+                        // 后续状态变化由持久化监听器异步修正
+                        for (auto id : affected) {
+                            if (auto t = engine_->get_task(id)) {
+                                storage_->update_status(id, t->status());
+                            }
+                        }
+                    }
+                }
+#endif
+                return "OK";
+            }
+
+            if (m == "aria2.forceShutdown" || m == "aria2.shutdown") {
+                FALCON_LOG_WARN_STREAM("Daemon shutdown requested via JSON-RPC (" << m << ")");
+                if (shutdown_handler_) {
+                    shutdown_handler_();
+                } else {
+                    FALCON_LOG_WARN_STREAM("No shutdown handler registered; ignoring " << m);
+                }
+                return "OK";
+            }
+
+            if (m == "aria2.purgeDownloadResult") {
+                engine_->remove_finished_tasks();
+#ifdef FALCON_HAS_SQLITE3
+                if (storage_) {
+                    for (auto status : {falcon::TaskStatus::Completed, falcon::TaskStatus::Failed,
+                                        falcon::TaskStatus::Cancelled}) {
+                        for (const auto& record : storage_->get_tasks_by_status(status)) {
+                            storage_->delete_task(record.id);
+                        }
+                    }
+                }
+#endif
+                return "OK";
+            }
+
+            if (m == "aria2.getGlobalOption") {
+                json out;
+                out["max-overall-download-limit"] = std::to_string(engine_->get_global_speed_limit());
+                out["max-concurrent-downloads"] = std::to_string(engine_->get_max_concurrent_tasks());
+                // daemon 没有全局默认下载目录的概念（addUri 逐任务指定），保持 aria2 键位存在
+                out["dir"] = "";
+                return out;
+            }
+
+            if (m == "aria2.changeGlobalOption") {
+                // aria2 签名是 (secret, options)：token 剥离后 options 就在 p[0]
+                if (!p.is_array() || p.empty() || !p[0].is_object()) {
+                    return json{{"error", json{{"code", -32602}, {"message", "Invalid params"}}}};
+                }
+                json result;
+                for (const auto& [key, value] : p[0].items()) {
+                    try {
+                        if (key == "max-overall-download-limit") {
+                            const std::string v = value.is_string()
+                                                      ? value.get<std::string>()
+                                                      : value.dump();
+                            falcon::BytesPerSecond limit = 0;
+                            if (v != "none" && v != "0") {
+                                limit = static_cast<falcon::BytesPerSecond>(std::stoull(v));
+                            }
+                            engine_->set_global_speed_limit(limit);
+                        } else if (key == "max-concurrent-downloads") {
+                            const std::size_t n = value.is_number_integer()
+                                                      ? static_cast<std::size_t>(value.get<int>())
+                                                      : std::stoull(value.get<std::string>());
+                            engine_->set_max_concurrent_tasks(n);
+                        } else {
+                            return json{{"error", json{{"code", 1},
+                                                       {"message", "Option not supported: " + key}}}};
+                        }
+                    } catch (const std::exception&) {
+                        return json{{"error", json{{"code", 1},
+                                                   {"message", "Invalid option value: " + key}}}};
+                    }
+                }
+                return "OK";
+            }
+
             if (m == "aria2.getGlobalStat") {
                 auto tasks = engine_->get_all_tasks();
                 std::size_t active = 0, waiting = 0, stopped = 0;
@@ -601,6 +842,19 @@ JsonRpcServer::HttpResponse JsonRpcServer::handle_jsonrpc(const std::string& bod
                             break;
                     }
                 }
+
+#ifdef FALCON_HAS_SQLITE3
+                // 重启后终态历史只存在于 storage（引擎恢复时跳过终态），
+                // 计数需合并 storage 独有记录，与 tell* 视图保持一致
+                if (storage_) {
+                    waiting += storage_extra_records(
+                        storage_, tasks, {falcon::TaskStatus::Pending, falcon::TaskStatus::Paused}).size();
+                    stopped += storage_extra_records(
+                        storage_, tasks,
+                        {falcon::TaskStatus::Completed, falcon::TaskStatus::Failed,
+                         falcon::TaskStatus::Cancelled}).size();
+                }
+#endif
 
                 json out;
                 out["downloadSpeed"] = std::to_string(engine_->get_total_speed());
@@ -708,7 +962,77 @@ JsonRpcServer::HttpResponse JsonRpcServer::handle_jsonrpc(const std::string& bod
                 return task_id_to_gid(task->id());
             }
 
-            if (m == "aria2.pause" || m == "aria2.unpause" || m == "aria2.remove" || m == "aria2.tellStatus") {
+            if (m == "aria2.tellStatus") {
+                if (!p.is_array() || p.empty() || !p[0].is_string()) {
+                    return json{{"error", json{{"code", -32602}, {"message", "Invalid params"}}}};
+                }
+                auto tid = gid_to_task_id(p[0].get<std::string>());
+                if (!tid) {
+                    return json{{"error", json{{"code", 2}, {"message", "Task not found"}}}};
+                }
+                // 引擎内存态优先；引擎查不到时（重启后终态历史）回落到 storage
+                if (auto task = engine_->get_task(*tid)) {
+                    return task_to_status_json(*task);
+                }
+#ifdef FALCON_HAS_SQLITE3
+                if (storage_) {
+                    if (auto record = storage_->get_task(*tid)) {
+                        return task_record_to_status_json(*record);
+                    }
+                }
+#endif
+                return json{{"error", json{{"code", 2}, {"message", "Task not found"}}}};
+            }
+
+            if (m == "aria2.getFiles" || m == "aria2.getUris" || m == "aria2.getOption") {
+                if (!p.is_array() || p.empty() || !p[0].is_string()) {
+                    return json{{"error", json{{"code", -32602}, {"message", "Invalid params"}}}};
+                }
+                auto tid = gid_to_task_id(p[0].get<std::string>());
+                if (!tid) {
+                    return json{{"error", json{{"code", 2}, {"message", "Task not found"}}}};
+                }
+
+                auto task = engine_->get_task(*tid);
+#ifdef FALCON_HAS_SQLITE3
+                std::optional<TaskRecord> record;
+                if (!task && storage_) {
+                    record = storage_->get_task(*tid);
+                }
+                if (!task && !record) {
+                    return json{{"error", json{{"code", 2}, {"message", "Task not found"}}}};
+                }
+                if (m == "aria2.getFiles") {
+                    if (task) {
+                        return files_json(task->output_path(), task->total_bytes(),
+                                          task->downloaded_bytes(), task->url(), true);
+                    }
+                    return files_json(record->output_path, record->total_bytes,
+                                      record->downloaded_bytes, record->url, true);
+                }
+                if (m == "aria2.getUris") {
+                    const std::string& uri = task ? task->url() : record->url;
+                    return json::array({json{{"uri", uri}, {"status", "used"}}});
+                }
+                return download_options_to_json(task ? task->options() : record->options);
+#else
+                if (!task) {
+                    return json{{"error", json{{"code", 2}, {"message", "Task not found"}}}};
+                }
+                if (m == "aria2.getFiles") {
+                    return files_json(task->output_path(), task->total_bytes(),
+                                      task->downloaded_bytes(), task->url(), true);
+                }
+                if (m == "aria2.getUris") {
+                    return json::array({json{{"uri", task->url()}, {"status", "used"}}});
+                }
+                return download_options_to_json(task->options());
+#endif
+            }
+
+            if (m == "aria2.pause" || m == "aria2.forcePause" ||
+                m == "aria2.unpause" ||
+                m == "aria2.remove" || m == "aria2.forceRemove") {
                 if (!p.is_array() || p.empty() || !p[0].is_string()) {
                     return json{{"error", json{{"code", -32602}, {"message", "Invalid params"}}}};
                 }
@@ -722,7 +1046,7 @@ JsonRpcServer::HttpResponse JsonRpcServer::handle_jsonrpc(const std::string& bod
                     return json{{"error", json{{"code", 2}, {"message", "Task not found"}}}};
                 }
 
-                if (m == "aria2.pause") {
+                if (m == "aria2.pause" || m == "aria2.forcePause") {
                     if (!engine_->pause_task(*tid)) {
                         return json{{"error", json{{"code", 1}, {"message", "Pause failed"}}}};
                     }
@@ -747,17 +1071,15 @@ JsonRpcServer::HttpResponse JsonRpcServer::handle_jsonrpc(const std::string& bod
 #endif
                     return gid;
                 }
-                if (m == "aria2.remove") {
-                    if (!engine_->cancel_task(*tid)) {
-                        return json{{"error", json{{"code", 1}, {"message", "Remove failed"}}}};
-                    }
-#ifdef FALCON_HAS_SQLITE3
-                    // Update storage
-                    if (storage_) storage_->update_status(*tid, TaskStatus::Cancelled);
-#endif
-                    return gid;
+                // aria2.remove / aria2.forceRemove
+                if (!engine_->cancel_task(*tid)) {
+                    return json{{"error", json{{"code", 1}, {"message", "Remove failed"}}}};
                 }
-                return task_to_status_json(*task);
+#ifdef FALCON_HAS_SQLITE3
+                // Update storage
+                if (storage_) storage_->update_status(*tid, TaskStatus::Cancelled);
+#endif
+                return gid;
             }
 
             if (m == "aria2.tellActive") {
@@ -776,22 +1098,25 @@ JsonRpcServer::HttpResponse JsonRpcServer::handle_jsonrpc(const std::string& bod
                 const int offset = p[0].is_number_integer() ? p[0].get<int>() : std::stoi(p[0].get<std::string>());
                 const int num = p[1].is_number_integer() ? p[1].get<int>() : std::stoi(p[1].get<std::string>());
 
-                std::vector<falcon::DownloadTask::Ptr> waiting;
-                auto pending = engine_->get_tasks_by_status(falcon::TaskStatus::Pending);
-                auto paused = engine_->get_tasks_by_status(falcon::TaskStatus::Paused);
-                waiting.reserve(pending.size() + paused.size());
-                waiting.insert(waiting.end(), pending.begin(), pending.end());
-                waiting.insert(waiting.end(), paused.begin(), paused.end());
-
-                json out = json::array();
-                int start = std::max(0, offset);
-                int end = std::min<int>(static_cast<int>(waiting.size()), start + std::max(0, num));
-                for (int i = start; i < end; ++i) {
-                    const auto index = static_cast<std::size_t>(i);
-                    if (!waiting[index]) continue;
-                    out.push_back(task_to_status_json(*waiting[index]));
+                std::vector<json> items;
+                auto tasks = engine_->get_all_tasks();
+                for (const auto& t : tasks) {
+                    if (!t) continue;
+                    if (t->status() == falcon::TaskStatus::Pending ||
+                        t->status() == falcon::TaskStatus::Paused) {
+                        items.push_back(task_to_status_json(*t));
+                    }
                 }
-                return out;
+#ifdef FALCON_HAS_SQLITE3
+                if (storage_) {
+                    for (const auto& record : storage_extra_records(
+                             storage_, tasks,
+                             {falcon::TaskStatus::Pending, falcon::TaskStatus::Paused})) {
+                        items.push_back(task_record_to_status_json(record));
+                    }
+                }
+#endif
+                return paginate_items(items, offset, num);
             }
 
             if (m == "aria2.tellStopped") {
@@ -801,24 +1126,59 @@ JsonRpcServer::HttpResponse JsonRpcServer::handle_jsonrpc(const std::string& bod
                 const int offset = p[0].is_number_integer() ? p[0].get<int>() : std::stoi(p[0].get<std::string>());
                 const int num = p[1].is_number_integer() ? p[1].get<int>() : std::stoi(p[1].get<std::string>());
 
-                std::vector<falcon::DownloadTask::Ptr> stopped;
-                auto completed = engine_->get_tasks_by_status(falcon::TaskStatus::Completed);
-                auto failed = engine_->get_tasks_by_status(falcon::TaskStatus::Failed);
-                auto cancelled = engine_->get_tasks_by_status(falcon::TaskStatus::Cancelled);
-                stopped.reserve(completed.size() + failed.size() + cancelled.size());
-                stopped.insert(stopped.end(), completed.begin(), completed.end());
-                stopped.insert(stopped.end(), failed.begin(), failed.end());
-                stopped.insert(stopped.end(), cancelled.begin(), cancelled.end());
-
-                json out = json::array();
-                int start = std::max(0, offset);
-                int end = std::min<int>(static_cast<int>(stopped.size()), start + std::max(0, num));
-                for (int i = start; i < end; ++i) {
-                    const auto index = static_cast<std::size_t>(i);
-                    if (!stopped[index]) continue;
-                    out.push_back(task_to_status_json(*stopped[index]));
+                std::vector<json> items;
+                auto tasks = engine_->get_all_tasks();
+                for (const auto& t : tasks) {
+                    if (!t) continue;
+                    if (t->status() == falcon::TaskStatus::Completed ||
+                        t->status() == falcon::TaskStatus::Failed ||
+                        t->status() == falcon::TaskStatus::Cancelled) {
+                        items.push_back(task_to_status_json(*t));
+                    }
                 }
-                return out;
+#ifdef FALCON_HAS_SQLITE3
+                if (storage_) {
+                    for (const auto& record : storage_extra_records(
+                             storage_, tasks,
+                             {falcon::TaskStatus::Completed, falcon::TaskStatus::Failed,
+                              falcon::TaskStatus::Cancelled})) {
+                        items.push_back(task_record_to_status_json(record));
+                    }
+                }
+#endif
+                return paginate_items(items, offset, num);
+            }
+
+            if (m == "aria2.removeDownloadResult") {
+                if (!p.is_array() || p.empty() || !p[0].is_string()) {
+                    return json{{"error", json{{"code", -32602}, {"message", "Invalid params"}}}};
+                }
+                auto tid = gid_to_task_id(p[0].get<std::string>());
+                if (!tid) {
+                    return json{{"error", json{{"code", 2}, {"message", "Task not found"}}}};
+                }
+
+                bool existed = false;
+                if (auto task = engine_->get_task(*tid)) {
+                    existed = true;
+                    // 引擎只允许移除终态任务；活动任务返回失败
+                    if (!engine_->remove_task(*tid)) {
+                        return json{{"error", json{{"code", 1},
+                                                   {"message", "Task cannot be removed while active"}}}};
+                    }
+                }
+#ifdef FALCON_HAS_SQLITE3
+                if (storage_) {
+                    if (storage_->task_exists(*tid)) {
+                        existed = true;
+                        storage_->delete_task(*tid);
+                    }
+                }
+#endif
+                if (!existed) {
+                    return json{{"error", json{{"code", 2}, {"message", "Task not found"}}}};
+                }
+                return "OK";
             }
 
             return json{{"error", json{{"code", -32601}, {"message", "Method not found"}}}};
@@ -834,8 +1194,13 @@ JsonRpcServer::HttpResponse JsonRpcServer::handle_jsonrpc(const std::string& bod
 
         resp.body = make_result(id, result).dump();
         return resp;
-    } catch (const std::exception& e) {
+    } catch (const json::parse_error& e) {
+        // -32700 专属于请求体不是合法 JSON 的情形
         resp.body = make_error(id, -32700, std::string("Parse error: ") + e.what()).dump();
+        return resp;
+    } catch (const std::exception& e) {
+        // dispatch 内部的运行时失败（如输出目录不可写）是服务端错误，不是解析错误
+        resp.body = make_error(id, -32603, std::string("Internal error: ") + e.what()).dump();
         return resp;
     }
 }

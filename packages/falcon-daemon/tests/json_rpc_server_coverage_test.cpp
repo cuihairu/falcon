@@ -626,10 +626,32 @@ TEST_F(JsonRpcCoverageTest, ListMethodsContainsAllAria2Methods) {
     auto& arr = parsed["result"];
     ASSERT_TRUE(arr.is_array());
 
-    for (const char* name : {"aria2.addUri", "aria2.pause", "aria2.unpause", "aria2.remove",
-                             "aria2.tellStatus", "aria2.tellActive", "aria2.tellWaiting",
-                             "aria2.tellStopped", "aria2.getGlobalStat", "aria2.getVersion",
-                             "system.listMethods", "system.multicall"}) {
+    for (const char* name : {"aria2.addUri",
+                             "aria2.pause",
+                             "aria2.pauseAll",
+                             "aria2.forcePause",
+                             "aria2.unpause",
+                             "aria2.unpauseAll",
+                             "aria2.remove",
+                             "aria2.forceRemove",
+                             "aria2.forceShutdown",
+                             "aria2.tellStatus",
+                             "aria2.tellActive",
+                             "aria2.tellWaiting",
+                             "aria2.tellStopped",
+                             "aria2.getFiles",
+                             "aria2.getUris",
+                             "aria2.getOption",
+                             "aria2.getGlobalOption",
+                             "aria2.changeGlobalOption",
+                             "aria2.getGlobalStat",
+                             "aria2.getVersion",
+                             "aria2.getSessionInfo",
+                             "aria2.saveSession",
+                             "aria2.purgeDownloadResult",
+                             "aria2.removeDownloadResult",
+                             "system.listMethods",
+                             "system.multicall"}) {
         bool found = false;
         for (const auto& m : arr) {
             if (m.is_string() && m.get<std::string>() == name) found = true;
@@ -1181,6 +1203,117 @@ TEST_F(JsonRpcCoverageTest, ConcurrentRequestsAreHandled) {
     }
     for (auto& t : workers) t.join();
     EXPECT_EQ(ok.load(), 20);
+}
+
+// ===========================================================================
+// Batch control / session / global options (no storage required)
+// ===========================================================================
+
+TEST_F(JsonRpcCoverageTest, SessionInfoAndSaveSession) {
+    start_server();
+    auto parsed = call("aria2.getSessionInfo", json::array());
+    ASSERT_TRUE(parsed.contains("result")) << parsed.dump();
+    EXPECT_FALSE(parsed["result"]["sessionId"].get<std::string>().empty());
+
+    parsed = call("aria2.saveSession", json::array());
+    ASSERT_TRUE(parsed.contains("result")) << parsed.dump();
+    EXPECT_EQ(parsed["result"], "OK");
+}
+
+TEST_F(JsonRpcCoverageTest, PauseAllAndUnpauseAllReturnOk) {
+    start_server();
+    auto parsed = call("aria2.pauseAll", json::array());
+    ASSERT_TRUE(parsed.contains("result")) << parsed.dump();
+    EXPECT_EQ(parsed["result"], "OK");
+
+    parsed = call("aria2.unpauseAll", json::array());
+    ASSERT_TRUE(parsed.contains("result")) << parsed.dump();
+    EXPECT_EQ(parsed["result"], "OK");
+}
+
+TEST_F(JsonRpcCoverageTest, ForceShutdownInvokesHandler) {
+    start_server();
+    std::atomic<bool> requested{false};
+    server_->set_shutdown_handler([&requested] { requested.store(true); });
+
+    auto parsed = call("aria2.forceShutdown", json::array());
+    ASSERT_TRUE(parsed.contains("result")) << parsed.dump();
+    EXPECT_EQ(parsed["result"], "OK");
+    EXPECT_TRUE(requested.load());
+}
+
+TEST_F(JsonRpcCoverageTest, GlobalOptionRoundTrip) {
+    start_server();
+    auto parsed = call("aria2.changeGlobalOption",
+                       json::array({json{{"max-overall-download-limit", "2048"},
+                                          {"max-concurrent-downloads", "2"}}}));
+    ASSERT_TRUE(parsed.contains("result")) << parsed.dump();
+    EXPECT_EQ(parsed["result"], "OK");
+    EXPECT_EQ(engine_.get_global_speed_limit(), falcon::BytesPerSecond{2048});
+    EXPECT_EQ(engine_.get_max_concurrent_tasks(), std::size_t{2});
+
+    parsed = call("aria2.getGlobalOption", json::array());
+    ASSERT_TRUE(parsed.contains("result")) << parsed.dump();
+    EXPECT_EQ(parsed["result"]["max-overall-download-limit"], "2048");
+    EXPECT_EQ(parsed["result"]["max-concurrent-downloads"], "2");
+
+    // "none" 取消限速
+    parsed = call("aria2.changeGlobalOption",
+                  json::array({json{{"max-overall-download-limit", "none"}}}));
+    ASSERT_TRUE(parsed.contains("result")) << parsed.dump();
+    EXPECT_EQ(engine_.get_global_speed_limit(), falcon::BytesPerSecond{0});
+
+    // 非法数值
+    parsed = call("aria2.changeGlobalOption",
+                  json::array({json{{"max-overall-download-limit", "not-a-number"}}}));
+    EXPECT_TRUE(parsed.contains("error")) << parsed.dump();
+
+    // 未知键
+    parsed = call("aria2.changeGlobalOption",
+                  json::array({json{{"no-such-option", "1"}}}));
+    EXPECT_TRUE(parsed.contains("error")) << parsed.dump();
+
+    // params 形状错误
+    parsed = call("aria2.changeGlobalOption", json::array({"only-one"}));
+    EXPECT_EQ(parsed["error"]["code"], -32602);
+}
+
+TEST_F(JsonRpcCoverageTest, GetFilesGetUrisGetOptionOnEngineTask) {
+    start_server();
+    // fixture 的 StubHandler 只认 test://；不 start_task，保持 Pending 即可查询
+    auto task = engine_.add_task("test://direct.bin");
+    ASSERT_NE(task, nullptr);
+    const std::string gid = gid_of(task->id());
+
+    auto parsed = call("aria2.getFiles", json::array({gid}));
+    ASSERT_TRUE(parsed.contains("result")) << parsed.dump();
+    ASSERT_EQ(parsed["result"].size(), std::size_t{1});
+    EXPECT_EQ(parsed["result"][0]["selected"], "true");
+    EXPECT_EQ(parsed["result"][0]["uris"][0]["uri"], "test://direct.bin");
+
+    parsed = call("aria2.getUris", json::array({gid}));
+    ASSERT_TRUE(parsed.contains("result")) << parsed.dump();
+    EXPECT_EQ(parsed["result"][0]["uri"], "test://direct.bin");
+
+    parsed = call("aria2.getOption", json::array({gid}));
+    ASSERT_TRUE(parsed.contains("result")) << parsed.dump();
+    EXPECT_TRUE(parsed["result"].contains("dir"));
+    EXPECT_TRUE(parsed["result"].contains("max-download-limit"));
+
+    // 未知 gid
+    parsed = call("aria2.getFiles", json::array({"00000000000ffffffd"}));
+    EXPECT_TRUE(parsed.contains("error")) << parsed.dump();
+    parsed = call("aria2.getOption", json::array({"00000000000ffffffd"}));
+    EXPECT_TRUE(parsed.contains("error")) << parsed.dump();
+    parsed = call("aria2.getUris", json::array({"00000000000ffffffd"}));
+    EXPECT_TRUE(parsed.contains("error")) << parsed.dump();
+}
+
+TEST_F(JsonRpcCoverageTest, RemoveDownloadResultUnknownGidIsError) {
+    start_server();
+    auto parsed = call("aria2.removeDownloadResult", json::array({"00000000000ffffffc"}));
+    EXPECT_TRUE(parsed.contains("error")) << parsed.dump();
+    EXPECT_EQ(parsed["error"]["code"], 2);
 }
 
 } // namespace

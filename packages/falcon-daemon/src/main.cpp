@@ -300,6 +300,8 @@ int main(int argc, char* argv[]) {
 #else
             rpc_server = std::make_unique<falcon::daemon::rpc::JsonRpcServer>(&engine, rpc_config, nullptr);
 #endif
+            // aria2.forceShutdown/shutdown → 走正常停机流程（排水 + 落库）
+            rpc_server->set_shutdown_handler([&daemon_manager]() { daemon_manager.request_stop(); });
             if (!rpc_server->start()) {
                 std::cerr << "Failed to start JSON-RPC server\n";
                 return 1;

@@ -60,6 +60,31 @@ if(SQLite3_FOUND AND TARGET falcon_daemon_storage)
     target_compile_definitions(falcon_daemon_storage_tests PRIVATE FALCON_HAS_SQLITE3)
 
     gtest_discover_tests(falcon_daemon_storage_tests)
+
+    # JSON-RPC × TaskStorage 集成：历史任务经 RPC 可见、删除联动、批量控制落库
+    find_package(Threads REQUIRED)
+    add_executable(falcon_daemon_rpc_storage_tests
+        json_rpc_storage_test.cpp
+    )
+
+    target_link_libraries(falcon_daemon_rpc_storage_tests
+        PRIVATE
+            falcon_daemon_rpc
+            GTest::gtest
+            GTest::gtest_main
+            Threads::Threads
+    )
+
+    target_include_directories(falcon_daemon_rpc_storage_tests
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src
+    )
+
+    target_compile_features(falcon_daemon_rpc_storage_tests PRIVATE cxx_std_17)
+
+    gtest_discover_tests(falcon_daemon_rpc_storage_tests
+        DISCOVERY_TIMEOUT 30
+    )
 endif()
 
 # ============================================================================
