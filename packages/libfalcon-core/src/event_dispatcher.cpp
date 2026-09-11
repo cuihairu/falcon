@@ -40,9 +40,14 @@ public:
     }
 
     void stop(bool wait_for_completion) {
-        if (!running_) return;
-
-        running_ = false;
+        {
+            // 持 queue_mutex_ 写 running_：worker 的 cv 谓词在同一路径上读它，
+            // 否则存在丢失唤醒窗口（worker 检查谓词后、进入 wait 前被
+            // notify_all 越过，之后无人再唤醒，join() 永远等待）
+            std::lock_guard<std::mutex> lock(queue_mutex_);
+            if (!running_) return;
+            running_ = false;
+        }
         cv_.notify_all();
 
         // 等待所有工作线程退出（running_ 置为 false 后不会再处理队列）
