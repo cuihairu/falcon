@@ -2,6 +2,16 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-11 - Daemon RPC API 全面完善
+- aria2 兼容 JSON-RPC 方法扩至 26 个，查询/删除同时覆盖引擎内存态与 SQLite 历史（引擎优先、storage 回落、按 id 去重）
+- 新增 `getFiles`/`getUris`/`getOption`/`getGlobalOption`/`changeGlobalOption`/`getSessionInfo`/`saveSession`/`purgeDownloadResult`/`removeDownloadResult`/`pauseAll`/`unpauseAll`/`forceShutdown`/`system.multicall` 等
+- `forceShutdown` 接线 `DaemonManager::request_stop()`，RPC 可触发正常停机（排水 + 落库）
+- 修复 `TaskStorage::create_task` 不写显式 id 的缺陷（此前 RPC addUri 落库后 storage id 与引擎 id 在删除/重启后错位）
+- JSON-RPC 错误码分层修正：-32700 仅限 JSON 解析失败，dispatch 内部异常报 -32603
+- 删除死代码 `xml_rpc_server.{hpp,cpp}`；daemon CLAUDE.md 从 gRPC 蓝图重写为 JSON-RPC 实际实现
+- Core 新增只读查询 `get_global_speed_limit()` / `get_max_concurrent_tasks()`
+- 新增测试目标 `falcon_daemon_rpc_storage_tests`（15 用例）与扩展 `falcon_daemon_rpc_coverage_tests`
+
 ### 2026-09-11 - Daemon 任务持久化闭环
 - 新增 `TaskStorageListener`：引擎状态/进度事件实时落库（SQLite，进度 1 秒节流）
 - 停机改为暂停语义（`pause_all` + 排水），未完成任务以可恢复状态入库
@@ -626,9 +636,9 @@ Daemon 配置文件（`/etc/falcon/daemon.json` 或 `~/.config/falcon/daemon.jso
 ### 🔄 第二阶段（进行中）
 1. **Daemon 服务**
    - ✅ HTTP RPC 服务器
-   - ✅ aria2 兼容 API（addUri/remove/tellStatus/getGlobalStat）
+   - ✅ aria2 兼容 API（26 个方法，含查询回落、批量控制、会话管理）
    - ✅ 任务持久化（SQLite：状态/进度落库、停机保存、重启恢复）
-   - 🔄 RESTful API 完善
+   - 🔄 事件流订阅（websocket/SSE 推送任务进度）
 
 2. **桌面应用（Qt6）**
    - ✅ 迅雷风格 UI
