@@ -50,7 +50,7 @@ jobs:
         timeout-minutes: 5
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build libcurl4-openssl-dev
+          sudo apt-get install -y cmake ninja-build libcurl4-openssl-dev libsqlite3-dev
 
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos-latest'
@@ -238,6 +238,7 @@ jobs:
             automake \
             libtool \
             libcurl4-openssl-dev \
+            libsqlite3-dev \
             libgl1-mesa-dev \
             libx11-dev \
             libx11-xcb-dev \

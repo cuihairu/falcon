@@ -14,6 +14,7 @@
     "curl",
     "openssl",
     "fmt",
+    "sqlite3",
     {
       "name": "gtest",
       "version>=": "1.12.0"

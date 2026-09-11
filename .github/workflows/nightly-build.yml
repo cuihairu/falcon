@@ -58,6 +58,7 @@ jobs:
             libtool \
             libgl1-mesa-dev \
             libcurl4-openssl-dev \
+            libsqlite3-dev \
             libssl-dev \
             libx11-dev \
             libx11-xcb-dev \
@@ -360,25 +361,66 @@ jobs:
           New-Item -ItemType Directory -Force -Path falcon-desktop
           Copy-Item falcon-desktop.exe falcon-desktop/
           Copy-Item falcon-cli.exe falcon-desktop/ -ErrorAction SilentlyContinue
+          Copy-Item falcon-daemon.exe falcon-desktop/ -ErrorAction SilentlyContinue
 
-          # 复制 vcpkg DLL
-          Copy-Item "${{ github.workspace }}\vcpkg\installed\x64-windows\bin\*.dll" falcon-desktop/ -ErrorAction SilentlyContinue
+          # vcpkg manifest 模式下，依赖 DLL 位于 <build>/vcpkg_installed/<triplet>/bin；
+          # 经典模式才在 <workspace>/vcpkg/installed/<triplet>/bin。
+          # 之前只复制经典模式路径且 SilentlyContinue，导致 zip 里没有任何依赖 DLL。
+          $triplet = "${{ matrix.vcpkg-triplet }}"
+          $manifestBin = "${{ github.workspace }}\build-desktop\vcpkg_installed\$triplet\bin"
+          $classicBin = "${{ github.workspace }}\vcpkg\installed\$triplet\bin"
+          if (Test-Path $manifestBin) {
+            Copy-Item "$manifestBin\*.dll" falcon-desktop/ -Force
+            Write-Host "Copied DLLs from manifest tree: $manifestBin"
+          } elseif (Test-Path $classicBin) {
+            Copy-Item "$classicBin\*.dll" falcon-desktop/ -Force
+            Write-Host "Copied DLLs from classic tree: $classicBin"
+          } else {
+            Write-Error "vcpkg DLL directory not found (checked manifest and classic trees)"
+            exit 1
+          }
 
-          # 使用 windeployqt 部署 Qt 依赖
-          $qtDir = "${{ github.workspace }}\vcpkg\installed\${{ matrix.vcpkg-triplet }}"
-          $windeployqt = Join-Path $qtDir "tools\Qt6\bin\windeployqt.exe"
-          & $windeployqt `
-            --release `
-            --no-translations `
-            --no-system-d3d-compiler `
-            falcon-desktop\falcon-desktop.exe
+          # Qt 插件必须随包（缺 platforms/qwindows.dll 时 GUI 无法启动）
+          $qtPluginDir = "${{ github.workspace }}\build-desktop\vcpkg_installed\$triplet\Qt6\plugins"
+          if (Test-Path $qtPluginDir) {
+            foreach ($category in @("platforms", "styles", "imageformats", "tls")) {
+              $src = Join-Path $qtPluginDir $category
+              if (Test-Path $src) {
+                New-Item -ItemType Directory -Force -Path "falcon-desktop\plugins\$category" | Out-Null
+                Copy-Item "$src\*.dll" "falcon-desktop\plugins\$category\" -Force
+              }
+            }
+            Write-Host "Copied Qt plugins from $qtPluginDir"
+          } else {
+            Write-Warning "Qt plugin directory not found: $qtPluginDir"
+          }
+
+          # MSVC CRT 运行时：目标机器未安装 VC++ Redistributable 时避免缺
+          # vcruntime140.dll / vcruntime140_1.dll / msvcp140.dll
+          $crtDirs = Get-ChildItem `
+            "$env:ProgramFiles\Microsoft Visual Studio\2022\*\VC\Redist\MSVC\*\x64\Microsoft.VC143.CRT" `
+            -Directory -ErrorAction SilentlyContinue
+          if ($crtDirs) {
+            $crtDir = $crtDirs | Sort-Object FullName -Descending | Select-Object -First 1
+            Copy-Item "$($crtDir.FullName)\*.dll" falcon-desktop/ -Force
+            Write-Host "Copied MSVC CRT from $($crtDir.FullName)"
+          } else {
+            Write-Warning "MSVC CRT redist directory not found; target machines need VC++ Redistributable"
+          }
 
           # 打包为 zip（向上三级到根目录：bin/Release -> bin -> build-desktop -> root）
           $zipName = "falcon-desktop-windows-${{ steps.version.outputs.version }}.zip"
           7z a -tzip ..\..\..\$zipName falcon-desktop\
 
-          # 验证文件已创建（回到根目录检查）
+          # 验证关键文件都在包里
+          $required = @("falcon-desktop.exe", "Qt6Core.dll", "Qt6Gui.dll", "Qt6Widgets.dll", "plugins\platforms\qwindows.dll")
           cd ../../../
+          foreach ($f in $required) {
+            if (-not (Test-Path "build-desktop\bin\Release\falcon-desktop\$f")) {
+              Write-Error "Missing required file in package: $f"
+              exit 1
+            }
+          }
           Get-ChildItem -Filter "falcon-desktop-windows-*.zip" | Select-Object Name, FullName
 
       - name: Upload artifact
