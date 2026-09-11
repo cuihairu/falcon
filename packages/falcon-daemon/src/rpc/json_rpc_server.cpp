@@ -658,6 +658,7 @@ JsonRpcServer::HttpResponse JsonRpcServer::handle_jsonrpc(const std::string& bod
                     "aria2.getOption",
                     "aria2.getGlobalOption",
                     "aria2.changeGlobalOption",
+                    "aria2.changePriority",
                     "aria2.getGlobalStat",
                     "aria2.getVersion",
                     "aria2.getSessionInfo",
@@ -785,6 +786,39 @@ JsonRpcServer::HttpResponse JsonRpcServer::handle_jsonrpc(const std::string& bod
                 // daemon 没有全局默认下载目录的概念（addUri 逐任务指定），保持 aria2 键位存在
                 out["dir"] = "";
                 return out;
+            }
+
+            if (m == "aria2.changePriority") {
+                // p = [gid, priority]；priority 用 falcon::TaskPriority 的数值
+                // （0=Low 1=Normal 2=High 3=Critical），与 aria2 原生语义不同，
+                // 这是 Falcon 客户端约定
+                if (!p.is_array() || p.size() < 2 || !p[0].is_string() ||
+                    (!p[1].is_number_integer() && !p[1].is_string())) {
+                    return json{{"error", json{{"code", -32602}, {"message", "Invalid params"}}}};
+                }
+                auto tid = gid_to_task_id(p[0].get<std::string>());
+                if (!tid) {
+                    return json{{"error", json{{"code", -32602}, {"message", "Invalid params"}}}};
+                }
+                int value = -1;
+                try {
+                    value = p[1].is_number_integer()
+                                ? p[1].get<int>()
+                                : std::stoi(p[1].get<std::string>());
+                } catch (const std::exception&) {
+                    return json{{"error", json{{"code", -32602}, {"message", "Invalid priority"}}}};
+                }
+                if (value < 0 || value > 3) {
+                    return json{{"error", json{{"code", 1},
+                                               {"message", "Priority must be 0..3"}}}};
+                }
+                auto task = engine_->get_task(*tid);
+                if (!task) {
+                    return json{{"error", json{{"code", 2}, {"message", "Task not found"}}}};
+                }
+                engine_->adjust_task_priority(
+                    *tid, static_cast<falcon::TaskPriority>(value));
+                return task_id_to_gid(*tid);
             }
 
             if (m == "aria2.changeGlobalOption") {

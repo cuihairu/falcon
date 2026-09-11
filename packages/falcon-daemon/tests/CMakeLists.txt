@@ -87,6 +87,30 @@ if(SQLite3_FOUND AND TARGET falcon_daemon_storage)
     )
 endif()
 
+# JSON-RPC 客户端 × 真实服务端回环集成
+add_executable(falcon_daemon_rpc_client_tests
+    json_rpc_client_test.cpp
+)
+
+target_link_libraries(falcon_daemon_rpc_client_tests
+    PRIVATE
+        falcon_daemon_rpc
+        GTest::gtest
+        GTest::gtest_main
+        Threads::Threads
+)
+
+target_include_directories(falcon_daemon_rpc_client_tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+)
+
+target_compile_features(falcon_daemon_rpc_client_tests PRIVATE cxx_std_17)
+
+gtest_discover_tests(falcon_daemon_rpc_client_tests
+    DISCOVERY_TIMEOUT 30
+)
+
 # ============================================================================
 # Additional coverage tests (appended; targets above are unchanged)
 # ============================================================================

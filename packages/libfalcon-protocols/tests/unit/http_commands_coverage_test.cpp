@@ -395,15 +395,6 @@ protected:
         std::filesystem::remove_all(test_dir_, ec);
     }
 
-    // DownloadEngineV2 的事件循环与非阻塞 connect 尚未适配 Windows（SOCKET
-    // 句柄语义、WSAPoll 对非阻塞 connect 的报告差异），依赖引擎驱动 socket
-    // 数据的测试在 Windows 上暂跳过。TODO(Win)：引擎适配完成后移除。
-    void skip_on_windows_until_engine_adapted() {
-#ifdef _WIN32
-        GTEST_SKIP() << "DownloadEngineV2 event loop not yet adapted for Windows";
-#endif
-    }
-
     std::string test_dir_;
 
     // TEST_F 测试体位于派生类中，友元关系不继承；通过夹具成员函数
@@ -460,7 +451,11 @@ TEST_F(HttpCommandsCoverageTest, InitiateConnectionRefusedPortFails) {
 }
 
 TEST_F(HttpCommandsCoverageTest, InitiateConnectionHttpSuccess) {
-    skip_on_windows_until_engine_adapted();
+#ifdef _WIN32
+    // DownloadEngineV2 的事件循环/非阻塞 connect 尚未适配 Windows；
+    // TODO(Win)：引擎适配完成后移除此跳过
+    GTEST_SKIP() << "DownloadEngineV2 event loop not yet adapted for Windows";
+#endif
     const std::string response =
         "HTTP/1.1 200 OK\r\n"
         "Content-Length: 5\r\n"
@@ -581,7 +576,11 @@ TEST_F(HttpCommandsCoverageTest, Response200SchedulesDownloadCommand) {
 }
 
 TEST_F(HttpCommandsCoverageTest, Response200WithAcceptRangesDownloadsFullBody) {
-    skip_on_windows_until_engine_adapted();
+#ifdef _WIN32
+    // DownloadEngineV2 的事件循环/非阻塞 connect 尚未适配 Windows；
+    // TODO(Win)：引擎适配完成后移除此跳过
+    GTEST_SKIP() << "DownloadEngineV2 event loop not yet adapted for Windows";
+#endif
     EngineConfigV2 config;
     DownloadEngineV2 engine(config);
 
@@ -713,7 +712,11 @@ TEST_F(HttpCommandsCoverageTest, ResponseEmptyReplyFails) {
 }
 
 TEST_F(HttpCommandsCoverageTest, ResponseNoDataWaitsForSocket) {
-    skip_on_windows_until_engine_adapted();
+#ifdef _WIN32
+    // DownloadEngineV2 的事件循环/非阻塞 connect 尚未适配 Windows；
+    // TODO(Win)：引擎适配完成后移除此跳过
+    GTEST_SKIP() << "DownloadEngineV2 event loop not yet adapted for Windows";
+#endif
     EngineConfigV2 config;
     DownloadEngineV2 engine(config);
 
@@ -773,7 +776,11 @@ TEST_F(HttpCommandsCoverageTest, ResponseMalformedHeaderLineFails) {
 }
 
 TEST_F(HttpCommandsCoverageTest, ResponseHeadersArrivingInParts) {
-    skip_on_windows_until_engine_adapted();
+#ifdef _WIN32
+    // DownloadEngineV2 的事件循环/非阻塞 connect 尚未适配 Windows；
+    // TODO(Win)：引擎适配完成后移除此跳过
+    GTEST_SKIP() << "DownloadEngineV2 event loop not yet adapted for Windows";
+#endif
     EngineConfigV2 config;
     DownloadEngineV2 engine(config);
 
@@ -834,7 +841,11 @@ TEST_F(HttpCommandsCoverageTest, Response200UpdatesTaskProgress) {
 //==============================================================================
 
 TEST_F(HttpCommandsCoverageTest, DownloadWritesBodyToFileAndCompletes) {
-    skip_on_windows_until_engine_adapted();
+#ifdef _WIN32
+    // DownloadEngineV2 的事件循环/非阻塞 connect 尚未适配 Windows；
+    // TODO(Win)：引擎适配完成后移除此跳过
+    GTEST_SKIP() << "DownloadEngineV2 event loop not yet adapted for Windows";
+#endif
     EngineConfigV2 config;
     DownloadEngineV2 engine(config);
 
@@ -1127,7 +1138,11 @@ TEST_F(HttpCommandsCoverageTest, PositionedSegmentWriteAppendsAtOffset) {
 }
 
 TEST_F(HttpCommandsCoverageTest, PositionedSegmentWriteInBatches) {
-    skip_on_windows_until_engine_adapted();
+#ifdef _WIN32
+    // DownloadEngineV2 的事件循环/非阻塞 connect 尚未适配 Windows；
+    // TODO(Win)：引擎适配完成后移除此跳过
+    GTEST_SKIP() << "DownloadEngineV2 event loop not yet adapted for Windows";
+#endif
     EngineConfigV2 config;
     DownloadEngineV2 engine(config);
 
@@ -1356,7 +1371,11 @@ std::string make_pattern_body(std::size_t size) {
 } // namespace
 
 TEST_F(HttpCommandsCoverageTest, EndToEndMultiSegmentDownload) {
-    skip_on_windows_until_engine_adapted();
+#ifdef _WIN32
+    // DownloadEngineV2 的事件循环/非阻塞 connect 尚未适配 Windows；
+    // TODO(Win)：引擎适配完成后移除此跳过
+    GTEST_SKIP() << "DownloadEngineV2 event loop not yet adapted for Windows";
+#endif
     // 16KB body、min_segment 1024、4 连接 → 4 段各 4096 字节
     const std::string body = make_pattern_body(16384);
 
