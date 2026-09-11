@@ -263,6 +263,36 @@ TEST(DownloadEngineApiTest, CancelAllWithTasks) {
 }
 
 // ---------------------------------------------------------------------------
+// set_next_task_id
+// ---------------------------------------------------------------------------
+
+TEST(DownloadEngineApiTest, SetNextTaskIdAdvancesIdCounter) {
+    falcon::DownloadEngine engine;
+    engine.register_handler(std::make_unique<QuickHandler>());
+
+    // 重启后计数器需要越过持久化记录的最大 id（此处模拟已有 id=500）
+    engine.set_next_task_id(500);
+
+    auto task = engine.add_task("quick://a.com/resumed");
+    ASSERT_NE(task, nullptr);
+    EXPECT_GT(task->id(), falcon::TaskId{500});
+}
+
+TEST(DownloadEngineApiTest, SetNextTaskIdNeverMovesBackwards) {
+    falcon::DownloadEngine engine;
+    engine.register_handler(std::make_unique<QuickHandler>());
+
+    static_cast<void>(engine.add_task("quick://a.com/1"));
+
+    // 用一个较小的值调用不应让下一个 id 回退
+    engine.set_next_task_id(1);
+
+    auto task = engine.add_task("quick://b.com/2");
+    ASSERT_NE(task, nullptr);
+    EXPECT_GT(task->id(), falcon::TaskId{1});
+}
+
+// ---------------------------------------------------------------------------
 // is_url_supported / get_supported_protocols
 // ---------------------------------------------------------------------------
 

@@ -300,6 +300,24 @@ TEST_F(TaskStorageTest, MarkFailed) {
     EXPECT_EQ("Connection timeout", retrieved->error_message);
 }
 
+TEST_F(TaskStorageTest, GetMaxTaskId) {
+    // 空表返回 nullopt
+    EXPECT_FALSE(storage_->get_max_task_id().has_value());
+
+    TaskId first = storage_->create_task(create_test_record());
+    TaskId second = storage_->create_task(create_test_record());
+
+    auto max_id = storage_->get_max_task_id();
+    ASSERT_TRUE(max_id.has_value());
+    EXPECT_EQ(*max_id, std::max(first, second));
+
+    // 删除最大 id 记录后应回落到剩余记录的最大值
+    storage_->delete_task(std::max(first, second));
+    max_id = storage_->get_max_task_id();
+    ASSERT_TRUE(max_id.has_value());
+    EXPECT_EQ(*max_id, std::min(first, second));
+}
+
 // ============================================================================
 // Options Serialization Tests
 // ============================================================================

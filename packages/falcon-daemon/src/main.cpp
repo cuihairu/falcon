@@ -8,6 +8,7 @@
 
 #ifdef FALCON_HAS_SQLITE3
 #include "storage/task_storage.hpp"
+#include "storage/task_storage_listener.hpp"
 #endif
 
 #include <atomic>
@@ -223,8 +224,15 @@ int main(int argc, char* argv[]) {
         if (task_storage->initialize()) {
             FALCON_LOG_INFO_STREAM("Task storage initialized: " << task_storage->get_db_path());
 
-            // Load saved tasks
-            auto saved_tasks = task_storage->get_active_tasks();
+            // 引擎任务 id 计数器越过持久化记录的最大 id：RPC 按任务 id 写库，
+            // 若重启后计数器从 1 重新开始，新任务会改写同 id 的历史记录
+            if (auto max_id = task_storage->get_max_task_id()) {
+                engine.set_next_task_id(*max_id);
+            }
+
+            // Load saved tasks：取全部记录，循环内跳过终态；
+            // Paused 任务恢复但不自动启动
+            auto saved_tasks = task_storage->list_tasks();
             FALCON_LOG_INFO_STREAM("Loading " << saved_tasks.size() << " saved tasks...");
 
             for (const auto& record : saved_tasks) {
@@ -238,9 +246,9 @@ int main(int argc, char* argv[]) {
                 // Re-create the task in the engine
                 auto task = engine.add_task(record.url, record.options);
                 if (task) {
-                    // Set the output path if specified
+                    // Restore the output path recorded before shutdown
                     if (!record.output_path.empty()) {
-                        // task->set_output_path(record.output_path);
+                        task->set_output_path(record.output_path);
                     }
                     // Only start tasks that were active (not paused)
                     if (record.status == falcon::TaskStatus::Downloading ||
@@ -254,31 +262,35 @@ int main(int argc, char* argv[]) {
             FALCON_LOG_WARN_STREAM("Failed to initialize task storage: " << task_storage->get_last_error());
             task_storage.reset();
         }
+
+        // 持久化监听器：状态变更实时落库，进度按 1 秒节流落库。
+        // 声明在 task_storage 之后，逆序析构时先于 storage 销毁。
+        std::unique_ptr<falcon::daemon::TaskStorageListener> task_listener;
+        if (task_storage) {
+            task_listener = std::make_unique<falcon::daemon::TaskStorageListener>(task_storage.get());
+            engine.add_listener(task_listener.get());
+        }
 #else
         FALCON_LOG_INFO_STREAM("Task persistence disabled (SQLite3 not available)");
 #endif
 
-        // Setup stop callback
-        daemon_manager.set_stop_callback([&engine]() {
+        // 停机排水：暂停（而非取消）所有任务并等待引擎安静。
+        // 取消会把任务落库为 Cancelled 导致重启后不再恢复；
+        // 暂停则让未完成任务以可恢复状态（Paused/Downloading）入库。
+        auto drain_engine = [&engine]() {
             FALCON_LOG_INFO_STREAM("Shutting down...");
-            engine.cancel_all();
-        });
+            engine.pause_all();
+            for (int i = 0; i < 50 && engine.get_active_task_count() > 0; ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+        };
 
-        // Setup reload callback
-        daemon_manager.set_reload_callback([&engine]() {
-            FALCON_LOG_INFO_STREAM("Reloading configuration...");
-            // 配置重载实现
-
-            // 在实际实现中，这里应该：
-            // 1. 重新读取配置文件
-            // 2. 更新引擎的全局设置（如速度限制）
-            // 3. 更新 RPC 服务器配置
-
-            // 当前简化实现：记录日志
-            FALCON_LOG_INFO_STREAM("Configuration reload completed");
-            FALCON_LOG_INFO_STREAM("Active tasks: " << engine.get_active_task_count()
-                                 << ", Total speed: " << engine.get_total_speed() << " B/s");
-        });
+#ifdef FALCON_HAS_SQLITE3
+        // shutdown() 返回后监听器不再访问 storage，之后可安全析构 task_storage
+        auto stop_persistence = [&task_listener]() { task_listener->shutdown(); };
+#else
+        auto stop_persistence = []() {};
+#endif
 
         // Start RPC server if enabled
         std::unique_ptr<falcon::daemon::rpc::JsonRpcServer> rpc_server;
@@ -298,17 +310,21 @@ int main(int argc, char* argv[]) {
             FALCON_LOG_INFO_STREAM("RPC disabled (start with --enable-rpc)");
         }
 
-        // Run main loop
+        // Run main loop；stop 回调在收到停止信号/服务停止时执行
         daemon_manager.run(
-            [&rpc_server, &engine]() {
+            [&rpc_server, &drain_engine, &stop_persistence]() {
                 // Stop callback
                 if (rpc_server) {
                     rpc_server->stop();
                 }
-                engine.cancel_all();
+                drain_engine();
+                stop_persistence();
             },
-            []() {
-                // Reload callback
+            [&engine]() {
+                // Reload callback（配置重载：当前记录运行状态）
+                FALCON_LOG_INFO_STREAM("Reloading configuration...");
+                FALCON_LOG_INFO_STREAM("Active tasks: " << engine.get_active_task_count()
+                                     << ", Total speed: " << engine.get_total_speed() << " B/s");
             }
         );
 

@@ -2,6 +2,13 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-11 - Daemon 任务持久化闭环
+- 新增 `TaskStorageListener`：引擎状态/进度事件实时落库（SQLite，进度 1 秒节流）
+- 停机改为暂停语义（`pause_all` + 排水），未完成任务以可恢复状态入库
+- 重启恢复：跳过终态、还原 `output_path`、Paused 任务恢复但不自动启动
+- 修复重启后任务 id 计数器与持久化记录冲突（`DownloadEngine::set_next_task_id` + `TaskStorage::get_max_task_id`）
+- vcpkg.json / CI 增加 SQLite3，daemon 持久化与存储测试纳入 CI
+
 ### 2026-04-14 - 四库拆分重构（P0+P1）
 - 将单体 `libfalcon` 拆分为四个独立包：`libfalcon-core`、`libfalcon-protocols`、`libfalcon-storage`、`libfalcon-drives`
 - 建立独立 CMake target 和 alias（`Falcon::core/protocols/storage/drives`）
@@ -620,7 +627,7 @@ Daemon 配置文件（`/etc/falcon/daemon.json` 或 `~/.config/falcon/daemon.jso
 1. **Daemon 服务**
    - ✅ HTTP RPC 服务器
    - ✅ aria2 兼容 API（addUri/remove/tellStatus/getGlobalStat）
-   - ✅ 任务持久化（规划中）
+   - ✅ 任务持久化（SQLite：状态/进度落库、停机保存、重启恢复）
    - 🔄 RESTful API 完善
 
 2. **桌面应用（Qt6）**

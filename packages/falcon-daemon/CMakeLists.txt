@@ -41,6 +41,8 @@ if(nlohmann_json_FOUND)
         add_library(falcon_daemon_storage STATIC
             src/storage/task_storage.cpp
             src/storage/task_storage.hpp
+            src/storage/task_storage_listener.cpp
+            src/storage/task_storage_listener.hpp
         )
 
         target_link_libraries(falcon_daemon_storage

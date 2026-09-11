@@ -397,6 +397,28 @@ public:
         return count;
     }
 
+    std::optional<TaskId> get_max_task_id() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        if (!db_) return std::nullopt;
+
+        const char* sql = "SELECT MAX(id) FROM tasks;";
+        sqlite3_stmt* stmt = nullptr;
+        int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
+        if (rc != SQLITE_OK) {
+            return std::nullopt;
+        }
+
+        std::optional<TaskId> max_id;
+        if (sqlite3_step(stmt) == SQLITE_ROW &&
+            sqlite3_column_type(stmt, 0) != SQLITE_NULL) {
+            max_id = static_cast<TaskId>(sqlite3_column_int64(stmt, 0));
+        }
+
+        sqlite3_finalize(stmt);
+        return max_id;
+    }
+
     bool update_progress(TaskId id, Bytes downloaded_bytes, double progress, BytesPerSecond speed) {
         std::lock_guard<std::mutex> lock(mutex_);
 
@@ -751,6 +773,10 @@ int TaskStorage::count_tasks_by_status(TaskStatus status) const {
 }
 
 int TaskStorage::count_all_tasks() const { return impl_->count_all_tasks(); }
+
+std::optional<TaskId> TaskStorage::get_max_task_id() const {
+    return impl_->get_max_task_id();
+}
 
 bool TaskStorage::update_progress(TaskId id, Bytes downloaded_bytes, double progress, BytesPerSecond speed) {
     return impl_->update_progress(id, downloaded_bytes, progress, speed);

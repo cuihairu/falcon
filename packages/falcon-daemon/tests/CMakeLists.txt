@@ -41,6 +41,7 @@ gtest_discover_tests(falcon_daemon_rpc_tests)
 if(SQLite3_FOUND AND TARGET falcon_daemon_storage)
     add_executable(falcon_daemon_storage_tests
         task_storage_test.cpp
+        task_storage_listener_test.cpp
     )
 
     target_link_libraries(falcon_daemon_storage_tests

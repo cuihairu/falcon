@@ -167,6 +167,14 @@ public:
     /// Get total number of tasks
     [[nodiscard]] std::size_t get_total_task_count() const;
 
+    // === Task ID Generation ===
+
+    /// Advance the internal task-id counter so new tasks get ids above
+    /// last_id. Never moves the counter backwards. Call on daemon startup
+    /// to avoid id collisions with task records persisted by a previous run.
+    /// @param last_id Highest task id already in use
+    void set_next_task_id(TaskId last_id);
+
 private:
     class Impl;
     std::unique_ptr<Impl> impl_;

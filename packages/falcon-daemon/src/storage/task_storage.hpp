@@ -27,18 +27,18 @@ namespace falcon::daemon {
  * @brief Persisted task record
  */
 struct TaskRecord {
-    TaskId id;                                  ///< Task ID
+    TaskId id = INVALID_TASK_ID;                ///< Task ID
     std::string url;                            ///< Download URL
     std::string output_path;                    ///< Output file path
-    TaskStatus status;                          ///< Task status
-    double progress;                            ///< Progress (0.0 - 1.0)
-    Bytes total_bytes;                          ///< Total file size
-    Bytes downloaded_bytes;                     ///< Downloaded bytes
-    BytesPerSecond speed;                       ///< Current download speed
+    TaskStatus status = TaskStatus::Pending;    ///< Task status
+    double progress = 0.0;                      ///< Progress (0.0 - 1.0)
+    Bytes total_bytes = 0;                      ///< Total file size
+    Bytes downloaded_bytes = 0;                 ///< Downloaded bytes
+    BytesPerSecond speed = 0;                   ///< Current download speed
     std::string error_message;                  ///< Error message if failed
     DownloadOptions options;                    ///< Download options
-    std::chrono::system_clock::time_point created_at;   ///< Creation time
-    std::chrono::system_clock::time_point updated_at;   ///< Last update time
+    std::chrono::system_clock::time_point created_at{};   ///< Creation time
+    std::chrono::system_clock::time_point updated_at{};   ///< Last update time
     std::optional<std::chrono::system_clock::time_point> completed_at; ///< Completion time
 };
 
@@ -169,6 +169,12 @@ public:
      * @return Count
      */
     int count_tasks_by_status(TaskStatus status) const;
+
+    /**
+     * @brief Get the highest task id ever stored
+     * @return Highest task id, or nullopt if the table is empty
+     */
+    std::optional<TaskId> get_max_task_id() const;
 
     /**
      * @brief Get total task count

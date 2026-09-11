@@ -292,6 +292,14 @@ public:
         return stats.total_tasks;
     }
 
+    void set_next_task_id(TaskId id) {
+        // 新任务 id 必须严格大于 last_id；CAS 循环保证与并发的 add_task 不互相回退
+        TaskId current = next_task_id_.load();
+        while (current <= id &&
+               !next_task_id_.compare_exchange_weak(current, id + 1)) {
+        }
+    }
+
     bool adjust_task_priority(TaskId id, TaskPriority priority) {
         return task_manager_.adjust_task_priority(id, priority);
     }
@@ -470,6 +478,10 @@ std::size_t DownloadEngine::get_active_task_count() const {
 
 std::size_t DownloadEngine::get_total_task_count() const {
     return impl_->get_total_task_count();
+}
+
+void DownloadEngine::set_next_task_id(TaskId id) {
+    impl_->set_next_task_id(id);
 }
 
 bool DownloadEngine::adjust_task_priority(TaskId id, TaskPriority priority) {

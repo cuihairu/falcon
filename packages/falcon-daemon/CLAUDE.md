@@ -6,6 +6,18 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-11 - 任务持久化闭环完成
+- 新增 `TaskStorageListener`（`src/storage/`）：实现 `IEventListener`，注册到引擎
+  - 状态变更实时落库：`Completed`/`Failed` 走 `mark_completed`/`mark_failed`（记录终态时间戳与错误消息）
+  - 进度按任务 1 秒节流落库（`update_progress`）
+  - `on_error` 的错误消息按任务缓存，任务进入 `Failed` 时随 `mark_failed` 一次性消费
+  - `shutdown()` 保证停机时监听器先于 `TaskStorage` 停止访问数据库
+- 停机语义修正：停止信号改为 `pause_all()` + 排水等待（原先 `cancel_all()` 会把未完成任务落库为 Cancelled，重启后无法恢复）
+- 恢复逻辑：从 `list_tasks()` 全量恢复（跳过终态；Paused 任务恢复但不自动启动）；恢复时还原 `output_path`
+- 任务 id 冲突修复：启动时用 `TaskStorage::get_max_task_id()` 推进引擎计数器（`DownloadEngine::set_next_task_id`），避免重启后新任务 id 与历史记录冲突导致写错库
+- `TaskRecord` 字段补默认初始化，防止垃圾值入库
+- vcpkg.json 与 CI 增加 SQLite3 依赖，`falcon_daemon_storage_tests` 纳入 CI
+
 ### 2025-12-21 - 初始化模块架构
 - 创建 Daemon 项目结构
 - 定义 RPC 接口设计（gRPC/REST）
