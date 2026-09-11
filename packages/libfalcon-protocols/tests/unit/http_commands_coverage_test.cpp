@@ -18,6 +18,9 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+// Windows 缺少 POSIX socket 语义的符号，测试服务器代码统一走这些别名
+using ssize_t = std::ptrdiff_t;
+#define SHUT_WR SD_SEND
 #define CLOSE_SOCKET(fd) closesocket(fd)
 #else
 #include <unistd.h>
@@ -1201,7 +1204,7 @@ public:
         addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 ||
             ::listen(listen_fd_, 8) != 0) {
-            ::close(listen_fd_);
+            CLOSE_SOCKET(listen_fd_);
             listen_fd_ = -1;
             return false;
         }
@@ -1223,7 +1226,7 @@ public:
 
     void stop() {
         if (listen_fd_ >= 0) {
-            ::close(listen_fd_);
+            CLOSE_SOCKET(listen_fd_);
             listen_fd_ = -1;
         }
         if (thread_.joinable()) {
@@ -1236,14 +1239,22 @@ public:
 private:
     void serve_loop() {
         while (served_.load() < expected_) {
+#ifdef _WIN32
+            WSAPOLLFD pfd{};
+            pfd.fd = static_cast<SOCKET>(listen_fd_);
+            pfd.events = POLLIN;
+            pfd.revents = 0;
+            const int ready = WSAPoll(&pfd, 1, 5000);
+#else
             struct pollfd pfd;
             pfd.fd = listen_fd_;
             pfd.events = POLLIN;
             pfd.revents = 0;
             const int ready = ::poll(&pfd, 1, 5000);
+#endif
             if (ready <= 0) return;  // 超时或错误：退出，由测试超时兜底
 
-            const int conn = ::accept(listen_fd_, nullptr, nullptr);
+            const int conn = static_cast<int>(::accept(listen_fd_, nullptr, nullptr));
             if (conn < 0) return;
             handle_connection(conn);
             served_.fetch_add(1);
@@ -1257,7 +1268,7 @@ private:
         while (request.find("\r\n\r\n") == std::string::npos) {
             const ssize_t n = ::recv(conn, buf, sizeof(buf), 0);
             if (n <= 0) {
-                ::close(conn);
+                CLOSE_SOCKET(conn);
                 return;
             }
             request.append(buf, static_cast<std::size_t>(n));
@@ -1305,7 +1316,7 @@ private:
         // 优雅关闭写方向，等待对端读完
         ::shutdown(conn, SHUT_WR);
         while (::recv(conn, buf, sizeof(buf), 0) > 0) {}
-        ::close(conn);
+        CLOSE_SOCKET(conn);
     }
 
     std::string body_;

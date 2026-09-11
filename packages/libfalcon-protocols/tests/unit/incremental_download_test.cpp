@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <random>
 #include <chrono>
+#include <cstddef>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -22,12 +23,17 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+// Windows 缺少 POSIX socket 语义的符号，测试服务器代码统一走这些别名
+using ssize_t = std::ptrdiff_t;
+#define SHUT_WR SD_SEND
+#define CLOSE_SOCKET(fd) closesocket(fd)
 #else
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#define CLOSE_SOCKET(fd) close(fd)
 #endif
 
 #include <atomic>
@@ -594,7 +600,7 @@ public:
         addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 ||
             ::listen(listen_fd_, 8) != 0) {
-            ::close(listen_fd_);
+            CLOSE_SOCKET(listen_fd_);
             listen_fd_ = -1;
             return false;
         }
@@ -618,12 +624,20 @@ public:
 private:
     void serve_loop() {
         while (listen_fd_ >= 0) {
+#ifdef _WIN32
+            WSAPOLLFD pfd{};
+            pfd.fd = static_cast<SOCKET>(listen_fd_);
+            pfd.events = POLLIN;
+            pfd.revents = 0;
+            if (WSAPoll(&pfd, 1, 5000) <= 0) return;
+#else
             struct pollfd pfd;
             pfd.fd = listen_fd_;
             pfd.events = POLLIN;
             pfd.revents = 0;
             if (::poll(&pfd, 1, 5000) <= 0) return;
-            const int conn = ::accept(listen_fd_, nullptr, nullptr);
+#endif
+            const int conn = static_cast<int>(::accept(listen_fd_, nullptr, nullptr));
             if (conn < 0) return;
             handle_connection(conn);
         }
@@ -644,7 +658,7 @@ private:
         while (request.find("\r\n\r\n") == std::string::npos) {
             const ssize_t n = ::recv(conn, buf, sizeof(buf), 0);
             if (n <= 0) {
-                ::close(conn);
+                CLOSE_SOCKET(conn);
                 return;
             }
             request.append(buf, static_cast<std::size_t>(n));
@@ -701,7 +715,7 @@ private:
 
         ::shutdown(conn, SHUT_WR);
         while (::recv(conn, buf, sizeof(buf), 0) > 0) {}
-        ::close(conn);
+        CLOSE_SOCKET(conn);
     }
 
     std::string body_;
@@ -712,7 +726,7 @@ private:
 
     void stop() {
         if (listen_fd_ >= 0) {
-            ::close(listen_fd_);
+            CLOSE_SOCKET(listen_fd_);
             listen_fd_ = -1;
         }
         if (thread_.joinable()) {
