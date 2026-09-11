@@ -312,7 +312,8 @@ jobs:
           -DFALCON_BUILD_TESTS=OFF
           -DFALCON_BUILD_CLI=OFF
           -DFALCON_BUILD_DESKTOP=ON
-          -DFALCON_BUILD_DAEMON=OFF
+          # desktop 链接 falcon_daemon_rpc_client（daemon RPC 后端），需一并构建
+          -DFALCON_BUILD_DAEMON=ON
           -DFALCON_BUILD_EXAMPLES=OFF
           -DFALCON_ENABLE_HTTP=ON
           -DFALCON_ENABLE_FTP=ON
@@ -330,7 +331,8 @@ jobs:
           -DFALCON_BUILD_TESTS=OFF
           -DFALCON_BUILD_CLI=OFF
           -DFALCON_BUILD_DESKTOP=ON
-          -DFALCON_BUILD_DAEMON=OFF
+          # desktop 链接 falcon_daemon_rpc_client（daemon RPC 后端），需一并构建
+          -DFALCON_BUILD_DAEMON=ON
           -DFALCON_BUILD_EXAMPLES=OFF
           -DFALCON_ENABLE_HTTP=ON
           -DFALCON_ENABLE_FTP=ON
