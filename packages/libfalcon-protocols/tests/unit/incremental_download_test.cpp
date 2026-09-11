@@ -24,10 +24,20 @@
 #include <ws2tcpip.h>
 #include <windows.h>
 // Windows 缺少 POSIX socket 语义的符号，测试服务器代码统一走这些别名
+#include <cstddef> // std::ptrdiff_t（MSVC 不经其他头传递提供）
 using ssize_t = std::ptrdiff_t;
 #define SHUT_WR SD_SEND
 #define CLOSE_SOCKET(fd) closesocket(fd)
+// socket()/bind() 前必须初始化 Winsock，否则 socket() 返回 INVALID_SOCKET
+static void ensure_winsock_started() {
+    static std::once_flag once;
+    std::call_once(once, []() {
+        WSADATA data{};
+        WSAStartup(MAKEWORD(2, 2), &data);
+    });
+}
 #else
+static void ensure_winsock_started() {}
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <poll.h>
@@ -37,6 +47,7 @@ using ssize_t = std::ptrdiff_t;
 #endif
 
 #include <atomic>
+#include <mutex>
 #include <thread>
 
 using namespace falcon;
@@ -591,6 +602,7 @@ public:
         body_ = file_body;
         hash_list_ = hash_list;
 
+        ensure_winsock_started();
         listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
         if (listen_fd_ < 0) return false;
 

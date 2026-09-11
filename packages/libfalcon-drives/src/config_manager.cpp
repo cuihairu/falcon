@@ -208,6 +208,18 @@ public:
             return false;
         }
 
+        // WAL + synchronous=NORMAL：默认 journal=DELETE/FULL 时每次写提交都全量
+        // fsync，批量保存 1000 条配置在 Windows（NTFS + Defender）上要 80+ 秒。
+        // WAL 下 NORMAL 只在 checkpoint 落盘，断电最多丢最后的事务、不会损坏库。
+        char* err = nullptr;
+        if (sqlite3_exec(db_, "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;",
+                         nullptr, nullptr, &err) != SQLITE_OK) {
+            log_error(std::string("Cannot set journal mode: ") +
+                      (err ? err : sqlite3_errmsg(db_)));
+            sqlite3_free(err);
+            // 非致命：性能退化但仍可继续
+        }
+
         // 设置主密码（如果提供）
         if (!master_password.empty()) {
             master_password_ = master_password;

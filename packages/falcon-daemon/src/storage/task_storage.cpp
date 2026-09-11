@@ -79,6 +79,9 @@ public:
         // Enable WAL mode for better concurrency
         if (config_.enable_wal_mode) {
             exec_sql("PRAGMA journal_mode=WAL;");
+            // WAL 下 NORMAL 只在 checkpoint 落盘；进度每秒写库时显著降低
+            // fsync 开销（断电最多丢最后的事务，不会损坏库）
+            exec_sql("PRAGMA synchronous=NORMAL;");
         }
 
         // Create tables
