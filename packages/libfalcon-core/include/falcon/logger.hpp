@@ -405,14 +405,23 @@ void log_errorf(const std::string& format, Args&&... args) {
 #define FALCON_DETAIL_LOG_ERROR_9(...) FALCON_LOG_ERROR_FMT(__VA_ARGS__)
 #define FALCON_DETAIL_LOG_ERROR_10(...) FALCON_LOG_ERROR_FMT(__VA_ARGS__)
 
-#define FALCON_DETAIL_DISPATCH_LOG(level, count, ...) FALCON_DETAIL_DISPATCH_LOG_(level, count, __VA_ARGS__)
-#define FALCON_DETAIL_DISPATCH_LOG_(level, count, ...) FALCON_DETAIL_LOG_##level##_##count(__VA_ARGS__)
+// Two-level indirection so the argument count is fully expanded before
+// token pasting. The level is part of the literal prefix token, never a
+// standalone identifier: windows.h (wingdi.h) does `#define ERROR 0`,
+// which would poison a dispatch macro taking `ERROR` as an argument and
+// paste a bogus name like FALCON_DETAIL_LOG_0_2 on Windows.
+#define FALCON_DETAIL_PASTE_(a, b) a##b
+#define FALCON_DETAIL_PASTE(a, b) FALCON_DETAIL_PASTE_(a, b)
 
 #define FALCON_LOG_INFO(...)                                                         \
-    FALCON_DETAIL_DISPATCH_LOG(INFO, FALCON_DETAIL_NARG(__VA_ARGS__), __VA_ARGS__)
+    FALCON_DETAIL_PASTE(FALCON_DETAIL_LOG_INFO_,                                     \
+                        FALCON_DETAIL_NARG(__VA_ARGS__))(__VA_ARGS__)
 #define FALCON_LOG_DEBUG(...)                                                        \
-    FALCON_DETAIL_DISPATCH_LOG(DEBUG, FALCON_DETAIL_NARG(__VA_ARGS__), __VA_ARGS__)
+    FALCON_DETAIL_PASTE(FALCON_DETAIL_LOG_DEBUG_,                                    \
+                        FALCON_DETAIL_NARG(__VA_ARGS__))(__VA_ARGS__)
 #define FALCON_LOG_WARN(...)                                                         \
-    FALCON_DETAIL_DISPATCH_LOG(WARN, FALCON_DETAIL_NARG(__VA_ARGS__), __VA_ARGS__)
+    FALCON_DETAIL_PASTE(FALCON_DETAIL_LOG_WARN_,                                     \
+                        FALCON_DETAIL_NARG(__VA_ARGS__))(__VA_ARGS__)
 #define FALCON_LOG_ERROR(...)                                                        \
-    FALCON_DETAIL_DISPATCH_LOG(ERROR, FALCON_DETAIL_NARG(__VA_ARGS__), __VA_ARGS__)
+    FALCON_DETAIL_PASTE(FALCON_DETAIL_LOG_ERROR_,                                    \
+                        FALCON_DETAIL_NARG(__VA_ARGS__))(__VA_ARGS__)

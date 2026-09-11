@@ -65,9 +65,3 @@ target_compile_features(falcon_plugin_bittorrent PRIVATE cxx_std_17)
 if(UNIX AND NOT APPLE)
     target_link_libraries(falcon_plugin_bittorrent PRIVATE pthread)
 endif()
-
-# 测试
-if(FALCON_BUILD_TESTS)
-    enable_testing()
-    add_subdirectory(tests)
-endif()

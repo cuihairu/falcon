@@ -67,7 +67,8 @@ DhtNodeId generateRandomNodeId() {
 
 DhtNodeId nodeIdFromString(const std::string& str) {
     DhtNodeId id;
-    size_t len = std::min(str.size(), id.size());
+    // (std::min)：加括号防止 Windows.h 的 min 宏展开（未定义 NOMINMAX 时）
+    size_t len = (std::min)(str.size(), id.size());
     std::memcpy(id.data(), str.data(), len);
     if (len < id.size()) {
         std::memset(id.data() + len, 0, id.size() - len);
@@ -258,7 +259,7 @@ size_t DhtRoutingTable::getBucketIndex(const DhtNodeId& nodeId) const {
             break;
         }
     }
-    return std::min(leadingZeros, size_t{159}); // 160 个桶 (0-159)
+    return (std::min)(leadingZeros, size_t{159}); // 160 个桶 (0-159)
 }
 
 //==============================================================================
@@ -443,7 +444,13 @@ void DhtClient::start() {
     // 启动维护线程
     maintenanceThread_ = std::thread([this]() {
         while (running_.load()) {
-            std::this_thread::sleep_for(std::chrono::minutes(5));
+            // 分片休眠（100ms 粒度，总计约 5 分钟），保证 stop() 能及时 join
+            for (int i = 0; i < 3000 && running_.load(); ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            if (!running_.load()) {
+                break;
+            }
 
             // 定期刷新路由表
             auto targetId = DhtUtils::generateRandomNodeId();
@@ -512,10 +519,18 @@ void DhtClient::receiveLoop() {
     socklen_t senderAddrLen = sizeof(senderAddr);
 
     while (running_.load()) {
+        // Windows（Winsock）recvfrom 返回 int，POSIX 返回 ssize_t
+#ifdef _WIN32
+        int bytesRead = recvfrom(socket_, reinterpret_cast<char*>(buffer),
+                                 sizeof(buffer), 0,
+                                 reinterpret_cast<sockaddr*>(&senderAddr),
+                                 &senderAddrLen);
+#else
         ssize_t bytesRead = recvfrom(socket_, reinterpret_cast<char*>(buffer),
-                                  sizeof(buffer), 0,
-                                  reinterpret_cast<sockaddr*>(&senderAddr),
-                                  &senderAddrLen);
+                                     sizeof(buffer), 0,
+                                     reinterpret_cast<sockaddr*>(&senderAddr),
+                                     &senderAddrLen);
+#endif
 
         if (bytesRead <= 0) {
 #ifdef _WIN32
