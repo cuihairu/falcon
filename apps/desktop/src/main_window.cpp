@@ -18,17 +18,21 @@
 #include "utils/url_detector.hpp"
 #include "utils/theme_manager.hpp"
 #include "ipc/http_server.hpp"
+#include "services/download_service.hpp"
+#include "services/download_backend.hpp"
 
 #include <QHBoxLayout>
 #include <QWidget>
 #include <QApplication>
 #include <QDir>
 #include <QDesktopServices>
+#include <QFileInfo>
 #include <QInputDialog>
 #include <QMessageBox>
 #include <QSettings>
 #include <QAction>
 #include <QMenu>
+#include <QUrl>
 
 namespace falcon::desktop {
 
@@ -48,8 +52,7 @@ MainWindow::MainWindow(QWidget* parent)
     , system_tray_(nullptr)
     , tray_menu_(nullptr)
     , theme_manager_(nullptr)
-    , download_engine_(nullptr)
-    , status_update_timer_(nullptr)
+    , download_service_(nullptr)
 {
     // 初始化主题管理器（必须在 setup_ui 之前）
     theme_manager_ = new ThemeManager(this);
@@ -63,11 +66,10 @@ MainWindow::MainWindow(QWidget* parent)
     setup_ui();
     setup_clipboard_monitor();
     setup_system_tray();
-    setup_status_update_timer();
     load_settings();
     apply_settings_to_runtime();
     setup_ipc_server();
-    ensure_download_engine();
+    ensure_download_service();
 }
 
 MainWindow::~MainWindow()
@@ -77,6 +79,10 @@ MainWindow::~MainWindow()
     }
     if (ipc_server_) {
         ipc_server_->stop();
+    }
+    // DownloadService 是 QObject 子对象，但 worker 线程必须在窗口析构前停掉
+    if (download_service_) {
+        download_service_->stop();
     }
 }
 
@@ -127,11 +133,8 @@ void MainWindow::create_top_bar()
     connect(top_bar_, &TopBar::minimizeClicked, this, &MainWindow::on_minimize_requested);
     connect(top_bar_, &TopBar::maximizeClicked, this, &MainWindow::on_maximize_requested);
     connect(top_bar_, &TopBar::closeClicked, this, &MainWindow::on_close_requested);
-    connect(top_bar_, &TopBar::refreshClicked, this, [this]() {
-        // 刷新当前页面
-        if (auto* page = qobject_cast<DownloadPage*>(content_stack_->currentWidget())) {
-            // 触发刷新
-        }
+    connect(top_bar_, &TopBar::refreshClicked, this, []() {
+        // 任务数据由 DownloadService 周期推送，无需手动刷新
     });
 }
 
@@ -145,15 +148,45 @@ void MainWindow::open_url(const QString& url)
     on_url_detected(url_info);
 }
 
-void MainWindow::ensure_download_engine()
+void MainWindow::ensure_download_service()
 {
-    if (download_engine_) {
+    if (download_service_) {
         return;
     }
-    download_engine_ = std::make_unique<falcon::DownloadEngine>();
 
-    // 注册事件监听器
-    download_engine_->add_listener(this);
+    // 按设置选择后端：daemon 模式经 JSON-RPC 访问 falcon-daemon，
+    // 否则维持进程内引擎直连
+    std::unique_ptr<IDownloadBackend> backend;
+    if (settings_page_ && settings_page_->is_daemon_mode_enabled()) {
+        falcon::daemon::rpc::JsonRpcClientConfig config;
+        config.url = settings_page_->get_daemon_rpc_url().toStdString();
+        config.secret = settings_page_->get_daemon_rpc_secret().toStdString();
+        config.timeout_seconds = 5;
+        backend = make_daemon_rpc_backend(std::move(config));
+    } else {
+        backend = make_inprocess_backend();
+    }
+
+    download_service_ = new DownloadService(std::move(backend), this);
+    connect(download_service_, &DownloadService::tasks_refreshed,
+            this, &MainWindow::on_tasks_refreshed);
+    connect(download_service_, &DownloadService::stats_refreshed,
+            this, &MainWindow::on_stats_refreshed);
+    connect(download_service_, &DownloadService::task_add_failed,
+            this, &MainWindow::on_task_add_failed);
+    connect(download_service_, &DownloadService::task_completed,
+            this, &MainWindow::on_task_completed);
+    connect(download_service_, &DownloadService::task_failed,
+            this, &MainWindow::on_task_failed);
+
+    // 全局设置（并发数/限速）需在首次轮询前生效
+    if (settings_page_) {
+        download_service_->apply_global_settings(
+            static_cast<std::size_t>(settings_page_->get_max_concurrent_downloads()),
+            static_cast<std::size_t>(settings_page_->get_global_speed_limit()) * 1024);
+    }
+
+    download_service_->start(500);
 }
 
 void MainWindow::show_add_download_dialog(UrlInfo url_info, const IncomingDownloadRequest* request_context)
@@ -180,7 +213,7 @@ void MainWindow::show_add_download_dialog(UrlInfo url_info, const IncomingDownlo
         return;
     }
 
-    ensure_download_engine();
+    ensure_download_service();
 
     falcon::DownloadOptions options;
     options.max_connections = static_cast<std::size_t>(dialog.get_connections());
@@ -200,18 +233,8 @@ void MainWindow::show_add_download_dialog(UrlInfo url_info, const IncomingDownlo
         options.headers["Cookie"] = cookies.toStdString();
     }
 
-    const std::string url = dialog.get_url().toStdString();
-    auto task = download_engine_->add_task(url, options);
-    if (!task) {
-        QMessageBox::warning(this, tr("Download"), tr("URL is not supported."));
-        return;
-    }
-
-    (void)download_engine_->start_task(task->id());
-
-    if (download_page_) {
-        download_page_->add_engine_task(task);
-    }
+    // 异步提交；被拒绝时经 task_add_failed 信号提示
+    download_service_->add_task(dialog.get_url(), options, true);
 
     QMessageBox::information(
         this,
@@ -224,7 +247,7 @@ void MainWindow::show_add_download_dialog(UrlInfo url_info, const IncomingDownlo
 
 bool MainWindow::add_download_task(const QString& url, bool start_immediately)
 {
-    ensure_download_engine();
+    ensure_download_service();
 
     falcon::DownloadOptions options;
     if (settings_page_) {
@@ -235,19 +258,8 @@ bool MainWindow::add_download_task(const QString& url, bool start_immediately)
         options.speed_limit = static_cast<std::size_t>(task_limit_kb * 1024);
     }
 
-    auto task = download_engine_->add_task(url.toStdString(), options);
-    if (!task) {
-        return false;
-    }
-
-    if (start_immediately) {
-        (void)download_engine_->start_task(task->id());
-    }
-
-    if (download_page_) {
-        download_page_->add_engine_task(task);
-    }
-
+    // 异步提交；被拒绝时经 task_add_failed 信号提示
+    download_service_->add_task(url, options, start_immediately);
     return true;
 }
 
@@ -316,6 +328,18 @@ void MainWindow::create_pages()
             this, &MainWindow::on_remove_finished_tasks_requested);
     connect(download_page_, &DownloadPage::priority_changed,
             this, &MainWindow::on_priority_changed);
+    connect(download_page_, &DownloadPage::pause_requested,
+            this, [this](falcon::TaskId id) {
+                if (download_service_) {
+                    download_service_->pause_task(id);
+                }
+            });
+    connect(download_page_, &DownloadPage::resume_requested,
+            this, [this](falcon::TaskId id) {
+                if (download_service_) {
+                    download_service_->resume_task(id);
+                }
+            });
 
     // 云盘页面
     auto* cloud_page = new CloudPage(this);
@@ -395,6 +419,12 @@ void MainWindow::load_settings()
         settings.value("notifications_enabled", true).toBool());
     settings_page_->set_sound_notifications_enabled(
         settings.value("sound_notifications_enabled", false).toBool());
+    settings_page_->set_daemon_mode_enabled(
+        settings.value("daemon_mode_enabled", false).toBool());
+    settings_page_->set_daemon_rpc_url(
+        settings.value("daemon_rpc_url", "http://127.0.0.1:6800/jsonrpc").toString());
+    settings_page_->set_daemon_rpc_secret(
+        settings.value("daemon_rpc_secret", "").toString());
 
     settings.endGroup();
 }
@@ -419,6 +449,9 @@ void MainWindow::save_settings() const
     settings.setValue("action_when_completed", settings_page_->get_action_when_completed());
     settings.setValue("notifications_enabled", settings_page_->is_notifications_enabled());
     settings.setValue("sound_notifications_enabled", settings_page_->is_sound_notifications_enabled());
+    settings.setValue("daemon_mode_enabled", settings_page_->is_daemon_mode_enabled());
+    settings.setValue("daemon_rpc_url", settings_page_->get_daemon_rpc_url());
+    settings.setValue("daemon_rpc_secret", settings_page_->get_daemon_rpc_secret());
     settings.endGroup();
     settings.sync();
 }
@@ -434,42 +467,11 @@ void MainWindow::apply_settings_to_runtime()
         clipboard_monitor_->set_enabled(settings_page_->is_clipboard_monitoring_enabled());
     }
 
-    if (download_engine_) {
-        download_engine_->set_max_concurrent_tasks(
-            static_cast<std::size_t>(settings_page_->get_max_concurrent_downloads()));
-
-        // 应用全局速度限制（KB/s -> bytes/s）
-        const std::size_t global_limit_kb = static_cast<std::size_t>(settings_page_->get_global_speed_limit());
-        download_engine_->set_global_speed_limit(global_limit_kb * 1024);
+    if (download_service_) {
+        download_service_->apply_global_settings(
+            static_cast<std::size_t>(settings_page_->get_max_concurrent_downloads()),
+            static_cast<std::size_t>(settings_page_->get_global_speed_limit()) * 1024);
     }
-}
-
-void MainWindow::setup_status_update_timer()
-{
-    status_update_timer_ = new QTimer(this);
-    status_update_timer_->setInterval(500);  // 每 500ms 更新一次
-    connect(status_update_timer_, &QTimer::timeout, this, &MainWindow::update_status_bar);
-    status_update_timer_->start();
-}
-
-void MainWindow::update_status_bar()
-{
-    if (!download_engine_ || !status_bar_) {
-        return;
-    }
-
-    // 获取总下载速度
-    const falcon::BytesPerSecond total_speed = download_engine_->get_total_speed();
-    status_bar_->set_download_speed(static_cast<uint64_t>(total_speed));
-
-    // 获取活动任务数和总任务数
-    const std::size_t active_count = download_engine_->get_active_task_count();
-    const std::size_t total_count = download_engine_->get_total_task_count();
-
-    // 计算已完成任务数（非活动且非待处理）
-    const std::size_t completed_count = total_count - active_count;
-
-    status_bar_->set_task_counts(static_cast<int>(active_count), static_cast<int>(completed_count));
 }
 
 void MainWindow::setup_ipc_server()
@@ -612,36 +614,34 @@ void MainWindow::on_configured_download_requested(const QString& url)
 
 void MainWindow::on_direct_download_requested(const QString& url, bool start_immediately)
 {
-    if (!add_download_task(url, start_immediately)) {
-        QMessageBox::warning(this, tr("Download"), tr("URL is not supported.\n%1").arg(url));
-    }
+    add_download_task(url, start_immediately);
 }
 
 void MainWindow::on_remove_task_requested(falcon::TaskId id)
 {
-    if (!download_engine_) {
+    if (!download_service_) {
         return;
     }
 
-    (void)download_engine_->remove_task(id);
+    download_service_->remove_task(id);
 }
 
 void MainWindow::on_remove_finished_tasks_requested()
 {
-    if (!download_engine_) {
+    if (!download_service_) {
         return;
     }
 
-    (void)download_engine_->remove_finished_tasks();
+    download_service_->remove_finished_tasks();
 }
 
 void MainWindow::on_priority_changed(falcon::TaskId id, falcon::TaskPriority priority)
 {
-    if (!download_engine_) {
+    if (!download_service_) {
         return;
     }
 
-    (void)download_engine_->adjust_task_priority(id, priority);
+    download_service_->set_priority(id, priority);
 }
 
 void MainWindow::on_minimize_requested()
@@ -669,44 +669,58 @@ void MainWindow::on_close_requested()
 }
 
 //==============================================================================
-// IEventListener Implementation
+// DownloadService Events（信号已从 worker 线程排队投递到 GUI 线程）
 //==============================================================================
 
-void MainWindow::on_status_changed(falcon::TaskId task_id, falcon::TaskStatus old_status,
-                                   falcon::TaskStatus new_status)
+void MainWindow::on_tasks_refreshed(const std::vector<falcon::daemon::rpc::TaskSnapshot>& tasks)
 {
-    (void)task_id;
-    (void)old_status;
-    (void)new_status;
-    // Status changes are handled by DownloadPage's refresh timer
+    // 维护 id → URL 映射，供错误通知显示文件名
+    task_url_by_id_.clear();
+    task_url_by_id_.reserve(static_cast<int>(tasks.size()) * 2);
+    for (const auto& snap : tasks) {
+        task_url_by_id_.insert(static_cast<qulonglong>(snap.id),
+                               QString::fromStdString(snap.url));
+    }
+
+    if (download_page_) {
+        download_page_->update_tasks(tasks);
+    }
 }
 
-void MainWindow::on_progress(const falcon::ProgressInfo& info)
+void MainWindow::on_stats_refreshed(falcon::daemon::rpc::GlobalStats stats)
 {
-    (void)info;
-    // Progress updates are handled by DownloadPage's refresh timer
+    if (!status_bar_) {
+        return;
+    }
+
+    status_bar_->set_download_speed(static_cast<uint64_t>(stats.download_speed));
+    status_bar_->set_task_counts(static_cast<int>(stats.active_tasks),
+                                 static_cast<int>(stats.stopped_tasks));
 }
 
-void MainWindow::on_error(falcon::TaskId task_id, const std::string& error_message)
+void MainWindow::on_task_add_failed(const QString& url, const QString& reason)
+{
+    QMessageBox::warning(this, tr("Download"),
+                         tr("Failed to add download task:\n%1\n\n%2").arg(url, reason));
+}
+
+void MainWindow::on_task_failed(falcon::TaskId id, const QString& error_message)
 {
     // 如果通知未启用，直接返回
     if (!settings_page_ || !settings_page_->is_notifications_enabled()) {
         return;
     }
 
-    // 获取任务信息（用于显示文件名）
-    QString task_name = tr("Task #%1").arg(task_id);
-    if (download_engine_) {
-        auto task = download_engine_->get_task(task_id);
-        if (task) {
-            const QString url = QString::fromStdString(task->url());
-            // 从 URL 提取文件名
-            const int last_slash = url.lastIndexOf('/');
-            if (last_slash >= 0 && last_slash < url.length() - 1) {
-                task_name = url.mid(last_slash + 1);
-            } else {
-                task_name = url;
-            }
+    // 从最近快照提取文件名用于显示
+    QString task_name = tr("Task #%1").arg(static_cast<qulonglong>(id));
+    const auto it = task_url_by_id_.constFind(static_cast<qulonglong>(id));
+    if (it != task_url_by_id_.constEnd() && !it.value().isEmpty()) {
+        const QString& url = it.value();
+        const int last_slash = url.lastIndexOf('/');
+        if (last_slash >= 0 && last_slash < url.length() - 1) {
+            task_name = url.mid(last_slash + 1);
+        } else {
+            task_name = url;
         }
     }
 
@@ -714,16 +728,16 @@ void MainWindow::on_error(falcon::TaskId task_id, const std::string& error_messa
     if (system_tray_ && system_tray_->isVisible()) {
         system_tray_->showMessage(
             tr("Download Error"),
-            tr("%1\nError: %2").arg(task_name, QString::fromStdString(error_message)),
+            tr("%1\nError: %2").arg(task_name, error_message),
             QSystemTrayIcon::Critical,
             5000  // 显示 5 秒
         );
     }
 }
 
-void MainWindow::on_completed(falcon::TaskId task_id, const std::string& output_path)
+void MainWindow::on_task_completed(falcon::TaskId id, const QString& output_path)
 {
-    (void)task_id;
+    (void)id;
 
     if (!settings_page_) {
         return;
@@ -737,16 +751,14 @@ void MainWindow::on_completed(falcon::TaskId task_id, const std::string& output_
 
         case 1:  // Open file
         {
-            const QString path = QString::fromStdString(output_path);
-            QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+            QDesktopServices::openUrl(QUrl::fromLocalFile(output_path));
             break;
         }
 
         case 2:  // Open folder
         {
-            const QFileInfo file_info(QString::fromStdString(output_path));
-            const QString dir_path = file_info.absolutePath();
-            QDesktopServices::openUrl(QUrl::fromLocalFile(dir_path));
+            const QFileInfo file_info(output_path);
+            QDesktopServices::openUrl(QUrl::fromLocalFile(file_info.absolutePath()));
             break;
         }
 
@@ -763,13 +775,6 @@ void MainWindow::on_completed(falcon::TaskId task_id, const std::string& output_
             break;
         }
     }
-}
-
-void MainWindow::on_file_info(falcon::TaskId task_id, const falcon::FileInfo& info)
-{
-    (void)task_id;
-    (void)info;
-    // File info updates are handled by DownloadPage
 }
 
 } // namespace falcon::desktop

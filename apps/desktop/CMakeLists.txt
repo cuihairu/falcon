@@ -56,6 +56,8 @@ set(SOURCES
     src/utils/theme_manager.cpp
     src/services/storage_service.cpp
     src/services/search_service.cpp
+    src/services/download_backend.cpp
+    src/services/download_service.cpp
     src/ipc/http_server.cpp
 )
 
@@ -76,6 +78,8 @@ set(HEADERS
     src/utils/theme_manager.hpp
     src/services/storage_service.hpp
     src/services/search_service.hpp
+    src/services/download_backend.hpp
+    src/services/download_service.hpp
     src/ipc/http_server.hpp
 )
 
@@ -123,6 +127,20 @@ target_link_libraries(falcon-desktop PRIVATE
     Falcon::protocols
     Falcon::storage
 )
+
+# daemon RPC 后端（JSON-RPC 客户端 + aria2 快照转换）。
+# 快照服务层的基础类型（TaskSnapshot 等）定义在该库中，为硬依赖。
+if(NOT TARGET falcon_daemon_rpc_client)
+    message(FATAL_ERROR
+        "falcon-desktop requires falcon_daemon_rpc_client (needs nlohmann_json + CURL). "
+        "Keep FALCON_BUILD_DAEMON=ON or install the missing dependencies.")
+endif()
+target_link_libraries(falcon-desktop PRIVATE falcon_daemon_rpc_client)
+
+# 后端层测试（纯 C++，无需 Qt；见 tests/CMakeLists.txt）
+if(FALCON_BUILD_TESTS)
+    add_subdirectory(tests)
+endif()
 
 # 安装目标（macOS 使用手动打包，跳过 install）
 if(NOT APPLE)

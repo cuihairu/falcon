@@ -17,7 +17,9 @@
 #include <QScrollArea>
 #include <QFrame>
 
-#include <falcon/download_task.hpp>
+#include <rpc/aria2_snapshots.hpp>
+
+#include <vector>
 
 namespace falcon::desktop {
 
@@ -41,6 +43,9 @@ enum class TaskDisplayStyle {
 /**
  * @brief 下载管理页面（迅雷风格）
  *
+ * 只消费 TaskSnapshot（DownloadService 每 500ms 推送），不直接持有引擎
+ * 或任务对象；暂停/继续等操作经信号交由 MainWindow 转发到下载服务。
+ *
  * 布局：
  * - 顶部：状态标题 + 操作按钮 + 新建按钮
  * - 中间：任务列表表格
@@ -54,7 +59,8 @@ public:
     explicit DownloadPage(QWidget* parent = nullptr);
     ~DownloadPage() override;
 
-    void add_engine_task(const falcon::DownloadTask::Ptr& task);
+    /// 全量替换任务快照并刷新显示（DownloadService 每个轮询周期调用）
+    void update_tasks(const std::vector<falcon::daemon::rpc::TaskSnapshot>& tasks);
     void set_view_mode(DownloadViewMode mode);
     void set_display_style(TaskDisplayStyle style);
 
@@ -63,6 +69,8 @@ signals:
     void remove_task_requested(falcon::TaskId id);
     void remove_finished_tasks_requested();
     void priority_changed(falcon::TaskId id, falcon::TaskPriority priority);
+    void pause_requested(falcon::TaskId id);
+    void resume_requested(falcon::TaskId id);
 
 private slots:
     void on_new_task_clicked();
@@ -75,15 +83,14 @@ private slots:
     void on_delete_selected();
 
 private:
-    // TaskRecord structure (must be defined before methods that use it)
+    // 任务显示记录：快照 + 预格式化的文本列
     struct TaskRecord {
-        falcon::DownloadTask::Ptr task;
+        falcon::daemon::rpc::TaskSnapshot snapshot;
         QString filename;
         QString save_path;
         QString size_text;
         QString status_text;
         QString error_text;
-        bool in_trash = false;
     };
 
     void setup_ui();
@@ -99,16 +106,20 @@ private:
     void update_action_buttons();
     void show_context_menu(const QPoint& pos);
     void show_grid_context_menu(const QPoint& pos);  // 网格视图右键菜单
-    void refresh_display();  // 刷新当前显示
-    void sync_task_grid();   // 同步网格内容
+    void rerender();             // 从当前 task_records_ 全量刷新显示
+    void sync_task_grid();       // 同步网格内容
+    void sync_task_row(const TaskRecord& record);   // 按视图过滤增/删行
+    void update_row_texts(int row, const TaskRecord& record);
     QWidget* create_task_card(const TaskRecord& record);  // 创建任务卡片
-    falcon::DownloadTask::Ptr task_from_sender() const;
-    falcon::DownloadTask::Ptr selected_task() const;
-    falcon::DownloadTask::Ptr task_at_row(int row) const;
 
-    void refresh_engine_tasks();
-    void sync_task_tables(const falcon::DownloadTask::Ptr& task);
+    const TaskRecord* record_by_id(qulonglong key) const;
+    const TaskRecord* record_from_sender() const;
+    const TaskRecord* selected_record() const;
+    const TaskRecord* record_at_row(int row) const;
+    void remove_task_row(qulonglong key);
+    bool should_show(const falcon::daemon::rpc::TaskSnapshot& snapshot) const;
 
+    static QString filename_for(const falcon::daemon::rpc::TaskSnapshot& snapshot);
     static QString format_bytes(uint64_t bytes);
     static QString format_speed(uint64_t bytes_per_second);
 
@@ -135,14 +146,7 @@ private:
     // 任务表格
     QTableWidget* task_table_;
 
-    // 操作按钮
-    QPushButton* pause_button_;
-    QPushButton* delete_button_;
-
-    // 刷新定时器
-    QTimer* refresh_timer_;
-
-    // 任务数据
+    // 任务数据（DownloadService 推送的快照副本）
     QHash<qulonglong, int> row_by_task_id_;
     QHash<qulonglong, TaskRecord> task_records_;
 

@@ -8,13 +8,16 @@
 #pragma once
 
 #include <QMainWindow>
-#include <QTimer>
+#include <QHash>
+#include <QString>
 #include <memory>
 #include <QStackedWidget>
 #include <QSystemTrayIcon>
 
-#include <falcon/download_engine.hpp>
-#include <falcon/event_listener.hpp>
+#include <falcon/types.hpp>
+
+#include <rpc/aria2_snapshots.hpp>
+#include <vector>
 
 namespace falcon::desktop {
 
@@ -29,15 +32,18 @@ class SettingsPage;
 class ClipboardMonitor;
 class HttpIpcServer;
 class ThemeManager;
+class DownloadService;
 struct UrlInfo;
 struct IncomingDownloadRequest;
 
 /**
  * @brief 主窗口类
  *
- * 包含可收放的侧边导航栏和内容区域
+ * 包含可收放的侧边导航栏和内容区域。
+ * 下载能力经 DownloadService 提供（进程内引擎或 daemon RPC 后端），
+ * 本类不再直接持有 DownloadEngine。
  */
-class MainWindow : public QMainWindow, public falcon::IEventListener
+class MainWindow : public QMainWindow
 {
     Q_OBJECT
 
@@ -73,13 +79,12 @@ private slots:
     void on_maximize_requested();
     void on_close_requested();
 
-    // IEventListener implementation
-    void on_status_changed(falcon::TaskId task_id, falcon::TaskStatus old_status,
-                           falcon::TaskStatus new_status) override;
-    void on_progress(const falcon::ProgressInfo& info) override;
-    void on_error(falcon::TaskId task_id, const std::string& error_message) override;
-    void on_completed(falcon::TaskId task_id, const std::string& output_path) override;
-    void on_file_info(falcon::TaskId task_id, const falcon::FileInfo& info) override;
+    // DownloadService 事件（已投递到 GUI 线程）
+    void on_tasks_refreshed(const std::vector<falcon::daemon::rpc::TaskSnapshot>& tasks);
+    void on_stats_refreshed(falcon::daemon::rpc::GlobalStats stats);
+    void on_task_add_failed(const QString& url, const QString& reason);
+    void on_task_completed(falcon::TaskId id, const QString& output_path);
+    void on_task_failed(falcon::TaskId id, const QString& error_message);
 
 private:
     void setup_ui();
@@ -90,14 +95,12 @@ private:
     void setup_clipboard_monitor();
     void setup_ipc_server();
     void setup_system_tray();
-    void ensure_download_engine();
+    void ensure_download_service();
     void show_add_download_dialog(UrlInfo url_info, const IncomingDownloadRequest* request_context);
     bool add_download_task(const QString& url, bool start_immediately);
     void load_settings();
     void save_settings() const;
     void apply_settings_to_runtime();
-    void setup_status_update_timer();
-    void update_status_bar();
 
     // 顶部工具栏
     TopBar* top_bar_;
@@ -128,11 +131,11 @@ private:
     // 主题管理
     ThemeManager* theme_manager_;
 
-    // 核心下载引擎
-    std::unique_ptr<falcon::DownloadEngine> download_engine_;
+    // 下载服务（worker 线程 + 后端抽象）
+    DownloadService* download_service_;
 
-    // 状态更新定时器
-    QTimer* status_update_timer_;
+    // 最近一轮任务快照的 URL 映射（错误通知里显示文件名用）
+    QHash<qulonglong, QString> task_url_by_id_;
 
     // 页面索引
     enum PageIndex {

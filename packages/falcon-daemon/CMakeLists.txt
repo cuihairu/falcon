@@ -29,6 +29,30 @@ if(nlohmann_json_FOUND)
     # 可执行文件
     # ============================================================================
 
+    # RPC 客户端 + aria2 快照转换：无服务端依赖，desktop 可直接链接
+    if(CURL_FOUND)
+        add_library(falcon_daemon_rpc_client STATIC
+            src/rpc/json_rpc_client.cpp
+            src/rpc/json_rpc_client.hpp
+            src/rpc/aria2_snapshots.cpp
+            src/rpc/aria2_snapshots.hpp
+        )
+
+        target_link_libraries(falcon_daemon_rpc_client
+            PUBLIC
+                Falcon::core
+                nlohmann_json::nlohmann_json
+                CURL::libcurl
+        )
+
+        target_include_directories(falcon_daemon_rpc_client
+            PUBLIC
+                ${CMAKE_CURRENT_SOURCE_DIR}/src
+        )
+
+        target_compile_features(falcon_daemon_rpc_client PRIVATE cxx_std_17)
+    endif()
+
     add_library(falcon_daemon_rpc STATIC
         src/rpc/json_rpc_server.cpp
         src/rpc/json_rpc_server.hpp

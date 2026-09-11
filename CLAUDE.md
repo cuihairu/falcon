@@ -2,6 +2,18 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-11 - 桌面应用接入 Daemon RPC（下载服务层）
+- desktop 新增下载服务层：`IDownloadBackend` 抽象 + `InProcessBackend`
+  （进程内引擎）/ `DaemonRpcBackend`（aria2 兼容 JSON-RPC）双实现，
+  UI 经 `DownloadService` 快照轮询驱动，不再直连 `DownloadEngine`
+- daemon 拆出 `falcon_daemon_rpc_client` 静态库（JSON-RPC 客户端 +
+  aria2 快照转换层），desktop 硬依赖；RPC 方法扩至 28 个（新增
+  `aria2.changePriority`），tellStatus 携带 `priority` 扩展字段
+- 设置页新增 Daemon 模式开关（RPC URL + secret，重启后生效）；
+  下载页重写为快照驱动（行内暂停/继续、右键优先级子菜单）
+- 新增纯 C++ 后端回环测试 `falcon_desktop_backend_tests`（5 用例），
+  desktop Qt 层随 CI Qt6 job 编译验证
+
 ### 2026-09-11 - Daemon RPC API 全面完善
 - aria2 兼容 JSON-RPC 方法扩至 26 个，查询/删除同时覆盖引擎内存态与 SQLite 历史（引擎优先、storage 回落、按 id 去重）
 - 新增 `getFiles`/`getUris`/`getOption`/`getGlobalOption`/`changeGlobalOption`/`getSessionInfo`/`saveSession`/`purgeDownloadResult`/`removeDownloadResult`/`pauseAll`/`unpauseAll`/`forceShutdown`/`system.multicall` 等
@@ -647,7 +659,7 @@ Daemon 配置文件（`/etc/falcon/daemon.json` 或 `~/.config/falcon/daemon.jso
    - ✅ 主题切换（亮色/暗色）
    - ✅ 云存储浏览（S3/OSS/COS）
    - ✅ 资源搜索集成
-   - 🔄 与 Daemon 通信完善
+   - ✅ Daemon 通信（aria2 兼容 JSON-RPC 后端 + 进程内引擎双后端）
 
 3. **测试与文档**
    - 🔄 单元测试覆盖率提升

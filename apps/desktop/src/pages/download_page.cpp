@@ -17,6 +17,8 @@
 #include <QClipboard>
 #include <QScrollArea>
 #include <QFrame>
+#include <QFileInfo>
+#include <QSet>
 #include <algorithm>
 
 namespace falcon::desktop {
@@ -24,6 +26,21 @@ namespace falcon::desktop {
 namespace {
 constexpr int kRowHeight = 56;
 constexpr int kSummaryCardWidth = 168;
+
+// 云盘域名列表（用于识别云添加任务）
+const QStringList& cloud_domains()
+{
+    static const QStringList domains = {
+        "pan.baidu.com",
+        "pan.quark.cn",
+        "cloud.189.cn",
+        "www.alipan.com",
+        "www.aliyundrive.com",
+        "www.115.com",
+        "disk.pikpak.com"
+    };
+    return domains;
+}
 } // namespace
 
 DownloadPage::DownloadPage(QWidget* parent)
@@ -38,20 +55,12 @@ DownloadPage::DownloadPage(QWidget* parent)
     , style_toggle_button_(nullptr)
     , more_button_(nullptr)
     , task_table_(nullptr)
-    , pause_button_(nullptr)
-    , delete_button_(nullptr)
-    , refresh_timer_(nullptr)
     , grid_container_(nullptr)
     , grid_scroll_area_(nullptr)
     , grid_widget_(nullptr)
     , grid_layout_(nullptr)
 {
     setup_ui();
-
-    refresh_timer_ = new QTimer(this);
-    refresh_timer_->setInterval(500);
-    connect(refresh_timer_, &QTimer::timeout, this, &DownloadPage::refresh_engine_tasks);
-    refresh_timer_->start();
 }
 
 DownloadPage::~DownloadPage() = default;
@@ -267,14 +276,10 @@ void DownloadPage::set_view_mode(DownloadViewMode mode)
     view_mode_ = mode;
     update_header_for_mode();
 
-    // 清空并重新加载任务
+    // 清空并按新过滤条件重新加载任务
     task_table_->setRowCount(0);
     row_by_task_id_.clear();
-
-    // 根据模式重新填充任务
-    for (auto it = task_records_.begin(); it != task_records_.end(); ++it) {
-        sync_task_tables(it.value().task);
-    }
+    rerender();
 }
 
 void DownloadPage::update_header_for_mode()
@@ -298,363 +303,85 @@ void DownloadPage::update_header_for_mode()
     }
 }
 
-void DownloadPage::update_summary_cards()
+QString DownloadPage::filename_for(const falcon::daemon::rpc::TaskSnapshot& snapshot)
 {
-    int active_count = 0;
-    int completed_count = 0;
-    uint64_t total_speed = 0;
+    if (!snapshot.output_path.empty()) {
+        const QFileInfo info(QString::fromStdString(snapshot.output_path));
+        const QString name = info.fileName();
+        if (!name.isEmpty()) {
+            return name;
+        }
+    }
+    // 回退：从 URL 取最后一段（去掉查询串）
+    const QString url = QString::fromStdString(snapshot.url);
+    const int slash = url.lastIndexOf('/');
+    QString name = (slash >= 0 && slash < url.length() - 1) ? url.mid(slash + 1) : url;
+    const int query = name.indexOf('?');
+    if (query >= 0) {
+        name = name.left(query);
+    }
+    return name;
+}
 
+void DownloadPage::update_tasks(const std::vector<falcon::daemon::rpc::TaskSnapshot>& tasks)
+{
+    // 重建记录表：不再存在的任务随之消失
+    QHash<qulonglong, TaskRecord> fresh;
+    fresh.reserve(static_cast<int>(tasks.size()) * 2);
+    for (const auto& snap : tasks) {
+        TaskRecord record;
+        record.snapshot = snap;
+        record.filename = filename_for(snap);
+        if (record.filename.isEmpty()) {
+            record.filename = tr("(unknown)");
+        }
+        record.save_path = QString::fromStdString(snap.output_path);
+        record.size_text = snap.total_bytes > 0 ? format_bytes(snap.total_bytes) : "-";
+        record.status_text = QString::fromUtf8(falcon::to_string(snap.status));
+        record.error_text = QString::fromStdString(snap.error_message);
+        fresh.insert(static_cast<qulonglong>(snap.id), record);
+    }
+    task_records_ = std::move(fresh);
+
+    // 删除已消失任务的行
+    QSet<qulonglong> live_keys;
     for (auto it = task_records_.cbegin(); it != task_records_.cend(); ++it) {
-        const auto& task = it.value().task;
-        if (!task) {
-            continue;
-        }
-
-        const auto status = task->status();
-        if (status == falcon::TaskStatus::Downloading || status == falcon::TaskStatus::Preparing) {
-            ++active_count;
-        }
-        if (status == falcon::TaskStatus::Completed) {
-            ++completed_count;
-        }
-        total_speed += static_cast<uint64_t>(task->speed());
+        live_keys.insert(it.key());
     }
-
-    if (active_summary_value_) {
-        active_summary_value_->setText(QString::number(active_count));
-    }
-    if (completed_summary_value_) {
-        completed_summary_value_->setText(QString::number(completed_count));
-    }
-    if (speed_summary_value_) {
-        speed_summary_value_->setText(format_speed(total_speed));
-    }
-}
-
-void DownloadPage::update_empty_state()
-{
-    const bool has_rows = task_table_ && task_table_->rowCount() > 0;
-    if (empty_state_widget_) {
-        empty_state_widget_->setVisible(!has_rows);
-    }
-    if (task_table_) {
-        task_table_->setVisible(has_rows && display_style_ == TaskDisplayStyle::Table);
-    }
-    if (grid_container_) {
-        grid_container_->setVisible(has_rows && display_style_ == TaskDisplayStyle::Grid);
-    }
-}
-
-void DownloadPage::update_action_buttons()
-{
-    // 更新每行操作按钮的状态
-    for (int row = 0; row < task_table_->rowCount(); ++row) {
-        auto* name_item = task_table_->item(row, 0);
-        if (!name_item) {
-            continue;
-        }
-
-        const qulonglong key = name_item->data(Qt::UserRole).toULongLong();
-        auto record_it = task_records_.find(key);
-        if (record_it == task_records_.end()) {
-            continue;
-        }
-
-        const auto& task = record_it->task;
-        if (!task) {
-            continue;
-        }
-
-        // 获取操作按钮容器
-        auto* actions_widget = task_table_->cellWidget(row, 5);
-        if (!actions_widget) {
-            continue;
-        }
-
-        auto* layout = qobject_cast<QHBoxLayout*>(actions_widget->layout());
-        if (!layout) {
-            continue;
-        }
-
-        // 第一个按钮是暂停/继续按钮
-        auto* pause_btn = qobject_cast<QPushButton*>(layout->itemAt(0)->widget());
-        if (pause_btn) {
-            const auto status = task->status();
-            bool is_running = (status == falcon::TaskStatus::Downloading ||
-                              status == falcon::TaskStatus::Preparing);
-            bool is_paused = (status == falcon::TaskStatus::Paused);
-            bool can_resume = (status == falcon::TaskStatus::Paused ||
-                              status == falcon::TaskStatus::Failed);
-
-            pause_btn->setEnabled(is_running || is_paused || can_resume);
-
-            if (is_running) {
-                pause_btn->setText(tr("暂停"));
-                pause_btn->setToolTip(tr("暂停"));
-            } else if (is_paused || can_resume) {
-                pause_btn->setText(tr("继续"));
-                pause_btn->setToolTip(tr("继续"));
-            } else {
-                pause_btn->setEnabled(false);
+    for (auto it = row_by_task_id_.begin(); it != row_by_task_id_.end();) {
+        if (!live_keys.contains(it.key())) {
+            const int row = it.value();
+            task_table_->removeRow(row);
+            it = row_by_task_id_.erase(it);
+            for (auto row_it = row_by_task_id_.begin(); row_it != row_by_task_id_.end(); ++row_it) {
+                if (row_it.value() > row) {
+                    row_it.value() -= 1;
+                }
             }
+        } else {
+            ++it;
         }
     }
+
+    rerender();
 }
 
-falcon::DownloadTask::Ptr DownloadPage::selected_task() const
-{
-    if (!task_table_ || !task_table_->selectionModel()) {
-        return nullptr;
-    }
-
-    const auto selected_rows = task_table_->selectionModel()->selectedRows();
-    if (selected_rows.isEmpty()) {
-        return nullptr;
-    }
-
-    auto* item = task_table_->item(selected_rows.first().row(), 0);
-    if (!item) {
-        return nullptr;
-    }
-
-    const qulonglong key = item->data(Qt::UserRole).toULongLong();
-    auto record_it = task_records_.constFind(key);
-    if (record_it == task_records_.constEnd()) {
-        return nullptr;
-    }
-
-    return record_it->task;
-}
-
-void DownloadPage::on_new_task_clicked()
-{
-    emit new_task_requested();
-}
-
-void DownloadPage::on_refresh_clicked()
-{
-    refresh_engine_tasks();
-}
-
-void DownloadPage::on_view_toggle_clicked()
-{
-    // 循环切换任务过滤模式
-    switch (view_mode_) {
-        case DownloadViewMode::Downloading:
-            set_view_mode(DownloadViewMode::Completed);
-            break;
-        case DownloadViewMode::Completed:
-            set_view_mode(DownloadViewMode::CloudAdd);
-            break;
-        case DownloadViewMode::CloudAdd:
-            set_view_mode(DownloadViewMode::Downloading);
-            break;
-    }
-}
-
-void DownloadPage::on_more_options_clicked()
-{
-    QMenu menu(this);
-
-    auto* start_all_action = menu.addAction(tr("全部开始"));
-    connect(start_all_action, &QAction::triggered, this, [this]() {
-        for (auto it = task_records_.begin(); it != task_records_.end(); ++it) {
-            const auto& task = it.value().task;
-            if (task) {
-                (void)task->resume();
-            }
-        }
-    });
-
-    auto* pause_all_action = menu.addAction(tr("全部暂停"));
-    connect(pause_all_action, &QAction::triggered, this, [this]() {
-        for (auto it = task_records_.begin(); it != task_records_.end(); ++it) {
-            const auto& task = it.value().task;
-            if (task) {
-                (void)task->pause();
-            }
-        }
-    });
-
-    menu.addSeparator();
-
-    auto* remove_finished_action = menu.addAction(tr("清除已完成"));
-    connect(remove_finished_action, &QAction::triggered, this, [this]() {
-        emit remove_finished_tasks_requested();
-    });
-
-    menu.addSeparator();
-
-    auto* open_dir_action = menu.addAction(tr("打开保存目录"));
-    connect(open_dir_action, &QAction::triggered, this, [this]() {
-        const auto task = selected_task();
-        if (task) {
-            const QString path = QString::fromStdString(task->options().output_directory);
-            QDesktopServices::openUrl(QUrl::fromLocalFile(path));
-        }
-    });
-
-    menu.exec(more_button_->mapToGlobal(more_button_->rect().bottomLeft()));
-}
-
-void DownloadPage::on_pause_selected()
-{
-    auto task = task_from_sender();
-    if (!task) {
-        task = selected_task();
-    }
-    if (task) {
-        const auto status = task->status();
-        if (status == falcon::TaskStatus::Downloading ||
-            status == falcon::TaskStatus::Preparing) {
-            (void)task->pause();
-        } else if (status == falcon::TaskStatus::Paused ||
-                   status == falcon::TaskStatus::Failed) {
-            (void)task->resume();
-        }
-    }
-}
-
-void DownloadPage::on_resume_selected()
-{
-    const auto task = selected_task();
-    if (task) {
-        (void)task->resume();
-    }
-}
-
-void DownloadPage::on_delete_selected()
-{
-    auto task = task_from_sender();
-    if (!task) {
-        task = selected_task();
-    }
-    if (task) {
-        emit remove_task_requested(task->id());
-    }
-}
-
-falcon::DownloadTask::Ptr DownloadPage::task_from_sender() const
-{
-    const QObject* sender_object = sender();
-    if (!sender_object) {
-        return nullptr;
-    }
-
-    const QVariant task_id_var = sender_object->property("taskId");
-    if (!task_id_var.isValid()) {
-        return nullptr;
-    }
-
-    const qulonglong key = task_id_var.toULongLong();
-    auto record_it = task_records_.constFind(key);
-    if (record_it == task_records_.constEnd()) {
-        return nullptr;
-    }
-
-    return record_it->task;
-}
-
-QString DownloadPage::format_bytes(uint64_t bytes)
-{
-    static const char* units[] = {"B", "KB", "MB", "GB", "TB"};
-    int unit = 0;
-    double size = static_cast<double>(bytes);
-    while (size >= 1024.0 && unit < 4) {
-        size /= 1024.0;
-        ++unit;
-    }
-    if (unit == 0) {
-        return QString::number(bytes) + " B";
-    }
-    return QString("%1 %2").arg(size, 0, 'f', 1).arg(units[unit]);
-}
-
-QString DownloadPage::format_speed(uint64_t bytes_per_second)
-{
-    if (bytes_per_second == 0) {
-        return "0 B/s";
-    }
-    return format_bytes(bytes_per_second) + "/s";
-}
-
-void DownloadPage::add_engine_task(const falcon::DownloadTask::Ptr& task)
-{
-    if (!task) {
-        return;
-    }
-
-    const qulonglong key = static_cast<qulonglong>(task->id());
-    if (task_records_.contains(key)) {
-        return;
-    }
-
-    const QString filename = !task->options().output_filename.empty()
-        ? QString::fromStdString(task->options().output_filename)
-        : QString::fromStdString(task->file_info().filename);
-
-    TaskRecord record;
-    record.task = task;
-    record.filename = filename.isEmpty() ? tr("(unknown)") : filename;
-    record.save_path = QString::fromStdString(task->options().output_directory);
-    record.size_text = "-";
-    record.status_text = QString::fromUtf8(falcon::to_string(task->status()));
-    record.error_text = QString::fromStdString(task->error_message());
-    task_records_.insert(key, record);
-
-    sync_task_tables(task);
-}
-
-void DownloadPage::refresh_engine_tasks()
+void DownloadPage::rerender()
 {
     for (auto it = task_records_.begin(); it != task_records_.end(); ++it) {
         TaskRecord& record = it.value();
-        const auto& task = record.task;
-        if (!task) {
-            continue;
-        }
+        const auto& snap = record.snapshot;
+        record.size_text = snap.total_bytes > 0 ? format_bytes(snap.total_bytes) : "-";
+        record.status_text = QString::fromUtf8(falcon::to_string(snap.status));
+        record.error_text = QString::fromStdString(snap.error_message);
+        sync_task_row(record);
+    }
 
-        const uint64_t total = static_cast<uint64_t>(task->total_bytes());
-        const uint64_t speed = static_cast<uint64_t>(task->speed());
-        const int pct = static_cast<int>(task->progress() * 100.0f);
-        record.size_text = total > 0 ? format_bytes(total) : "-";
-        record.status_text = QString::fromUtf8(falcon::to_string(task->status()));
-        record.error_text = QString::fromStdString(task->error_message());
-
-        sync_task_tables(task);
-
-        auto row_it = row_by_task_id_.find(it.key());
-        if (row_it == row_by_task_id_.end()) {
-            continue;
-        }
-
-        const int row = row_it.value();
-
-        // 更新文件名
-        if (auto* name_item = task_table_->item(row, 0)) {
-            name_item->setText(record.filename);
-        }
-
-        // 更新大小
-        if (auto* size_item = task_table_->item(row, 2)) {
-            size_item->setText(record.size_text);
-        }
-
-        // 更新速度
-        if (auto* speed_item = task_table_->item(row, 3)) {
-            speed_item->setText(format_speed(speed));
-        }
-
-        // 更新状态
-        if (auto* status_item = task_table_->item(row, 4)) {
-            status_item->setText(record.status_text);
-        }
-
-        // 更新进度条
-        if (auto* widget = task_table_->cellWidget(row, 1)) {
-            if (auto* bar = qobject_cast<QProgressBar*>(widget)) {
-                bar->setValue(std::max(0, std::min(100, pct)));
-            }
+    // 刷新可见行的动态列（大小/速度/状态/进度）
+    for (auto it = row_by_task_id_.cbegin(); it != row_by_task_id_.cend(); ++it) {
+        const auto* record = record_by_id(it.key());
+        if (record) {
+            update_row_texts(it.value(), *record);
         }
     }
 
@@ -668,76 +395,38 @@ void DownloadPage::refresh_engine_tasks()
     }
 }
 
-void DownloadPage::sync_task_tables(const falcon::DownloadTask::Ptr& task)
+bool DownloadPage::should_show(const falcon::daemon::rpc::TaskSnapshot& snapshot) const
 {
-    if (!task) {
-        return;
-    }
-
-    const qulonglong key = static_cast<qulonglong>(task->id());
-    auto record_it = task_records_.find(key);
-    if (record_it == task_records_.end()) {
-        return;
-    }
-
-    const TaskRecord& record = record_it.value();
-
-    // 根据视图模式过滤任务
-    const auto status = task->status();
-    bool should_show = false;
-
-    // 云盘域名列表（用于识别云添加任务）
-    static const QStringList cloud_domains = {
-        "pan.baidu.com",
-        "pan.quark.cn",
-        "cloud.189.cn",
-        "www.alipan.com",
-        "www.aliyundrive.com",
-        "www.115.com",
-        "disk.pikpak.com"
-    };
-
     switch (view_mode_) {
         case DownloadViewMode::Downloading:
-            should_show = (status == falcon::TaskStatus::Downloading ||
-                          status == falcon::TaskStatus::Preparing ||
-                          status == falcon::TaskStatus::Paused ||
-                          status == falcon::TaskStatus::Pending);
-            break;
+            return snapshot.status == falcon::TaskStatus::Downloading ||
+                   snapshot.status == falcon::TaskStatus::Preparing ||
+                   snapshot.status == falcon::TaskStatus::Paused ||
+                   snapshot.status == falcon::TaskStatus::Pending;
         case DownloadViewMode::Completed:
-            should_show = (status == falcon::TaskStatus::Completed);
-            break;
-        case DownloadViewMode::CloudAdd:
-            // 显示 URL 包含云盘域名的任务
-            {
-                const QString url = QString::fromStdString(task->url());
-                should_show = std::any_of(cloud_domains.begin(), cloud_domains.end(),
-                    [&url](const QString& domain) {
-                        return url.contains(domain);
-                    });
-            }
-            break;
-    }
-
-    if (!should_show) {
-        // 移除行
-        if (row_by_task_id_.contains(key)) {
-            const int row = row_by_task_id_.value(key);
-            task_table_->removeRow(row);
-            row_by_task_id_.remove(key);
-            for (auto it = row_by_task_id_.begin(); it != row_by_task_id_.end(); ++it) {
-                if (it.value() > row) {
-                    it.value() -= 1;
-                }
-            }
+            return snapshot.status == falcon::TaskStatus::Completed;
+        case DownloadViewMode::CloudAdd: {
+            const QString url = QString::fromStdString(snapshot.url);
+            const auto& domains = cloud_domains();
+            return std::any_of(domains.begin(), domains.end(),
+                [&url](const QString& domain) { return url.contains(domain); });
         }
+    }
+    return false;
+}
+
+void DownloadPage::sync_task_row(const TaskRecord& record)
+{
+    const qulonglong key = static_cast<qulonglong>(record.snapshot.id);
+
+    if (!should_show(record.snapshot)) {
+        remove_task_row(key);
         update_empty_state();
         return;
     }
 
-    // 添加或更新行
     if (row_by_task_id_.contains(key)) {
-        return;  // 行已存在，由 refresh_engine_tasks 更新
+        return;  // 行已存在，动态列由 rerender 统一更新
     }
 
     const int row = task_table_->rowCount();
@@ -797,10 +486,90 @@ void DownloadPage::sync_task_tables(const falcon::DownloadTask::Ptr& task)
     actions_layout->addWidget(delete_btn);
 
     task_table_->setCellWidget(row, 5, actions_widget);
+    update_row_texts(row, record);
     update_empty_state();
 }
 
-falcon::DownloadTask::Ptr DownloadPage::task_at_row(int row) const
+void DownloadPage::update_row_texts(int row, const TaskRecord& record)
+{
+    const auto& snap = record.snapshot;
+    const int pct = static_cast<int>(snap.progress * 100.0);
+
+    if (auto* name_item = task_table_->item(row, 0)) {
+        name_item->setText(record.filename);
+    }
+    if (auto* size_item = task_table_->item(row, 2)) {
+        size_item->setText(record.size_text);
+    }
+    if (auto* speed_item = task_table_->item(row, 3)) {
+        speed_item->setText(format_speed(snap.speed));
+    }
+    if (auto* status_item = task_table_->item(row, 4)) {
+        status_item->setText(record.status_text);
+    }
+    if (auto* widget = task_table_->cellWidget(row, 1)) {
+        if (auto* bar = qobject_cast<QProgressBar*>(widget)) {
+            bar->setValue(std::max(0, std::min(100, pct)));
+        }
+    }
+}
+
+void DownloadPage::remove_task_row(qulonglong key)
+{
+    if (!row_by_task_id_.contains(key)) {
+        return;
+    }
+    const int row = row_by_task_id_.value(key);
+    task_table_->removeRow(row);
+    row_by_task_id_.remove(key);
+    for (auto it = row_by_task_id_.begin(); it != row_by_task_id_.end(); ++it) {
+        if (it.value() > row) {
+            it.value() -= 1;
+        }
+    }
+}
+
+const DownloadPage::TaskRecord* DownloadPage::record_by_id(qulonglong key) const
+{
+    auto it = task_records_.constFind(key);
+    return it == task_records_.constEnd() ? nullptr : &it.value();
+}
+
+const DownloadPage::TaskRecord* DownloadPage::selected_record() const
+{
+    if (!task_table_ || !task_table_->selectionModel()) {
+        return nullptr;
+    }
+
+    const auto selected_rows = task_table_->selectionModel()->selectedRows();
+    if (selected_rows.isEmpty()) {
+        return nullptr;
+    }
+
+    auto* item = task_table_->item(selected_rows.first().row(), 0);
+    if (!item) {
+        return nullptr;
+    }
+
+    return record_by_id(item->data(Qt::UserRole).toULongLong());
+}
+
+const DownloadPage::TaskRecord* DownloadPage::record_from_sender() const
+{
+    const QObject* sender_object = sender();
+    if (!sender_object) {
+        return nullptr;
+    }
+
+    const QVariant task_id_var = sender_object->property("taskId");
+    if (!task_id_var.isValid()) {
+        return nullptr;
+    }
+
+    return record_by_id(task_id_var.toULongLong());
+}
+
+const DownloadPage::TaskRecord* DownloadPage::record_at_row(int row) const
 {
     if (row < 0 || row >= task_table_->rowCount()) {
         return nullptr;
@@ -811,13 +580,240 @@ falcon::DownloadTask::Ptr DownloadPage::task_at_row(int row) const
         return nullptr;
     }
 
-    const qulonglong key = item->data(Qt::UserRole).toULongLong();
-    auto record_it = task_records_.constFind(key);
-    if (record_it == task_records_.constEnd()) {
-        return nullptr;
+    return record_by_id(item->data(Qt::UserRole).toULongLong());
+}
+
+void DownloadPage::update_summary_cards()
+{
+    int active_count = 0;
+    int completed_count = 0;
+    uint64_t total_speed = 0;
+
+    for (auto it = task_records_.cbegin(); it != task_records_.cend(); ++it) {
+        const auto& snap = it.value().snapshot;
+        if (snap.status == falcon::TaskStatus::Downloading ||
+            snap.status == falcon::TaskStatus::Preparing) {
+            ++active_count;
+        }
+        if (snap.status == falcon::TaskStatus::Completed) {
+            ++completed_count;
+        }
+        total_speed += snap.speed;
     }
 
-    return record_it->task;
+    if (active_summary_value_) {
+        active_summary_value_->setText(QString::number(active_count));
+    }
+    if (completed_summary_value_) {
+        completed_summary_value_->setText(QString::number(completed_count));
+    }
+    if (speed_summary_value_) {
+        speed_summary_value_->setText(format_speed(total_speed));
+    }
+}
+
+void DownloadPage::update_empty_state()
+{
+    const bool has_rows = task_table_ && task_table_->rowCount() > 0;
+    if (empty_state_widget_) {
+        empty_state_widget_->setVisible(!has_rows);
+    }
+    if (task_table_) {
+        task_table_->setVisible(has_rows && display_style_ == TaskDisplayStyle::Table);
+    }
+    if (grid_container_) {
+        grid_container_->setVisible(has_rows && display_style_ == TaskDisplayStyle::Grid);
+    }
+}
+
+void DownloadPage::update_action_buttons()
+{
+    // 更新每行操作按钮的状态
+    for (int row = 0; row < task_table_->rowCount(); ++row) {
+        auto* name_item = task_table_->item(row, 0);
+        if (!name_item) {
+            continue;
+        }
+
+        const auto* record = record_by_id(name_item->data(Qt::UserRole).toULongLong());
+        if (!record) {
+            continue;
+        }
+
+        // 获取操作按钮容器
+        auto* actions_widget = task_table_->cellWidget(row, 5);
+        if (!actions_widget) {
+            continue;
+        }
+
+        auto* layout = qobject_cast<QHBoxLayout*>(actions_widget->layout());
+        if (!layout) {
+            continue;
+        }
+
+        // 第一个按钮是暂停/继续按钮
+        auto* pause_btn = qobject_cast<QPushButton*>(layout->itemAt(0)->widget());
+        if (!pause_btn) {
+            continue;
+        }
+
+        const auto status = record->snapshot.status;
+        const bool is_running = (status == falcon::TaskStatus::Downloading ||
+                                 status == falcon::TaskStatus::Preparing);
+        const bool is_paused = (status == falcon::TaskStatus::Paused);
+        const bool can_resume = (status == falcon::TaskStatus::Paused ||
+                                 status == falcon::TaskStatus::Failed);
+
+        if (is_running) {
+            pause_btn->setEnabled(true);
+            pause_btn->setText(tr("暂停"));
+            pause_btn->setToolTip(tr("暂停"));
+        } else if (is_paused || can_resume) {
+            pause_btn->setEnabled(true);
+            pause_btn->setText(tr("继续"));
+            pause_btn->setToolTip(tr("继续"));
+        } else {
+            pause_btn->setEnabled(false);
+        }
+    }
+}
+
+void DownloadPage::on_new_task_clicked()
+{
+    emit new_task_requested();
+}
+
+void DownloadPage::on_refresh_clicked()
+{
+    // 数据由 DownloadService 周期推送；此处重渲染当前快照
+    rerender();
+}
+
+void DownloadPage::on_view_toggle_clicked()
+{
+    // 循环切换任务过滤模式
+    switch (view_mode_) {
+        case DownloadViewMode::Downloading:
+            set_view_mode(DownloadViewMode::Completed);
+            break;
+        case DownloadViewMode::Completed:
+            set_view_mode(DownloadViewMode::CloudAdd);
+            break;
+        case DownloadViewMode::CloudAdd:
+            set_view_mode(DownloadViewMode::Downloading);
+            break;
+    }
+}
+
+void DownloadPage::on_more_options_clicked()
+{
+    QMenu menu(this);
+
+    auto* start_all_action = menu.addAction(tr("全部开始"));
+    connect(start_all_action, &QAction::triggered, this, [this]() {
+        for (auto it = task_records_.cbegin(); it != task_records_.cend(); ++it) {
+            const auto& snap = it.value().snapshot;
+            if (snap.status == falcon::TaskStatus::Paused ||
+                snap.status == falcon::TaskStatus::Failed ||
+                snap.status == falcon::TaskStatus::Pending) {
+                emit resume_requested(snap.id);
+            }
+        }
+    });
+
+    auto* pause_all_action = menu.addAction(tr("全部暂停"));
+    connect(pause_all_action, &QAction::triggered, this, [this]() {
+        for (auto it = task_records_.cbegin(); it != task_records_.cend(); ++it) {
+            const auto& snap = it.value().snapshot;
+            if (snap.status == falcon::TaskStatus::Downloading ||
+                snap.status == falcon::TaskStatus::Preparing) {
+                emit pause_requested(snap.id);
+            }
+        }
+    });
+
+    menu.addSeparator();
+
+    auto* remove_finished_action = menu.addAction(tr("清除已完成"));
+    connect(remove_finished_action, &QAction::triggered, this, [this]() {
+        emit remove_finished_tasks_requested();
+    });
+
+    menu.addSeparator();
+
+    auto* open_dir_action = menu.addAction(tr("打开保存目录"));
+    connect(open_dir_action, &QAction::triggered, this, [this]() {
+        if (const auto* record = selected_record()) {
+            const QString path = record->save_path.isEmpty()
+                ? QString::fromStdString(record->snapshot.url)
+                : record->save_path;
+            const QString dir = QFileInfo(path).absolutePath();
+            QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+        }
+    });
+
+    menu.exec(more_button_->mapToGlobal(more_button_->rect().bottomLeft()));
+}
+
+void DownloadPage::on_pause_selected()
+{
+    const auto* record = record_from_sender();
+    if (!record) {
+        record = selected_record();
+    }
+    if (!record) {
+        return;
+    }
+
+    const auto status = record->snapshot.status;
+    if (status == falcon::TaskStatus::Downloading ||
+        status == falcon::TaskStatus::Preparing) {
+        emit pause_requested(record->snapshot.id);
+    } else if (status == falcon::TaskStatus::Paused ||
+               status == falcon::TaskStatus::Failed) {
+        emit resume_requested(record->snapshot.id);
+    }
+}
+
+void DownloadPage::on_resume_selected()
+{
+    if (const auto* record = selected_record()) {
+        emit resume_requested(record->snapshot.id);
+    }
+}
+
+void DownloadPage::on_delete_selected()
+{
+    const auto* record = record_from_sender();
+    if (!record) {
+        record = selected_record();
+    }
+    if (record) {
+        emit remove_task_requested(record->snapshot.id);
+    }
+}
+
+QString DownloadPage::format_bytes(uint64_t bytes)
+{
+    static const char* units[] = {"B", "KB", "MB", "GB", "TB"};
+    int unit = 0;
+    double size = static_cast<double>(bytes);
+    while (size >= 1024.0 && unit < 4) {
+        size /= 1024.0;
+        ++unit;
+    }
+    if (unit == 0) {
+        return QString::number(bytes) + " B";
+    }
+    return QString("%1 %2").arg(size, 0, 'f', 1).arg(units[unit]);
+}
+
+QString DownloadPage::format_speed(uint64_t bytes_per_second)
+{
+    if (bytes_per_second == 0) {
+        return "0 B/s";
+    }
+    return format_bytes(bytes_per_second) + "/s";
 }
 
 void DownloadPage::show_context_menu(const QPoint& pos)
@@ -827,85 +823,75 @@ void DownloadPage::show_context_menu(const QPoint& pos)
         return;
     }
 
-    const int row = item->row();
-    auto task = task_at_row(row);
-    if (!task) {
+    const auto* record = record_at_row(item->row());
+    if (!record) {
         return;
     }
 
     QMenu menu(this);
 
     // 根据任务状态显示不同菜单项
-    const auto status = task->status();
+    const auto status = record->snapshot.status;
 
     // 暂停/继续
     if (status == falcon::TaskStatus::Downloading ||
         status == falcon::TaskStatus::Preparing) {
         auto* pause_action = menu.addAction(tr("暂停"));
-        connect(pause_action, &QAction::triggered, this, &DownloadPage::on_pause_selected);
+        connect(pause_action, &QAction::triggered, this,
+                [this, id = record->snapshot.id]() { emit pause_requested(id); });
     } else if (status == falcon::TaskStatus::Paused ||
                status == falcon::TaskStatus::Failed) {
         auto* resume_action = menu.addAction(tr("继续"));
-        connect(resume_action, &QAction::triggered, this, &DownloadPage::on_resume_selected);
+        connect(resume_action, &QAction::triggered, this,
+                [this, id = record->snapshot.id]() { emit resume_requested(id); });
     }
 
     menu.addSeparator();
 
-    // 打开文件夹
+    // 打开文件夹与复制链接按值捕获快照内容：菜单 exec 期间任务表可能被
+    // update_tasks 整体重建，不能捕获指向 task_records_ 的指针
+    const QString dir_for_open = QFileInfo(
+        record->save_path.isEmpty() ? QString::fromStdString(record->snapshot.url)
+                                    : record->save_path).absolutePath();
     auto* open_dir_action = menu.addAction(tr("打开文件夹"));
-    connect(open_dir_action, &QAction::triggered, this, [this]() {
-        const auto task = selected_task();
-        if (task) {
-            const QString path = QString::fromStdString(task->options().output_directory);
-            QDesktopServices::openUrl(QUrl::fromLocalFile(path));
-        }
+    connect(open_dir_action, &QAction::triggered, this, [dir_for_open]() {
+        QDesktopServices::openUrl(QUrl::fromLocalFile(dir_for_open));
     });
 
-    // 复制下载链接
+    const QString url_for_copy = QString::fromStdString(record->snapshot.url);
     auto* copy_url_action = menu.addAction(tr("复制下载链接"));
-    connect(copy_url_action, &QAction::triggered, this, [task]() {
-        QApplication::clipboard()->setText(QString::fromStdString(task->url()));
+    connect(copy_url_action, &QAction::triggered, this, [url_for_copy]() {
+        QApplication::clipboard()->setText(url_for_copy);
     });
 
     menu.addSeparator();
 
     // 优先级子菜单
     auto* priority_menu = menu.addMenu(tr("优先级"));
-    const auto current_priority = task->get_priority();
+    const auto current_priority = record->snapshot.priority;
+    const auto task_id = record->snapshot.id;
 
-    auto* low_action = priority_menu->addAction(tr("低"));
-    low_action->setCheckable(true);
-    low_action->setChecked(current_priority == falcon::TaskPriority::Low);
-    connect(low_action, &QAction::triggered, this, [this, id = task->id()]() {
-        emit priority_changed(id, falcon::TaskPriority::Low);
-    });
-
-    auto* normal_action = priority_menu->addAction(tr("普通"));
-    normal_action->setCheckable(true);
-    normal_action->setChecked(current_priority == falcon::TaskPriority::Normal);
-    connect(normal_action, &QAction::triggered, this, [this, id = task->id()]() {
-        emit priority_changed(id, falcon::TaskPriority::Normal);
-    });
-
-    auto* high_action = priority_menu->addAction(tr("高"));
-    high_action->setCheckable(true);
-    high_action->setChecked(current_priority == falcon::TaskPriority::High);
-    connect(high_action, &QAction::triggered, this, [this, id = task->id()]() {
-        emit priority_changed(id, falcon::TaskPriority::High);
-    });
-
-    auto* critical_action = priority_menu->addAction(tr("紧急"));
-    critical_action->setCheckable(true);
-    critical_action->setChecked(current_priority == falcon::TaskPriority::Critical);
-    connect(critical_action, &QAction::triggered, this, [this, id = task->id()]() {
-        emit priority_changed(id, falcon::TaskPriority::Critical);
-    });
+    auto add_priority_action = [this, priority_menu, task_id, current_priority](
+                                   const char* label_text, falcon::TaskPriority priority) {
+        auto* action = priority_menu->addAction(tr(label_text));
+        action->setCheckable(true);
+        action->setChecked(current_priority == priority);
+        connect(action, &QAction::triggered, this, [this, task_id, priority]() {
+            emit priority_changed(task_id, priority);
+        });
+    };
+    add_priority_action("低", falcon::TaskPriority::Low);
+    add_priority_action("普通", falcon::TaskPriority::Normal);
+    add_priority_action("高", falcon::TaskPriority::High);
+    add_priority_action("紧急", falcon::TaskPriority::Critical);
 
     menu.addSeparator();
 
-    // 删除任务
+    // 删除任务（按值捕获：菜单 exec 期间行号可能被 update_tasks 重排）
+    const auto menu_task_id = record->snapshot.id;
     auto* delete_action = menu.addAction(tr("删除任务"));
-    connect(delete_action, &QAction::triggered, this, &DownloadPage::on_delete_selected);
+    connect(delete_action, &QAction::triggered, this,
+            [this, menu_task_id]() { emit remove_task_requested(menu_task_id); });
 
     menu.exec(task_table_->mapToGlobal(pos));
 }
@@ -950,9 +936,7 @@ void DownloadPage::set_display_style(TaskDisplayStyle style)
 
     display_style_ = style;
 
-    if (style == TaskDisplayStyle::Grid) {
-        refresh_display();  // 刷新网格内容
-    }
+    rerender();
     update_empty_state();
 }
 
@@ -992,102 +976,78 @@ void DownloadPage::show_grid_context_menu(const QPoint& pos)
         return;
     }
 
-    const qulonglong key = task_id_var.toULongLong();
-    auto record_it = task_records_.constFind(key);
-    if (record_it == task_records_.constEnd()) {
+    const auto* record = record_by_id(task_id_var.toULongLong());
+    if (!record) {
         return;
     }
 
-    const auto& task = record_it->task;
-    if (!task) {
-        return;
-    }
+    const auto& snapshot = record->snapshot;
 
     QMenu menu(this);
 
     // 根据任务状态显示不同菜单项
-    const auto status = task->status();
+    const auto status = snapshot.status;
 
     // 暂停/继续
     if (status == falcon::TaskStatus::Downloading ||
         status == falcon::TaskStatus::Preparing) {
         auto* pause_action = menu.addAction(tr("暂停"));
-        connect(pause_action, &QAction::triggered, this, [this, task]() {
-            (void)task->pause();
-        });
+        connect(pause_action, &QAction::triggered, this,
+                [this, id = snapshot.id]() { emit pause_requested(id); });
     } else if (status == falcon::TaskStatus::Paused ||
                status == falcon::TaskStatus::Failed) {
         auto* resume_action = menu.addAction(tr("继续"));
-        connect(resume_action, &QAction::triggered, this, [this, task]() {
-            (void)task->resume();
-        });
+        connect(resume_action, &QAction::triggered, this,
+                [this, id = snapshot.id]() { emit resume_requested(id); });
     }
 
     menu.addSeparator();
 
-    // 打开文件夹
+    // 按值捕获快照内容，理由同 show_context_menu
+    const QString dir_for_open = QFileInfo(
+        record->save_path.isEmpty() ? QString::fromStdString(record->snapshot.url)
+                                    : record->save_path).absolutePath();
     auto* open_dir_action = menu.addAction(tr("打开文件夹"));
-    connect(open_dir_action, &QAction::triggered, this, [task]() {
-        const QString path = QString::fromStdString(task->options().output_directory);
-        QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+    connect(open_dir_action, &QAction::triggered, this, [dir_for_open]() {
+        QDesktopServices::openUrl(QUrl::fromLocalFile(dir_for_open));
     });
 
-    // 复制下载链接
+    const QString url_for_copy = QString::fromStdString(record->snapshot.url);
     auto* copy_url_action = menu.addAction(tr("复制下载链接"));
-    connect(copy_url_action, &QAction::triggered, this, [task]() {
-        QApplication::clipboard()->setText(QString::fromStdString(task->url()));
+    connect(copy_url_action, &QAction::triggered, this, [url_for_copy]() {
+        QApplication::clipboard()->setText(url_for_copy);
     });
 
     menu.addSeparator();
 
     // 优先级子菜单
     auto* priority_menu = menu.addMenu(tr("优先级"));
-    const auto current_priority = task->get_priority();
+    const auto current_priority = snapshot.priority;
+    const auto task_id = snapshot.id;
 
-    auto* low_action = priority_menu->addAction(tr("低"));
-    low_action->setCheckable(true);
-    low_action->setChecked(current_priority == falcon::TaskPriority::Low);
-    connect(low_action, &QAction::triggered, this, [this, id = task->id()]() {
-        emit priority_changed(id, falcon::TaskPriority::Low);
-    });
-
-    auto* normal_action = priority_menu->addAction(tr("普通"));
-    normal_action->setCheckable(true);
-    normal_action->setChecked(current_priority == falcon::TaskPriority::Normal);
-    connect(normal_action, &QAction::triggered, this, [this, id = task->id()]() {
-        emit priority_changed(id, falcon::TaskPriority::Normal);
-    });
-
-    auto* high_action = priority_menu->addAction(tr("高"));
-    high_action->setCheckable(true);
-    high_action->setChecked(current_priority == falcon::TaskPriority::High);
-    connect(high_action, &QAction::triggered, this, [this, id = task->id()]() {
-        emit priority_changed(id, falcon::TaskPriority::High);
-    });
-
-    auto* critical_action = priority_menu->addAction(tr("紧急"));
-    critical_action->setCheckable(true);
-    critical_action->setChecked(current_priority == falcon::TaskPriority::Critical);
-    connect(critical_action, &QAction::triggered, this, [this, id = task->id()]() {
-        emit priority_changed(id, falcon::TaskPriority::Critical);
-    });
+    auto add_priority_action = [this, priority_menu, task_id, current_priority](
+                                   const char* label_text, falcon::TaskPriority priority) {
+        auto* action = priority_menu->addAction(tr(label_text));
+        action->setCheckable(true);
+        action->setChecked(current_priority == priority);
+        connect(action, &QAction::triggered, this, [this, task_id, priority]() {
+            emit priority_changed(task_id, priority);
+        });
+    };
+    add_priority_action("低", falcon::TaskPriority::Low);
+    add_priority_action("普通", falcon::TaskPriority::Normal);
+    add_priority_action("高", falcon::TaskPriority::High);
+    add_priority_action("紧急", falcon::TaskPriority::Critical);
 
     menu.addSeparator();
 
     // 删除任务
     auto* delete_action = menu.addAction(tr("删除任务"));
-    connect(delete_action, &QAction::triggered, this, [this, task]() {
-        emit remove_task_requested(task->id());
+    connect(delete_action, &QAction::triggered, this, [this, id = snapshot.id]() {
+        emit remove_task_requested(id);
     });
 
     menu.exec(grid_widget_->mapToGlobal(pos));
-}
-
-void DownloadPage::refresh_display()
-{
-    if (display_style_ == TaskDisplayStyle::Grid) {
-        sync_task_grid();
-    }
 }
 
 void DownloadPage::sync_task_grid()
@@ -1106,44 +1066,9 @@ void DownloadPage::sync_task_grid()
     int row = 0;
     constexpr int kColumns = 3;  // 每行显示3个卡片
 
-    for (auto it = task_records_.begin(); it != task_records_.end(); ++it) {
+    for (auto it = task_records_.cbegin(); it != task_records_.cend(); ++it) {
         const TaskRecord& record = it.value();
-        const auto& task = record.task;
-        if (!task) {
-            continue;
-        }
-
-        // 根据视图模式过滤
-        const auto status = task->status();
-        bool should_show = false;
-
-        static const QStringList cloud_domains = {
-            "pan.baidu.com", "pan.quark.cn", "cloud.189.cn",
-            "www.alipan.com", "www.aliyundrive.com", "www.115.com", "disk.pikpak.com"
-        };
-
-        switch (view_mode_) {
-            case DownloadViewMode::Downloading:
-                should_show = (status == falcon::TaskStatus::Downloading ||
-                              status == falcon::TaskStatus::Preparing ||
-                              status == falcon::TaskStatus::Paused ||
-                              status == falcon::TaskStatus::Pending);
-                break;
-            case DownloadViewMode::Completed:
-                should_show = (status == falcon::TaskStatus::Completed);
-                break;
-            case DownloadViewMode::CloudAdd:
-                {
-                    const QString url = QString::fromStdString(task->url());
-                    should_show = std::any_of(cloud_domains.begin(), cloud_domains.end(),
-                        [&url](const QString& domain) {
-                            return url.contains(domain);
-                        });
-                }
-                break;
-        }
-
-        if (!should_show) {
+        if (!should_show(record.snapshot)) {
             continue;
         }
 
@@ -1164,6 +1089,8 @@ void DownloadPage::sync_task_grid()
 
 QWidget* DownloadPage::create_task_card(const TaskRecord& record)
 {
+    const auto& snap = record.snapshot;
+
     auto* card = new QWidget(grid_widget_);
     card->setObjectName("taskCard");
     card->setFixedSize(280, 140);
@@ -1189,10 +1116,7 @@ QWidget* DownloadPage::create_task_card(const TaskRecord& record)
     progress_bar->setRange(0, 100);
     progress_bar->setTextVisible(true);
     progress_bar->setMaximumHeight(20);
-    if (record.task) {
-        const int pct = static_cast<int>(record.task->progress() * 100.0f);
-        progress_bar->setValue(std::max(0, std::min(100, pct)));
-    }
+    progress_bar->setValue(std::max(0, std::min(100, static_cast<int>(snap.progress * 100.0))));
     card_layout->addWidget(progress_bar);
 
     // 信息行
@@ -1203,12 +1127,8 @@ QWidget* DownloadPage::create_task_card(const TaskRecord& record)
     size_label->setObjectName("cardInfoLabel");
     info_layout->addWidget(size_label);
 
-    auto* speed_label = new QLabel(card);
+    auto* speed_label = new QLabel(format_speed(snap.speed), card);
     speed_label->setObjectName("cardInfoLabel");
-    if (record.task) {
-        const uint64_t speed = static_cast<uint64_t>(record.task->speed());
-        speed_label->setText(format_speed(speed));
-    }
     info_layout->addWidget(speed_label);
 
     auto* status_label = new QLabel(record.status_text, card);
@@ -1224,19 +1144,16 @@ QWidget* DownloadPage::create_task_card(const TaskRecord& record)
     auto* pause_btn = new QPushButton(card);
     pause_btn->setObjectName("cardActionButton");
     pause_btn->setFixedSize(60, 26);
-    const auto status = record.task ? record.task->status() : falcon::TaskStatus::Pending;
-    if (status == falcon::TaskStatus::Downloading ||
-        status == falcon::TaskStatus::Preparing) {
+    if (snap.status == falcon::TaskStatus::Downloading ||
+        snap.status == falcon::TaskStatus::Preparing) {
         pause_btn->setText(tr("暂停"));
-        connect(pause_btn, &QPushButton::clicked, this, [this, record]() {
-            if (record.task) (void)record.task->pause();
-        });
-    } else if (status == falcon::TaskStatus::Paused ||
-               status == falcon::TaskStatus::Failed) {
+        connect(pause_btn, &QPushButton::clicked, this,
+                [this, id = snap.id]() { emit pause_requested(id); });
+    } else if (snap.status == falcon::TaskStatus::Paused ||
+               snap.status == falcon::TaskStatus::Failed) {
         pause_btn->setText(tr("继续"));
-        connect(pause_btn, &QPushButton::clicked, this, [this, record]() {
-            if (record.task) (void)record.task->resume();
-        });
+        connect(pause_btn, &QPushButton::clicked, this,
+                [this, id = snap.id]() { emit resume_requested(id); });
     } else {
         pause_btn->setEnabled(false);
     }
@@ -1245,10 +1162,8 @@ QWidget* DownloadPage::create_task_card(const TaskRecord& record)
     auto* delete_btn = new QPushButton(tr("删除"), card);
     delete_btn->setObjectName("cardActionButton");
     delete_btn->setFixedSize(60, 26);
-    connect(delete_btn, &QPushButton::clicked, this, [this, record]() {
-        if (record.task) {
-            emit remove_task_requested(record.task->id());
-        }
+    connect(delete_btn, &QPushButton::clicked, this, [this, id = snap.id]() {
+        emit remove_task_requested(id);
     });
     actions_layout->addWidget(delete_btn);
 

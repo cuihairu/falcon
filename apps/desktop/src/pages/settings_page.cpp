@@ -33,6 +33,9 @@ SettingsPage::SettingsPage(QWidget* parent)
     , default_connections_spin_(nullptr)
     , connection_timeout_spin_(nullptr)
     , retry_count_spin_(nullptr)
+    , daemon_enabled_checkbox_(nullptr)
+    , daemon_url_edit_(nullptr)
+    , daemon_secret_edit_(nullptr)
     , task_speed_limit_spin_(nullptr)
     , global_speed_limit_spin_(nullptr)
     , completion_action_combo_(nullptr)
@@ -117,6 +120,27 @@ void SettingsPage::set_theme_display(bool dark_mode)
     }
 }
 
+void SettingsPage::set_daemon_mode_enabled(bool enabled)
+{
+    if (daemon_enabled_checkbox_) {
+        daemon_enabled_checkbox_->setChecked(enabled);
+    }
+}
+
+void SettingsPage::set_daemon_rpc_url(const QString& url)
+{
+    if (daemon_url_edit_) {
+        daemon_url_edit_->setText(url);
+    }
+}
+
+void SettingsPage::set_daemon_rpc_secret(const QString& secret)
+{
+    if (daemon_secret_edit_) {
+        daemon_secret_edit_->setText(secret);
+    }
+}
+
 bool SettingsPage::is_clipboard_monitoring_enabled() const
 {
     return clipboard_monitoring_checkbox_->isChecked();
@@ -182,6 +206,22 @@ int SettingsPage::get_action_when_completed() const
     return completion_action_combo_ ? completion_action_combo_->currentIndex() : 0;
 }
 
+bool SettingsPage::is_daemon_mode_enabled() const
+{
+    return daemon_enabled_checkbox_ ? daemon_enabled_checkbox_->isChecked() : false;
+}
+
+QString SettingsPage::get_daemon_rpc_url() const
+{
+    return daemon_url_edit_ ? daemon_url_edit_->text().trimmed()
+                            : QString("http://127.0.0.1:6800/jsonrpc");
+}
+
+QString SettingsPage::get_daemon_rpc_secret() const
+{
+    return daemon_secret_edit_ ? daemon_secret_edit_->text() : QString();
+}
+
 //==============================================================================
 // Private Slots
 //==============================================================================
@@ -221,6 +261,11 @@ void SettingsPage::reset_to_defaults()
     default_connections_spin_->setValue(4);
     connection_timeout_spin_->setValue(30);
     retry_count_spin_->setValue(3);
+
+    // Daemon RPC settings（默认进程内引擎）
+    daemon_enabled_checkbox_->setChecked(false);
+    daemon_url_edit_->setText("http://127.0.0.1:6800/jsonrpc");
+    daemon_secret_edit_->setText("");
 
     // Notification settings
     notifications_checkbox_->setChecked(true);
@@ -503,6 +548,24 @@ QWidget* SettingsPage::create_connection_section_widget()
     retry_count_spin_->setRange(0, 10);
     retry_count_spin_->setValue(3);
     layout->addRow(retry_label, retry_count_spin_);
+
+    // Daemon RPC 模式：经 aria2 兼容 JSON-RPC 连接 falcon-daemon。
+    // 后端在应用启动时创建，切换需重启应用生效。
+    auto* daemon_label = new QLabel(tr("Daemon mode:"), this);
+    daemon_enabled_checkbox_ = new QCheckBox(
+        tr("Connect to falcon-daemon (applies after restart)"), this);
+    layout->addRow(daemon_label, daemon_enabled_checkbox_);
+
+    auto* daemon_url_label = new QLabel(tr("Daemon RPC URL:"), this);
+    daemon_url_edit_ = new QLineEdit(this);
+    daemon_url_edit_->setPlaceholderText("http://127.0.0.1:6800/jsonrpc");
+    layout->addRow(daemon_url_label, daemon_url_edit_);
+
+    auto* daemon_secret_label = new QLabel(tr("Daemon RPC secret:"), this);
+    daemon_secret_edit_ = new QLineEdit(this);
+    daemon_secret_edit_->setEchoMode(QLineEdit::Password);
+    daemon_secret_edit_->setPlaceholderText(tr("token secret (optional)"));
+    layout->addRow(daemon_secret_label, daemon_secret_edit_);
 
     return group;
 }

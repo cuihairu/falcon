@@ -47,6 +47,9 @@ public:
     void set_open_file_when_completed(bool enabled);
     void set_action_when_completed(int action);
     void set_theme_display(bool dark_mode);
+    void set_daemon_mode_enabled(bool enabled);
+    void set_daemon_rpc_url(const QString& url);
+    void set_daemon_rpc_secret(const QString& secret);
 
     /**
      * @brief Get clipboard monitoring enabled state
@@ -114,6 +117,11 @@ public:
      */
     int get_action_when_completed() const;
 
+    /// daemon RPC 模式开关（切换在下次启动应用时生效）
+    bool is_daemon_mode_enabled() const;
+    QString get_daemon_rpc_url() const;
+    QString get_daemon_rpc_secret() const;
+
 signals:
     /**
      * @brief Signal emitted when settings are changed
@@ -173,6 +181,11 @@ private:
     QSpinBox* default_connections_spin_;
     QSpinBox* connection_timeout_spin_;
     QSpinBox* retry_count_spin_;
+
+    // Daemon RPC settings
+    QCheckBox* daemon_enabled_checkbox_;
+    QLineEdit* daemon_url_edit_;
+    QLineEdit* daemon_secret_edit_;
 
     // Speed limit settings
     QSpinBox* task_speed_limit_spin_;

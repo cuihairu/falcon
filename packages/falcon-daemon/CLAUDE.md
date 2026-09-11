@@ -6,6 +6,23 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-11 - RPC 客户端库与快照转换层（桌面应用支撑）
+- 新增 `aria2_snapshots.{hpp,cpp}`：纯 C++ 把 aria2 `tell*`/`getGlobalStat`
+  JSON 应答转换为 `TaskSnapshot`/`GlobalStats`（容错解析：字节字段接受
+  字符串/数值/缺失，坏数组条目跳过；gid 支持 16 位 hex 及可选 `0x` 前缀）
+- 新增 `json_rpc_client.{hpp,cpp}`：JSON-RPC 2.0 客户端（libcurl 传输、
+  `token:<secret>` 认证、超时/错误传播），封装 `addUri`/`changePriority`/
+  `tell*`/`pause`/`unpause`/`remove`/`purgeDownloadResult`/
+  `changeGlobalOption`/`getGlobalStat` 等桌面所需方法
+- tellStatus 应答新增 Falcon 扩展字段 `priority`，供桌面恢复每任务优先级
+  （storage 回落记录暂报 Normal，优先级尚未持久化）
+- CMake 拆分：`falcon_daemon_rpc_client` 静态库（client + snapshots，
+  链接 Falcon::core + nlohmann_json + CURL），供 apps/desktop 独立链接
+  （桌面不需要 RPC 服务器）；`falcon_daemon_rpc`（daemon 本体，含服务器）
+  保持原源文件列表，两组重复编译同源文件，无二进制同时链接两者
+- 测试：`json_rpc_client_test`（内嵌服务器回环）与 `aria2_snapshots_test`
+  纳入 `falcon_daemon_rpc_tests`
+
 ### 2026-09-11 - aria2 兼容 RPC 全面完善
 - RPC 方法扩至 26 个（`aria2.*` 全套核心 + `system.*`），查询与删除同时覆盖
   引擎内存态与 TaskStorage 历史记录（引擎优先、storage 回落，`tellWaiting`
@@ -67,7 +84,10 @@ packages/falcon-daemon/src/
 │   ├── daemon.hpp/.cpp       # DaemonManager：生命周期、信号、pid 文件、停机排水
 │   └── (daemonize POSIX 细节)
 ├── rpc/
-│   ├── json_rpc_server.hpp/.cpp  # aria2 兼容 JSON-RPC 2.0 服务器（26 个方法）
+│   ├── json_rpc_server.hpp/.cpp  # aria2 兼容 JSON-RPC 2.0 服务器（28 个方法）
+│   ├── json_rpc_client.hpp/.cpp  # JSON-RPC 2.0 客户端（libcurl；随
+│   │                             #   falcon_daemon_rpc_client 库供桌面链接）
+│   ├── aria2_snapshots.hpp/.cpp  # aria2 JSON → TaskSnapshot/GlobalStats 转换
 │   └── websocket_server.hpp/.cpp # 预留（未来事件流订阅），未接入构建
 └── storage/
     ├── task_storage.hpp/.cpp         # SQLite 持久化（TaskRecord CRUD）
@@ -130,14 +150,14 @@ Windows Service Options（仅 Windows）:
 - CORS：`--rpc-allow-origin-all` 时回显 `Access-Control-Allow-*`
 - 批量调用：`system.multicall`（结果包装为 `[result]`）
 
-方法清单（26 个）：
+方法清单（28 个，`system.listMethods` 列出 27 个，`shutdown` 为别名）：
 
 | 分组 | 方法 |
 |------|------|
-| 任务控制 | `addUri` `pause` `forcePause` `unpause` `unpauseAll` `pauseAll` `remove` `forceRemove` |
-| 查询 | `tellStatus` `tellActive` `tellWaiting` `tellStopped` `getFiles` `getUris` `getOption` `getGlobalStat` |
+| 任务控制 | `addUri` `pause` `forcePause` `unpause` `unpauseAll` `pauseAll` `remove` `forceRemove` `changePriority`（Falcon 扩展） |
+| 查询 | `tellStatus`（含 Falcon 扩展字段 `priority`） `tellActive` `tellWaiting` `tellStopped` `getFiles` `getUris` `getOption` `getGlobalStat` |
 | 选项 | `getGlobalOption` `changeGlobalOption`（支持 `max-overall-download-limit`、`max-concurrent-downloads`；`"none"`/`"0"` 取消限制） |
-| 会话与清理 | `getSessionInfo` `saveSession` `purgeDownloadResult` `removeDownloadResult` `forceShutdown` |
+| 会话与清理 | `getSessionInfo` `saveSession` `purgeDownloadResult` `removeDownloadResult` `forceShutdown` `shutdown`（= forceShutdown 别名） |
 | 系统 | `system.listMethods` `system.multicall` |
 
 错误码约定（对齐 aria2）：
@@ -207,6 +227,7 @@ RPC 的 `pauseAll`/`unpauseAll`/`removeDownloadResult`/`purgeDownloadResult`
 | 测试目标 | 文件 | 覆盖 |
 |----------|------|------|
 | `falcon_daemon_rpc_tests` | `json_rpc_server_test.cpp` | RPC 基础 |
+| `falcon_daemon_rpc_client_tests` | `json_rpc_client_test.cpp` `aria2_snapshots_test.cpp` | 客户端 × 真实服务器回环 + 快照转换 |
 | `falcon_daemon_rpc_coverage_tests` | `json_rpc_server_coverage_test.cpp` | HTTP 层 + 全方法 |
 | `falcon_daemon_rpc_storage_tests` | `json_rpc_storage_test.cpp` | RPC × storage 集成（回落/删除联动/批量落库/停机回调） |
 | `falcon_daemon_storage_tests` | `task_storage_test.cpp` `task_storage_listener_test.cpp` | 持久化与监听器 |
