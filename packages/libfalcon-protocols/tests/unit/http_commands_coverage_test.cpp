@@ -19,6 +19,7 @@
 #include <ws2tcpip.h>
 #include <windows.h>
 // Windows 缺少 POSIX socket 语义的符号，测试服务器代码统一走这些别名
+#include <cstddef> // std::ptrdiff_t（MSVC 不经其他头传递提供）
 using ssize_t = std::ptrdiff_t;
 #define SHUT_WR SD_SEND
 #define CLOSE_SOCKET(fd) closesocket(fd)
