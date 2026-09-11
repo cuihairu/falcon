@@ -11,6 +11,7 @@
 #include <fstream>
 #include <sstream>
 #include <iomanip>
+#include <cctype>
 #include <cstring>
 #include <random>
 #include <chrono>
@@ -51,10 +52,62 @@ std::vector<std::string> BitTorrentHandler::supported_schemes() const {
     return {"magnet", "bittorrent"};
 }
 
-bool BitTorrentHandler::can_handle(const std::string& url) const {
-    // 检查 magnet 链接
-    if (url.find("magnet:") == 0) {
+namespace {
+
+// 校验 magnet URI 中的 info-hash：40 位十六进制（BT v1）或 32 位 Base32
+bool isValidInfoHash(const std::string& url, size_t hashBegin) {
+    // hash 在 '&'（下一个参数）或 '#'（片段）或字符串结尾处结束
+    size_t end = url.size();
+    for (size_t i = hashBegin; i < end; ++i) {
+        const char c = url[i];
+        if (c == '&' || c == '#') {
+            end = i;
+            break;
+        }
+    }
+
+    const size_t len = end - hashBegin;
+    if (len == 40) {
+        // 十六进制（大小写不敏感）
+        for (size_t i = hashBegin; i < end; ++i) {
+            if (!std::isxdigit(static_cast<unsigned char>(url[i]))) {
+                return false;
+            }
+        }
         return true;
+    }
+    if (len == 32) {
+        // Base32（RFC 4648：A-Z、2-7，大小写不敏感）
+        for (size_t i = hashBegin; i < end; ++i) {
+            const char c = static_cast<char>(
+                std::toupper(static_cast<unsigned char>(url[i])));
+            if (!((c >= 'A' && c <= 'Z') || (c >= '2' && c <= '7'))) {
+                return false;
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
+} // anonymous namespace
+
+bool BitTorrentHandler::can_handle(const std::string& url) const {
+    // 检查 magnet 链接：scheme 大小写不敏感，且必须携带合法的 btih info-hash
+    std::string lower;
+    lower.reserve(url.size());
+    for (char c : url) {
+        lower.push_back(
+            static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    }
+
+    if (lower.rfind("magnet:", 0) == 0) {
+        static const std::string kXtPrefix = "xt=urn:btih:";
+        const size_t hashBegin = lower.find(kXtPrefix);
+        if (hashBegin == std::string::npos) {
+            return false;
+        }
+        return isValidInfoHash(url, hashBegin + kXtPrefix.size());
     }
 
     // 检查 .torrent 文件
@@ -63,7 +116,7 @@ bool BitTorrentHandler::can_handle(const std::string& url) const {
     }
 
     // 检查 bittorrent:// 链接（自定义协议）
-    if (url.find("bittorrent://") == 0) {
+    if (url.rfind("bittorrent://", 0) == 0) {
         return true;
     }
 

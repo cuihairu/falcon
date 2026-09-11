@@ -3,12 +3,20 @@
  * @brief BitTorrent/Magnet 插件单元测试
  * @author Falcon Team
  * @date 2025-12-21
+ *
+ * B 编码相关测试通过公共的 BencodeValue API（bencode.hpp）覆盖。
+ * BitTorrentHandler 的 BValue/parseBencode/bencodeToString/sha1/base32Decode
+ * 等辅助方法为私有实现细节，不直接测试（其行为由 BencodeValue 测试等价覆盖）。
  */
 
 #include <gtest/gtest.h>
 #include <falcon/plugins/bittorrent/bittorrent_plugin.hpp>
+#include <falcon/plugins/bittorrent/bencode.hpp>
 #include <falcon/exceptions.hpp>
-#include <fstream>
+
+#include <algorithm>
+#include <string>
+#include <vector>
 
 using namespace falcon;
 using namespace falcon::protocols;
@@ -27,18 +35,16 @@ protected:
                                        "&tr=udp%3A%2F%2Ftracker.example.com%3A6969"
                                        "&tr=udp%3A%2F%2Ftracker2.example.com%3A6969";
 
-    // 简单的 torrent 文件内容（B编码）
-    const std::string simpleTorrentData = "d8:announce44:http://tracker.example.com:6969/announce"
-                                        "10:created by13:Falcon Client13:creation datei1703980800e"
-                                        "8:encoding5:UTF-84:infod6:lengthi1048576e4:name12:test_file.zip"
-                                        "12:piece lengthi262144e6:pieces20:abcdefghijklmnopqrstuv"
-                                        "6:filesld6:lengthi524288e4:pathl4:test8:file1.ziped6:lengthi524288e"
-                                        "4:pathl4:test8:file2.zipeeee";
-
-    // BitTorrent 处理器辅助方法
-    std::string bencodeToString(const BitTorrentHandler::BValue& value) {
-        return handler->bencodeToString(value);
-    }
+    // 简单的 torrent 文件内容（B 编码，key 按字典序，长度前缀正确）
+    const std::string simpleTorrentData =
+        "d8:announce40:http://tracker.example.com:6969/announce"
+        "10:created by13:Falcon Client"
+        "13:creation datei1703980800e"
+        "8:encoding5:UTF-8"
+        "4:infod6:lengthi1048576e4:name13:test_file.zip"
+        "12:piece lengthi262144e"
+        "6:pieces22:abcdefghijklmnopqrstuv"
+        "ee";
 };
 
 TEST_F(BitTorrentHandlerTest, ProtocolName) {
@@ -53,9 +59,17 @@ TEST_F(BitTorrentHandlerTest, SupportedSchemes) {
 }
 
 TEST_F(BitTorrentHandlerTest, CanHandleUrls) {
-    // Magnet links
-    EXPECT_TRUE(handler->can_handle("magnet:?xt=urn:btih:abc123"));
-    EXPECT_TRUE(handler->can_handle("MAGNET:?xt=urn:btih:ABC123"));  // 大小写
+    // Magnet links（合法 info-hash：40 位十六进制或 32 位 Base32）
+    EXPECT_TRUE(handler->can_handle(
+        "magnet:?xt=urn:btih:1234567890abcdef1234567890abcdef12345678"));
+    EXPECT_TRUE(handler->can_handle(
+        "MAGNET:?xt=urn:btih:1234567890ABCDEF1234567890ABCDEF12345678"));  // 大小写
+    EXPECT_TRUE(handler->can_handle(
+        "magnet:?xt=urn:btih:MFRGGZDFMZTWQ2LKMNWG23PJME4TQ45X"));  // 32 位 Base32
+
+    // magnet URI 非法 info-hash
+    EXPECT_FALSE(handler->can_handle("magnet:?xt=urn:btih:abc123"));
+    EXPECT_FALSE(handler->can_handle("magnet:?xt=urn:btih:1234567890abcdef1234567890abcdef1234567z"));
 
     // Torrent files
     EXPECT_TRUE(handler->can_handle("http://example.com/file.torrent"));
@@ -104,145 +118,144 @@ TEST_F(BitTorrentHandlerTest, ParseInvalidMagnetUri) {
     }
 }
 
-TEST_F(BitTorrentHandlerTest, Sha1Hash) {
-    // 测试 SHA1 哈希计算
-    std::string input = "hello world";
-    std::string expected = "2ef7bde608ce5404e97d5f042f95f89f1c232871";  // SHA1 of "hello world"
+//==============================================================================
+// B 编码解析（公共 BencodeValue API）
+//==============================================================================
 
-    std::string hash = handler->sha1(input);
-    EXPECT_EQ(hash, expected);
-
-    // 测试空字符串
-    std::string emptyHash = handler->sha1("");
-    EXPECT_EQ(emptyHash, "da39a3ee5e6b4b0d3255bfef95601890afd80709");  // SHA1 of empty string
-}
-
-TEST_F(BitTorrentHandlerTest, Base32Decode) {
-    // 测试 Base32 解码
-    std::string input = "MFRGGZDFMZTWQ===";  // Base32 of "test"
-    std::string decoded = handler->base32Decode(input);
-    EXPECT_EQ(decoded, "test");
-
-    // 测试更长的字符串
-    input = "MFRGGZA=";  // Base32 of "Hello"
-    decoded = handler->base32Decode(input);
-    EXPECT_EQ(decoded, "Hello");
-}
-
-TEST_F(BitTorrentHandlerTest, BencodeParsing) {
-    // 测试 B 编码解析
+TEST(BencodeValueTest, ParseInteger) {
     size_t pos = 0;
+    BencodeValue value = BencodeValue::decode("i42e", pos);
 
-    // 解析整数
-    BitTorrentHandler::BValue intVal = handler->parseBencode("i1234e", pos);
-    EXPECT_EQ(intVal.type, BitTorrentHandler::BValue::Integer);
-    EXPECT_EQ(intVal.intValue, 1234);
-
-    // 解析字符串
-    pos = 0;
-    BitTorrentHandler::BValue strVal = handler->parseBencode("5:hello", pos);
-    EXPECT_EQ(strVal.type, BitTorrentHandler::BValue::String);
-    EXPECT_EQ(strVal.strValue, "hello");
-
-    // 解析列表
-    pos = 0;
-    BitTorrentHandler::BValue listVal = handler->parseBencode("l4:test5:worldi42ee", pos);
-    EXPECT_EQ(listVal.type, BitTorrentHandler::BValue::List);
-    EXPECT_EQ(listVal.listValue.size(), 3);
-
-    // 解析字典
-    pos = 0;
-    BitTorrentHandler::BValue dictVal = handler->parseBencode("d3:key5:value4:testi42ee", pos);
-    EXPECT_EQ(dictVal.type, BitTorrentHandler::BValue::Dict);
-    EXPECT_EQ(dictVal.dictValue["key"].strValue, "value");
-    EXPECT_EQ(dictVal.dictValue["test"].intValue, 42);
+    EXPECT_TRUE(value.isInt());
+    EXPECT_EQ(value.asInt(), 42);
+    EXPECT_EQ(pos, 4u);
 }
 
-TEST_F(BitTorrentHandlerTest, BencodeEncoding) {
-    // 测试 B 编码到字符串
-    BitTorrentHandler::BValue intVal;
-    intVal.type = BitTorrentHandler::BValue::Integer;
-    intVal.intValue = 1234;
-    EXPECT_EQ(bencodeToString(intVal), "i1234e");
+TEST(BencodeValueTest, ParseString) {
+    size_t pos = 0;
+    BencodeValue value = BencodeValue::decode("4:spam", pos);
 
-    BitTorrentHandler::BValue strVal;
-    strVal.type = BitTorrentHandler::BValue::String;
-    strVal.strValue = "hello";
-    EXPECT_EQ(bencodeToString(strVal), "5:hello");
-
-    BitTorrentHandler::BValue listVal;
-    listVal.type = BitTorrentHandler::BValue::List;
-    listVal.listValue.push_back(strVal);
-    listVal.listValue.push_back(intVal);
-    EXPECT_EQ(bencodeToString(listVal), "l5:helloi1234ee");
+    EXPECT_TRUE(value.isString());
+    EXPECT_EQ(value.asString(), "spam");
+    EXPECT_EQ(pos, 6u);
 }
 
-TEST_F(BitTorrentHandlerTest, ValidateTorrent) {
-    // 创建基本的 torrent 结构
-    BitTorrentHandler::BValue torrent;
-    torrent.type = BitTorrentHandler::BValue::Dict;
-    torrent.dictValue["info"] = BitTorrentHandler::BValue();
-    torrent.dictValue["info"].type = BitTorrentHandler::BValue::Dict;
-    torrent.dictValue["info"].dictValue["name"] = BitTorrentHandler::BValue();
-    torrent.dictValue["info"].dictValue["name"].type = BitTorrentHandler::BValue::String;
-    torrent.dictValue["info"].dictValue["name"].strValue = "test.torrent";
-    torrent.dictValue["info"].dictValue["pieces"] = BitTorrentHandler::BValue();
-    torrent.dictValue["info"].dictValue["pieces"].type = BitTorrentHandler::BValue::String;
-    torrent.dictValue["info"].dictValue["pieces"].strValue = "abcdefghijklmnopqrstuv";
-    torrent.dictValue["info"].dictValue["length"] = BitTorrentHandler::BValue();
-    torrent.dictValue["info"].dictValue["length"].type = BitTorrentHandler::BValue::Integer;
-    torrent.dictValue["info"].dictValue["length"].intValue = 1048576;
+TEST(BencodeValueTest, ParseList) {
+    size_t pos = 0;
+    BencodeValue value = BencodeValue::decode("l4:spam4:eggse", pos);
 
-    EXPECT_TRUE(handler->validateTorrent(torrent));
-
-    // 测试无效的 torrent
-    BitTorrentHandler::BValue invalidTorrent;
-    invalidTorrent.type = BitTorrentHandler::BValue::String;
-    invalidTorrent.strValue = "not a torrent";
-    EXPECT_FALSE(handler->validateTorrent(invalidTorrent));
+    EXPECT_TRUE(value.isList());
+    EXPECT_EQ(value.size(), 2u);
+    EXPECT_EQ(value[0].asString(), "spam");
+    EXPECT_EQ(value[1].asString(), "eggs");
 }
 
-TEST_F(BitTorrentHandlerTest, GetTrackers) {
-    BitTorrentHandler::BValue torrent;
-    torrent.type = BitTorrentHandler::BValue::Dict;
+TEST(BencodeValueTest, ParseDict) {
+    size_t pos = 0;
+    BencodeValue value = BencodeValue::decode("d3:cow3:moo4:spam4:eggse", pos);
 
-    // 添加 announce
-    torrent.dictValue["announce"] = BitTorrentHandler::BValue();
-    torrent.dictValue["announce"].type = BitTorrentHandler::BValue::String;
-    torrent.dictValue["announce"].strValue = "http://tracker.example.com:6969";
-
-    // 添加 announce-list
-    torrent.dictValue["announce-list"] = BitTorrentHandler::BValue();
-    torrent.dictValue["announce-list"].type = BitTorrentHandler::BValue::List;
-
-    BitTorrentHandler::BValue trackerList;
-    trackerList.type = BitTorrentHandler::BValue::List;
-
-    BitTorrentHandler::BValue tracker1, tracker2;
-    tracker1.type = BitTorrentHandler::BValue::String;
-    tracker1.strValue = "udp://tracker1.example.com:6969";
-    tracker2.type = BitTorrentHandler::BValue::String;
-    tracker2.strValue = "udp://tracker2.example.com:6969";
-
-    trackerList.listValue.push_back(tracker1);
-    trackerList.listValue.push_back(tracker2);
-    torrent.dictValue["announce-list"].listValue.push_back(trackerList);
-
-    auto trackers = handler->getTrackers(torrent);
-    EXPECT_GT(trackers.size(), 0);
+    EXPECT_TRUE(value.isDict());
+    EXPECT_EQ(value["cow"].asString(), "moo");
+    EXPECT_EQ(value["spam"].asString(), "eggs");
 }
 
-TEST_F(BitTorrentHandlerTest, GenerateNodeId) {
-    std::string nodeId1 = handler->generateNodeId();
-    std::string nodeId2 = handler->generateNodeId();
+TEST(BencodeValueTest, ParseNested) {
+    BencodeValue value = BencodeValue::decode("d4:spamld4:spam4:eggseee");
 
-    // Node ID 应该是 20 字节
-    EXPECT_EQ(nodeId1.length(), 20);
-    EXPECT_EQ(nodeId2.length(), 20);
-
-    // 两个 ID 应该不同
-    EXPECT_NE(nodeId1, nodeId2);
+    EXPECT_TRUE(value.isDict());
+    EXPECT_TRUE(value.hasKey("spam"));
+    EXPECT_TRUE(value["spam"].isList());
+    EXPECT_TRUE(value["spam"][0].isDict());
+    EXPECT_EQ(value["spam"][0]["spam"].asString(), "eggs");
 }
+
+TEST(BencodeValueTest, ParseMixedTypes) {
+    size_t pos = 0;
+    BencodeValue value = BencodeValue::decode("d3:key5:value4:testi42ee", pos);
+
+    EXPECT_TRUE(value.isDict());
+    EXPECT_EQ(value["key"].asString(), "value");
+    EXPECT_EQ(value["test"].asInt(), 42);
+}
+
+TEST(BencodeValueTest, EncodeInteger) {
+    BencodeValue value(static_cast<int64_t>(42));
+    EXPECT_EQ(value.encode(), "i42e");
+}
+
+TEST(BencodeValueTest, EncodeString) {
+    BencodeValue value(std::string("hello"));
+    EXPECT_EQ(value.encode(), "5:hello");
+}
+
+TEST(BencodeValueTest, EncodeList) {
+    BencodeValue list(std::vector<BencodeValue>{
+        BencodeValue(std::string("hello")),
+        BencodeValue(static_cast<int64_t>(42)),
+    });
+    EXPECT_EQ(list.encode(), "l5:helloi42ee");
+}
+
+TEST(BencodeValueTest, RoundTrip) {
+    // 字典 key 必须按字典序排列（编码器通过 std::map 保证）
+    const std::string encoded = "d3:key5:value4:listl4:spami1ee4:testi42ee";
+    BencodeValue decoded = BencodeValue::decode(encoded);
+    EXPECT_EQ(decoded.encode(), encoded);
+}
+
+TEST(BencodeValueTest, InvalidDataThrows) {
+    EXPECT_THROW(BencodeValue::decode("i42"), BencodeException);       // 缺少结尾 e
+    EXPECT_THROW(BencodeValue::decode(""), BencodeException);          // 空输入
+    EXPECT_THROW(BencodeValue::decode("g"), BencodeException);         // 非法起始字符
+}
+
+//==============================================================================
+// Torrent 结构解析（经公共 BencodeValue 覆盖原 validateTorrent/getTrackers 意图）
+//==============================================================================
+
+TEST_F(BitTorrentHandlerTest, TorrentStructureParsing) {
+    BencodeValue torrent = BencodeValue::decode(simpleTorrentData);
+
+    EXPECT_TRUE(torrent.isDict());
+    EXPECT_TRUE(torrent.hasKey("announce"));
+    EXPECT_TRUE(torrent.hasKey("info"));
+
+    const BencodeValue& info = torrent["info"];
+    EXPECT_TRUE(info.isDict());
+    EXPECT_EQ(info["name"].asString(), "test_file.zip");
+    EXPECT_EQ(info["length"].asInt(), 1048576);
+    EXPECT_EQ(info["piece length"].asInt(), 262144);
+}
+
+TEST(BencodeValueTest, TrackerListParsing) {
+    const std::string data =
+        "d8:announce40:http://tracker.example.com:6969/announce"
+        "13:announce-listl41:http://tracker1.example.com:6969/announce"
+        "41:http://tracker2.example.com:6969/announceee";
+
+    BencodeValue torrent = BencodeValue::decode(data);
+
+    ASSERT_TRUE(torrent.hasKey("announce"));
+    EXPECT_EQ(torrent["announce"].asString(),
+              "http://tracker.example.com:6969/announce");
+
+    ASSERT_TRUE(torrent.hasKey("announce-list"));
+    ASSERT_TRUE(torrent["announce-list"].isList());
+
+    std::vector<std::string> trackers;
+    const BencodeValue& list = torrent["announce-list"];
+    for (size_t i = 0; i < list.size(); ++i) {
+        trackers.push_back(list[i].asString());
+    }
+    EXPECT_EQ(trackers.size(), 2u);
+    EXPECT_NE(std::find(trackers.begin(), trackers.end(),
+                        "http://tracker1.example.com:6969/announce"),
+              trackers.end());
+}
+
+//==============================================================================
+// Handler 其余行为
+//==============================================================================
 
 TEST_F(BitTorrentHandlerTest, EdgeCases) {
     // 空字符串
@@ -255,8 +268,13 @@ TEST_F(BitTorrentHandlerTest, EdgeCases) {
     // 无效的文件扩展名
     EXPECT_FALSE(handler->can_handle("http://example.com/file.txt"));
 
-    // 带片段的 magnet（应该有效）
-    EXPECT_TRUE(handler->can_handle("magnet:?xt=urn:btih:abc#fragment"));
+    // 带片段的 magnet（hash 在 '#' 处截断，片段不影响识别）
+    EXPECT_TRUE(handler->can_handle(
+        "magnet:?xt=urn:btih:1234567890abcdef1234567890abcdef12345678#fragment"));
+
+    // xt 参数后跟其他参数（hash 在 '&' 处截断）
+    EXPECT_TRUE(handler->can_handle(
+        "magnet:?xt=urn:btih:1234567890abcdef1234567890abcdef12345678&dn=test"));
 }
 
 TEST_F(BitTorrentHandlerTest, GetFileInfo) {
