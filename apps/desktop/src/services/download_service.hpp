@@ -21,8 +21,8 @@
 #include <thread>
 #include <vector>
 
-Q_DECLARE_METATYPE(std::vector<falcon::daemon::rpc::TaskSnapshot>)
-Q_DECLARE_METATYPE(falcon::daemon::rpc::GlobalStats)
+// 信号参数类型在 Qt6 下无需 Q_DECLARE_METATYPE：PMF connect 的跨线程
+// 排队连接经 QMetaType::fromType 编译期解析（类型需可默认构造/可拷贝）。
 
 namespace falcon::desktop {
 

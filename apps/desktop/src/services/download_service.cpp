@@ -9,26 +9,11 @@
 
 namespace falcon::desktop {
 
-namespace {
-/// 注册信号参数的自定义 metatype（跨线程 QueuedConnection 必需）
-void register_metatypes() {
-    static const bool once = []() {
-        qRegisterMetaType<std::vector<falcon::daemon::rpc::TaskSnapshot>>(
-            "std::vector<falcon::daemon::rpc::TaskSnapshot>");
-        qRegisterMetaType<falcon::daemon::rpc::GlobalStats>(
-            "falcon::daemon::rpc::GlobalStats");
-        return true;
-    }();
-    (void)once;
-}
-} // namespace
-
 DownloadService::DownloadService(std::unique_ptr<IDownloadBackend> backend,
                                  QObject* parent)
     : QObject(parent)
     , backend_(std::move(backend))
 {
-    register_metatypes();
 }
 
 DownloadService::~DownloadService()
