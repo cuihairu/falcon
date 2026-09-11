@@ -213,6 +213,8 @@ static json task_to_status_json(const falcon::DownloadTask& task) {
     json out;
     out["gid"] = task_id_to_gid(task.id());
     out["status"] = aria2_status_from_task(task);
+    // Falcon 扩展字段：aria2 原生没有优先级，桌面客户端用它还原任务列表
+    out["priority"] = static_cast<int>(task.get_priority());
     out["totalLength"] = std::to_string(task.total_bytes());
     out["completedLength"] = std::to_string(task.downloaded_bytes());
     out["downloadSpeed"] = std::to_string(task.speed());
@@ -228,6 +230,8 @@ static json task_record_to_status_json(const TaskRecord& record) {
     json out;
     out["gid"] = task_id_to_gid(record.id);
     out["status"] = aria2_status_from_task_status(record.status);
+    // storage 未持久化优先级，历史记录回默认 Normal
+    out["priority"] = static_cast<int>(falcon::TaskPriority::Normal);
     out["totalLength"] = std::to_string(record.total_bytes);
     out["completedLength"] = std::to_string(record.downloaded_bytes);
     out["downloadSpeed"] = std::to_string(record.speed);

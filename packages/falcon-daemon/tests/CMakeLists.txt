@@ -90,6 +90,7 @@ endif()
 # JSON-RPC 客户端 × 真实服务端回环集成
 add_executable(falcon_daemon_rpc_client_tests
     json_rpc_client_test.cpp
+    aria2_snapshots_test.cpp
 )
 
 target_link_libraries(falcon_daemon_rpc_client_tests

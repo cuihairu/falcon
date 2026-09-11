@@ -832,18 +832,19 @@ TEST_F(JsonRpcCoverageTest, AddUriInvalidParams) {
     parsed = call("aria2.addUri", json::array({json::array()}));
     EXPECT_EQ(parsed["error"]["code"], -32602);
 
-    // URI list with non-string entry -> type error surfaces as parse error.
+    // URI list with non-string entry -> engine-side type error surfaces as
+    // an internal error (dispatch threw, not the JSON parser).
     parsed = call("aria2.addUri", json::array({json::array({42})}));
-    EXPECT_EQ(parsed["error"]["code"], -32700);
+    EXPECT_EQ(parsed["error"]["code"], -32603);
 }
 
 TEST_F(JsonRpcCoverageTest, AddUriUnsupportedProtocol) {
     start_server();
     auto parsed = call("aria2.addUri", json::array({json::array({"unsupported://nowhere/file"})}));
     ASSERT_TRUE(parsed.contains("error")) << parsed.dump();
-    // The engine throws for unsupported protocols; the server reports it as a
-    // parse-level error envelope.
-    EXPECT_EQ(parsed["error"]["code"], -32700);
+    // The engine throws for unsupported protocols; dispatch exceptions are
+    // reported as internal errors, not parse errors.
+    EXPECT_EQ(parsed["error"]["code"], -32603);
 }
 
 TEST_F(JsonRpcCoverageTest, AddUriReturnsGidAndTellStatusReflectsOptions) {
