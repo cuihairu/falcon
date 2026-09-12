@@ -10,13 +10,29 @@
 #include <falcon/protocols/commands/command.hpp>
 #include <thread>
 #include <chrono>
-#ifndef _WIN32
+#include <cstring>
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <unistd.h>
 #endif
 
 using namespace falcon;
 
 namespace {
+#ifdef _WIN32
+/// 进程级 winsock 初始化（ScopedPipe 的 Windows 回环 TCP 实现依赖）
+class WinsockInit {
+public:
+    WinsockInit() {
+        WSADATA data{};
+        WSAStartup(MAKEWORD(2, 2), &data);
+    }
+    ~WinsockInit() { WSACleanup(); }
+};
+#endif
+
 class MockQueueCommand : public AbstractCommand {
 public:
     MockQueueCommand() : AbstractCommand(1) {}
@@ -32,18 +48,70 @@ public:
 class ScopedPipe {
 public:
     ScopedPipe() {
+#ifdef _WIN32
+        // Windows 无 pipe：用回环 TCP 连接的一对 socket 等价替代
+        //（测试只把 fd 喂给引擎的映射表，不做实际 I/O）
+        static WinsockInit winsock;
+        SOCKET listen_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (listen_sock == INVALID_SOCKET) return;
+
+        struct sockaddr_in addr;
+        std::memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        addr.sin_port = 0;
+
+        if (bind(listen_sock, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) != 0 ||
+            listen(listen_sock, 1) != 0) {
+            closesocket(listen_sock);
+            return;
+        }
+
+        int len = sizeof(addr);
+        if (getsockname(listen_sock, reinterpret_cast<struct sockaddr*>(&addr), &len) != 0) {
+            closesocket(listen_sock);
+            return;
+        }
+
+        SOCKET client_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (client_sock == INVALID_SOCKET ||
+            connect(client_sock, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) != 0) {
+            if (client_sock != INVALID_SOCKET) closesocket(client_sock);
+            closesocket(listen_sock);
+            return;
+        }
+
+        SOCKET server_sock = accept(listen_sock, nullptr, nullptr);
+        closesocket(listen_sock);
+        if (server_sock == INVALID_SOCKET) {
+            closesocket(client_sock);
+            return;
+        }
+
+        fds_[0] = static_cast<int>(client_sock);
+        fds_[1] = static_cast<int>(server_sock);
+#else
         if (::pipe(fds_) != 0) {
             fds_[0] = -1;
             fds_[1] = -1;
         }
+#endif
     }
 
     ~ScopedPipe() {
         if (fds_[0] >= 0) {
+#ifdef _WIN32
+            ::closesocket(fds_[0]);
+#else
             ::close(fds_[0]);
+#endif
         }
         if (fds_[1] >= 0) {
+#ifdef _WIN32
+            ::closesocket(fds_[1]);
+#else
             ::close(fds_[1]);
+#endif
         }
     }
 

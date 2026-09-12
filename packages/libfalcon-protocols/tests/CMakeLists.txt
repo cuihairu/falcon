@@ -61,10 +61,8 @@ add_executable(falcon_protocols_tests
     unit/coverage_supplement_test.cpp
 )
 
-# download_engine_v2_test uses POSIX pipe/close, skip on Windows
-if(NOT WIN32)
-    target_sources(falcon_protocols_tests PRIVATE unit/download_engine_v2_test.cpp)
-endif()
+# download_engine_v2_test：pipe 已用回环 TCP 在 Windows 等价实现，三平台统一编译
+target_sources(falcon_protocols_tests PRIVATE unit/download_engine_v2_test.cpp)
 
 # Conditional plugin tests
 if(FALCON_ENABLE_BITTORRENT)

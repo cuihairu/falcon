@@ -15,6 +15,8 @@
 - 移除 `http_commands_coverage_test.cpp` 全部 7 处 `TODO(Win)` GTEST_SKIP，
   Windows 与 POSIX 统一走真实事件循环（PollEventPoll/WSAPoll）；测试基建补
   `RangeTestServer::start()` 显式 winsock 初始化
+- `download_engine_v2_test.cpp` 解除 Windows 排除：ScopedPipe 的 pipe 以回环
+  TCP 连接等价实现（仅作合法 fd 喂给引擎映射表，无 I/O 依赖），三平台统一编译
 - docs 站点依赖漏洞修复（Dependabot 8 条）：pnpm overrides 强制 vite 6.4.3+/
   esbuild 0.25+/postcss 8.5.23+/nanoid 3.3.18+，文档站构建验证通过
 
