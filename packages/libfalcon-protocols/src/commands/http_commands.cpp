@@ -132,6 +132,41 @@ std::string sock_err_str(int err) { return strerror(err); }
 bool sock_would_block(int err) { return err == EAGAIN || err == EWOULDBLOCK; }
 #endif
 
+/// 构造连接级重试命令；返回 nullptr 表示不可重试：
+/// - 多连接意图的任务不参与连接级重试（分段失败语义不同，暂不覆盖）
+/// - 已达 max_retries（首连 + max_retries 次重试）
+std::unique_ptr<Command> make_connection_retry(TaskId task_id,
+                                               const std::string& url,
+                                               const DownloadOptions& options,
+                                               int retry_count) {
+    if (options.max_connections > 1) return nullptr;
+    if (retry_count >= static_cast<int>(options.max_retries)) return nullptr;
+    FALCON_LOG_WARN_STREAM("连接失败，调度延迟重试 ("
+                          << (retry_count + 1) << "/" << options.max_retries
+                          << "): " << url);
+    return std::make_unique<HttpRetryCommand>(task_id, url, options,
+                                              retry_count + 1);
+}
+
+/// 任务组终态收口（连接级失败重试耗尽时调用）。此前初始连接失败
+/// 无人标终态：任务悬空 Downloading、all_completed 永不成立、
+/// run() 无法退出。仅用于单连接路径（多段组由段失败聚合终态）
+void fail_group_terminal(DownloadEngineV2* engine, TaskId task_id,
+                         const std::string& reason) {
+    if (!engine) return;
+    auto* man = engine->request_group_man();
+    auto* group = man ? man->find_group(task_id) : nullptr;
+    if (!group) return;
+    group->set_error_message(reason);
+    group->set_status(RequestGroupStatus::FAILED);
+    if (auto task = group->download_task()) {
+        if (task->error_message().empty()) {
+            task->set_error(reason);
+        }
+        task->set_status(TaskStatus::Failed);
+    }
+}
+
 std::string to_lower(std::string s) {
     for (auto& ch : s) {
         ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
@@ -654,19 +689,20 @@ AbstractCommand::ExecutionResult HttpInitiateConnectionCommand::send_http_reques
     // 发送完成，进入响应阶段
     // 注意：如果是 HTTPS，需要传递 SSL 连接对象；
     // 分段连接需携带 URL 与分段信息，供响应命令按该段范围调度下载命令
-    schedule_next(engine,
-                  std::make_unique<HttpResponseCommand>(get_task_id(),
-                                                       socket_fd_,
-                                                       http_request_,
-                                                       options_,
+    auto response_cmd = std::make_unique<HttpResponseCommand>(get_task_id(),
+                                                             socket_fd_,
+                                                             http_request_,
+                                                             options_,
 #ifdef FALCON_ENABLE_OPENSSL
-                                                       ssl_conn_,
+                                                             ssl_conn_,
 #endif
-                                                       use_https_,
-                                                       url_,
-                                                       range_segment_id_,
-                                                       range_offset_,
-                                                       range_length_));
+                                                             use_https_,
+                                                             url_,
+                                                             range_segment_id_,
+                                                             range_offset_,
+                                                             range_length_);
+    response_cmd->set_retry_count(retry_count_);
+    schedule_next(engine, std::move(response_cmd));
     return ExecutionResult::OK;
 }
 
@@ -681,22 +717,38 @@ void HttpInitiateConnectionCommand::set_range(SegmentId segment_id,
 
 void HttpInitiateConnectionCommand::notify_segment_failure(DownloadEngineV2* engine,
                                                            const std::string& reason) {
-    if (!has_range_ || !engine) {
+    if (!engine) {
         return;
     }
-    auto* man = engine->request_group_man();
-    auto* group = man ? man->find_group(get_task_id()) : nullptr;
-    if (!group) {
-        return;
-    }
-    group->finish_segment(false);
-    group->set_error_message(reason);
-    group->set_status(RequestGroupStatus::FAILED);
-    if (auto task = group->download_task()) {
-        if (task->error_message().empty()) {
-            task->set_error(reason);
+    if (has_range_) {
+        // 分段连接：段失败收口（多连接组由段失败聚合终态）
+        auto* man = engine->request_group_man();
+        auto* group = man ? man->find_group(get_task_id()) : nullptr;
+        if (!group) {
+            return;
         }
-        task->set_status(TaskStatus::Failed);
+        group->finish_segment(false);
+        group->set_error_message(reason);
+        group->set_status(RequestGroupStatus::FAILED);
+        if (auto task = group->download_task()) {
+            if (task->error_message().empty()) {
+                task->set_error(reason);
+            }
+            task->set_status(TaskStatus::Failed);
+        }
+        close_socket_fd(socket_fd_);
+        socket_fd_ = -1;
+        return;
+    }
+
+    // 初始连接：先尝试连接级重试（重试期间任务组保持 ACTIVE），
+    // 重试耗尽才收口终态——修复此前初始连接失败组无终态的悬空缺陷
+    //（任务悬空 Downloading、all_completed 永不成立、run() 无法退出）
+    if (auto retry_cmd = make_connection_retry(get_task_id(), url_, options_,
+                                               retry_count_)) {
+        schedule_next(engine, std::move(retry_cmd));
+    } else {
+        fail_group_terminal(engine, get_task_id(), reason);
     }
     close_socket_fd(socket_fd_);
     socket_fd_ = -1;
@@ -745,7 +797,19 @@ bool HttpResponseCommand::execute(DownloadEngineV2* engine) {
     auto* group = group_man ? group_man->find_group(get_task_id()) : nullptr;
     auto task = group ? group->download_task() : nullptr;
 
-    auto fail = [&](const std::string& msg) {
+    auto fail = [&](const std::string& msg, bool retryable = false) {
+        // 连接级失败（对端重置/立即断开等）：单连接任务调度延迟重试，
+        // 任务组保持 ACTIVE 等待重试链。语义性失败（HTTP 状态错误、
+        // 重定向不支持等）重试无价值，直接收口
+        if (retryable) {
+            if (auto retry_cmd = make_connection_retry(get_task_id(), source_url_,
+                                                       options_, retry_count_)) {
+                close_socket_fd(socket_fd_);
+                socket_fd_ = -1;
+                schedule_next(engine, std::move(retry_cmd));
+                return handle_result(ExecutionResult::OK);
+            }
+        }
         if (task) {
             task->set_error(msg);
             task->set_status(TaskStatus::Failed);
@@ -768,7 +832,8 @@ bool HttpResponseCommand::execute(DownloadEngineV2* engine) {
             return handle_result(ExecutionResult::WAIT_FOR_SOCKET);
         }
         if (res != ExecutionResult::OK) {
-            return fail("Failed to receive HTTP response headers");
+            return fail("Failed to receive HTTP response headers",
+                        /*retryable=*/true);
         }
     }
 
@@ -1539,25 +1604,36 @@ HttpRetryCommand::HttpRetryCommand(
     , options_(options)
     , retry_count_(retry_count)
     , max_retries_(static_cast<int>(options.max_retries))
-    , retry_wait_(std::chrono::seconds(5))
+    , retry_wait_(std::chrono::seconds(options.retry_delay_seconds))
+    , retry_at_(std::chrono::steady_clock::now() + retry_wait_)
 {
 }
 
 bool HttpRetryCommand::execute(DownloadEngineV2* engine) {
     if (!should_retry()) {
         FALCON_LOG_ERROR_STREAM("达到最大重试次数: " << max_retries_);
+        fail_group_terminal(engine, get_task_id(),
+                            "Connection failed after " +
+                                std::to_string(max_retries_) + " retries");
         return handle_result(ExecutionResult::ERROR_OCCURRED);
+    }
+
+    // 未到重试时刻：以 NEED_RETRY 回队轮询（不注册 socket 事件），
+    // 由引擎 poll 节奏驱动到点检查。旧实现在引擎事件循环线程里
+    // sleep_for(retry_wait_)——一个任务重试时整个引擎所有任务与
+    // socket 事件停摆
+    const auto now = std::chrono::steady_clock::now();
+    if (now < retry_at_) {
+        return handle_result(ExecutionResult::NEED_RETRY);
     }
 
     FALCON_LOG_INFO_STREAM("重试下载 (" << retry_count_ << "/" << max_retries_ << "): " << url_);
 
-    // 等待一段时间后重试
-    std::this_thread::sleep_for(retry_wait_);
-
     if (engine) {
-        // 创建新的连接命令重试下载
+        // 创建新的连接命令重试下载（携带重试计数供失败时继续链式判定）
         auto next_cmd = std::make_unique<HttpInitiateConnectionCommand>(
             get_task_id(), url_, options_);
+        next_cmd->set_retry_count(retry_count_);
         schedule_next(engine, std::move(next_cmd));
     }
 

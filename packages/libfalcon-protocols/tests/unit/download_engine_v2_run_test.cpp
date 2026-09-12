@@ -269,6 +269,17 @@ EngineConfigV2 single_slot_config() {
     return config;
 }
 
+/// 占位任务选项：连接失败后进入长时间挂起的连接级重试链，任务组
+/// 保持 ACTIVE（连接失败现已正确终态化——组悬空 Downloading 曾是
+/// 这些测试依赖的旧缺陷行为，修复后 all_completed 会提前结束 run()）
+DownloadOptions keepalive_options() {
+    DownloadOptions o;
+    o.max_connections = 1;         // 单连接才有连接级重试
+    o.max_retries = 1000;
+    o.retry_delay_seconds = 3600;  // 重试等待期组保持非终态
+    return o;
+}
+
 /// 抛异常的普通命令：抛出前计数，用于断言引擎在异常后仍然存活
 class ThrowingCommand : public AbstractCommand {
 public:
@@ -326,7 +337,7 @@ TEST(DownloadEngineV2RunTest, RunShutdownByRoutineCommand) {
 
     // 保留端口上的回环地址：离线且连接快速失败，仅用于保持组处于未完成状态
     ASSERT_GT(engine.add_download("http://127.0.0.1:1/keepalive.bin",
-                                  DownloadOptions()),
+                                  keepalive_options()),
               0);
 
     auto routine = std::make_unique<CountdownShutdownRoutine>(3);
@@ -351,7 +362,7 @@ TEST(DownloadEngineV2RunTest, RunShutdownByRoutineCommand) {
 TEST(DownloadEngineV2RunTest, RunResumesParkedCommandOnSocketEvent) {
     DownloadEngineV2 engine(fast_poll_config());
     ASSERT_GT(engine.add_download("http://127.0.0.1:1/keepalive.bin",
-                                  DownloadOptions()),
+                                  keepalive_options()),
               0);
 
     auto pair = make_socket_pair_nb();
@@ -381,7 +392,7 @@ TEST(DownloadEngineV2RunTest, RunResumesParkedCommandOnSocketEvent) {
 TEST(DownloadEngineV2RunTest, RunParksCommandWithoutEventForeverUntilDone) {
     DownloadEngineV2 engine(fast_poll_config());
     ASSERT_GT(engine.add_download("http://127.0.0.1:1/keepalive.bin",
-                                  DownloadOptions()),
+                                  keepalive_options()),
               0);
 
     auto routine = std::make_unique<CountdownShutdownRoutine>(20);
@@ -407,10 +418,10 @@ TEST(DownloadEngineV2RunTest, AddDownloadWhileRunningActivatesTask) {
 
     // 保活任务：避免引擎因"无任务"在例程命令执行前退出
     ASSERT_GT(engine.add_download("http://127.0.0.1:1/keepalive.bin",
-                                  DownloadOptions()),
+                                  keepalive_options()),
               0);
 
-    DownloadOptions options;
+    DownloadOptions options = keepalive_options();
     options.output_filename = "run_time_added.bin";
     auto routine = std::make_unique<AddDownloadRoutine>(
         "http://127.0.0.1:1/added.bin", options);
@@ -481,7 +492,7 @@ TEST(DownloadEngineV2RunTest, CommandExceptionFailsGroupAndEngineSurvives) {
     DownloadEngineV2 engine(single_slot_config());
 
     ASSERT_GT(engine.add_download("http://127.0.0.1:1/keepalive.bin",
-                                  DownloadOptions()),
+                                  keepalive_options()),
               0);
     TaskId victim_id = engine.add_download("http://127.0.0.1:1/victim.bin",
                                            DownloadOptions());
@@ -516,7 +527,7 @@ TEST(DownloadEngineV2RunTest, NonStdExceptionAlsoFailsGroup) {
     DownloadEngineV2 engine(single_slot_config());
 
     ASSERT_GT(engine.add_download("http://127.0.0.1:1/keepalive.bin",
-                                  DownloadOptions()),
+                                  keepalive_options()),
               0);
     TaskId victim_id = engine.add_download("http://127.0.0.1:1/victim.bin",
                                            DownloadOptions());
@@ -541,7 +552,7 @@ TEST(DownloadEngineV2RunTest, NonStdExceptionAlsoFailsGroup) {
 TEST(DownloadEngineV2RunTest, RoutineExceptionSkipsRoundEngineKeepsRunning) {
     DownloadEngineV2 engine(fast_poll_config());
     ASSERT_GT(engine.add_download("http://127.0.0.1:1/keepalive.bin",
-                                  DownloadOptions()),
+                                  keepalive_options()),
               0);
 
     auto throw_counter = std::make_shared<std::atomic<int>>(0);

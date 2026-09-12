@@ -2,6 +2,34 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-12 - V2 引擎连接级重试链（max_retries + retry_delay_seconds 端到端生效）
+- 修复三重缺陷：`HttpRetryCommand` 是孤儿命令（生产路径零创建，
+  仅测试直接构造）——V2 HTTP 下载失败根本没有重试，
+  `DownloadOptions::max_retries`/`retry_delay_seconds` 零消费；且该
+  命令在引擎事件循环线程里 `sleep_for(5s)`——一个任务重试时整个
+  引擎所有任务与 socket 事件停摆；初始连接失败后无人给任务组标
+  终态——任务悬空 Downloading、all_completed 永不成立、run() 永不
+  退出（既有 run 测试的 keepalive 任务恰好依赖此悬空行为）
+- 重试链接线（aria2 max-tries 同语义）：连接失败（connect 失败/
+  响应头阶段断连，均无已下载数据）→ `make_connection_retry` 构造
+  `HttpRetryCommand` → 以 `NEED_RETRY` 回队轮询到
+  `retry_delay_seconds` 到点（不注册 socket 事件、不阻塞引擎线程）
+  → 重新 initiate；重试计数经 `set_retry_count` 沿命令链传递
+  （首连 + max_retries 次重试），重试期间任务组保持 ACTIVE
+- 边界语义：多连接意图的任务不参与连接级重试（分段失败语义不同，
+  暂不覆盖）；传输中断（已下载数据）重试属断点续传域，亦不在本次
+  范围；HTTP 状态错误/重定向不支持等语义性失败重试无价值，直接
+  终态收口
+- 新增 `fail_group_terminal` 收口：初始连接失败重试耗尽后组标
+  FAILED + task Failed（复用段失败收尾语义）
+- 新增 5 个端到端用例（`download_engine_v2_retry_test.cpp`，
+  FlakyServer 前 N 次连接立即关闭 + accept 计数）：瞬时故障恢复
+  （COMPLETED，恰 2 次连接）/ 重试耗尽精确次数（3 次）/ 延迟消费
+  （2 次重试 ≥2s）/ 多连接任务跳过重试（1 次连接）/ 连接拒绝获得
+  终态；既有 run 测试 keepalive 任务改用长挂起重试链保持组 ACTIVE
+  （组悬空依赖随缺陷一并移除）；全量 1468 ctest 通过，ASan 17
+  用例零告警
+
 ### 2026-09-12 - V2 引擎超时清理闭环（任务终态 + fd 关闭 + 任务级超时）
 - 修复 `cleanup_completed_commands` 双重缺陷（对端黑洞时暴露）：
   命令挂起超时后只销毁命令对象——`HttpResponseCommand`/

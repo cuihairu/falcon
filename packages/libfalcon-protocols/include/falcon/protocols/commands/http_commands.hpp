@@ -173,6 +173,19 @@ public:
      */
     Bytes range_length() const noexcept { return range_length_; }
 
+    /**
+     * @brief 设置连接级重试计数
+     *
+     * 重试链重新进入连接阶段时携带（HttpRetryCommand 调度时传入），
+     * 用于 max_retries 判定；0 = 首次尝试
+     */
+    void set_retry_count(int count) noexcept { retry_count_ = count; }
+
+    /**
+     * @brief 获取连接级重试计数
+     */
+    int retry_count() const noexcept { return retry_count_; }
+
 private:
     bool resolve_host(const std::string& host, std::string& ip);
     bool create_socket();
@@ -192,6 +205,9 @@ private:
     std::string path_ = "/";
     uint16_t port_ = 80;
     bool use_https_ = false;
+
+    // 连接级重试计数（max_retries 语义：首连 + max_retries 次重试）
+    int retry_count_ = 0;
 
     // 多连接分段信息（初始连接无 Range；段 1..N-1 的连接带 Range）
     bool has_range_ = false;
@@ -318,6 +334,16 @@ public:
         return segment_id_ > 0;
     }
 
+    /**
+     * @brief 设置连接级重试计数（连接阶段携带而来）
+     */
+    void set_retry_count(int count) noexcept { retry_count_ = count; }
+
+    /**
+     * @brief 获取连接级重试计数
+     */
+    int retry_count() const noexcept { return retry_count_; }
+
 private:
     ExecutionResult receive_response_headers(DownloadEngineV2* engine);
     bool parse_headers();
@@ -341,6 +367,10 @@ private:
     SegmentId segment_id_ = 0;     ///< 分段编号（0 = 初始连接）
     Bytes range_offset_ = 0;       ///< 分段起始偏移
     Bytes range_length_ = 0;       ///< 分段长度
+
+    // 连接级重试计数（连接阶段携带而来，用于响应头阶段失败后的
+    // max_retries 判定）
+    int retry_count_ = 0;
 
     // TLS/HTTPS 支持
     bool use_https_ = false;
@@ -532,6 +562,9 @@ private:
     int retry_count_;
     int max_retries_;
     std::chrono::seconds retry_wait_;
+    // 最早重试时刻：到点前 execute 以 NEED_RETRY 回队轮询，
+    // 不阻塞引擎线程（旧实现 sleep_for 会停摆整个事件循环）
+    std::chrono::steady_clock::time_point retry_at_;
 };
 
 /**
