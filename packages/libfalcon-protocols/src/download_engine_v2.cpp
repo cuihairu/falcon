@@ -13,8 +13,26 @@
 #include <algorithm>
 #include <chrono>
 #include <limits>
+#ifndef _WIN32
+#include <unistd.h>  // close
+#endif
 
 namespace falcon {
+
+namespace {
+
+/// 关闭 socket fd（命令对象析构不关 fd，fd 所有权随命令流转，
+/// 超时清理等引擎侧销毁路径必须显式关闭）
+void close_socket_fd(int fd) {
+    if (fd < 0) return;
+#ifdef _WIN32
+    ::closesocket(fd);
+#else
+    ::close(fd);
+#endif
+}
+
+} // namespace
 
 //==============================================================================
 // DownloadEngineV2 实现
@@ -510,18 +528,28 @@ void DownloadEngineV2::process_ready_events() {
 }
 
 void DownloadEngineV2::cleanup_completed_commands() {
-    // 清理两类资源：
-    // 1) waiting_commands_ 中超时未恢复的命令（对端异常断开、EventPoll one-shot 丢失等）
-    // 2) 关联的 socket 事件注册，避免 fd 资源泄漏
+    // 清理三类资源：
+    // 1) waiting_commands_ 中超时未恢复的命令（对端异常断开、EventPoll
+    //    one-shot 丢失、对端黑洞不响应等）
+    // 2) 关联的 socket 事件注册与 fd 本身（命令对象析构不关 fd）
+    // 3) 所属任务组的终态：超时前组停在 ACTIVE，不标 FAILED 会让任务
+    //    悬空在 Downloading、all_completed 永不成立、run() 无法退出
     if (config_.command_wait_timeout_seconds <= 0) {
         return;  // 超时清理已禁用
     }
 
     const auto now = std::chrono::steady_clock::now();
-    const auto timeout = std::chrono::seconds(config_.command_wait_timeout_seconds);
 
-    // 第一遍扫描：在锁内收集超时命令 ID 与对应 fd，避免在锁内执行回调或 IO
-    std::vector<std::pair<CommandId, int>> expired;  // {command_id, fd}
+    // 第一遍扫描：在锁内收集全部等待中命令的 {command_id, fd, task_id, 挂起时间}，
+    // 避免在锁内执行回调或 IO
+    struct WaitEntry {
+        CommandId cmd_id;
+        int fd;
+        TaskId task_id;
+        std::chrono::steady_clock::time_point parked_at;
+    };
+    std::vector<WaitEntry> waiting;
+    std::vector<WaitEntry> expired;
     std::vector<std::unique_ptr<Command>> dropped;
 
     {
@@ -530,44 +558,69 @@ void DownloadEngineV2::cleanup_completed_commands() {
             return;
         }
 
-        expired.reserve(waiting_command_times_.size());
+        waiting.reserve(waiting_command_times_.size());
         for (const auto& [cmd_id, ts] : waiting_command_times_) {
-            if (now - ts >= timeout) {
-                int fd = -1;
-                auto w_it = socket_wait_map_.find(cmd_id);
-                if (w_it != socket_wait_map_.end()) {
-                    fd = w_it->second.fd;
+            int fd = -1;
+            TaskId task_id = 0;
+            auto w_it = socket_wait_map_.find(cmd_id);
+            if (w_it != socket_wait_map_.end()) {
+                fd = w_it->second.fd;
+            }
+            auto c_it = waiting_commands_.find(cmd_id);
+            if (c_it != waiting_commands_.end() && c_it->second) {
+                task_id = c_it->second->get_task_id();
+            }
+            waiting.push_back(WaitEntry{cmd_id, fd, task_id, ts});
+        }
+    }
+
+    // 锁外：按任务超时阈值筛选超时者——任务的 options.timeout_seconds
+    // 显式设置（>0）时优先生效，未设置回落引擎全局兜底值
+    for (const auto& entry : waiting) {
+        std::size_t threshold = static_cast<std::size_t>(config_.command_wait_timeout_seconds);
+        if (entry.task_id != 0) {
+            if (auto* group = request_group_man_->find_group(entry.task_id)) {
+                if (group->options().timeout_seconds > 0) {
+                    threshold = group->options().timeout_seconds;
                 }
-                expired.emplace_back(cmd_id, fd);
             }
         }
-
-        if (expired.empty()) {
-            return;
+        if (now - entry.parked_at >= std::chrono::seconds(threshold)) {
+            expired.push_back(entry);
         }
+    }
 
-        // 第二遍：从所有映射中移除，并取出命令所有权以便锁外销毁
-        for (const auto& [cmd_id, fd] : expired) {
-            auto w_it = waiting_commands_.find(cmd_id);
+    if (expired.empty()) {
+        return;
+    }
+
+    // 第二遍：锁内从所有映射中移除，并取出命令所有权以便锁外销毁
+    {
+        std::lock_guard<std::mutex> lock(socket_map_mutex_);
+        for (const auto& entry : expired) {
+            auto w_it = waiting_commands_.find(entry.cmd_id);
             if (w_it != waiting_commands_.end()) {
                 dropped.push_back(std::move(w_it->second));
                 waiting_commands_.erase(w_it);
             }
-            waiting_command_times_.erase(cmd_id);
-            socket_wait_map_.erase(cmd_id);
-            if (fd >= 0) {
-                socket_command_map_.erase(fd);
+            waiting_command_times_.erase(entry.cmd_id);
+            socket_wait_map_.erase(entry.cmd_id);
+            if (entry.fd >= 0) {
+                socket_command_map_.erase(entry.fd);
             }
         }
     }
 
-    // 锁外：移除 EventPoll 监听（平台 IO 调用不应持锁），记录日志
-    for (const auto& [cmd_id, fd] : expired) {
-        if (fd >= 0) {
-            event_poll_->remove_event(fd);
+    // 锁外：摘除 EventPoll 监听、关闭 fd（平台 IO 调用不应持锁）、
+    // 把所属任务组标 FAILED，记录日志
+    for (const auto& entry : expired) {
+        if (entry.fd >= 0) {
+            event_poll_->remove_event(entry.fd);
+            close_socket_fd(entry.fd);
         }
-        FALCON_LOG_WARN_STREAM("等待中的命令超时被清理: cmd=" << cmd_id
-                              << ", timeout=" << config_.command_wait_timeout_seconds << "s");
+        fail_group_of_command(entry.task_id, "download wait timeout");
+        FALCON_LOG_WARN_STREAM("等待中的命令超时被清理: cmd=" << entry.cmd_id
+                              << ", task=" << entry.task_id);
     }
     // dropped 在作用域结束时自动销毁命令对象
 }

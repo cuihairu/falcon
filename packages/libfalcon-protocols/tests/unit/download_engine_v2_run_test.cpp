@@ -19,25 +19,33 @@
 #include <winsock2.h>
 #include <windows.h>
 #define CLOSE_SOCKET(fd) closesocket(fd)
+#define POLL(fd_ptr, count, timeout_ms) WSAPoll((fd_ptr), (count), (timeout_ms))
 #else
 #include <unistd.h>
 #include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <fcntl.h>
+#include <poll.h>
 #define CLOSE_SOCKET(fd) close(fd)
+#define POLL(fd_ptr, count, timeout_ms) ::poll((fd_ptr), (count), (timeout_ms))
 #endif
 
 #include <gtest/gtest.h>
 #include <falcon/protocols/download_engine_v2.hpp>
 #include <falcon/protocols/commands/command.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <array>
+#include <cerrno>
 #include <chrono>
 #include <cstring>
 #include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <vector>
 
 using namespace falcon;
 
@@ -51,6 +59,12 @@ void ensure_winsock_for_run_test() {
         WSAStartup(MAKEWORD(2, 2), &data);
     });
 }
+// Winsock（winsock2.h）无 socklen_t/ssize_t：长度参数与 recv 返回值均为 int
+using sock_len = int;
+using recv_ssize = int;
+#else
+using sock_len = socklen_t;
+using recv_ssize = ssize_t;
 #endif
 
 /// 创建一对已连接的非阻塞 Socket
@@ -543,4 +557,256 @@ TEST(DownloadEngineV2RunTest, RoutineExceptionSkipsRoundEngineKeepsRunning) {
     EXPECT_GE(throw_counter->load(), 3);
     EXPECT_GE(routine_ptr->executions(), 3);
     EXPECT_TRUE(engine.is_shutdown_requested());
+}
+
+//==============================================================================
+// 超时清理测试：对端黑洞（连接挂死）必须让任务获得 FAILED 终态
+//==============================================================================
+//
+// 此前的缺陷：等待响应的命令挂起超时后，cleanup_completed_commands
+// 只销毁命令对象——不关闭 fd（命令析构 = default 不关 fd）、不把任务
+// 组标 FAILED。对端黑洞时任务永久悬空在 Downloading、all_completed
+// 永不成立、run() 永不退出。
+
+namespace {
+
+/// 黑洞 HTTP 服务器：接受连接后不读不写不响应（对端请求永远挂死）。
+/// 每个连接由非阻塞轮询线程持有；对端关闭 fd 时 recv 返回 0（EOF），
+/// 计入 peer_closed——若引擎超时清理只销毁命令而泄漏 fd，进程存活
+/// 期间服务器侧观察不到 EOF，此计数不增长
+class SilentServer {
+public:
+    ~SilentServer() { stop(); }  // RAII：joinable 线程析构即 terminate
+
+    bool start() {
+#ifdef _WIN32
+        ensure_winsock_for_run_test();
+#endif
+        listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (listen_fd_ < 0) return false;
+
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = 0;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 ||
+            ::listen(listen_fd_, 8) != 0) {
+            CLOSE_SOCKET(listen_fd_);
+            listen_fd_ = -1;
+            return false;
+        }
+
+        sockaddr_in bound{};
+        sock_len len = sizeof(bound);
+        if (::getsockname(listen_fd_, reinterpret_cast<sockaddr*>(&bound), &len) != 0) {
+            stop();
+            return false;
+        }
+        port_ = ntohs(bound.sin_port);
+
+        running_ = true;
+        accept_thread_ = std::thread([this] { accept_loop(); });
+        return true;
+    }
+
+    void stop() {
+        running_ = false;
+        if (listen_fd_ >= 0) {
+            CLOSE_SOCKET(listen_fd_);
+            listen_fd_ = -1;
+        }
+        if (accept_thread_.joinable()) accept_thread_.join();
+        for (auto& t : conn_threads_) {
+            if (t.joinable()) t.join();  // 持有线程 200ms 轮询自行退出
+        }
+        conn_threads_.clear();
+    }
+
+    int port() const { return port_; }
+    int peer_closed() const { return peer_closed_.load(); }
+
+    std::string url(const std::string& path) const {
+        return "http://127.0.0.1:" + std::to_string(port_) + path;
+    }
+
+private:
+    void accept_loop() {
+        // poll 带超时轮询 running_：阻塞 accept 上直接 close(fd) 在
+        // Linux 不保证唤醒（复用既有测试服务器模板）
+        while (running_) {
+            struct pollfd pfd;
+            pfd.fd = listen_fd_;
+            pfd.events = POLLIN;
+            pfd.revents = 0;
+            if (POLL(&pfd, 1, 500) <= 0) {
+                continue;  // 超时或错误：重新检查 running_
+            }
+            sockaddr_in peer{};
+            sock_len peer_len = sizeof(peer);
+            int conn = ::accept(listen_fd_, reinterpret_cast<sockaddr*>(&peer), &peer_len);
+            if (conn < 0) {
+                if (!running_) return;
+                continue;
+            }
+            {
+                std::lock_guard<std::mutex> lock(conn_mutex_);
+                conns_.push_back(conn);
+            }
+            conn_threads_.emplace_back([this, conn] { hold(conn); });
+        }
+    }
+
+    void hold(int conn) {
+        set_nonblocking(conn);
+        char buf[512];
+        while (running_.load()) {
+            struct pollfd pfd;
+            pfd.fd = conn;
+            pfd.events = POLLIN;
+            pfd.revents = 0;
+            if (POLL(&pfd, 1, 200) <= 0) {
+                continue;  // 超时轮询 running_
+            }
+            recv_ssize n = ::recv(conn, buf, sizeof(buf), 0);
+            if (n == 0) {
+                peer_closed_.fetch_add(1);  // 对端关闭 fd（EOF）
+                break;
+            }
+            if (n < 0) {
+#ifdef _WIN32
+                if (WSAGetLastError() == WSAEWOULDBLOCK) continue;
+#else
+                if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
+#endif
+                break;  // 真实错误（含服务器 stop 后的残连接）
+            }
+            // 收到客户端请求头：黑洞，不响应，继续持有连接
+        }
+        {
+            std::lock_guard<std::mutex> lock(conn_mutex_);
+            conns_.erase(std::remove(conns_.begin(), conns_.end(), conn),
+                         conns_.end());
+        }
+        CLOSE_SOCKET(conn);
+    }
+
+    static void set_nonblocking(int fd) {
+#ifdef _WIN32
+        u_long mode = 1;
+        ioctlsocket(fd, FIONBIO, &mode);
+#else
+        const int flags = ::fcntl(fd, F_GETFL, 0);
+        ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+#endif
+    }
+
+    int listen_fd_ = -1;
+    int port_ = 0;
+    std::atomic<bool> running_{false};
+    std::atomic<int> peer_closed_{0};
+    std::mutex conn_mutex_;
+    std::vector<int> conns_;
+    std::thread accept_thread_;
+    std::vector<std::thread> conn_threads_;
+};
+
+/// 在独立线程跑 run()，等待任务组进入终态；超时强制停机。
+/// 返回是否在时限内观察到终态，elapsed_ms 带出耗时
+bool wait_group_terminal(DownloadEngineV2& engine, RequestGroup* group,
+                         int timeout_seconds, long long& elapsed_ms) {
+    std::thread runner([&engine] { engine.run(); });
+
+    const auto begin = std::chrono::steady_clock::now();
+    const auto deadline = begin + std::chrono::seconds(timeout_seconds);
+    bool finished = false;
+    while (std::chrono::steady_clock::now() < deadline) {
+        const auto st = group->status();
+        if (st == RequestGroupStatus::COMPLETED || st == RequestGroupStatus::FAILED) {
+            finished = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                     std::chrono::steady_clock::now() - begin)
+                     .count();
+
+    if (!finished) {
+        engine.force_shutdown();
+    }
+    runner.join();
+    return finished;
+}
+
+} // namespace
+
+TEST(DownloadEngineV2RunTest, BlackHoleServerTimesOutViaTaskTimeout) {
+    SilentServer server;
+    ASSERT_TRUE(server.start());
+
+    // 任务级超时优先生效：2s 黑洞挂死后任务必须获得 FAILED 终态，
+    // run() 随之退出（修复前：任务永久 Downloading、run() 永不退出）
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;  // 引擎兜底超时保持默认 120s，不参与
+    DownloadEngineV2 engine(config);
+
+    const auto options = [] {
+        DownloadOptions o;
+        o.timeout_seconds = 2;
+        return o;
+    }();
+
+    const TaskId task_id = engine.add_download(server.url("/blackhole.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    long long elapsed_ms = 0;
+    ASSERT_TRUE(wait_group_terminal(engine, group, 15, elapsed_ms));
+
+    EXPECT_EQ(group->status(), RequestGroupStatus::FAILED);
+    // 显式小于引擎兜底值：证明生效的是任务级 2s 而非全局兜底；
+    // 不设下界——超时只会更晚、不会更早的语义由阈值保证
+    EXPECT_LT(elapsed_ms, 10000)
+        << "任务级 timeout_seconds=2 未生效（等待 " << elapsed_ms << "ms）";
+    // fd 必须真实关闭：进程存活期间服务器侧应观察到 EOF
+    EXPECT_GE(server.peer_closed(), 1)
+        << "超时清理未关闭 fd（泄漏的连接在服务器侧观察不到 EOF）";
+
+    server.stop();
+}
+
+TEST(DownloadEngineV2RunTest, BlackHoleServerTimesOutViaEngineFallback) {
+    SilentServer server;
+    ASSERT_TRUE(server.start());
+
+    // 任务未设置超时（0）时回落引擎兜底值：command_wait_timeout_seconds=2
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    config.command_wait_timeout_seconds = 2;
+    DownloadEngineV2 engine(config);
+
+    const auto options = [] {
+        DownloadOptions o;
+        o.timeout_seconds = 0;  // 未设置：回落引擎兜底
+        return o;
+    }();
+
+    const TaskId task_id = engine.add_download(server.url("/fallback.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    long long elapsed_ms = 0;
+    ASSERT_TRUE(wait_group_terminal(engine, group, 15, elapsed_ms));
+
+    EXPECT_EQ(group->status(), RequestGroupStatus::FAILED);
+    // 显式小于 DownloadOptions 默认值 30s：证明生效的是引擎兜底 2s
+    EXPECT_LT(elapsed_ms, 10000)
+        << "引擎兜底 command_wait_timeout_seconds=2 未生效（等待 "
+        << elapsed_ms << "ms）";
+    EXPECT_GE(server.peer_closed(), 1)
+        << "超时清理未关闭 fd（泄漏的连接在服务器侧观察不到 EOF）";
+
+    server.stop();
 }

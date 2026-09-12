@@ -2,6 +2,27 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-12 - V2 引擎超时清理闭环（任务终态 + fd 关闭 + 任务级超时）
+- 修复 `cleanup_completed_commands` 双重缺陷（对端黑洞时暴露）：
+  命令挂起超时后只销毁命令对象——`HttpResponseCommand`/
+  `HttpDownloadCommand` 析构 `= default` 不关 fd（泄漏），且不把
+  所属任务组标 FAILED（任务永久悬空 Downloading、all_completed
+  永不成立、run() 永不退出）
+- 重构为三遍扫描：锁内收集等待中命令 {cmd_id, fd, task_id, 挂起
+  时间} → 锁外按任务阈值筛选 → 锁内移除映射取所有权 → 锁外
+  `remove_event` + `close_socket_fd`（新增引擎侧辅助，_WIN32 走
+  closesocket）+ 复用 `fail_group_of_command` 标终态（与命令异常
+  路径同语义；组未完成时必为 ACTIVE，task=0 命令 find_group 安全
+  无操作）
+- `DownloadOptions::timeout_seconds` 从零消费端变为生效：任务
+  显式设置（>0）优先，未设置回落引擎 `command_wait_timeout_seconds`
+  （默认 120s 兜底）
+- 新增 2 个黑洞服务器用例（`download_engine_v2_run_test.cpp`，
+  SilentServer 接受连接后不读不写）：任务级 2s / 引擎兜底 2s 两条
+  路径均断言组 FAILED + run() 在时限内退出 + 服务器侧观察到 EOF
+  （进程存活期间 fd 未关闭即观察不到，真泄漏检测）；全量 1463
+  ctest 通过，ASan 构建限速/超时/异常边界 17 用例零告警
+
 ### 2026-09-12 - V2 引擎单任务限速（任务窗口 + 与全局取严）
 - `DownloadOptions::speed_limit` 在 V2 引擎同样零消费端（V1 有
   curl 通道，V2 裸 socket 路径全速跑），复用全局限速的滑动窗口
