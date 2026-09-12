@@ -58,6 +58,7 @@ add_executable(falcon_protocols_tests
     unit/http_commands_coverage_test.cpp
     unit/event_poll_poll_test.cpp
     unit/download_engine_v2_run_test.cpp
+    unit/download_engine_v2_speed_limit_test.cpp
     unit/coverage_supplement_test.cpp
 )
 

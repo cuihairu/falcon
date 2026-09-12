@@ -19,6 +19,7 @@
 
 #include <memory>
 #include <deque>
+#include <utility>
 #include <vector>
 #include <map>
 #include <atomic>
@@ -198,6 +199,34 @@ public:
     };
     Statistics get_statistics() const;
 
+    /**
+     * @brief 设置全局下载限速（bytes/s，0 = 不限速），运行时可调
+     *
+     * 引擎按滑动窗口统计全局接收速率，超限时拉长事件轮询等待节流
+     * （与 aria2 的 SpeedCalc/整体节流思路一致）
+     */
+    void set_global_speed_limit(std::uint64_t bytes_per_second);
+
+    /// 当前生效的全局限速（bytes/s，0 = 不限速）
+    std::uint64_t get_global_speed_limit() const noexcept;
+
+    /**
+     * @brief 命令报告本轮接收字节数（全局限速统计入口）
+     *
+     * 下载命令在每次成功接收后调用；引擎以滑动窗口统计全局速率，
+     * 超限时在事件循环中节流
+     */
+    void report_downloaded_bytes(Bytes n);
+
+    /**
+     * @brief 当前接收预算（字节）：全局限速 − 滑动窗口占用
+     *
+     * 下载命令在每次 recv 前查询并截断单次读取量；预算为 0 表示
+     * 本秒配额已用完，应挂起等待（引擎节流期不执行数据面命令）。
+     * 不限速时返回 UINT64_MAX。仅引擎线程调用（与窗口统计同线程）
+     */
+    std::uint64_t recv_budget() const noexcept;
+
 private:
     /**
      * @brief 执行命令队列
@@ -232,7 +261,14 @@ private:
     /// 提取为方法以便在回调中整体 try/catch 兜底）
     void handle_socket_ready(int socket_fd, int ready_events);
 
-    // 成员变量
+    /// 淘汰滑动窗口（最近 1s）外的速率样本
+    void prune_speed_window(std::chrono::steady_clock::time_point now);
+
+    /// 窗口占用达到限值时评估节流截止时间：等足够多的旧样本满 1s 龄
+    /// 淘汰、接收预算恢复为止（与 recv_budget 的预算语义一致）
+    void evaluate_throttle(std::chrono::steady_clock::time_point now);
+
+    /// 成员变量
     std::unique_ptr<net::EventPoll> event_poll_;
     std::unique_ptr<RequestGroupMan> request_group_man_;
     std::unique_ptr<net::SocketPool> socket_pool_;
@@ -261,6 +297,14 @@ private:
     // 状态
     std::atomic<int> halt_requested_{0};
     bool running_ = false;
+
+    // 全局限速：limit 原子供其他线程热更；统计仅引擎线程访问（单线程事件循环）
+    std::atomic<std::uint64_t> global_speed_limit_{0};
+    /// 滑动窗口样本 (时间点, 字节数)，统计最近 1s 全局接收速率
+    std::deque<std::pair<std::chrono::steady_clock::time_point, Bytes>> speed_samples_;
+    Bytes speed_window_bytes_ = 0;
+    /// 限速节流剩余等待（receive_data 让出后累计，poll 时消费）
+    std::chrono::steady_clock::time_point throttle_until_{};
 
     // 配置
     EngineConfigV2 config_;

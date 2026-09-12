@@ -2,6 +2,29 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-12 - V2 引擎全局限速（读层预算 + 事件循环节流）
+- `EngineConfigV2::global_speed_limit` 从零消费端变为端到端生效：
+  `HttpDownloadCommand::receive_data` 每次 recv 后
+  `report_downloaded_bytes` → 引擎 1s 滑动窗口统计全局接收速率
+- 节流双层设计（aria2 SpeedCalc 同思路）：
+  - 读层预算 `recv_budget()`（限值 − 窗口占用）：recv 前查询，
+    单次读取量截断到预算内、预算归零即挂起等 socket 事件——
+    单次 execute 最多循环读 64 轮，若不在读层限流，一次就能把
+    整个文件拉完，循环级节流永远插不进来；截断同样必要，预算
+    残量时整缓冲读会让均速到限值 2 倍（测试实测复现）
+  - 循环级节流：窗口达限后 `evaluate_throttle` 以"旧样本满 1s 龄
+    淘汰、预算恢复"为截止点拉长 poll 等待并跳过数据面命令，
+    socket 事件照常处理不丢唤醒
+- `set_global_speed_limit` 运行时可调（清空节流截止立即生效），
+  多连接分段下载共享同一窗口（全局语义）
+- 新增 3 个端到端用例（`download_engine_v2_speed_limit_test.cpp`）：
+  全速对照上界 + 配置构造/运行时 setter 两条限速路径的时间下界
+  断言（256KB @ 64KB/s ≥ 2.5s，实测 ≈3.0s 精确节流）；测试服务器
+  带 RAII 析构（joinable 线程析构即 terminate）与 Winsock 类型
+  别名，三平台可编译
+- 全量回归：protocols 549 + core 402 + daemon 229 通过，ASan 构建
+  V2 限速/异常边界 13 用例零告警
+
 ### 2026-09-12 - 引擎全局限速真正落地（零消费端 → 端到端生效）
 - 修复全局限速"只存值不生效"的缺陷：`set_global_speed_limit` 此前
   仅写原子并广播事件，下载路径零消费端（daemon.json 的

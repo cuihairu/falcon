@@ -1238,7 +1238,22 @@ void HttpDownloadCommand::fail_group_on_segment_error(RequestGroup& group,
 AbstractCommand::ExecutionResult HttpDownloadCommand::receive_data(DownloadEngineV2* engine) {
     char buffer[65536];  // 64KB 缓冲区
     for (int iter = 0; iter < 64; ++iter) {
-        ssize_t n = recv(socket_fd_, buffer, static_cast<int>(sizeof(buffer)), 0);
+        // 全局限速：本轮接收预算耗尽即挂起——引擎节流窗口恢复前不再
+        // 读数据（单次 execute 最多循环 64 轮，若不在读层限流，一次
+        // 就能把整个文件拉完，引擎循环级节流永远插不进来）
+        std::uint64_t chunk = sizeof(buffer);
+        if (engine) {
+            const std::uint64_t budget = engine->recv_budget();
+            if (budget == 0) {
+                engine->register_socket_event(
+                    socket_fd_, static_cast<int>(net::IOEvent::READ), id());
+                return ExecutionResult::WAIT_FOR_SOCKET;
+            }
+            // 单次读取量截断到预算内：预算很小时不能整缓冲读，
+            // 否则窗口瞬间超额、长期均速可到限值的 2 倍
+            chunk = std::min<std::uint64_t>(sizeof(buffer), budget);
+        }
+        ssize_t n = recv(socket_fd_, buffer, static_cast<int>(chunk), 0);
         if (n < 0) {
             if (sock_would_block(sock_errno())) {
                 if (engine) {
@@ -1258,6 +1273,11 @@ AbstractCommand::ExecutionResult HttpDownloadCommand::receive_data(DownloadEngin
                 return ExecutionResult::OK;
             }
             return ExecutionResult::ERROR_OCCURRED;
+        }
+
+        // 全局限速统计：报告接收量给引擎（滑动窗口 → 节流）
+        if (engine) {
+            engine->report_downloaded_bytes(static_cast<Bytes>(n));
         }
 
         if (chunked_encoding_) {

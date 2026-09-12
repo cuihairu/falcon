@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <limits>
 
 namespace falcon {
 
@@ -25,6 +26,7 @@ DownloadEngineV2::DownloadEngineV2(const EngineConfigV2& config)
     , socket_pool_(std::make_unique<net::SocketPool>(
           std::chrono::seconds(30),  // 30秒超时
           16))                        // 最大空闲连接数
+    , global_speed_limit_(config.global_speed_limit)
     , config_(config)
 {
     FALCON_LOG_INFO_STREAM("创建 DownloadEngineV2");
@@ -177,6 +179,72 @@ DownloadEngineV2::Statistics DownloadEngineV2::get_statistics() const {
     return stats;
 }
 
+void DownloadEngineV2::set_global_speed_limit(std::uint64_t bytes_per_second) {
+    global_speed_limit_.store(bytes_per_second, std::memory_order_relaxed);
+    // 变更立即生效：清空节流截止，下轮重新评估（提速能马上恢复预算）
+    throttle_until_ = {};
+    if (bytes_per_second > 0) {
+        FALCON_LOG_INFO_STREAM("全局限速: " << bytes_per_second << " bytes/s");
+    } else {
+        FALCON_LOG_INFO_STREAM("全局限速: 取消");
+    }
+}
+
+std::uint64_t DownloadEngineV2::get_global_speed_limit() const noexcept {
+    return global_speed_limit_.load(std::memory_order_relaxed);
+}
+
+std::uint64_t DownloadEngineV2::recv_budget() const noexcept {
+    const auto limit = global_speed_limit_.load(std::memory_order_relaxed);
+    if (limit == 0) {
+        return std::numeric_limits<std::uint64_t>::max();
+    }
+    return speed_window_bytes_ >= limit ? 0 : limit - speed_window_bytes_;
+}
+
+void DownloadEngineV2::report_downloaded_bytes(Bytes n) {
+    if (n == 0) return;
+    const auto now = std::chrono::steady_clock::now();
+    speed_samples_.emplace_back(now, n);
+    speed_window_bytes_ += n;
+    prune_speed_window(now);
+}
+
+void DownloadEngineV2::prune_speed_window(std::chrono::steady_clock::time_point now) {
+    const auto cutoff = now - std::chrono::seconds(1);
+    while (!speed_samples_.empty() && speed_samples_.front().first < cutoff) {
+        speed_window_bytes_ -= speed_samples_.front().second;
+        speed_samples_.pop_front();
+    }
+}
+
+void DownloadEngineV2::evaluate_throttle(std::chrono::steady_clock::time_point now) {
+    prune_speed_window(now);
+    const auto limit = global_speed_limit_.load(std::memory_order_relaxed);
+    if (limit == 0 || speed_window_bytes_ < limit) {
+        return;  // 窗口未达限：不节流
+    }
+    // 窗口达限：等到足够多的旧样本满 1s 龄淘汰、接收预算恢复为止。
+    // 找最早的 k 使去掉前 k 个样本后剩余和 < limit——第 k 个样本满龄
+    // （时间戳 + 1s）时窗口恰好降到 limit 以下
+    Bytes suffix = speed_window_bytes_;
+    std::size_t k = 0;
+    while (k < speed_samples_.size() && suffix >= limit) {
+        suffix -= speed_samples_[k].second;
+        ++k;
+    }
+    // k == size() 时全部样本满龄后窗口归零（suffix < limit），取末样本锚点
+    const auto anchor = k < speed_samples_.size()
+                            ? speed_samples_[k].first
+                            : speed_samples_.back().first;
+    // +1ms：prune 用严格小于判定，样本恰满 1s 时还未淘汰
+    const auto until =
+        anchor + std::chrono::seconds(1) + std::chrono::milliseconds(1);
+    if (until > throttle_until_) {
+        throttle_until_ = until;
+    }
+}
+
 void DownloadEngineV2::run() {
     FALCON_LOG_INFO_STREAM("启动下载引擎事件循环");
 
@@ -195,19 +263,43 @@ void DownloadEngineV2::run() {
                 break;
             }
 
+            // 全局限速节流：超速时拉长本轮事件等待并跳过数据面命令，
+            // 让 socket 事件照常处理（回调只入队，不丢事件）
+            bool throttled = false;
+            int poll_timeout_ms = config_.poll_timeout_ms;
+            if (global_speed_limit_.load(std::memory_order_relaxed) > 0) {
+                const auto now = std::chrono::steady_clock::now();
+                if (now < throttle_until_) {
+                    throttled = true;
+                } else {
+                    evaluate_throttle(now);
+                    throttled = now < throttle_until_;
+                }
+                if (throttled) {
+                    const auto remain_ms =
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            throttle_until_ - std::chrono::steady_clock::now())
+                            .count();
+                    poll_timeout_ms = static_cast<int>(
+                        std::clamp<long long>(remain_ms, 1, 1000));
+                }
+            }
+
             // 执行例程命令
             execute_routine_commands();
 
             // 等待事件（带超时）
-            int events = event_poll_->poll(config_.poll_timeout_ms);
+            int events = event_poll_->poll(poll_timeout_ms);
 
             // 处理就绪事件
             if (events > 0) {
                 process_ready_events();
             }
 
-            // 执行命令队列
-            execute_commands();
+            // 执行命令队列（节流轮跳过，抑制接收速率）
+            if (!throttled) {
+                execute_commands();
+            }
 
             // 清理已完成的命令
             cleanup_completed_commands();
