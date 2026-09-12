@@ -6,6 +6,31 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-12 - WebSocket 事件流客户端（桌面端对接）
+- 新增 `websocket_rpc_client.{hpp,cpp}`：`WebSocketRpcClient`——与 daemon
+  维持一条 WebSocket 长连接，请求/响应同连接按 id 匹配，服务器通知经
+  notification handler 推送（与 `JsonRpcClient`（HTTP）平行；桌面
+  `DaemonRpcBackend` 已切换至此客户端，500ms 轮询升级为事件驱动）
+  - `call()` 语义与 `JsonRpcClient::call` 完全一致（token 自动前置、
+    错误码约定相同）；便捷方法（addUri/tell*/pause/...）平行复刻
+  - 断线自愈：`call()` 发现未连接自动重连握手；发送失败 shutdown 加速
+    读线程收尾；服务器/网络断开时挂起请求统一以 -32000 唤醒返回
+  - 线程安全：`call()` 可并发（pending 表按 id 匹配 + 写帧互斥）；
+    通知 handler 在读线程调用、与 `set_notification_handler` 互斥
+    （setter 返回后保证无在途调用，调用方析构时序安全；handler 内可
+    调 call()、不可 disconnect()）
+  - 端点解析 `ws://`/`http://` 同义（与 HTTP JSON-RPC 同端点），支持
+    主机名（getaddrinfo）、IPv6 字面量、可选端口（缺省 6800）；TLS 不支持
+  - `set_url()` 运行期重定向端点（断开旧连接，下个 call 按新端点重连）
+- `websocket_frame` 新增 `ws_encode_client_frame`（客户端掩码帧，
+  thread_local mt19937_64 掩码 key）与 `ws_base64_encode`（握手 key 用）
+- CMake：`falcon_daemon_rpc_client` 与 `falcon_daemon_rpc` 均纳入
+  websocket_frame + websocket_rpc_client 源（重复编译同源文件既有模式）
+- 测试：新增 `tests/websocket_rpc_client_test.cpp`（10 用例入
+  `falcon_daemon_rpc_client_tests`）：WS 上 RPC 往返/认证/通知接收/
+  断线重连/服务器停机返回/并发 id 匹配、客户端掩码帧解析回环与扩展
+  长度、握手 key base64
+
 ### 2026-09-12 - WebSocket 事件流订阅（aria2 兼容通知）
 - 新增 `websocket_frame.{hpp,cpp}`：RFC 6455 协议层（无 socket 依赖、无
   OpenSSL 依赖——SHA1/base64 自实现）：
@@ -124,6 +149,9 @@ packages/falcon-daemon/src/
 │   │                             #   + WebSocket 升级与通知广播（RpcEventBridge）
 │   ├── websocket_frame.hpp/.cpp  # RFC 6455 帧编解码（握手应答/掩码/分片，
 │   │                             #   自实现 SHA1+base64，无 OpenSSL 依赖）
+│   ├── websocket_rpc_client.hpp/.cpp # WebSocket JSON-RPC 客户端（单连接
+│   │                             #   承载请求/响应与通知；随
+│   │                             #   falcon_daemon_rpc_client 库供桌面链接）
 │   ├── json_rpc_client.hpp/.cpp  # JSON-RPC 2.0 客户端（libcurl；随
 │   │                             #   falcon_daemon_rpc_client 库供桌面链接）
 │   └── aria2_snapshots.hpp/.cpp  # aria2 JSON → TaskSnapshot/GlobalStats 转换
@@ -290,7 +318,7 @@ RPC 的 `pauseAll`/`unpauseAll`/`removeDownloadResult`/`purgeDownloadResult`
 | 测试目标 | 文件 | 覆盖 |
 |----------|------|------|
 | `falcon_daemon_rpc_tests` | `json_rpc_server_test.cpp` `websocket_test.cpp` | RPC 基础；WebSocket 帧协议/握手/通知/节流/停机 |
-| `falcon_daemon_rpc_client_tests` | `json_rpc_client_test.cpp` `aria2_snapshots_test.cpp` | 客户端 × 真实服务器回环 + 快照转换 |
+| `falcon_daemon_rpc_client_tests` | `json_rpc_client_test.cpp` `aria2_snapshots_test.cpp` `websocket_rpc_client_test.cpp` | 客户端 × 真实服务器回环 + 快照转换 + WS 客户端事件流 |
 | `falcon_daemon_rpc_coverage_tests` | `json_rpc_server_coverage_test.cpp` | HTTP 层 + 全方法 |
 | `falcon_daemon_rpc_storage_tests` | `json_rpc_storage_test.cpp` | RPC × storage 集成（回落/删除联动/批量落库/停机回调） |
 | `falcon_daemon_storage_tests` | `task_storage_test.cpp` `task_storage_listener_test.cpp` | 持久化与监听器 |
@@ -342,9 +370,7 @@ curl http://127.0.0.1:6800/jsonrpc -d '
 ## 下一步开发计划
 
 1. **配置文件加载**：`daemon.json`（RPC/storage/下载参数）与命令行参数合并
-2. **桌面客户端对接**：apps/desktop `DaemonRpcBackend` 从 500ms 轮询迁移到
-   WebSocket 事件流驱动（通知触发刷新）
-3. **认证增强**：secret 持久化、配置文件管理（当前仅命令行传入）
+2. **认证增强**：secret 持久化、配置文件管理（当前仅命令行传入）
 
 ---
 

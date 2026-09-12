@@ -21,8 +21,11 @@ add_executable(falcon_desktop_backend_tests
     ../src/services/download_backend.cpp
 )
 
+# 测试 harness 直接使用真实 JsonRpcServer：其符号在 falcon_daemon_rpc 中
+# （含客户端库同源文件，静态库按需拉入成员，无重复定义冲突）
 target_link_libraries(falcon_desktop_backend_tests
     PRIVATE
+        falcon_daemon_rpc
         falcon_daemon_rpc_client
         GTest::gtest
         GTest::gtest_main

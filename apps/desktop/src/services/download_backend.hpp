@@ -13,6 +13,7 @@
 #include <falcon/download_options.hpp>
 #include <falcon/types.hpp>
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -53,6 +54,16 @@ public:
     virtual std::vector<falcon::daemon::rpc::TaskSnapshot> fetch_tasks() = 0;
     /// 全局统计；不可用时返回 nullopt
     virtual std::optional<falcon::daemon::rpc::GlobalStats> fetch_stats() = 0;
+
+    // ---- 事件驱动（可选能力） ----
+    /// 注册"有新事件"唤醒回调：daemon 推送通知（任务状态变更/进度更新）时
+    /// 触发，调用方据此立即刷新快照，把轮询降为兜底路径。
+    /// 回调从后端内部线程调用，须线程安全且不得阻塞；
+    /// 传空 std::function 解除注册（返回后保证不再有在途调用）。
+    /// 默认实现为无操作（无事件源的后端）。
+    virtual void set_wake_callback(std::function<void()> callback) {
+        (void)callback;
+    }
 };
 
 /// 进程内引擎后端：直接持有 DownloadEngine（原 desktop 行为）

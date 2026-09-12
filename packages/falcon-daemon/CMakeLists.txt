@@ -29,13 +29,19 @@ if(nlohmann_json_FOUND)
     # 可执行文件
     # ============================================================================
 
-    # RPC 客户端 + aria2 快照转换：无服务端依赖，desktop 可直接链接
+    # RPC 客户端 + aria2 快照转换 + WebSocket 事件流客户端：无服务端依赖，
+    # desktop 可直接链接（websocket_frame 与 falcon_daemon_rpc 重复编译同源
+    # 文件，无二进制同时链接两者）
     if(CURL_FOUND)
         add_library(falcon_daemon_rpc_client STATIC
             src/rpc/json_rpc_client.cpp
             src/rpc/json_rpc_client.hpp
             src/rpc/aria2_snapshots.cpp
             src/rpc/aria2_snapshots.hpp
+            src/rpc/websocket_frame.cpp
+            src/rpc/websocket_frame.hpp
+            src/rpc/websocket_rpc_client.cpp
+            src/rpc/websocket_rpc_client.hpp
         )
 
         target_link_libraries(falcon_daemon_rpc_client
@@ -62,6 +68,8 @@ if(nlohmann_json_FOUND)
         src/rpc/aria2_snapshots.hpp
         src/rpc/websocket_frame.cpp
         src/rpc/websocket_frame.hpp
+        src/rpc/websocket_rpc_client.cpp
+        src/rpc/websocket_rpc_client.hpp
         src/daemon/daemon.cpp
         src/daemon/daemon.hpp
     )

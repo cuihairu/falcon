@@ -190,6 +190,22 @@ TEST_F(DownloadBackendTest, DaemonApplyGlobalSettings) {
     EXPECT_EQ(engine_.get_global_speed_limit(), falcon::BytesPerSecond{8192});
 }
 
+TEST_F(DownloadBackendTest, DaemonWakeCallbackOnNotification) {
+    std::atomic<int> wakes{0};
+    daemon_backend_->set_wake_callback([&wakes]() { wakes.fetch_add(1); });
+
+    add_active_task("backend-wake");
+
+    // daemon WebSocket 事件流通知（任务状态变更）应触发唤醒回调
+    for (int i = 0; i < 2500 && wakes.load() == 0; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    EXPECT_GT(wakes.load(), 0);
+
+    // 解除注册：返回后保证不再有在途调用
+    daemon_backend_->set_wake_callback({});
+}
+
 TEST_F(DownloadBackendTest, InProcessBackendBasics) {
     auto backend = make_inprocess_backend();
     ASSERT_TRUE(backend);

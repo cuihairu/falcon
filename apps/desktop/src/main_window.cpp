@@ -186,6 +186,8 @@ void MainWindow::ensure_download_service()
             static_cast<std::size_t>(settings_page_->get_global_speed_limit()) * 1024);
     }
 
+    // 500ms 仅作兜底轮询：daemon RPC 后端经 WebSocket 事件流收到通知
+    // （任务状态变更/进度推送）会即时触发刷新，进程内后端保持周期驱动
     download_service_->start(500);
 }
 

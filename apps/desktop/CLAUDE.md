@@ -2,6 +2,30 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-12 - Daemon 事件流驱动（WebSocket 通知接入）
+- `DaemonRpcBackend` 从 HTTP `JsonRpcClient` 切换到 `WebSocketRpcClient`
+  （daemon 新增的 WS JSON-RPC 客户端）：与 daemon 维持单条 WebSocket
+  长连接，全部 RPC（控制/查询）与服务器通知共用；断线后 `call()` 自动
+  重连握手
+- `IDownloadBackend` 新增可选能力 `set_wake_callback`（默认无操作）：
+  daemon 通知（aria2.onDownloadStart/Pause/Complete/Error/Stop +
+  falcon.onProgress）到达即触发回调，传空解除注册（返回后保证无在途
+  调用，析构时序安全）
+- `DownloadService` 刷新路径升级为事件驱动：`start()` 注册唤醒回调 →
+  `request_refresh()` 置位 + 唤醒 worker；worker 在 fetch 期间到达的
+  重复事件自动合并（bool 标志），500ms 周期轮询降为兜底（后端不可达
+  重连、无事件源的进程内后端仍走周期驱动）
+- 析构顺序加固：`~DownloadService` 先 `stop()`（worker join）再解除
+  唤醒回调；`~DaemonRpcBackend` 先 `client_.disconnect()`（join WS 读
+  线程）再让成员析构——否则成员逆序析构会先销毁 `wake_callback_` 而
+  读线程可能正在调用它
+- 修复 `falcon_desktop_backend_tests` 潜在链接缺陷：测试 harness 使用
+  `JsonRpcServer` 但目标只链接了 `falcon_daemon_rpc_client`（不含
+  server 符号）——补链 `falcon_daemon_rpc`（静态库按需拉入成员，与
+  client 库的同源文件无重复定义冲突）
+- 新增用例 `DaemonWakeCallbackOnNotification`（addUri → daemon 通知 →
+  wake 回调全链路）；本地等价目标编译验证 6/6 通过
+
 ### 2026-09-11 - 下载服务层与后端抽象（Daemon RPC 集成）
 - 新增 `services/download_backend.{hpp,cpp}`（纯 C++，不依赖 Qt）：
   `IDownloadBackend` 接口（add/pause/resume/remove/set_priority/
@@ -137,6 +161,10 @@ Falcon Desktop 是基于 Qt6 的跨平台桌面下载管理器，采用迅雷风
 - **线程模型**：QObject 本体在主线程；内部 `std::thread` worker 排空命令
   队列后 fetch 快照并 emit 信号（跨线程自动 QueuedConnection；自定义类型
   需 `Q_DECLARE_METATYPE` + `qRegisterMetaType`）
+- **刷新驱动**：daemon RPC 后端经 WebSocket 事件流收到通知即回调
+  `set_wake_callback` 触发立即刷新（事件驱动）；周期轮询（500ms）仅作
+  兜底（重连、无事件源的进程内后端）。worker 忙碌期间到达的重复事件
+  自动合并为一次刷新
 - **事件派生**：完成/失败不靠回调，由前后两轮快照 diff 得出（仅当亲眼见过
   未完成状态才通知），两个后端行为完全一致
 - **后端选择**：应用启动时按设置页 daemon 开关创建，运行中不可切换

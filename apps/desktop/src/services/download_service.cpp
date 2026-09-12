@@ -19,17 +19,25 @@ DownloadService::DownloadService(std::unique_ptr<IDownloadBackend> backend,
 DownloadService::~DownloadService()
 {
     stop();
+    // 先于 backend_ 成员析构解除事件回调（析构顺序上 mutex_ 会先于 backend_
+    // 销毁，必须保证此后后端线程不再进入 request_refresh）。
+    // set_wake_callback 返回后保证无在途调用。
+    backend_->set_wake_callback({});
 }
 
 void DownloadService::start(int poll_interval_ms)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (started_) {
-        return;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (started_) {
+            return;
+        }
+        poll_interval_ = std::chrono::milliseconds(poll_interval_ms);
+        stop_flag_ = false;
+        started_ = true;
     }
-    poll_interval_ = std::chrono::milliseconds(poll_interval_ms);
-    stop_flag_ = false;
-    started_ = true;
+    // 事件驱动：后端有事件源（daemon 通知）时即时刷新，轮询降为兜底
+    backend_->set_wake_callback([this]() { request_refresh(); });
     worker_ = std::thread([this]() { worker_loop(); });
 }
 
@@ -106,18 +114,33 @@ void DownloadService::apply_global_settings(std::size_t max_concurrent_tasks,
     });
 }
 
+void DownloadService::request_refresh()
+{
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!started_ || refresh_requested_) {
+            return;
+        }
+        refresh_requested_ = true;
+    }
+    cv_.notify_all();
+}
+
 void DownloadService::worker_loop()
 {
     std::unique_lock<std::mutex> lock(mutex_);
     while (!stop_flag_) {
-        // 等待命令或轮询周期到点
+        // 等待命令 / 事件到达 / 轮询周期到点（兜底）
         cv_.wait_for(lock, poll_interval_,
-                     [this]() { return stop_flag_ || !queue_.empty(); });
+                     [this]() {
+                         return stop_flag_ || !queue_.empty() || refresh_requested_;
+                     });
         if (stop_flag_) {
             return;
         }
         std::deque<std::function<void()>> jobs;
         jobs.swap(queue_);
+        refresh_requested_ = false;  // 合并期间到达的重复事件
         lock.unlock();
 
         while (!jobs.empty()) {

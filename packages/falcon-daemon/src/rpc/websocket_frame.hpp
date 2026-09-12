@@ -34,8 +34,15 @@ enum WsOpcode : std::uint8_t {
 /// Sec-WebSocket-Accept = base64(SHA1(client_key + GUID))
 std::string ws_compute_accept_key(const std::string& client_key);
 
+/// 标准 base64 编码（客户端握手 Sec-WebSocket-Key 也需要）
+std::string ws_base64_encode(const std::uint8_t* data, std::size_t size);
+
 /// 编码服务端帧（服务端 → 客户端方向不掩码）
 std::string ws_encode_frame(std::uint8_t opcode, const std::string& payload);
+
+/// 编码客户端帧（客户端 → 服务端方向必须掩码，RFC 6455 §5.3）。
+/// 掩码 key 每帧随机生成（thread_local mt19937_64）。
+std::string ws_encode_client_frame(std::uint8_t opcode, const std::string& payload);
 
 /// 解析出的单条 WebSocket 消息
 struct WsFrame {

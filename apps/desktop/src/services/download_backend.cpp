@@ -7,10 +7,14 @@
 
 #include "download_backend.hpp"
 
+#include <rpc/websocket_rpc_client.hpp>
+
 #include <falcon/download_engine.hpp>
 
 #include <algorithm>
 #include <cstdio>
+#include <functional>
+#include <mutex>
 #include <utility>
 
 namespace falcon::desktop {
@@ -168,7 +172,32 @@ nlohmann::json options_to_aria2(const falcon::DownloadOptions& options) {
 class DaemonRpcBackend final : public IDownloadBackend {
 public:
     explicit DaemonRpcBackend(falcon::daemon::rpc::JsonRpcClientConfig config)
-        : client_(std::move(config)) {}
+        : client_(std::move(config)) {
+        // 事件流驱动：daemon 的全部通知（aria2.onDownloadStart/Pause/Complete/
+        // Error/Stop + falcon.onProgress）都意味着快照有变化，唤醒调用方刷新。
+        // 与 set_wake_callback 互斥（client 侧保证），析构时序安全。
+        client_.set_notification_handler(
+            [this](const std::string& method, const std::string& params_json) {
+                (void)method;
+                (void)params_json;
+                std::lock_guard<std::mutex> lock(dispatch_mutex_);
+                if (wake_callback_) wake_callback_();
+            });
+    }
+
+    /// set_wake_callback 与通知分发互斥：返回后读线程不会再进入旧回调，
+    /// DownloadService 可据此安全地先行析构其成员
+    void set_wake_callback(std::function<void()> callback) override {
+        std::lock_guard<std::mutex> lock(dispatch_mutex_);
+        wake_callback_ = std::move(callback);
+    }
+
+    ~DaemonRpcBackend() override {
+        // 成员按声明逆序析构会先销毁 wake_callback_ 再析构 client_——
+        // 若读线程此时正在分发通知会调用已析构的回调。先断开连接
+        // （join 读线程）保证分发静止。
+        client_.disconnect();
+    }
 
     AddTaskResult add_task(const std::string& url,
                            const falcon::DownloadOptions& options,
@@ -256,7 +285,10 @@ public:
     }
 
 private:
-    falcon::daemon::rpc::JsonRpcClient client_;
+    // WebSocket 单连接承载全部 RPC（请求/响应 + 通知）；断线下次 call 自动重连
+    falcon::daemon::rpc::WebSocketRpcClient client_;
+    std::mutex dispatch_mutex_;  // wake_callback_ 与通知分发互斥
+    std::function<void()> wake_callback_;
 };
 
 } // namespace

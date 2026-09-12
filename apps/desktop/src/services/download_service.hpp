@@ -49,7 +49,9 @@ public:
     DownloadService(const DownloadService&) = delete;
     DownloadService& operator=(const DownloadService&) = delete;
 
-    /// 启动 worker 线程与轮询（重复调用无效果）
+    /// 启动 worker 线程与轮询（重复调用无效果）。poll_interval_ms 为快照
+    /// 轮询兜底周期；daemon RPC 后端注册事件回调后，通知到达会即时触发
+    /// 额外刷新，实际延迟不受该周期约束。
     void start(int poll_interval_ms = 500);
 
     /// 停止 worker 线程（阻塞至线程退出；析构时自动调用）
@@ -81,6 +83,9 @@ signals:
 private:
     void enqueue(std::function<void()>&& job);
     void notify_worker();
+    /// 后端事件回调（daemon 通知到达）：请求立即刷一轮快照。
+    /// 线程安全；worker 忙碌时只置位，由下一轮循环消化（天然合并）。
+    void request_refresh();
     void worker_loop();
     /// 与上一轮快照对比，发出完成/失败事件
     void publish_transitions(const std::vector<falcon::daemon::rpc::TaskSnapshot>& tasks);
@@ -94,6 +99,8 @@ private:
     std::chrono::milliseconds poll_interval_{500};
     bool stop_flag_ = false;
     bool started_ = false;
+    /// 后端事件到达标志（事件驱动刷新；轮询周期为兜底）
+    bool refresh_requested_ = false;
 
     /// worker 线程私有：上一轮快照（按 id 索引）
     std::map<falcon::TaskId, falcon::daemon::rpc::TaskSnapshot> last_snapshot_;

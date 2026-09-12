@@ -2,6 +2,17 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-12 - 桌面端接入 Daemon 事件流
+- 新增 `WebSocketRpcClient`（daemon 包，随 `falcon_daemon_rpc_client` 库）：
+  WS 单连接承载请求/响应与服务器通知，断线自动重连，`call()` 语义与
+  HTTP 客户端一致
+- desktop `DaemonRpcBackend` 切换到 WS 客户端：daemon 通知（任务状态
+  变更/进度推送）即时触发快照刷新，500ms 轮询降为兜底；刷新路径
+  `IDownloadBackend::set_wake_callback` + `DownloadService::request_refresh`
+- 新增 10 个 WS 客户端回环测试（daemon 159 用例全过）+ desktop 事件
+  唤醒全链路用例（等价目标本地编译验证 6/6）；修复 desktop 测试目标
+  缺失 server 符号的潜在链接缺陷
+
 ### 2026-09-12 - Daemon WebSocket 事件流订阅
 - daemon 同端口支持 WebSocket 升级（`ws://host:6800/jsonrpc`，aria2 真实
   行为，AriaNg 实时模式可直接对接）；WS 上的 JSON-RPC 与 HTTP 共用分发与
@@ -691,7 +702,8 @@ Daemon 配置文件（`/etc/falcon/daemon.json` 或 `~/.config/falcon/daemon.jso
    - ✅ 主题切换（亮色/暗色）
    - ✅ 云存储浏览（S3/OSS/COS）
    - ✅ 资源搜索集成
-   - ✅ Daemon 通信（aria2 兼容 JSON-RPC 后端 + 进程内引擎双后端）
+   - ✅ Daemon 通信（aria2 兼容 JSON-RPC 后端 + 进程内引擎双后端；
+     WebSocket 事件流驱动刷新，轮询兜底）
 
 3. **测试与文档**
    - 🔄 单元测试覆盖率提升

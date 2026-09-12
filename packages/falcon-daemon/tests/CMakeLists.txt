@@ -88,10 +88,11 @@ if(SQLite3_FOUND AND TARGET falcon_daemon_storage)
     )
 endif()
 
-# JSON-RPC 客户端 × 真实服务端回环集成
+# JSON-RPC 客户端 × 真实服务端回环集成（HTTP + WebSocket 事件流）
 add_executable(falcon_daemon_rpc_client_tests
     json_rpc_client_test.cpp
     aria2_snapshots_test.cpp
+    websocket_rpc_client_test.cpp
 )
 
 target_link_libraries(falcon_daemon_rpc_client_tests

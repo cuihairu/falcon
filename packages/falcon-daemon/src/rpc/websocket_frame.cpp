@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <random>
 
 namespace falcon::daemon::rpc {
 namespace {
@@ -155,6 +156,10 @@ std::string ws_compute_accept_key(const std::string& client_key) {
     return base64_encode(digest.data(), digest.size());
 }
 
+std::string ws_base64_encode(const std::uint8_t* data, std::size_t size) {
+    return base64_encode(data, size);
+}
+
 std::string ws_encode_frame(std::uint8_t opcode, const std::string& payload) {
     std::string frame;
     frame.reserve(payload.size() + 10);
@@ -173,6 +178,40 @@ std::string ws_encode_frame(std::uint8_t opcode, const std::string& payload) {
         }
     }
     frame += payload;
+    return frame;
+}
+
+std::string ws_encode_client_frame(std::uint8_t opcode, const std::string& payload) {
+    // 掩码 key 不可预测（RFC 6455 §5.3）；本地 RPC 场景 mt19937_64 足够
+    static thread_local std::mt19937_64 rng{std::random_device{}()};
+    const std::uint64_t v = rng();
+    const std::uint8_t key[4] = {static_cast<std::uint8_t>(v >> 56),
+                                 static_cast<std::uint8_t>(v >> 48),
+                                 static_cast<std::uint8_t>(v >> 40),
+                                 static_cast<std::uint8_t>(v >> 32)};
+
+    std::string frame;
+    frame.reserve(payload.size() + 14);
+    frame.push_back(static_cast<char>(0x80u | opcode)); // FIN=1
+    const std::size_t n = payload.size();
+    if (n < 126) {
+        frame.push_back(static_cast<char>(0x80u | n));
+    } else if (n < 65536) {
+        frame.push_back(static_cast<char>(0x80u | 126));
+        append_be16(frame, static_cast<std::uint16_t>(n));
+    } else {
+        frame.push_back(static_cast<char>(0x80u | 127));
+        for (int i = 7; i >= 0; --i) {
+            frame.push_back(static_cast<char>((n >> (i * 8)) & 0xFF));
+        }
+    }
+    frame.append(reinterpret_cast<const char*>(key), 4);
+    frame += payload;
+    // 就地异或去掩码（编码 = 解码，对称运算）
+    char* out = frame.data() + frame.size() - n;
+    for (std::size_t i = 0; i < n; ++i) {
+        out[i] = static_cast<char>(out[i] ^ key[i % 4]);
+    }
     return frame;
 }
 
