@@ -30,7 +30,6 @@ TEST(CommonUtilsTest, DownloadOptionsDefaults) {
     EXPECT_EQ(options.timeout_seconds, 30);
     EXPECT_EQ(options.max_retries, 3);
     EXPECT_EQ(options.speed_limit, 0);
-    EXPECT_TRUE(options.resume_if_exists);
     EXPECT_TRUE(options.resume_enabled);
     EXPECT_EQ(options.output_directory, ".");
     EXPECT_TRUE(options.output_filename.empty());
@@ -44,7 +43,6 @@ TEST(CommonUtilsTest, DownloadOptionsCustomValues) {
     options.timeout_seconds = 120;
     options.max_retries = 5;
     options.speed_limit = 1024 * 1024;
-    options.resume_if_exists = false;
     options.output_directory = "/tmp/downloads";
     options.output_filename = "test.bin";
     options.user_agent = "Falcon/1.0";
@@ -54,7 +52,6 @@ TEST(CommonUtilsTest, DownloadOptionsCustomValues) {
     EXPECT_EQ(options.timeout_seconds, 120);
     EXPECT_EQ(options.max_retries, 5);
     EXPECT_EQ(options.speed_limit, 1024 * 1024);
-    EXPECT_FALSE(options.resume_if_exists);
     EXPECT_EQ(options.output_directory, "/tmp/downloads");
     EXPECT_EQ(options.output_filename, "test.bin");
     EXPECT_EQ(options.user_agent, "Falcon/1.0");

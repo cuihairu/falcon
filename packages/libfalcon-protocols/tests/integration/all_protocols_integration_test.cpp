@@ -417,7 +417,6 @@ TEST_F(ProtocolsCompatibilityTest, ProtocolSpecificFeatures) {
     // HTTP特有功能
     DownloadOptions httpOptions;
     httpOptions.max_connections = 5;
-    httpOptions.resume_if_exists = true;
 
     try {
         auto httpTask = engine->startDownload("https://example.com/large_file.zip", httpOptions);

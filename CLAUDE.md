@@ -2,6 +2,16 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-12 - 死代码清理（resume_if_exists 死字段 + http_plugin_v2 死文件）
+- 删除 `DownloadOptions::resume_if_exists`：注释自述"resume_enabled 的
+  别名"，唯一消费点在一个从未接入构建的死文件里，活代码全库零读；
+  断点续传语义由 `resume_enabled` 独立承载（V1 四处消费）
+- 删除 `plugins/http/http_plugin_v2.cpp`（466 行）：2025-12 时代的
+  `HttpPlugin` 重复实现，与在建的 `http_plugin.cpp` 同名同类（接入
+  构建即重定义冲突），全库零引用零构建；沿用 websocket_server/
+  xml_rpc_server 死原型删除先例，git 历史可查
+- 全量 1470 ctest 通过，零新增编译警告
+
 ### 2026-09-12 - V2 引擎覆盖保护闭环（overwrite_existing 端到端生效）
 - 修复静默数据破坏缺陷：`DownloadOptions::overwrite_existing` 默认
   false（"不覆盖已存在文件"），但 V2 首段下载命令无条件以 trunc 打开
