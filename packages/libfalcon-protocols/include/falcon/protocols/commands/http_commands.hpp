@@ -19,6 +19,7 @@
 #include <memory>
 #include <string>
 #include <map>
+#include <vector>
 #include <fstream>
 
 #ifdef FALCON_ENABLE_OPENSSL
@@ -492,6 +493,14 @@ private:
     bool handle_chunked_encoding(const char* data, std::size_t size, DownloadEngineV2* engine);
     void update_progress();
     bool check_completion();
+
+    /// 冲刷磁盘写缓冲到输出文件（缓冲为空时直接成功）
+    /// @return false 表示落盘失败（stream 置错）
+    bool flush_write_buffer();
+
+    /// 冲刷写缓冲并关闭输出文件；完成/失败收尾与析构兜底共用
+    /// @return false 表示冲刷或关闭失败
+    bool finish_output();
     void complete_group_if_all_segments_done(RequestGroup& group,
                                              const DownloadTask::Ptr& task,
                                              bool success);
@@ -513,6 +522,14 @@ private:
     std::string initial_data_;
     bool initial_written_ = false;
     std::ofstream output_;
+
+    // 磁盘写缓冲（enable_disk_cache/disk_cache_size 消费点）：数据先
+    // 攒在内存、攒满 disk_cache_size 一次性落盘，减少小块写 syscall
+    // 与多段模式逐块 seekp 的流缓冲冲刷；缓冲容量在文件打开时从引擎
+    // 配置取定，0 = 直写。异常路径（超时清理/停机排水直接销毁命令，
+    // 不经 execute 收尾分支）由析构兜底冲刷，防缓冲数据静默丢失
+    std::vector<char> write_buffer_;
+    std::size_t write_buffer_capacity_ = 0;
 
     // 分块传输编码状态
     bool chunked_encoding_ = false;

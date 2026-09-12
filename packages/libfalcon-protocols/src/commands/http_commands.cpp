@@ -1160,7 +1160,12 @@ HttpDownloadCommand::HttpDownloadCommand(
 {
 }
 
-HttpDownloadCommand::~HttpDownloadCommand() = default;
+HttpDownloadCommand::~HttpDownloadCommand() {
+    // 异常路径兜底：超时清理与停机排水直接销毁命令，不经 execute 的
+    // 完成收尾分支；此处尽力把写缓冲落盘，防缓冲数据静默丢失
+    //（失败无法上报——析构不抛异常，与 ofstream 析构同语义）
+    finish_output();
+}
 
 bool HttpDownloadCommand::execute(DownloadEngineV2* engine) {
     if (!engine) {
@@ -1212,6 +1217,14 @@ bool HttpDownloadCommand::execute(DownloadEngineV2* engine) {
         }
         file_opened_ = true;
 
+        // 磁盘写缓冲容量取定（引擎级配置，任务选项无法承载）：
+        // enable_disk_cache=false 或容量为 0 时保持直写
+        if (engine->config().enable_disk_cache &&
+            engine->config().disk_cache_size > 0) {
+            write_buffer_.reserve(engine->config().disk_cache_size);
+            write_buffer_capacity_ = engine->config().disk_cache_size;
+        }
+
         if (segment_id_ == 0) {
             task->mark_started();
             task->set_status(TaskStatus::Downloading);
@@ -1236,7 +1249,13 @@ bool HttpDownloadCommand::execute(DownloadEngineV2* engine) {
     }
 
     if (download_complete_) {
-        output_.close();
+        if (!finish_output()) {
+            task->set_error("Failed to flush buffered data to disk");
+            fail_group_on_segment_error(*group, task);
+            close_socket_fd(socket_fd_);
+            socket_fd_ = -1;
+            return handle_result(ExecutionResult::ERROR_OCCURRED);
+        }
         close_socket_fd(socket_fd_);
         socket_fd_ = -1;
         complete_group_if_all_segments_done(*group, task, true);
@@ -1245,7 +1264,7 @@ bool HttpDownloadCommand::execute(DownloadEngineV2* engine) {
 
     auto res = receive_data(engine);
     if (res == ExecutionResult::ERROR_OCCURRED) {
-        output_.close();
+        finish_output();  // 已在失败路径：尽力落盘，错误不覆盖主因
         close_socket_fd(socket_fd_);
         socket_fd_ = -1;
         if (task->error_message().empty()) {
@@ -1256,7 +1275,13 @@ bool HttpDownloadCommand::execute(DownloadEngineV2* engine) {
     }
 
     if (download_complete_) {
-        output_.close();
+        if (!finish_output()) {
+            task->set_error("Failed to flush buffered data to disk");
+            fail_group_on_segment_error(*group, task);
+            close_socket_fd(socket_fd_);
+            socket_fd_ = -1;
+            return handle_result(ExecutionResult::ERROR_OCCURRED);
+        }
         close_socket_fd(socket_fd_);
         socket_fd_ = -1;
         complete_group_if_all_segments_done(*group, task, true);
@@ -1404,17 +1429,24 @@ bool HttpDownloadCommand::write_to_segment(const char* data,
         return true;
     }
 
-    // 定位写入：非首段按段偏移寻址（每个 ofstream 独立维护写位置）
-    if (segment_id_ != 0) {
-        output_.seekp(static_cast<std::streamoff>(offset_ + downloaded_bytes_));
+    if (write_buffer_capacity_ > 0) {
+        // 磁盘写缓冲：数据攒在内存，攒满一次性落盘（顺序追加，落盘
+        // 内容与位置和逐块直写完全一致）
+        write_buffer_.insert(write_buffer_.end(), data, data + allowed);
+    } else {
+        // 直写路径——定位写入：非首段按段偏移寻址（每个 ofstream
+        // 独立维护写位置）
+        if (segment_id_ != 0) {
+            output_.seekp(static_cast<std::streamoff>(offset_ + downloaded_bytes_));
+            if (!output_) {
+                return false;
+            }
+        }
+
+        output_.write(data, static_cast<std::streamsize>(allowed));
         if (!output_) {
             return false;
         }
-    }
-
-    output_.write(data, static_cast<std::streamsize>(allowed));
-    if (!output_) {
-        return false;
     }
 
     downloaded_bytes_ += static_cast<Bytes>(allowed);
@@ -1439,7 +1471,43 @@ bool HttpDownloadCommand::write_to_segment(const char* data,
     }
 
     FALCON_LOG_DEBUG_STREAM("写入 " << allowed << " 字节到分段 " << segment_id_);
+
+    // 攒满落盘：冲刷失败按写失败处理（调用方段错误收尾）
+    if (write_buffer_capacity_ > 0 &&
+        write_buffer_.size() >= write_buffer_capacity_) {
+        return flush_write_buffer();
+    }
     return true;
+}
+
+bool HttpDownloadCommand::flush_write_buffer() {
+    if (write_buffer_.empty()) {
+        return true;
+    }
+    if (segment_id_ != 0) {
+        // 多段模式按段偏移定位：已落盘字节数 = 已接收字节数 − 缓冲滞留数
+        output_.seekp(static_cast<std::streamoff>(
+            offset_ + downloaded_bytes_ - write_buffer_.size()));
+        if (!output_) {
+            return false;
+        }
+    }
+    output_.write(write_buffer_.data(),
+                  static_cast<std::streamsize>(write_buffer_.size()));
+    const bool ok = static_cast<bool>(output_);
+    write_buffer_.clear();
+    return ok;
+}
+
+bool HttpDownloadCommand::finish_output() {
+    if (!file_opened_) {
+        return true;
+    }
+    const bool flushed = flush_write_buffer();
+    if (output_.is_open()) {
+        output_.close();
+    }
+    return flushed && static_cast<bool>(output_);
 }
 
 bool HttpDownloadCommand::handle_chunked_encoding(const char* data, std::size_t size, DownloadEngineV2* engine) {

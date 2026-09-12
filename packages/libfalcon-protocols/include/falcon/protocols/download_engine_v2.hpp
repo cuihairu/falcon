@@ -144,6 +144,14 @@ public:
     RequestGroupMan* request_group_man() noexcept { return request_group_man_.get(); }
 
     /**
+     * @brief 获取引擎配置（只读）
+     *
+     * 命令据此读取引擎级配置（如磁盘写缓冲 enable_disk_cache/
+     * disk_cache_size），任务选项无法承载引擎级参数
+     */
+    const EngineConfigV2& config() const noexcept { return config_; }
+
+    /**
      * @brief 获取 Socket 连接池
      */
     net::SocketPool* socket_pool() noexcept { return socket_pool_.get(); }

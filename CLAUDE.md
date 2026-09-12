@@ -2,6 +2,30 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-12 - V2 引擎磁盘写缓冲闭环（enable_disk_cache/disk_cache_size 端到端生效）
+- `enable_disk_cache`/`disk_cache_size` 自初始核心库（9b73dca 时代）
+  即为愿望式配置，两引擎全链路零消费且默认 `true`（配置在撒谎）；
+  V2 裸 socket 路径每 recv 块直写 ofstream（多段模式还逐块 seekp
+  强制冲刷流缓冲），小块写 syscall 放大实打实存在
+- V2 实现（`HttpDownloadCommand` 应用层写缓冲）：`enable_disk_cache=
+  true` 时数据攒在内存、攒满 `disk_cache_size` 一次性落盘（顺带消掉
+  多段逐块 seekp）；`=false` 保持直写；容量在文件打开时从引擎配置
+  取定（引擎级参数，任务选项无法承载，`DownloadEngineV2::config()`
+  新只读访问器），接收即记账（进度/限速按收到的字节计，与落盘解耦）
+- 异常路径兜底：超时清理与停机排水直接销毁命令、不经 execute 收尾
+  分支——析构补冲刷（`finish_output`），滞留缓冲的数据不再随命令
+  静默丢失；完成路径冲刷失败按段错误收尾（磁盘满不会假报
+  COMPLETED）；完成/失败/析构三条路径共用同一收口
+- V1 `EngineConfig` 同名字段删除（curl+FILE* 已双层缓冲，实现无
+  收益；按 resume_if_exists 先例清除死配置），特性归属 V2 配置
+- 新增 3 个用例（`download_engine_v2_run_test.cpp`，新增
+  PartialThenHangServer 部分响应后挂起服务器）：小缓冲多次落盘
+  （16KB 缓冲下载 64KB 逐字节一致）/ 禁用直写对照 / 异常销毁兜底
+  冲刷（4KB 滞留缓冲 + 超时清理，析构后文件必须完整含这 4KB）；
+  既有全部下载用例默认走缓冲路径即回归；全量 1475 ctest 通过
+  （WsRpcClient 一例并行负载抖动，串行复跑即过），ASan 134 用例
+  零告警
+
 ### 2026-09-12 - 进度回调节流闭环（progress_interval_ms 端到端生效）
 - 修复事件风暴缺陷：`DownloadTask::update_progress` 每次调用都
   无条件下发 `on_progress`，而 V1 curl 写回调与 V2 每 recv 块都直打

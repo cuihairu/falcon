@@ -910,6 +910,138 @@ private:
     std::vector<std::thread> conn_threads_;
 };
 
+/// 部分响应后挂起的服务器：发出完整响应头 + 前 partial_bytes 字节
+/// 响应体后保持连接不关不读——模拟"传了一半对端卡死"。磁盘写缓冲
+/// 的异常路径用例据此制造"数据已接收但滞留缓冲"的状态
+class PartialThenHangServer {
+public:
+    ~PartialThenHangServer() { stop(); }  // RAII：joinable 线程析构即 terminate
+
+    bool start(std::string body, std::size_t partial_bytes) {
+#ifdef _WIN32
+        ensure_winsock_for_run_test();
+#endif
+        body_ = std::move(body);
+        partial_bytes_ = partial_bytes;
+
+        listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (listen_fd_ < 0) return false;
+
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = 0;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 ||
+            ::listen(listen_fd_, 8) != 0) {
+            CLOSE_SOCKET(listen_fd_);
+            listen_fd_ = -1;
+            return false;
+        }
+
+        sockaddr_in bound{};
+        sock_len len = sizeof(bound);
+        if (::getsockname(listen_fd_, reinterpret_cast<sockaddr*>(&bound), &len) != 0) {
+            stop();
+            return false;
+        }
+        port_ = ntohs(bound.sin_port);
+
+        running_ = true;
+        accept_thread_ = std::thread([this] { accept_loop(); });
+        return true;
+    }
+
+    void stop() {
+        running_ = false;
+        if (listen_fd_ >= 0) {
+            CLOSE_SOCKET(listen_fd_);
+            listen_fd_ = -1;
+        }
+        if (accept_thread_.joinable()) accept_thread_.join();
+        for (auto& t : conn_threads_) {
+            if (t.joinable()) t.join();
+        }
+        conn_threads_.clear();
+    }
+
+    std::string url(const std::string& path) const {
+        return "http://127.0.0.1:" + std::to_string(port_) + path;
+    }
+
+private:
+    void accept_loop() {
+        while (running_) {
+            struct pollfd pfd;
+            pfd.fd = listen_fd_;
+            pfd.events = POLLIN;
+            pfd.revents = 0;
+            if (POLL(&pfd, 1, 500) <= 0) {
+                continue;
+            }
+            sockaddr_in peer{};
+            sock_len peer_len = sizeof(peer);
+            int conn = ::accept(listen_fd_, reinterpret_cast<sockaddr*>(&peer), &peer_len);
+            if (conn < 0) {
+                if (!running_) return;
+                continue;
+            }
+            conn_threads_.emplace_back([this, conn] { serve(conn); });
+        }
+    }
+
+    void serve(int conn) {
+        std::string request;
+        char buf[2048];
+        while (request.find("\r\n\r\n") == std::string::npos &&
+               request.size() < 16 * 1024) {
+            recv_ssize n = ::recv(conn, buf, sizeof(buf), 0);
+            if (n <= 0) {
+                CLOSE_SOCKET(conn);
+                return;
+            }
+            request.append(buf, static_cast<std::size_t>(n));
+        }
+
+        std::string header = "HTTP/1.1 200 OK\r\n"
+                             "Content-Type: application/octet-stream\r\n"
+                             "Content-Length: " + std::to_string(body_.size()) + "\r\n"
+                             "Accept-Ranges: none\r\n"
+                             "Connection: close\r\n\r\n";
+        send_all(conn, header.data(), header.size());
+        const std::size_t n = std::min(partial_bytes_, body_.size());
+        send_all(conn, body_.data(), n);
+
+        // 挂起：不发余量也不关闭，直到测试停机
+        while (running_.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        CLOSE_SOCKET(conn);
+    }
+
+    void send_all(int conn, const char* data, std::size_t size) {
+        std::size_t sent = 0;
+        while (sent < size) {
+            recv_ssize n = ::send(conn, data + sent,
+#ifdef _WIN32
+                                  static_cast<int>(size - sent),
+#else
+                                  size - sent,
+#endif
+                                  0);
+            if (n <= 0) return;
+            sent += static_cast<std::size_t>(n);
+        }
+    }
+
+    std::string body_;
+    std::size_t partial_bytes_ = 0;
+    int listen_fd_ = -1;
+    int port_ = 0;
+    std::atomic<bool> running_{false};
+    std::thread accept_thread_;
+    std::vector<std::thread> conn_threads_;
+};
+
 } // namespace
 
 TEST(DownloadEngineV2RunTest, BlackHoleServerTimesOutViaTaskTimeout) {
@@ -1111,5 +1243,124 @@ TEST(DownloadEngineV2RunTest, ShutdownDrainsParkedCommandFd) {
     EXPECT_EQ(group->status(), RequestGroupStatus::ACTIVE)
         << "停机排水不改变任务状态（非失败语义）";
 
+    server.stop();
+}
+
+//==============================================================================
+// 磁盘写缓冲（enable_disk_cache/disk_cache_size）语义测试
+//==============================================================================
+
+/// 小容量写缓冲（16KB）下载 64KB：多次攒满落盘 + 完成冲刷，文件必须
+/// 与响应体逐字节一致（修复前配置零消费；缓冲定位或冲刷缺失任何一环
+/// 都会在这里现形）
+TEST(DownloadEngineV2RunTest, DiskCacheBufferedDownloadMatchesBody) {
+    const std::string body = make_body(64 * 1024);
+    MinimalHttpServer server;
+    ASSERT_TRUE(server.start(body));
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    config.disk_cache_size = 16 * 1024;  // 多次触发攒满落盘
+    DownloadEngineV2 engine(config);
+
+    const std::string dir = run_test_temp_dir("diskcache_buf");
+    std::filesystem::create_directories(dir);
+    const std::string out_path = dir + "/buffered.bin";
+
+    DownloadOptions options;
+    options.output_filename = out_path;
+    options.max_connections = 1;
+
+    const TaskId task_id = engine.add_download(server.url("/buffered.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    long long elapsed_ms = 0;
+    ASSERT_TRUE(wait_group_terminal(engine, group, 20, elapsed_ms));
+
+    EXPECT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+    EXPECT_EQ(read_file_content(out_path), body);
+
+    std::filesystem::remove_all(dir);
+    server.stop();
+}
+
+/// enable_disk_cache=false：直写路径（缓冲分支的回归对照），文件同样
+/// 必须与响应体逐字节一致
+TEST(DownloadEngineV2RunTest, DiskCacheDisabledDirectWriteMatchesBody) {
+    const std::string body = make_body(32 * 1024);
+    MinimalHttpServer server;
+    ASSERT_TRUE(server.start(body));
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    config.enable_disk_cache = false;
+    DownloadEngineV2 engine(config);
+
+    const std::string dir = run_test_temp_dir("diskcache_off");
+    std::filesystem::create_directories(dir);
+    const std::string out_path = dir + "/direct.bin";
+
+    DownloadOptions options;
+    options.output_filename = out_path;
+    options.max_connections = 1;
+
+    const TaskId task_id = engine.add_download(server.url("/direct.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    long long elapsed_ms = 0;
+    ASSERT_TRUE(wait_group_terminal(engine, group, 20, elapsed_ms));
+
+    EXPECT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+    EXPECT_EQ(read_file_content(out_path), body);
+
+    std::filesystem::remove_all(dir);
+    server.stop();
+}
+
+/// 异常路径兜底冲刷：数据已接收但滞留缓冲（未攒满）时命令被超时清理
+/// 销毁，析构必须把缓冲落盘——修复前缓冲数据随命令静默丢失，文件比
+/// 任务记账的 downloaded_bytes 短一截
+TEST(DownloadEngineV2RunTest, DiskCacheFlushedOnAbnormalDestroy) {
+    const std::string body = make_body(64 * 1024);
+    // 只发 4KB（< 8KB 缓冲容量）后挂起：数据滞留缓冲，永不攒满
+    const std::size_t partial = 4 * 1024;
+    PartialThenHangServer server;
+    ASSERT_TRUE(server.start(body, partial));
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    config.disk_cache_size = 8 * 1024;
+    DownloadEngineV2 engine(config);
+
+    const std::string dir = run_test_temp_dir("diskcache_dtor");
+    std::filesystem::create_directories(dir);
+    const std::string out_path = dir + "/aborted.bin";
+
+    const auto options = [&out_path] {
+        DownloadOptions o;
+        o.output_filename = out_path;
+        o.max_connections = 1;
+        o.timeout_seconds = 2;  // 挂死 2s 后超时清理销毁命令
+        return o;
+    }();
+
+    const TaskId task_id = engine.add_download(server.url("/aborted.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    long long elapsed_ms = 0;
+    ASSERT_TRUE(wait_group_terminal(engine, group, 15, elapsed_ms));
+
+    EXPECT_EQ(group->status(), RequestGroupStatus::FAILED);
+    // 析构兜底冲刷：滞留缓冲的 4KB 必须已在文件里，逐字节一致
+    EXPECT_EQ(read_file_content(out_path), body.substr(0, partial))
+        << "异常销毁路径未冲刷写缓冲（滞留数据静默丢失）";
+
+    std::filesystem::remove_all(dir);
     server.stop();
 }

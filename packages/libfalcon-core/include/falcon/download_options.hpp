@@ -93,12 +93,6 @@ struct EngineConfig {
     /// Global speed limit in bytes/second (0 = unlimited)
     std::size_t global_speed_limit = 0;
 
-    /// Enable disk cache for better write performance
-    bool enable_disk_cache = true;
-
-    /// Disk cache size in bytes (per task)
-    std::size_t disk_cache_size = 4 * 1024 * 1024;  // 4 MB
-
     /// Log level: 0=off, 1=error, 2=warn, 3=info, 4=debug, 5=trace
     int log_level = 3;
 
