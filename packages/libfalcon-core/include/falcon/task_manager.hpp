@@ -240,6 +240,16 @@ public:
     void set_max_concurrent_tasks(size_t max_tasks);
 
     /**
+     * @brief 注册引擎全局限速原子（非拥有指针，须比 TaskManager 活得久）
+     *
+     * 注册后协议处理器可经 IEventListener::query_speed_limit 查询到
+     * 引擎全局限速（按并发槽位均摊后）与任务自身限速的综合结果
+     * @param source 引擎持有的限速原子地址（std::atomic<BytesPerSecond>），
+     *               nullptr 取消注册
+     */
+    void set_global_speed_source(std::atomic<std::uint64_t>* source);
+
+    /**
      * @brief 调整任务优先级
      * @param id 任务ID
      * @param priority 新优先级

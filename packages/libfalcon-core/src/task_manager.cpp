@@ -471,6 +471,10 @@ public:
         cv_.notify_one();
     }
 
+    void set_global_speed_source(std::atomic<std::uint64_t>* source) {
+        global_speed_source_ = source;
+    }
+
     bool adjust_task_priority(TaskId id, TaskPriority priority) {
         auto task = get_task(id);
         if (!task) return false;
@@ -758,6 +762,28 @@ public:
         }
     }
 
+    BytesPerSecond query_speed_limit(TaskId task_id) override {
+        // 全局限速按最大并发槽位均摊：并发任务数不会超过槽位数，
+        // 每任务 ≤ 全局/槽位 即可保证总速率不超全局限制
+        BytesPerSecond limit = 0;
+        if (global_speed_source_) {
+            const BytesPerSecond global =
+                global_speed_source_->load(std::memory_order_relaxed);
+            if (global > 0) {
+                limit = global / max_concurrent_tasks_.load(std::memory_order_relaxed);
+            }
+        }
+
+        // 任务自身限速更严格时以任务为准
+        if (auto task = get_task(task_id)) {
+            const auto own = task->options().speed_limit;
+            if (own > 0 && (limit == 0 || own < limit)) {
+                limit = own;
+            }
+        }
+        return limit;
+    }
+
 private:
     void worker_loop() {
         while (running_) {
@@ -886,6 +912,8 @@ private:
     EventDispatcher* event_dispatcher_;
     std::atomic<size_t> max_concurrent_tasks_{1};
     std::atomic<size_t> active_count_{0};
+    /// 引擎全局限速原子（DownloadEngine::Impl 持有，非拥有）
+    std::atomic<std::uint64_t>* global_speed_source_ = nullptr;
 
     // 任务存储
     mutable std::mutex tasks_mutex_;
@@ -994,6 +1022,10 @@ size_t TaskManager::get_max_concurrent_tasks() const {
 
 void TaskManager::set_max_concurrent_tasks(size_t max_tasks) {
     impl_->set_max_concurrent_tasks(max_tasks);
+}
+
+void TaskManager::set_global_speed_source(std::atomic<std::uint64_t>* source) {
+    impl_->set_global_speed_source(source);
 }
 
 bool TaskManager::adjust_task_priority(TaskId id, TaskPriority priority) {

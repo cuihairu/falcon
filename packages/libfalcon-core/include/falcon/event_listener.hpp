@@ -59,6 +59,17 @@ public:
     /// @param info Progress information
     virtual void on_progress(const ProgressInfo& info) { (void)info; }
 
+    /// 查询任务当前应采用的下载限速（bytes/s；0 = 不限速）
+    ///
+    /// 引擎侧实现综合全局限速（按并发槽位均摊）与任务自身限速；
+    /// 协议处理器可在下载过程中周期性查询，从而应用运行时限速变更
+    /// （如 aria2.changeGlobalOption / SIGHUP 热更新）。
+    /// 默认返回 0（handler 脱离引擎独立使用时无限速语义）。
+    virtual BytesPerSecond query_speed_limit(TaskId task_id) {
+        (void)task_id;
+        return 0;
+    }
+
     /// Called when an error occurs
     /// @param task_id The task identifier
     /// @param error_message Error description

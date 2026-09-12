@@ -6,6 +6,15 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-12 - 全局限速查询通道（query_speed_limit）
+- `IEventListener` 新增 `query_speed_limit(task_id)`（默认返回 0，
+  非破坏扩展）：协议处理器可在下载过程中周期性查询任务当前限速
+- `TaskManager` 实现：引擎全局限速按并发槽位均摊、与任务自身
+  `options.speed_limit` 取严；经 `set_global_speed_source` 注册
+  引擎限速原子（`DownloadEngine::Impl` 持有，非拥有）
+- `DownloadEngine::Impl` 构造时接通 `config.global_speed_limit`
+  （此前该配置参数从未被消费）并把限速原子暴露给 TaskManager
+
 ### 2026-05-14 - 任务优先级管理
 - 统一 `TaskPriority` 枚举到 `types.hpp`（Low/Normal/High/Critical）
 - 添加 `DownloadTask::get_priority()` / `set_priority()` 方法

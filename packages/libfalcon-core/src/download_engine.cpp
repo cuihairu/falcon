@@ -56,17 +56,25 @@ public:
               return tm;
           }(),
           &event_dispatcher_)
-        , global_speed_limiter_(0)
+        , global_speed_limiter_(config.global_speed_limit)
         , next_task_id_(1) {
 
         // Apply global log level
         falcon::set_log_level(config_.log_level);
+
+        if (config_.global_speed_limit > 0) {
+            FALCON_LOG_INFO_STREAM("Global speed limit: "
+                << format_bytes(config_.global_speed_limit) << "/s");
+        }
 
         // 启动事件分发器
         event_dispatcher_.start();
 
         // 启动任务管理器
         task_manager_.start();
+
+        // 暴露全局限速原子给协议处理器（handler 经 listener 查询限速）
+        task_manager_.set_global_speed_source(&global_speed_limiter_);
     }
 
     ~Impl() {

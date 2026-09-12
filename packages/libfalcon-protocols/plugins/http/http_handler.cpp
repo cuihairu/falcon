@@ -127,6 +127,8 @@ struct ProgressData {
     Bytes start_offset;
     std::chrono::steady_clock::time_point last_update;
     Bytes last_bytes;
+    CURL* curl = nullptr;              // 运行时限速动态调整目标
+    BytesPerSecond applied_limit = 0;  // 当前已生效的每连接限速
 };
 
 static int progress_callback(void* clientp, curl_off_t dltotal, curl_off_t dlnow,
@@ -162,6 +164,18 @@ static int progress_callback(void* clientp, curl_off_t dltotal, curl_off_t dlnow
         }
 
         data->task->update_progress(current, total, speed);
+
+        // 运行时限速：每窗口查询一次（listener 侧综合全局/任务限制），
+        // 变化时热应用——CURLOPT_MAX_RECV_SPEED_LARGE 支持传输中修改
+        if (data->curl && data->listener && data->task) {
+            const BytesPerSecond want =
+                data->listener->query_speed_limit(data->task->id());
+            if (want != data->applied_limit) {
+                curl_easy_setopt(data->curl, CURLOPT_MAX_RECV_SPEED_LARGE,
+                                 static_cast<curl_off_t>(want));
+                data->applied_limit = want;
+            }
+        }
 
         data->last_update = now;
         data->last_bytes = current;
@@ -529,10 +543,17 @@ public:
                                  static_cast<curl_off_t>(start_offset));
             }
 
-            // Speed limit
-            if (options.speed_limit > 0) {
+            // Speed limit：listener 查询优先（综合引擎全局/任务限速），
+            // handler 独立使用（无 listener）时回落任务自身限制
+            BytesPerSecond effective_limit = options.speed_limit;
+            if (listener) {
+                effective_limit = listener->query_speed_limit(task->id());
+            }
+            progress_data.curl = curl;
+            progress_data.applied_limit = effective_limit;
+            if (effective_limit > 0) {
                 curl_easy_setopt(curl, CURLOPT_MAX_RECV_SPEED_LARGE,
-                                 static_cast<curl_off_t>(options.speed_limit));
+                                 static_cast<curl_off_t>(effective_limit));
             }
 
             CURLcode res = curl_easy_perform(curl);
@@ -600,6 +621,20 @@ public:
         seg_config.adaptive_sizing = options.adaptive_segment_sizing;
         seg_config.validate_pieces = false;
 
+        // 段下载限速：把任务限速（综合引擎全局/任务限制）均摊到各连接。
+        // 段是短生命周期连接，启动时静态分摊即可（download_segment_curl
+        // 消费 options.speed_limit）
+        DownloadOptions seg_options = options;
+        if (listener) {
+            const BytesPerSecond task_limit =
+                listener->query_speed_limit(task->id());
+            if (task_limit > 0) {
+                const std::size_t conns =
+                    std::max<std::size_t>(1, options.max_connections);
+                seg_options.speed_limit = task_limit / conns;
+            }
+        }
+
         // Create segment downloader
         auto downloader = std::make_shared<SegmentDownloader>(
             task,
@@ -632,7 +667,7 @@ public:
                                              Bytes end,
                                              const std::string& output_path,
                                              std::atomic<bool>& cancelled) -> bool {
-            return download_segment_curl(url, start, end, output_path, options, cancelled);
+            return download_segment_curl(url, start, end, output_path, seg_options, cancelled);
         });
 
         if (task->status() == TaskStatus::Paused || task->status() == TaskStatus::Cancelled) {

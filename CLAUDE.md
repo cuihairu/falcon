@@ -2,6 +2,26 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-12 - 引擎全局限速真正落地（零消费端 → 端到端生效）
+- 修复全局限速"只存值不生效"的缺陷：`set_global_speed_limit` 此前
+  仅写原子并广播事件，下载路径零消费端（daemon.json 的
+  `max_overall_speed_limit` 与 RPC `max-overall-download-limit`
+  均为无效配置）；`EngineConfig::global_speed_limit` 构造参数同样
+  从未消费
+- 通道：`IEventListener::query_speed_limit(task_id)`（默认返回 0，
+  非破坏扩展）→ `TaskManager` 实现（全局限速按并发槽位均摊、与
+  任务自身 `options.speed_limit` 取严）→ HTTP handler 消费
+- HTTP 单连接路径：初值 + 进度回调每 200ms 窗口查询一次，变化时
+  热应用 `CURLOPT_MAX_RECV_SPEED_LARGE`（libcurl 支持传输中修改，
+  RPC/SIGHUP 改限速即时生效）；段路径：任务限速按连接数均摊后经
+  `options.speed_limit` 传入（既有消费点）
+- 新增 3 个回环 HTTP 端到端用例（`global_speed_limit_test.cpp`，
+  `falcon_http_tests`）：256KB 全速 520ms / 全局 64KB/s 4021ms /
+  任务自身 64KB/s 4021ms——时间下界断言只验证"限速生效必变慢"，
+  不设上界防 CI 抖动误报；测试 server 用 poll+超时防 Linux close
+  阻塞 accept 不唤醒的挂死（复用 RangeTestServer 模板）
+- 全量回归：core 392 + protocols 424 + daemon 229 全绿
+
 ### 2026-09-12 - V2 引擎异常边界（命令异常不再 terminate 整个进程）
 - `run()` 主循环体兜底 try/catch：循环内异常安全停机（引擎常以 `run()`
   作线程函数，异常逃逸即 `std::terminate`——此前引擎零 try/catch，
