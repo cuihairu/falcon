@@ -2,6 +2,28 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-12 - V2 引擎覆盖保护闭环（overwrite_existing 端到端生效）
+- 修复静默数据破坏缺陷：`DownloadOptions::overwrite_existing` 默认
+  false（"不覆盖已存在文件"），但 V2 首段下载命令无条件以 trunc 打开
+  输出文件——默认配置下二次下载同名文件即静默销毁旧文件；该字段
+  此前全链路零消费（task_manager 序列化往返、CLI/daemon 配置读写，
+  引擎侧从不读取）
+- 门禁挂 `RequestGroup::init()`（输出路径在此确定、激活时恰好执行
+  一次）：文件已存在且未显式 `overwrite_existing=true` → 组直接
+  FAILED + 明确错误消息（aria2 `allow-overwrite=false` 同语义），
+  不发任何网络请求；门禁先于协议检查，错误消息区分"文件已存在"
+  与连接失败
+- 任务终态同步补齐：组在 init 失败（覆盖拒绝、URL 协议不支持）时
+  同步 task Failed + error（此前组 FAILED 但任务永久停留初始
+  Pending 态，与组状态脱节）
+- V1 不在本次范围（daemon/CLI 生产引擎，行为改动需评估停机恢复流）；
+  V2 暂无断点续传，已存在文件没有可续传语义，覆盖必须显式授权
+- 新增 2 个用例（`download_engine_v2_run_test.cpp`，新增
+  MinimalHttpServer 测试服务器）：默认配置保护旧文件（FAILED +
+  错误含"已存在" + 文件内容逐字节保留，URL 不可达但错误必须是
+  文件已存在——证明门禁先于网络生效）/ 显式授权覆盖（COMPLETED +
+  内容完整替换）；全量 1470 ctest 通过，ASan 19 用例零告警
+
 ### 2026-09-12 - V2 引擎连接级重试链（max_retries + retry_delay_seconds 端到端生效）
 - 修复三重缺陷：`HttpRetryCommand` 是孤儿命令（生产路径零创建，
   仅测试直接构造）——V2 HTTP 下载失败根本没有重试，

@@ -41,11 +41,17 @@
 #include <cerrno>
 #include <chrono>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
+
+#ifdef _WIN32
+#include <process.h>
+#endif
 
 using namespace falcon;
 
@@ -749,6 +755,161 @@ bool wait_group_terminal(DownloadEngineV2& engine, RequestGroup* group,
     return finished;
 }
 
+#ifdef _WIN32
+int run_test_getpid() { return _getpid(); }
+#else
+int run_test_getpid() { return static_cast<int>(::getpid()); }
+#endif
+
+std::string run_test_temp_dir(const char* tag) {
+    return (std::filesystem::temp_directory_path() /
+            (std::string("falcon_v2_run_") + tag + "_" +
+             std::to_string(run_test_getpid())))
+        .string();
+}
+
+std::string make_body(std::size_t size) {
+    std::string body;
+    body.reserve(size);
+    for (std::size_t i = 0; i < size; ++i) {
+        body.push_back(static_cast<char>('a' + (i % 26)));
+    }
+    return body;
+}
+
+std::string read_file_content(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return {};
+    return std::string(std::istreambuf_iterator<char>(in),
+                       std::istreambuf_iterator<char>());
+}
+
+/// 最小可用 HTTP 服务器：对所有请求返回固定 200 响应体。
+/// overwrite 门禁的对照组用例需要真实完成一次下载（黑洞与保留端口
+/// 服务器都产不出 COMPLETED 终态）
+class MinimalHttpServer {
+public:
+    ~MinimalHttpServer() { stop(); }  // RAII：joinable 线程析构即 terminate
+
+    bool start(std::string body) {
+#ifdef _WIN32
+        ensure_winsock_for_run_test();
+#endif
+        body_ = std::move(body);
+
+        listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (listen_fd_ < 0) return false;
+
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = 0;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 ||
+            ::listen(listen_fd_, 8) != 0) {
+            CLOSE_SOCKET(listen_fd_);
+            listen_fd_ = -1;
+            return false;
+        }
+
+        sockaddr_in bound{};
+        sock_len len = sizeof(bound);
+        if (::getsockname(listen_fd_, reinterpret_cast<sockaddr*>(&bound), &len) != 0) {
+            stop();
+            return false;
+        }
+        port_ = ntohs(bound.sin_port);
+
+        running_ = true;
+        accept_thread_ = std::thread([this] { accept_loop(); });
+        return true;
+    }
+
+    void stop() {
+        running_ = false;
+        if (listen_fd_ >= 0) {
+            CLOSE_SOCKET(listen_fd_);
+            listen_fd_ = -1;
+        }
+        if (accept_thread_.joinable()) accept_thread_.join();
+        for (auto& t : conn_threads_) {
+            if (t.joinable()) t.join();
+        }
+        conn_threads_.clear();
+    }
+
+    std::string url(const std::string& path) const {
+        return "http://127.0.0.1:" + std::to_string(port_) + path;
+    }
+
+private:
+    void accept_loop() {
+        // poll 带超时轮询 running_：阻塞 accept 上直接 close(fd) 在
+        // Linux 不保证唤醒（复用既有测试服务器模板）
+        while (running_) {
+            struct pollfd pfd;
+            pfd.fd = listen_fd_;
+            pfd.events = POLLIN;
+            pfd.revents = 0;
+            if (POLL(&pfd, 1, 500) <= 0) {
+                continue;
+            }
+            sockaddr_in peer{};
+            sock_len peer_len = sizeof(peer);
+            int conn = ::accept(listen_fd_, reinterpret_cast<sockaddr*>(&peer), &peer_len);
+            if (conn < 0) {
+                if (!running_) return;
+                continue;
+            }
+            conn_threads_.emplace_back([this, conn] { serve(conn); });
+        }
+    }
+
+    void serve(int conn) {
+        std::string request;
+        char buf[2048];
+        while (request.find("\r\n\r\n") == std::string::npos &&
+               request.size() < 16 * 1024) {
+            recv_ssize n = ::recv(conn, buf, sizeof(buf), 0);
+            if (n <= 0) {
+                CLOSE_SOCKET(conn);
+                return;
+            }
+            request.append(buf, static_cast<std::size_t>(n));
+        }
+
+        std::string header = "HTTP/1.1 200 OK\r\n"
+                             "Content-Type: application/octet-stream\r\n"
+                             "Content-Length: " + std::to_string(body_.size()) + "\r\n"
+                             "Accept-Ranges: none\r\n"
+                             "Connection: close\r\n\r\n";
+        send_all(conn, header.data(), header.size());
+        send_all(conn, body_.data(), body_.size());
+        CLOSE_SOCKET(conn);
+    }
+
+    void send_all(int conn, const char* data, std::size_t size) {
+        std::size_t sent = 0;
+        while (sent < size) {
+            recv_ssize n = ::send(conn, data + sent,
+#ifdef _WIN32
+                                  static_cast<int>(size - sent),
+#else
+                                  size - sent,
+#endif
+                                  0);
+            if (n <= 0) return;
+            sent += static_cast<std::size_t>(n);
+        }
+    }
+
+    std::string body_;
+    int listen_fd_ = -1;
+    int port_ = 0;
+    std::atomic<bool> running_{false};
+    std::thread accept_thread_;
+    std::vector<std::thread> conn_threads_;
+};
+
 } // namespace
 
 TEST(DownloadEngineV2RunTest, BlackHoleServerTimesOutViaTaskTimeout) {
@@ -820,4 +981,90 @@ TEST(DownloadEngineV2RunTest, BlackHoleServerTimesOutViaEngineFallback) {
         << "超时清理未关闭 fd（泄漏的连接在服务器侧观察不到 EOF）";
 
     server.stop();
+}
+
+//==============================================================================
+// overwrite_existing 语义测试：默认配置绝不允许静默销毁已存在文件
+//==============================================================================
+
+/// overwrite_existing=false（默认）+ 输出文件已存在：任务组激活即 FAILED、
+/// 错误可查、已存在文件内容原样保留（修复前首段命令无条件 trunc，默认
+/// 配置也静默销毁用户文件）。门禁在 init() 网络 I/O 之前生效：URL 不可达
+/// （127.0.0.1:1）但错误必须是"文件已存在"而非连接失败
+TEST(DownloadEngineV2RunTest, OverwriteDisabledKeepsExistingFileAndFailsGroup) {
+    const std::string dir = run_test_temp_dir("protected");
+    std::filesystem::create_directories(dir);
+    const std::string out_path = dir + "/protected.bin";
+    const std::string existing = "OLD-CONTENT-MUST-SURVIVE";
+    {
+        std::ofstream out(out_path, std::ios::binary);
+        out << existing;
+    }
+
+    DownloadEngineV2 engine(fast_poll_config());
+    DownloadOptions options;
+    options.output_filename = out_path;  // 显式指向已存在文件
+    options.max_connections = 1;
+
+    const TaskId task_id =
+        engine.add_download("http://127.0.0.1:1/protected.bin", options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    long long elapsed_ms = 0;
+    ASSERT_TRUE(wait_group_terminal(engine, group, 10, elapsed_ms));
+
+    EXPECT_EQ(group->status(), RequestGroupStatus::FAILED);
+    EXPECT_NE(group->error_message().find("已存在"), std::string::npos)
+        << "错误应为文件已存在而非连接失败: " << group->error_message();
+
+    auto task = group->download_task();
+    ASSERT_NE(task, nullptr);
+    EXPECT_EQ(task->status(), TaskStatus::Failed);
+    EXPECT_NE(task->error_message().find("已存在"), std::string::npos);
+
+    // 数据保护核心断言：已存在文件一个字节都没被碰
+    EXPECT_EQ(read_file_content(out_path), existing);
+
+    std::filesystem::remove_all(dir);
+}
+
+/// overwrite_existing=true + 输出文件已存在：显式授权覆盖，下载照常进行，
+/// 完成后文件内容被完整替换（修复前该路径本就 trunc 重写，行为保持）
+TEST(DownloadEngineV2RunTest, OverwriteEnabledReplacesExistingFile) {
+    const std::string body = make_body(32 * 1024);
+    MinimalHttpServer server;
+    ASSERT_TRUE(server.start(body));
+
+    const std::string dir = run_test_temp_dir("replace");
+    std::filesystem::create_directories(dir);
+    const std::string out_path = dir + "/replace.bin";
+    {
+        std::ofstream out(out_path, std::ios::binary);
+        out << "STALE-CONTENT";
+    }
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options;
+    options.output_filename = out_path;
+    options.max_connections = 1;
+    options.overwrite_existing = true;
+
+    const TaskId task_id = engine.add_download(server.url("/replace.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    long long elapsed_ms = 0;
+    ASSERT_TRUE(wait_group_terminal(engine, group, 20, elapsed_ms));
+
+    EXPECT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+    // 旧内容被完整替换：既无残留（截断失效）也无追加（写入位置错乱）
+    EXPECT_EQ(read_file_content(out_path), body);
+
+    std::filesystem::remove_all(dir);
 }

@@ -122,6 +122,25 @@ bool RequestGroup::init() {
     download_task_ = std::make_shared<DownloadTask>(id_, url, options_);
     download_task_->set_output_path(build_output_path_for_options(url, options_));
 
+    // 输出文件已存在且未显式允许覆盖 → 直接失败（aria2 allow-overwrite=false
+    // 同语义）。此前 HttpDownloadCommand 首段无条件 trunc，默认配置
+    // （overwrite_existing=false）也会静默销毁已存在的同名文件；V2 暂无
+    // 断点续传，已存在文件没有可续传语义，覆盖必须显式授权。
+    if (!options_.overwrite_existing) {
+        std::error_code exists_ec;
+        const std::string& out_path = download_task_->output_path();
+        if (std::filesystem::exists(out_path, exists_ec) && !exists_ec) {
+            const std::string reason =
+                "输出文件已存在（设置 overwrite_existing = true 以覆盖）: " + out_path;
+            FALCON_LOG_WARN_STREAM("任务组失败: id=" << id_ << ", " << reason);
+            set_error_message(reason);
+            download_task_->set_error(reason);
+            download_task_->set_status(TaskStatus::Failed);
+            status_ = RequestGroupStatus::FAILED;
+            return false;
+        }
+    }
+
     if (starts_with(url, "http://")) {
         return true;
     }
@@ -131,6 +150,10 @@ bool RequestGroup::init() {
     } else {
         set_error_message("V2 当前仅支持 http://");
     }
+    // URL 协议不受支持：组 FAILED 的同时同步任务终态（任务此前会永久
+    // 停留在初始 Pending 态，与组状态脱节）
+    download_task_->set_error(error_message());
+    download_task_->set_status(TaskStatus::Failed);
     status_ = RequestGroupStatus::FAILED;
     return false;
 }
