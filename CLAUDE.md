@@ -2,6 +2,24 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-12 - V2 引擎停机排水（run() 退出关闭命令持有的 fd）
+- 补齐 33efedc 超时清理修复的姊妹项：运行期挂起 fd 由超时清理
+  收口，但 shutdown/force_shutdown/异常停机退出 run() 时仍在队列
+  或挂起中的命令随容器析构——HTTP 命令析构 `= default` 不关 fd，
+  对端黑洞任务在默认 120s 兜底超时到达前停机即静默泄漏 fd
+- `Command` 根基类新增 `virtual int socket_fd()`（默认 -1），
+  HttpInitiate/Response/Download 三个命令 override 返回各自持有
+  的 fd（fd 生命周期语义注释化：由引擎统一管理，命令析构不关）
+- run() 退出统一调 `drain_command_fds()`：锁内收集两个容器中命令
+  持有的 fd 并清空容器与 socket 映射 → 锁外 `remove_event` +
+  `close_socket_fd`；EventPoll::poll 在 run() 线程内同步派发回调，
+  循环退出后排水无并发面
+- 新增用例（SilentServer 黑洞 + shutdown）：EOF 断言归因干净——
+  任务/引擎兜底超时在测试时长内不触发，服务器侧观察到 EOF 只能
+  来自停机排水（修复前 fd 泄漏即观察不到）；同时断言排水不改变
+  任务状态（非失败语义）；全量 1471 ctest 通过，ASan 25 用例零
+  告警
+
 ### 2026-09-12 - 死代码清理（resume_if_exists 死字段 + http_plugin_v2 死文件）
 - 删除 `DownloadOptions::resume_if_exists`：注释自述"resume_enabled 的
   别名"，唯一消费点在一个从未接入构建的死文件里，活代码全库零读；

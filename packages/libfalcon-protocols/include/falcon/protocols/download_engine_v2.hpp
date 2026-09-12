@@ -283,6 +283,11 @@ private:
         const std::deque<std::pair<std::chrono::steady_clock::time_point, Bytes>>& samples,
         Bytes total, std::uint64_t limit);
 
+    /// 停机排水：关闭命令队列与挂起命令持有的 socket fd。
+    /// 命令析构 = default 不关 fd；运行期 fd 由超时清理收口，
+    /// shutdown/异常停机退出 run() 时统一在此排水，防泄漏
+    void drain_command_fds();
+
     /// 成员变量
     std::unique_ptr<net::EventPoll> event_poll_;
     std::unique_ptr<RequestGroupMan> request_group_man_;

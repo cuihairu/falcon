@@ -1068,3 +1068,48 @@ TEST(DownloadEngineV2RunTest, OverwriteEnabledReplacesExistingFile) {
 
     std::filesystem::remove_all(dir);
 }
+
+//==============================================================================
+// 停机排水测试：run() 退出必须关闭命令持有的 fd
+//==============================================================================
+
+/// 带挂起命令（对端黑洞）的引擎 shutdown 后，命令持有的 fd 必须被
+/// 关闭——服务器侧观察到 EOF。任务/引擎兜底超时（30s/120s）在测试
+/// 时长内不会触发，超时清理未参与，EOF 只能来自 run() 退出的停机
+/// 排水（修复前 fd 随命令析构静默泄漏，进程存活期间观察不到 EOF）
+TEST(DownloadEngineV2RunTest, ShutdownDrainsParkedCommandFd) {
+    SilentServer server;
+    ASSERT_TRUE(server.start());
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;  // 兜底超时保持默认 120s，不参与
+    DownloadEngineV2 engine(config);
+
+    const TaskId task_id = engine.add_download(server.url("/drain.bin"),
+                                               DownloadOptions());
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    std::thread runner([&engine] { engine.run(); });
+
+    // 等命令挂起（请求已发出、响应黑洞挂死）；即便尚未挂起，命令也
+    // 在命令队列中，同样被排水覆盖
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+    engine.shutdown();
+    runner.join();
+
+    // EOF 观察有服务器线程的 poll 周期延迟，短轮询等待避免误报
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (server.peer_closed() < 1 &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    EXPECT_GE(server.peer_closed(), 1)
+        << "停机后挂起命令的 fd 未关闭（排水缺失，fd 静默泄漏）";
+    EXPECT_EQ(group->status(), RequestGroupStatus::ACTIVE)
+        << "停机排水不改变任务状态（非失败语义）";
+
+    server.stop();
+}

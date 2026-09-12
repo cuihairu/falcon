@@ -94,6 +94,15 @@ public:
      */
     TaskId get_task_id() const noexcept { return task_id_; }
 
+    /**
+     * @brief 命令当前持有的 socket 文件描述符（未持有返回 -1）
+     *
+     * fd 生命周期由引擎统一管理（超时清理与停机排水路径 close），
+     * 命令自身析构不关闭；引擎据此在 run() 退出时排水所有排队/挂起
+     * 命令持有的 fd
+     */
+    virtual int socket_fd() const noexcept { return -1; }
+
 protected:
     explicit Command(TaskId task_id)
         : task_id_(task_id), command_id_(generate_command_id()) {}

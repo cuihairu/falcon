@@ -434,7 +434,53 @@ void DownloadEngineV2::run() {
 
     running_ = false;
 
+    // 停机排水：run() 退出（shutdown/force/全任务终态/异常 break）时
+    // 统一关闭命令队列与挂起命令持有的 fd。运行期挂起 fd 由超时清理
+    // 收口；此处的排水覆盖"引擎停了但命令还攥着 fd"的剩余窗口
+    //（对端黑洞任务在默认 120s 兜底超时到达前停机即属此列）
+    drain_command_fds();
+
     FALCON_LOG_INFO_STREAM("下载引擎事件循环结束");
+}
+
+void DownloadEngineV2::drain_command_fds() {
+    std::vector<int> fds;
+    {
+        std::lock_guard<std::mutex> lock(socket_map_mutex_);
+        for (auto& entry : waiting_commands_) {
+            const int fd = entry.second ? entry.second->socket_fd() : -1;
+            if (fd >= 0) {
+                fds.push_back(fd);
+            }
+        }
+        waiting_commands_.clear();
+        waiting_command_times_.clear();
+        socket_wait_map_.clear();
+        socket_command_map_.clear();
+    }
+    {
+        std::lock_guard<std::mutex> lock(command_queue_mutex_);
+        for (auto& command : command_queue_) {
+            const int fd = command ? command->socket_fd() : -1;
+            if (fd >= 0) {
+                fds.push_back(fd);
+            }
+        }
+        command_queue_.clear();
+    }
+
+    for (const int fd : fds) {
+        // EventPoll::poll 在 run() 线程内同步派发回调，此处循环已退出，
+        // 无并发回调；remove_event 防止已关闭 fd 残留在监听集
+        if (event_poll_) {
+            event_poll_->remove_event(fd);
+        }
+        close_socket_fd(fd);
+    }
+    if (!fds.empty()) {
+        FALCON_LOG_INFO_STREAM("停机排水: 关闭 " << fds.size()
+                              << " 个命令持有的 socket fd");
+    }
 }
 
 void DownloadEngineV2::execute_commands() {

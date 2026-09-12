@@ -125,7 +125,7 @@ public:
     /**
      * @brief 获取创建的 Socket 文件描述符
      */
-    int socket_fd() const noexcept { return socket_fd_; }
+    int socket_fd() const noexcept override { return socket_fd_; }
 
     /**
      * @brief 获取 HTTP 请求对象
@@ -321,6 +321,11 @@ public:
     }
 
     /**
+     * @brief 获取持有的 Socket 文件描述符（引擎停机排水用）
+     */
+    int socket_fd() const noexcept override { return socket_fd_; }
+
+    /**
      * @brief 检查是否接受 Range 请求
      */
     bool accepts_range() const noexcept {
@@ -461,6 +466,11 @@ public:
     SegmentId segment_id() const noexcept {
         return segment_id_;
     }
+
+    /**
+     * @brief 获取持有的 Socket 文件描述符（引擎停机排水用）
+     */
+    int socket_fd() const noexcept override { return socket_fd_; }
 
     /**
      * @brief 获取分段起始偏移
