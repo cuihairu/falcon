@@ -413,10 +413,14 @@ TEST_F(TaskManagerPriorityTest, PriorityDequeueOrder) {
     manager_->add_task(critical_task, TaskPriority::Critical);
 
     // Start all tasks — they should queue
-    manager_->start_task(1);
-    manager_->start_task(2);
-    manager_->start_task(3);
+    // 必须从最高优先级开始启动：worker 可能在相邻 start_task 之间被唤醒，
+    // 若首个可运行任务不是 Critical(4)，出队顺序将基于不完整队列（竞争）。
+    // Critical 先入队后，任意时刻唤醒 worker 首个激活的都是 4；而 release(4)
+    // 时主线程已执行完下面全部 start_task，队列完整，后续顺序由优先队列保证。
     manager_->start_task(4);
+    manager_->start_task(3);
+    manager_->start_task(2);
+    manager_->start_task(1);
 
     ASSERT_TRUE(handler_->wait_for_activated_count(1, std::chrono::milliseconds(1000)));
     EXPECT_EQ(handler_->get_execution_order(), std::vector<TaskId>({4u}));
