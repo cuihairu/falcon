@@ -381,6 +381,17 @@ struct ServerHarness {
     ~ServerHarness() { server->stop(); }
 };
 
+/// 等待服务端注册表达到 n 个订阅者。
+/// connect() 返回只代表客户端收到了 101，服务端会话线程可能尚未执行到
+/// 注册；负载下该窗口可达毫秒级，立即断言 count 或广播会偶发落空。
+bool wait_registered(falcon::daemon::rpc::JsonRpcServer* server, std::size_t n) {
+    for (int i = 0; i < 500; ++i) {
+        if (server->websocket_client_count() == n) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return server->websocket_client_count() == n;
+}
+
 } // namespace
 
 // ============================================================================
@@ -469,7 +480,7 @@ TEST(WsServerTest, HandshakeOverLoopback) {
     EXPECT_NE(client.handshake_response().find("Sec-WebSocket-Accept: "
                                                "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="),
               std::string::npos);
-    EXPECT_EQ(h.server->websocket_client_count(), 1u);
+    EXPECT_TRUE(wait_registered(h.server.get(), 1u));
 }
 
 TEST(WsServerTest, PlainGetNotUpgraded) {
@@ -607,6 +618,8 @@ TEST(WsServerTest, BroadcastFanout) {
     WsTestClient a, b;
     ASSERT_TRUE(a.connect(h.server->port()));
     ASSERT_TRUE(b.connect(h.server->port()));
+    // 两端都注册进广播表后再广播，否则快照可能漏掉尚未注册的连接
+    ASSERT_TRUE(wait_registered(h.server.get(), 2u));
 
     h.server->broadcast_notification("falcon.test",
                                      R"([{"gid":"0000000000000042"}])");
@@ -630,7 +643,7 @@ TEST(WsServerTest, CloseFrameRoundtripAndCleanup) {
     {
         WsTestClient client;
         ASSERT_TRUE(client.connect(h.server->port()));
-        ASSERT_EQ(h.server->websocket_client_count(), 1u);
+        ASSERT_TRUE(wait_registered(h.server.get(), 1u));
 
         ASSERT_TRUE(client.send_frame(WS_OP_CLOSE, std::string("\x03\xE8", 2)));
         auto frame = client.read_frame(5000);

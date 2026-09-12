@@ -66,6 +66,7 @@ void restore_home_env(const std::string& value) {
 struct AllConfigs {
     falcon::daemon::rpc::JsonRpcServerConfig rpc;
     falcon::daemon::DaemonConfig daemon;
+    falcon::daemon::DownloadConfig download;
     std::string task_db_path;
     bool enable_rpc = false;
     bool run_as_daemon = false;
@@ -74,7 +75,7 @@ struct AllConfigs {
 falcon::daemon::ConfigLoadResult load(const std::string& path, AllConfigs& c) {
     return falcon::daemon::apply_config_file(path, c.rpc, c.daemon,
                                              c.task_db_path, c.enable_rpc,
-                                             c.run_as_daemon);
+                                             c.run_as_daemon, c.download);
 }
 
 TEST(ConfigTest, ApplyFullConfig) {
@@ -94,6 +95,10 @@ TEST(ConfigTest, ApplyFullConfig) {
         },
         "storage": {
             "task_db_path": "/tmp/falcon-tasks.db"
+        },
+        "download": {
+            "max_concurrent_tasks": 5,
+            "max_overall_speed_limit": 1048576
         }
     })"));
 
@@ -116,6 +121,50 @@ TEST(ConfigTest, ApplyFullConfig) {
     EXPECT_EQ(c.daemon.log_file, "/tmp/falcon-test.log");
 
     EXPECT_EQ(c.task_db_path, "/tmp/falcon-tasks.db");
+
+    ASSERT_TRUE(c.download.max_concurrent_tasks.has_value());
+    EXPECT_EQ(*c.download.max_concurrent_tasks, 5u);
+    ASSERT_TRUE(c.download.max_overall_speed_limit.has_value());
+    EXPECT_EQ(*c.download.max_overall_speed_limit, 1048576u);
+}
+
+TEST(ConfigTest, DownloadSectionOptionalSemantics) {
+    const TempFile file(write_config(R"({
+        "download": { "max_concurrent_tasks": 3 }
+    })"));
+
+    AllConfigs c;
+    // 预置另一个键已有值：文件未出现的键必须保持原样（不动引擎默认）
+    c.download.max_overall_speed_limit = 42u;
+
+    const auto result = load(file.path, c);
+    ASSERT_TRUE(result.ok) << result.error;
+    ASSERT_TRUE(c.download.max_concurrent_tasks.has_value());
+    EXPECT_EQ(*c.download.max_concurrent_tasks, 3u);
+    ASSERT_TRUE(c.download.max_overall_speed_limit.has_value());
+    EXPECT_EQ(*c.download.max_overall_speed_limit, 42u);
+}
+
+TEST(ConfigTest, DownloadSectionAbsentKeepsNullopt) {
+    const TempFile file(write_config(R"({ "rpc": { "port": 6802 } })"));
+
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    ASSERT_TRUE(result.ok) << result.error;
+    EXPECT_FALSE(c.download.max_concurrent_tasks.has_value());
+    EXPECT_FALSE(c.download.max_overall_speed_limit.has_value());
+}
+
+TEST(ConfigTest, DownloadSectionTypeMismatchFails) {
+    const TempFile file(write_config(R"({
+        "download": { "max_concurrent_tasks": "three" }
+    })"));
+
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    EXPECT_FALSE(result.ok);
+    EXPECT_NE(result.error.find("invalid type for key 'max_concurrent_tasks'"),
+              std::string::npos);
 }
 
 TEST(ConfigTest, PartialConfigKeepsValues) {

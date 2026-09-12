@@ -2,6 +2,14 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-12 - Daemon 下载参数配置化（daemon.json "download" 节）
+- `daemon.json` 新增 `download` 节（`max_concurrent_tasks`/
+  `max_overall_speed_limit`），启动时应用、SIGHUP 重载热更，与
+  `aria2.changeGlobalOption` 键位对齐
+- 顺手加固 WS 测试基建的注册窗口竞争（`wait_registered` 辅助），
+  消除负载下 BroadcastFanout/count 断言的偶发失败
+- daemon 全量 229 用例通过
+
 ### 2026-09-12 - Daemon SIGHUP 配置重载（daemon.json 热更新）
 - SIGHUP 触发重读启动时生效的 daemon.json：`rpc.secret`/
   `allow_origin_all` 经 `JsonRpcServer::update_auth` 立即生效，
@@ -692,11 +700,17 @@ Daemon 配置文件（默认 `~/.config/falcon/daemon.json`，或 `--conf-path` 
   },
   "storage": {
     "task_db_path": "/var/lib/falcon/tasks.db"
+  },
+  "download": {
+    "max_concurrent_tasks": 5,
+    "max_overall_speed_limit": 0
   }
 }
 ```
 
 优先级：命令行显式参数 > 配置文件 > 内置默认值；`--no-conf` 跳过加载。
+SIGHUP 重载：`rpc.secret`/`allow_origin_all` 与 `download` 节立即生效，
+监听/存储/守护化项需重启。
 
 ---
 

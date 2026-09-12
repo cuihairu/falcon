@@ -626,6 +626,50 @@ TEST_F(MainIntegrationTest, ConfFileReloadKeepsRunningOnBrokenFile) {
     EXPECT_EQ(exit_code_of(p), 0);
 }
 
+TEST_F(MainIntegrationTest, DownloadOptionsFromConfigAndSighupReload) {
+    TempDirGuard tmp(make_temp_dir());
+    const std::string conf = tmp.path + "/daemon.json";
+    const uint16_t port = pick_free_port();
+    ASSERT_NE(port, 0);
+
+    const auto write_conf = [&](int max_tasks) {
+        std::ofstream out(conf);
+        out << "{\"rpc\":{\"enabled\":true,\"host\":\"127.0.0.1\","
+            << "\"port\":" << port << ",\"secret\":\"dl-conf-token\"},"
+            << "\"download\":{\"max_concurrent_tasks\":" << max_tasks << "}}";
+    };
+    write_conf(2);
+
+    Proc p;
+    ASSERT_TRUE(proc_start(p, {"--conf-path", conf}, ""));
+    ASSERT_TRUE(wait_until([&] { return tcp_connect(port); }, 8000));
+
+    const auto body_with = [&](const std::string& params) {
+        return http_post(port, make_rpc_body("aria2.getGlobalOption", params));
+    };
+
+    // 配置文件的 download 节在启动时生效
+    auto resp = body_with("[\"token:dl-conf-token\"]");
+    ASSERT_TRUE(resp.has_value());
+    EXPECT_TRUE(contains(http_body(*resp), "\"max-concurrent-downloads\":\"2\"")) << *resp;
+
+    // 改文件 + SIGHUP：下载参数是运行时可调项，热更立即生效
+    write_conf(3);
+    ASSERT_EQ(::kill(p.pid, SIGHUP), 0);
+    bool applied = false;
+    for (int i = 0; i < 250 && !applied; ++i) {
+        auto probe = body_with("[\"token:dl-conf-token\"]");
+        applied = probe.has_value() &&
+                  contains(http_body(*probe), "\"max-concurrent-downloads\":\"3\"");
+        if (!applied) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    EXPECT_TRUE(applied) << "download option never picked up after SIGHUP";
+
+    proc_signal(p, SIGTERM);
+    EXPECT_TRUE(proc_finish(p, 8000));
+    EXPECT_EQ(exit_code_of(p), 0);
+}
+
 TEST_F(MainIntegrationTest, RpcInvalidHostFailsFast) {
     auto r = run_wait({"--enable-rpc", "--rpc-listen-host", "not-an-ip"}, 15000);
     ASSERT_FALSE(r.timed_out);

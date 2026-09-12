@@ -91,7 +91,8 @@ ConfigLoadResult apply_config_file(const std::string& path,
                                    DaemonConfig& daemon_config,
                                    std::string& task_db_path,
                                    bool& enable_rpc,
-                                   bool& run_as_daemon) {
+                                   bool& run_as_daemon,
+                                   DownloadConfig& download_config) {
     ConfigLoadResult result;
 
     std::ifstream in(path);
@@ -113,7 +114,7 @@ ConfigLoadResult apply_config_file(const std::string& path,
     }
 
     // 允许的节与各节键集合（未知键告警不失败——向前兼容）
-    const std::string known_sections[] = {"rpc", "daemon", "storage"};
+    const std::string known_sections[] = {"rpc", "daemon", "storage", "download"};
 
     for (auto it = root.begin(); it != root.end(); ++it) {
         bool known = false;
@@ -180,6 +181,32 @@ ConfigLoadResult apply_config_file(const std::string& path,
         warn_unknown_keys(storage, {"task_db_path"}, "storage", result.warnings);
         if (!read_path_key(storage, "task_db_path", task_db_path, result.error)) {
             return result;
+        }
+    }
+
+    if (root.contains("download")) {
+        const auto& download = root.at("download");
+        if (!download.is_object()) {
+            result.error = "'download' section must be an object";
+            return result;
+        }
+        warn_unknown_keys(download, {"max_concurrent_tasks",
+                                     "max_overall_speed_limit"},
+                          "download", result.warnings);
+        // optional 语义：键出现才覆盖，未出现保持引擎默认
+        if (download.contains("max_concurrent_tasks")) {
+            std::size_t value = 0;
+            if (!read_key(download, "max_concurrent_tasks", value, result.error)) {
+                return result;
+            }
+            download_config.max_concurrent_tasks = value;
+        }
+        if (download.contains("max_overall_speed_limit")) {
+            std::uint64_t value = 0;
+            if (!read_key(download, "max_overall_speed_limit", value, result.error)) {
+                return result;
+            }
+            download_config.max_overall_speed_limit = value;
         }
     }
 

@@ -6,6 +6,22 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-12 - 下载参数配置化（daemon.json "download" 节）
+- `daemon.json` 新增 `download` 节：`max_concurrent_tasks`（全局并发
+  任务数）、`max_overall_speed_limit`（全局总限速，字节/秒，0=不限），
+  与 `aria2.changeGlobalOption`/`getGlobalOption` 已支持的键对齐
+- `DownloadConfig` 用 `std::optional` 表达"文件出现才覆盖"：未出现的
+  键不动引擎默认；类型错误报错、未知键告警，与既有节一致
+- 启动时引擎构造后应用；SIGHUP 重载视为可热更项（引擎 setter 运行时
+  可调），节值变化即重新应用
+- 加固 WS 测试基建：`connect()` 返回只代表客户端收到 101，服务端会话
+  线程可能尚未注册——新增 `wait_registered` 轮询辅助，修复 3 处
+  即时断言/广播的注册窗口竞争（负载下偶发：BroadcastFanout 广播漏
+  连接、count 断言落空）
+- 测试：config 新增 4 用例（全量/optional 语义/节缺失/类型错误）+
+  main 集成 1 用例（配置 → getGlobalOption 反映 → SIGHUP 热更生效）；
+  daemon 全量 229 用例通过
+
 ### 2026-09-12 - SIGHUP 配置重载（daemon.json 热更新）
 - `DaemonManager` 新增 `request_reload()`（仅置原子标志，
   async-signal-safe）/ `reload_pending()`；`run()` 主循环消费标志后
@@ -272,6 +288,10 @@ Windows Service Options（仅 Windows）:
   },
   "storage": {
     "task_db_path": "~/.config/falcon/tasks.db"
+  },
+  "download": {
+    "max_concurrent_tasks": 5,
+    "max_overall_speed_limit": 0
   }
 }
 ```
@@ -283,10 +303,11 @@ Windows Service Options（仅 Windows）:
 
 **SIGHUP 热重载**：向运行中的 daemon 发送 SIGHUP（或 systemd
 `ExecReload=/bin/kill -HUP $MAINPID`）会重读启动时实际生效的配置
-文件。`rpc.secret`/`rpc.allow_origin_all` 立即生效（已建立的连接不
-受影响）；监听地址/端口、`storage.task_db_path`、`daemon` 节各项
-变化仅告警"restart required"。重载失败（文件缺失/JSON 非法）保持
-现有配置继续运行。`--no-conf` 启动时无文件可重载，SIGHUP 记日志跳过。
+文件。可热更项立即生效：`rpc.secret`/`rpc.allow_origin_all`（已建立
+的连接不受影响）与 `download` 节（引擎 setter 运行时可调）；监听
+地址/端口、`storage.task_db_path`、`daemon` 节各项变化仅告警
+"restart required"。重载失败（文件缺失/JSON 非法）保持现有配置继续
+运行。`--no-conf` 启动时无文件可重载，SIGHUP 记日志跳过。
 
 ---
 
@@ -453,7 +474,7 @@ curl http://127.0.0.1:6800/jsonrpc -d '
 
 ## 下一步开发计划
 
-1. **下载参数配置化**：全局并发数/限速等引擎参数纳入 `daemon.json`（经 `changeGlobalOption` 已可运行时修改）
+（当前无排期项；已完成：daemon.json 配置加载、SIGHUP 热重载、下载参数配置化）
 
 ---
 

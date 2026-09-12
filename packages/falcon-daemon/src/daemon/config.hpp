@@ -16,6 +16,8 @@
 
 #include "daemon/daemon.hpp"
 
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -32,6 +34,13 @@ struct ConfigLoadResult {
     std::vector<std::string> warnings;   ///< 非致命提示（未知键等）
 };
 
+/// 下载参数（daemon.json 的 "download" 节）。
+/// optional 语义：文件中出现对应键才有值，未出现的键保持引擎默认
+struct DownloadConfig {
+    std::optional<std::size_t> max_concurrent_tasks;        ///< 全局并发任务数
+    std::optional<std::uint64_t> max_overall_speed_limit;   ///< 全局总限速（字节/秒，0=不限）
+};
+
 /**
  * @brief 解析 JSON 配置文件并应用到配置结构上
  *
@@ -43,6 +52,7 @@ struct ConfigLoadResult {
  * - rpc: enabled / host / port / secret / allow_origin_all
  * - daemon: run_as_daemon / pid_file / working_dir / log_file
  * - storage: task_db_path
+ * - download: max_concurrent_tasks / max_overall_speed_limit
  *
  * @param path 配置文件路径
  * @param rpc_config RPC 服务器配置（就地更新）
@@ -50,6 +60,7 @@ struct ConfigLoadResult {
  * @param task_db_path 任务数据库路径（就地更新）
  * @param enable_rpc 是否启用 RPC（就地更新）
  * @param run_as_daemon 是否守护化运行（就地更新）
+ * @param download_config 下载参数（就地更新，optional 语义）
  * @return ConfigLoadResult 加载结果；warnings 含未知键提示
  */
 ConfigLoadResult apply_config_file(const std::string& path,
@@ -57,7 +68,8 @@ ConfigLoadResult apply_config_file(const std::string& path,
                                    DaemonConfig& daemon_config,
                                    std::string& task_db_path,
                                    bool& enable_rpc,
-                                   bool& run_as_daemon);
+                                   bool& run_as_daemon,
+                                   DownloadConfig& download_config);
 
 /**
  * @brief 展开 "~/" 前缀为用户主目录（无前缀时原样返回）

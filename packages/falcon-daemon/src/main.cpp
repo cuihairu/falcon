@@ -71,6 +71,7 @@ int main(int argc, char* argv[]) {
     std::string task_db_path;
     falcon::daemon::rpc::JsonRpcServerConfig rpc_config;
     falcon::daemon::DaemonConfig daemon_config;
+    falcon::daemon::DownloadConfig download_config;
 
 #ifdef _WIN32
     bool install_service = false;
@@ -102,7 +103,7 @@ int main(int argc, char* argv[]) {
             if (!conf_path.empty() || std::filesystem::exists(path)) {
                 auto result = falcon::daemon::apply_config_file(
                     path, rpc_config, daemon_config, task_db_path,
-                    enable_rpc, run_as_daemon);
+                    enable_rpc, run_as_daemon, download_config);
                 if (!result.ok) {
                     std::cerr << "Error loading config file: " << result.error << "\n";
                     return 1;
@@ -251,6 +252,14 @@ int main(int argc, char* argv[]) {
         // Create download engine
         falcon::DownloadEngine engine;
 
+        // 应用配置文件的下载参数（引擎运行时可调，SIGHUP 重载同样走这里）
+        if (download_config.max_concurrent_tasks) {
+            engine.set_max_concurrent_tasks(*download_config.max_concurrent_tasks);
+        }
+        if (download_config.max_overall_speed_limit) {
+            engine.set_global_speed_limit(*download_config.max_overall_speed_limit);
+        }
+
         // Initialize task storage if SQLite3 is available
 #ifdef FALCON_HAS_SQLITE3
         std::unique_ptr<falcon::daemon::TaskStorage> task_storage;
@@ -381,12 +390,13 @@ int main(int argc, char* argv[]) {
 
                 falcon::daemon::rpc::JsonRpcServerConfig new_rpc = rpc_config;
                 falcon::daemon::DaemonConfig new_daemon = daemon_config;
+                falcon::daemon::DownloadConfig new_download = download_config;
                 std::string new_task_db = task_db_path;
                 bool new_enable_rpc = enable_rpc;
                 bool new_run_as_daemon = run_as_daemon;
                 const auto result = falcon::daemon::apply_config_file(
                     active_conf_path, new_rpc, new_daemon, new_task_db,
-                    new_enable_rpc, new_run_as_daemon);
+                    new_enable_rpc, new_run_as_daemon, new_download);
                 if (!result.ok) {
                     FALCON_LOG_WARN_STREAM("Config reload failed, keeping current config: "
                                          << result.error);
@@ -402,6 +412,19 @@ int main(int argc, char* argv[]) {
                      new_rpc.allow_origin_all != rpc_config.allow_origin_all)) {
                     rpc_server->update_auth(new_rpc.secret, new_rpc.allow_origin_all);
                     FALCON_LOG_INFO_STREAM("RPC auth settings updated (applied immediately)");
+                }
+
+                // 可热更：下载参数（引擎 setter 运行时可调；optional 语义下
+                // 节值未变则不动引擎，变了的键重新应用）
+                if (new_download.max_concurrent_tasks != download_config.max_concurrent_tasks ||
+                    new_download.max_overall_speed_limit != download_config.max_overall_speed_limit) {
+                    if (new_download.max_concurrent_tasks) {
+                        engine.set_max_concurrent_tasks(*new_download.max_concurrent_tasks);
+                    }
+                    if (new_download.max_overall_speed_limit) {
+                        engine.set_global_speed_limit(*new_download.max_overall_speed_limit);
+                    }
+                    FALCON_LOG_INFO_STREAM("Download settings updated (applied immediately)");
                 }
 
                 // 需重启：监听、存储、守护化相关
@@ -426,6 +449,7 @@ int main(int argc, char* argv[]) {
                 // 采纳为新基线，下一次重载据此对比
                 rpc_config = new_rpc;
                 daemon_config = new_daemon;
+                download_config = new_download;
                 task_db_path = new_task_db;
                 enable_rpc = new_enable_rpc;
                 run_as_daemon = new_run_as_daemon;
