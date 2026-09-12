@@ -2,6 +2,18 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-12 - 修复 V2 引擎多段下载悬垂引用（Windows CI 崩溃根因）
+- `HttpResponseCommand::options_` 由引用成员改为值拷贝：其构造方
+  `HttpInitiateConnectionCommand` 在 `send_http_request` 末尾把自己
+  的 `options_` 值成员按引用传入，随后命令对象即被引擎队列销毁，
+  响应命令再解引用即 heap-use-after-free（ASan 于
+  `determine_download_strategy` 首行命中；Windows MSVC 堆 free 后
+  改写导致读脏数据崩溃，且引擎线程无异常边界 → 静默 terminate）
+- Linux glibc free 后暂不改写，读回旧值侥幸通过（压测 300 次不复现），
+  属三平台共同潜伏缺陷；`HttpDownloadCommand`/`RequestGroup` 核查为
+  值持有，全库仅此一处悬垂引用
+- ASan 构建 20 轮压测 + protocols 全量 446 用例通过
+
 ### 2026-09-12 - Daemon 配置文件加载（daemon.json）
 - 新增 `daemon.json` 配置文件：`rpc`（enabled/host/port/secret/
   allow_origin_all）、`daemon`（run_as_daemon/pid_file/working_dir/

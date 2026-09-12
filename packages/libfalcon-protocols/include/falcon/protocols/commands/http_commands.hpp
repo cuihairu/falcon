@@ -331,7 +331,10 @@ private:
     int socket_fd_;
     std::shared_ptr<HttpRequest> http_request_;
     std::shared_ptr<HttpResponse> http_response_;
-    const DownloadOptions& options_;  // 引用下载选项
+    // 必须按值持有：调用方（HttpInitiateConnectionCommand）把自己的
+    // options_ 值成员传入，其命令对象在本命令执行前就会被引擎队列销毁，
+    // 引用成员会悬垂（heap-use-after-free）
+    const DownloadOptions options_;
 
     // 多连接分段信息
     std::string source_url_;       ///< 原始完整 URL（空 = 不启用多连接）
