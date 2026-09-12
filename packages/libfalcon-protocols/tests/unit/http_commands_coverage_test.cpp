@@ -451,11 +451,6 @@ TEST_F(HttpCommandsCoverageTest, InitiateConnectionRefusedPortFails) {
 }
 
 TEST_F(HttpCommandsCoverageTest, InitiateConnectionHttpSuccess) {
-#ifdef _WIN32
-    // DownloadEngineV2 的事件循环/非阻塞 connect 尚未适配 Windows；
-    // TODO(Win)：引擎适配完成后移除此跳过
-    GTEST_SKIP() << "DownloadEngineV2 event loop not yet adapted for Windows";
-#endif
     const std::string response =
         "HTTP/1.1 200 OK\r\n"
         "Content-Length: 5\r\n"
@@ -576,13 +571,10 @@ TEST_F(HttpCommandsCoverageTest, Response200SchedulesDownloadCommand) {
 }
 
 TEST_F(HttpCommandsCoverageTest, Response200WithAcceptRangesDownloadsFullBody) {
-#ifdef _WIN32
-    // DownloadEngineV2 的事件循环/非阻塞 connect 尚未适配 Windows；
-    // TODO(Win)：引擎适配完成后移除此跳过
-    GTEST_SKIP() << "DownloadEngineV2 event loop not yet adapted for Windows";
-#endif
     EngineConfigV2 config;
     DownloadEngineV2 engine(config);
+
+    // Windows 与 POSIX 统一走真实事件循环（见 event_poll_factory 的平台分发）
 
     const std::string out_path = test_dir_ + "/accept_ranges.bin";
     TaskHandle handle = make_engine_task(engine, out_path);
@@ -712,13 +704,10 @@ TEST_F(HttpCommandsCoverageTest, ResponseEmptyReplyFails) {
 }
 
 TEST_F(HttpCommandsCoverageTest, ResponseNoDataWaitsForSocket) {
-#ifdef _WIN32
-    // DownloadEngineV2 的事件循环/非阻塞 connect 尚未适配 Windows；
-    // TODO(Win)：引擎适配完成后移除此跳过
-    GTEST_SKIP() << "DownloadEngineV2 event loop not yet adapted for Windows";
-#endif
     EngineConfigV2 config;
     DownloadEngineV2 engine(config);
+
+    // Windows 与 POSIX 统一走真实事件循环（见 event_poll_factory 的平台分发）
 
     auto [fd0, fd1] = make_socket_pair_nb();
     ASSERT_GE(fd0, 0);
@@ -776,13 +765,10 @@ TEST_F(HttpCommandsCoverageTest, ResponseMalformedHeaderLineFails) {
 }
 
 TEST_F(HttpCommandsCoverageTest, ResponseHeadersArrivingInParts) {
-#ifdef _WIN32
-    // DownloadEngineV2 的事件循环/非阻塞 connect 尚未适配 Windows；
-    // TODO(Win)：引擎适配完成后移除此跳过
-    GTEST_SKIP() << "DownloadEngineV2 event loop not yet adapted for Windows";
-#endif
     EngineConfigV2 config;
     DownloadEngineV2 engine(config);
+
+    // Windows 与 POSIX 统一走真实事件循环（见 event_poll_factory 的平台分发）
 
     auto [fd0, fd1] = make_socket_pair_nb();
     ASSERT_GE(fd0, 0);
@@ -841,13 +827,10 @@ TEST_F(HttpCommandsCoverageTest, Response200UpdatesTaskProgress) {
 //==============================================================================
 
 TEST_F(HttpCommandsCoverageTest, DownloadWritesBodyToFileAndCompletes) {
-#ifdef _WIN32
-    // DownloadEngineV2 的事件循环/非阻塞 connect 尚未适配 Windows；
-    // TODO(Win)：引擎适配完成后移除此跳过
-    GTEST_SKIP() << "DownloadEngineV2 event loop not yet adapted for Windows";
-#endif
     EngineConfigV2 config;
     DownloadEngineV2 engine(config);
+
+    // Windows 与 POSIX 统一走真实事件循环（见 event_poll_factory 的平台分发）
 
     const std::string out_path = test_dir_ + "/body.bin";
     TaskHandle handle = make_engine_task(engine, out_path);
@@ -1138,13 +1121,10 @@ TEST_F(HttpCommandsCoverageTest, PositionedSegmentWriteAppendsAtOffset) {
 }
 
 TEST_F(HttpCommandsCoverageTest, PositionedSegmentWriteInBatches) {
-#ifdef _WIN32
-    // DownloadEngineV2 的事件循环/非阻塞 connect 尚未适配 Windows；
-    // TODO(Win)：引擎适配完成后移除此跳过
-    GTEST_SKIP() << "DownloadEngineV2 event loop not yet adapted for Windows";
-#endif
     EngineConfigV2 config;
     DownloadEngineV2 engine(config);
+
+    // Windows 与 POSIX 统一走真实事件循环（见 event_poll_factory 的平台分发）
 
     const std::string out_path = test_dir_ + "/positioned_batches.bin";
     TaskHandle handle = make_engine_task(engine, out_path);
@@ -1223,6 +1203,9 @@ namespace {
 class RangeTestServer {
 public:
     bool start(const std::string& body, int expected_connections) {
+#ifdef _WIN32
+        ensure_winsock_for_coverage();
+#endif
         body_ = body;
         expected_ = expected_connections;
 
@@ -1371,11 +1354,6 @@ std::string make_pattern_body(std::size_t size) {
 } // namespace
 
 TEST_F(HttpCommandsCoverageTest, EndToEndMultiSegmentDownload) {
-#ifdef _WIN32
-    // DownloadEngineV2 的事件循环/非阻塞 connect 尚未适配 Windows；
-    // TODO(Win)：引擎适配完成后移除此跳过
-    GTEST_SKIP() << "DownloadEngineV2 event loop not yet adapted for Windows";
-#endif
     // 16KB body、min_segment 1024、4 连接 → 4 段各 4096 字节
     const std::string body = make_pattern_body(16384);
 

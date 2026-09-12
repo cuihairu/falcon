@@ -26,10 +26,6 @@
 #include <windows.h>
 // Windows 没有 ssize_t，使用 SSIZE_T 或 ptrdiff_t
 typedef SSIZE_T ssize_t;
-// Windows 没有 EINPROGRESS，使用 WSAEWOULDBLOCK
-#ifndef EINPROGRESS
-#define EINPROGRESS WSAEWOULDBLOCK
-#endif
 #else
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -122,6 +118,19 @@ void close_socket_fd(int fd) {
     ::close(fd);
 #endif
 }
+
+#ifdef _WIN32
+// Winsock 的 socket 调用失败后不设置 errno，必须经 WSAGetLastError() 获取；
+// 其错误码（如 WSAEWOULDBLOCK=10035）也与 BSD 的 EAGAIN/EWOULDBLOCK 不同，
+// 以下辅助统一收口，避免各处直接比较 errno
+int sock_errno() { return WSAGetLastError(); }
+std::string sock_err_str(int err) { return "WSA error " + std::to_string(err); }
+bool sock_would_block(int err) { return err == WSAEWOULDBLOCK; }
+#else
+int sock_errno() { return errno; }
+std::string sock_err_str(int err) { return strerror(err); }
+bool sock_would_block(int err) { return err == EAGAIN || err == EWOULDBLOCK; }
+#endif
 
 std::string to_lower(std::string s) {
     for (auto& ch : s) {
@@ -371,7 +380,7 @@ bool HttpInitiateConnectionCommand::resolve_host(
 bool HttpInitiateConnectionCommand::create_socket() {
     socket_fd_ = socket(AF_INET, SOCK_STREAM, 0);
     if (socket_fd_ < 0) {
-        FALCON_LOG_ERROR_STREAM("socket() 失败: " << strerror(errno));
+        FALCON_LOG_ERROR_STREAM("socket() 失败: " << sock_err_str(sock_errno()));
         return false;
     }
 
@@ -424,12 +433,22 @@ bool HttpInitiateConnectionCommand::connect_socket() {
     int ret = connect(socket_fd_,
                      reinterpret_cast<struct sockaddr*>(&addr),
                      sizeof(addr));
-    if (ret < 0 && errno != EINPROGRESS) {
-        FALCON_LOG_ERROR_STREAM("connect() 失败: " << strerror(errno));
-        return false;
+    if (ret < 0) {
+        const int err = sock_errno();
+        // 非阻塞 connect 的“进行中”语义：Winsock 一律报 WSAEWOULDBLOCK
+        //（兼容 WSAEINPROGRESS），BSD 系报 EINPROGRESS（EINTR 视为可重试）
+#ifdef _WIN32
+        const bool in_progress = (err == WSAEWOULDBLOCK || err == WSAEINPROGRESS);
+#else
+        const bool in_progress = (err == EINPROGRESS || err == EINTR);
+#endif
+        if (!in_progress) {
+            FALCON_LOG_ERROR_STREAM("connect() 失败: " << sock_err_str(err));
+            return false;
+        }
     }
 
-    connect_in_progress_ = (ret < 0 && errno == EINPROGRESS);
+    connect_in_progress_ = (ret < 0);
     FALCON_LOG_INFO_STREAM("正在连接 " << host_ << ":" << port_
                                  << (connect_in_progress_ ? " (in progress)" : " (connected)"));
     return true;
@@ -613,14 +632,14 @@ AbstractCommand::ExecutionResult HttpInitiateConnectionCommand::send_http_reques
         } else {
 #endif
             // 使用普通 send 发送 HTTP 数据
-            n = send(socket_fd_, data, remaining, 0);
+            n = send(socket_fd_, data, static_cast<int>(remaining), 0);
             if (n < 0) {
-                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                if (sock_would_block(sock_errno())) {
                     engine->register_socket_event(
                         socket_fd_, static_cast<int>(net::IOEvent::WRITE), id());
                     return ExecutionResult::WAIT_FOR_SOCKET;
                 }
-                FALCON_LOG_ERROR_STREAM("send() 失败: " << strerror(errno));
+                FALCON_LOG_ERROR_STREAM("send() 失败: " << sock_err_str(sock_errno()));
                 return ExecutionResult::ERROR_OCCURRED;
             }
 #ifdef FALCON_ENABLE_OPENSSL
@@ -807,16 +826,16 @@ AbstractCommand::ExecutionResult HttpResponseCommand::receive_response_headers(D
         } else {
 #endif
             // 使用普通 recv 接收 HTTP 数据
-            n = recv(socket_fd_, buffer, sizeof(buffer), 0);
+            n = recv(socket_fd_, buffer, static_cast<int>(sizeof(buffer)), 0);
             if (n < 0) {
-                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                if (sock_would_block(sock_errno())) {
                     if (engine) {
                         engine->register_socket_event(
                             socket_fd_, static_cast<int>(net::IOEvent::READ), id());
                     }
                     return ExecutionResult::WAIT_FOR_SOCKET;
                 }
-                FALCON_LOG_ERROR_STREAM("recv() 失败: " << strerror(errno));
+                FALCON_LOG_ERROR_STREAM("recv() 失败: " << sock_err_str(sock_errno()));
                 return ExecutionResult::ERROR_OCCURRED;
             }
 
@@ -1219,16 +1238,16 @@ void HttpDownloadCommand::fail_group_on_segment_error(RequestGroup& group,
 AbstractCommand::ExecutionResult HttpDownloadCommand::receive_data(DownloadEngineV2* engine) {
     char buffer[65536];  // 64KB 缓冲区
     for (int iter = 0; iter < 64; ++iter) {
-        ssize_t n = recv(socket_fd_, buffer, sizeof(buffer), 0);
+        ssize_t n = recv(socket_fd_, buffer, static_cast<int>(sizeof(buffer)), 0);
         if (n < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            if (sock_would_block(sock_errno())) {
                 if (engine) {
                     engine->register_socket_event(
                         socket_fd_, static_cast<int>(net::IOEvent::READ), id());
                 }
                 return ExecutionResult::WAIT_FOR_SOCKET;
             }
-            FALCON_LOG_ERROR_STREAM("recv() 失败: " << strerror(errno));
+            FALCON_LOG_ERROR_STREAM("recv() 失败: " << sock_err_str(sock_errno()));
             return ExecutionResult::ERROR_OCCURRED;
         }
 

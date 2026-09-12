@@ -2,6 +2,22 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-12 - V2 引擎 Windows 运行时适配
+- 修复 `http_commands.cpp` 三类 Winsock 运行时缺陷（此前仅"能编译"，跳过测试
+  掩盖了无法实际运行）：
+  - Winsock 调用失败后不设置 errno——新增 `sock_errno()/sock_err_str()/
+    sock_would_block()` 辅助（Windows 走 `WSAGetLastError()`），替换全部
+    `errno` 直接判定
+  - 非阻塞 connect 的"进行中"判定：Winsock 一律报 `WSAEWOULDBLOCK`（旧代码
+    按 `errno == EINPROGRESS` 判定，Windows 上必然误判为连接失败）
+  - send/recv 的 EAGAIN 判定（MSVC 的 EAGAIN=11 与 WSAEWOULDBLOCK=10035
+    永不匹配，缓冲区满会被误判为致命错误）
+- 移除 `http_commands_coverage_test.cpp` 全部 7 处 `TODO(Win)` GTEST_SKIP，
+  Windows 与 POSIX 统一走真实事件循环（PollEventPoll/WSAPoll）；测试基建补
+  `RangeTestServer::start()` 显式 winsock 初始化
+- docs 站点依赖漏洞修复（Dependabot 8 条）：pnpm overrides 强制 vite 6.4.3+/
+  esbuild 0.25+/postcss 8.5.23+/nanoid 3.3.18+，文档站构建验证通过
+
 ### 2026-09-11 - 桌面应用接入 Daemon RPC（下载服务层）
 - desktop 新增下载服务层：`IDownloadBackend` 抽象 + `InProcessBackend`
   （进程内引擎）/ `DaemonRpcBackend`（aria2 兼容 JSON-RPC）双实现，
