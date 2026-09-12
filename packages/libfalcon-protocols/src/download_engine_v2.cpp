@@ -188,34 +188,44 @@ void DownloadEngineV2::run() {
 
     // 主事件循环
     while (!is_shutdown_requested()) {
-        // 检查是否所有任务完成
-        if (request_group_man_->all_completed()) {
-            FALCON_LOG_INFO_STREAM("所有任务已完成");
+        try {
+            // 检查是否所有任务完成
+            if (request_group_man_->all_completed()) {
+                FALCON_LOG_INFO_STREAM("所有任务已完成");
+                break;
+            }
+
+            // 执行例程命令
+            execute_routine_commands();
+
+            // 等待事件（带超时）
+            int events = event_poll_->poll(config_.poll_timeout_ms);
+
+            // 处理就绪事件
+            if (events > 0) {
+                process_ready_events();
+            }
+
+            // 执行命令队列
+            execute_commands();
+
+            // 清理已完成的命令
+            cleanup_completed_commands();
+
+            // 更新任务状态
+            update_task_status();
+
+            // 从等待队列激活新任务
+            request_group_man_->fill_request_group_from_reserver(this);
+        } catch (const std::exception& e) {
+            // 引擎通常运行在独立线程（测试/宿主直接以 run() 作线程函数），
+            // 异常逃逸即 std::terminate——这里兜底保证线程正常收尾
+            FALCON_LOG_ERROR_STREAM("引擎事件循环异常，安全停机: " << e.what());
+            break;
+        } catch (...) {
+            FALCON_LOG_ERROR_STREAM("引擎事件循环未知异常，安全停机");
             break;
         }
-
-        // 执行例程命令
-        execute_routine_commands();
-
-        // 等待事件（带超时）
-        int events = event_poll_->poll(config_.poll_timeout_ms);
-
-        // 处理就绪事件
-        if (events > 0) {
-            process_ready_events();
-        }
-
-        // 执行命令队列
-        execute_commands();
-
-        // 清理已完成的命令
-        cleanup_completed_commands();
-
-        // 更新任务状态
-        update_task_status();
-
-        // 从等待队列激活新任务
-        request_group_man_->fill_request_group_from_reserver(this);
     }
 
     running_ = false;
@@ -245,8 +255,26 @@ void DownloadEngineV2::execute_commands() {
             continue;
         }
 
-        // 执行命令（不要持有队列锁，避免阻塞 socket 回调入队）
-        bool completed = command->execute(this);
+        // 执行命令（不要持有队列锁，避免阻塞 socket 回调入队）。
+        // 异常边界：单个命令抛出只终结其所属任务，引擎继续运行
+        bool completed = false;
+        try {
+            completed = command->execute(this);
+        } catch (const std::exception& e) {
+            FALCON_LOG_ERROR_STREAM("命令执行异常: cmd=" << command->name()
+                                  << ", task=" << command->get_task_id()
+                                  << ", error=" << e.what());
+            fail_group_of_command(command->get_task_id(),
+                                  std::string("command exception: ") + e.what());
+            continue;
+        } catch (...) {
+            FALCON_LOG_ERROR_STREAM("命令执行异常: cmd=" << command->name()
+                                  << ", task=" << command->get_task_id()
+                                  << ", error=unknown");
+            fail_group_of_command(command->get_task_id(),
+                                  "command exception: unknown");
+            continue;
+        }
 
         if (completed) {
             continue;
@@ -276,8 +304,17 @@ void DownloadEngineV2::execute_routine_commands() {
     std::lock_guard<std::mutex> lock(routine_commands_mutex_);
 
     for (auto& command : routine_commands_) {
-        // 例程命令总是放回队列（周期性执行）
-        command->execute(this);
+        // 例程命令总是放回队列（周期性执行）；异常只跳过本轮，
+        // 不终止引擎（例程命令是全局性的，无对应任务可标失败）
+        try {
+            command->execute(this);
+        } catch (const std::exception& e) {
+            FALCON_LOG_ERROR_STREAM("例程命令异常: cmd=" << command->name()
+                                  << ", error=" << e.what());
+        } catch (...) {
+            FALCON_LOG_ERROR_STREAM("例程命令异常: cmd=" << command->name()
+                                  << ", error=unknown");
+        }
     }
 }
 
@@ -353,6 +390,58 @@ void DownloadEngineV2::update_task_status() {
     request_group_man_->cleanup_finished_active();
 }
 
+void DownloadEngineV2::fail_group_of_command(TaskId task_id, const std::string& reason) {
+    auto* group = request_group_man_ ? request_group_man_->find_group(task_id) : nullptr;
+    if (!group) {
+        return;
+    }
+    if (group->is_multi_segment()) {
+        group->finish_segment(false);
+    }
+    group->set_error_message(reason);
+    group->set_status(RequestGroupStatus::FAILED);
+}
+
+void DownloadEngineV2::handle_socket_ready(int socket_fd, int ready_events) {
+    std::unique_ptr<Command> resumed;
+    CommandId cmd_id = 0;
+    {
+        std::lock_guard<std::mutex> lock(socket_map_mutex_);
+        auto it = socket_command_map_.find(socket_fd);
+        if (it == socket_command_map_.end()) {
+            FALCON_LOG_DEBUG_STREAM("Socket 事件就绪但无关联命令: fd=" << socket_fd);
+            return;
+        }
+        cmd_id = it->second;
+
+        auto w_it = waiting_commands_.find(cmd_id);
+        if (w_it != waiting_commands_.end()) {
+            resumed = std::move(w_it->second);
+            waiting_commands_.erase(w_it);
+            waiting_command_times_.erase(cmd_id);
+        }
+
+        socket_wait_map_.erase(cmd_id);
+        socket_command_map_.erase(it);
+    }
+
+    // one-shot: 事件就绪后移除监听；失败则忽略（平台可能已自动删除）
+    event_poll_->remove_event(socket_fd);
+
+    if (!resumed) {
+        FALCON_LOG_DEBUG_STREAM("Socket 事件就绪但命令不存在: fd=" << socket_fd << ", cmd=" << cmd_id);
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(command_queue_mutex_);
+        command_queue_.push_back(std::move(resumed));
+    }
+
+    FALCON_LOG_DEBUG_STREAM("Socket 事件就绪: fd=" << socket_fd << ", events=" << ready_events
+                                          << ", 恢复命令=" << cmd_id);
+}
+
 bool DownloadEngineV2::register_socket_event(int fd, int events, CommandId command_id) {
     std::lock_guard<std::mutex> lock(socket_map_mutex_);
 
@@ -360,43 +449,17 @@ bool DownloadEngineV2::register_socket_event(int fd, int events, CommandId comma
     socket_wait_map_[command_id] = SocketWait{fd, events};
 
     auto callback = [this](int socket_fd, int ready_events, void* /*user_data*/) {
-        std::unique_ptr<Command> resumed;
-        CommandId cmd_id = 0;
-        {
-            std::lock_guard<std::mutex> lock(socket_map_mutex_);
-            auto it = socket_command_map_.find(socket_fd);
-            if (it == socket_command_map_.end()) {
-                FALCON_LOG_DEBUG_STREAM("Socket 事件就绪但无关联命令: fd=" << socket_fd);
-                return;
-            }
-            cmd_id = it->second;
-
-            auto w_it = waiting_commands_.find(cmd_id);
-            if (w_it != waiting_commands_.end()) {
-                resumed = std::move(w_it->second);
-                waiting_commands_.erase(w_it);
-                waiting_command_times_.erase(cmd_id);
-            }
-
-            socket_wait_map_.erase(cmd_id);
-            socket_command_map_.erase(it);
+        // 回调在 EventPoll 线程上下文执行，异常逃逸即 std::terminate，
+        // 因此整体兜底：回调失败只丢失这一次唤醒（超时清理会回收挂起命令）
+        try {
+            handle_socket_ready(socket_fd, ready_events);
+        } catch (const std::exception& e) {
+            FALCON_LOG_ERROR_STREAM("Socket 事件回调异常: fd=" << socket_fd
+                                  << ", error=" << e.what());
+        } catch (...) {
+            FALCON_LOG_ERROR_STREAM("Socket 事件回调异常: fd=" << socket_fd
+                                  << ", error=unknown");
         }
-
-        // one-shot: 事件就绪后移除监听；失败则忽略（平台可能已自动删除）
-        event_poll_->remove_event(socket_fd);
-
-        if (!resumed) {
-            FALCON_LOG_DEBUG_STREAM("Socket 事件就绪但命令不存在: fd=" << socket_fd << ", cmd=" << cmd_id);
-            return;
-        }
-
-        {
-            std::lock_guard<std::mutex> lock(command_queue_mutex_);
-            command_queue_.push_back(std::move(resumed));
-        }
-
-        FALCON_LOG_DEBUG_STREAM("Socket 事件就绪: fd=" << socket_fd << ", events=" << ready_events
-                                              << ", 恢复命令=" << cmd_id);
     };
 
     // 已存在则修改事件，否则新增事件

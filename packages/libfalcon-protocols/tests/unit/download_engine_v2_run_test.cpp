@@ -35,6 +35,7 @@
 #include <chrono>
 #include <cstring>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 
@@ -247,6 +248,53 @@ EngineConfigV2 fast_poll_config() {
     return config;
 }
 
+EngineConfigV2 single_slot_config() {
+    EngineConfigV2 config;
+    config.max_concurrent_tasks = 1;
+    config.poll_timeout_ms = 10;
+    return config;
+}
+
+/// 抛异常的普通命令：抛出前计数，用于断言引擎在异常后仍然存活
+class ThrowingCommand : public AbstractCommand {
+public:
+    ThrowingCommand(TaskId task_id, std::shared_ptr<std::atomic<int>> counter,
+                    bool throw_non_std)
+        : AbstractCommand(task_id), counter_(std::move(counter)),
+          throw_non_std_(throw_non_std) {}
+
+    bool execute(DownloadEngineV2*) override {
+        counter_->fetch_add(1);
+        if (throw_non_std_) {
+            throw 42;  // 非 std::exception：驱动引擎 catch(...) 分支
+        }
+        throw std::runtime_error("boom");
+    }
+
+    const char* name() const override { return "ThrowingCommand"; }
+
+private:
+    std::shared_ptr<std::atomic<int>> counter_;
+    bool throw_non_std_;
+};
+
+/// 每次执行都抛异常的例程命令
+class ThrowingRoutine : public AbstractCommand {
+public:
+    explicit ThrowingRoutine(std::shared_ptr<std::atomic<int>> counter)
+        : AbstractCommand(0), counter_(std::move(counter)) {}
+
+    bool execute(DownloadEngineV2*) override {
+        counter_->fetch_add(1);
+        throw std::runtime_error("routine boom");
+    }
+
+    const char* name() const override { return "ThrowingRoutine"; }
+
+private:
+    std::shared_ptr<std::atomic<int>> counter_;
+};
+
 } // namespace
 
 //==============================================================================
@@ -407,4 +455,92 @@ TEST(DownloadEngineV2RunTest, StatisticsAggregatesGroupProgress) {
 
     auto stats = engine.get_statistics();
     EXPECT_EQ(stats.total_downloaded, 1024U);
+}
+
+//==============================================================================
+// 异常边界测试：命令抛出不得终止引擎（run 在独立线程语境下即 std::terminate）
+//==============================================================================
+
+TEST(DownloadEngineV2RunTest, CommandExceptionFailsGroupAndEngineSurvives) {
+    // 单槽位：keepalive 占满活动列表，victim 保持 WAITING 不被激活，
+    // 因此它没有真实初始命令，FAILED 状态只能来自异常兜底路径
+    DownloadEngineV2 engine(single_slot_config());
+
+    ASSERT_GT(engine.add_download("http://127.0.0.1:1/keepalive.bin",
+                                  DownloadOptions()),
+              0);
+    TaskId victim_id = engine.add_download("http://127.0.0.1:1/victim.bin",
+                                           DownloadOptions());
+    ASSERT_GT(victim_id, 0);
+
+    auto routine = std::make_unique<CountdownShutdownRoutine>(3);
+    engine.add_routine_command(std::move(routine));
+
+    auto throw_counter = std::make_shared<std::atomic<int>>(0);
+    engine.add_command(
+        std::make_unique<ThrowingCommand>(victim_id, throw_counter, false));
+
+    auto instant_counter = std::make_shared<std::atomic<int>>(0);
+    engine.add_command(std::make_unique<InstantCommand>(instant_counter));
+
+    engine.run();  // 若无异常边界，此处 std::terminate
+
+    // 异常命令只坑了自己的组：标 FAILED 且错误消息可查
+    EXPECT_EQ(throw_counter->load(), 1);
+    auto* victim = engine.request_group_man()->find_group(victim_id);
+    ASSERT_NE(victim, nullptr);
+    EXPECT_EQ(victim->status(), RequestGroupStatus::FAILED);
+    EXPECT_NE(victim->error_message().find("command exception"),
+              std::string::npos);
+
+    // 同轮其他命令照常执行，引擎正常退出
+    EXPECT_EQ(instant_counter->load(), 1);
+    EXPECT_TRUE(engine.is_shutdown_requested());
+}
+
+TEST(DownloadEngineV2RunTest, NonStdExceptionAlsoFailsGroup) {
+    DownloadEngineV2 engine(single_slot_config());
+
+    ASSERT_GT(engine.add_download("http://127.0.0.1:1/keepalive.bin",
+                                  DownloadOptions()),
+              0);
+    TaskId victim_id = engine.add_download("http://127.0.0.1:1/victim.bin",
+                                           DownloadOptions());
+    ASSERT_GT(victim_id, 0);
+
+    auto routine = std::make_unique<CountdownShutdownRoutine>(3);
+    engine.add_routine_command(std::move(routine));
+
+    auto counter = std::make_shared<std::atomic<int>>(0);
+    engine.add_command(
+        std::make_unique<ThrowingCommand>(victim_id, counter, true));
+
+    engine.run();
+
+    EXPECT_EQ(counter->load(), 1);
+    auto* victim = engine.request_group_man()->find_group(victim_id);
+    ASSERT_NE(victim, nullptr);
+    EXPECT_EQ(victim->status(), RequestGroupStatus::FAILED);
+    EXPECT_NE(victim->error_message().find("unknown"), std::string::npos);
+}
+
+TEST(DownloadEngineV2RunTest, RoutineExceptionSkipsRoundEngineKeepsRunning) {
+    DownloadEngineV2 engine(fast_poll_config());
+    ASSERT_GT(engine.add_download("http://127.0.0.1:1/keepalive.bin",
+                                  DownloadOptions()),
+              0);
+
+    auto throw_counter = std::make_shared<std::atomic<int>>(0);
+    engine.add_routine_command(std::make_unique<ThrowingRoutine>(throw_counter));
+
+    auto routine = std::make_unique<CountdownShutdownRoutine>(3);
+    CountdownShutdownRoutine* routine_ptr = routine.get();
+    engine.add_routine_command(std::move(routine));
+
+    engine.run();
+
+    // 抛异常的例程每轮被跳过但引擎不终止，正常例程照常驱动 shutdown
+    EXPECT_GE(throw_counter->load(), 3);
+    EXPECT_GE(routine_ptr->executions(), 3);
+    EXPECT_TRUE(engine.is_shutdown_requested());
 }

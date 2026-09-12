@@ -224,6 +224,14 @@ private:
      */
     void update_task_status();
 
+    /// 命令执行异常的兜底：把命令所属任务组置为 FAILED（含多段组的
+    /// finish_segment 收尾），保证引擎级异常边界有确定的任务可见结果
+    void fail_group_of_command(TaskId task_id, const std::string& reason);
+
+    /// Socket 事件就绪处理（register_socket_event 回调的实际逻辑，
+    /// 提取为方法以便在回调中整体 try/catch 兜底）
+    void handle_socket_ready(int socket_fd, int ready_events);
+
     // 成员变量
     std::unique_ptr<net::EventPoll> event_poll_;
     std::unique_ptr<RequestGroupMan> request_group_man_;

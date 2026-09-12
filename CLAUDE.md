@@ -2,6 +2,23 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-12 - V2 引擎异常边界（命令异常不再 terminate 整个进程）
+- `run()` 主循环体兜底 try/catch：循环内异常安全停机（引擎常以 `run()`
+  作线程函数，异常逃逸即 `std::terminate`——此前引擎零 try/catch，
+  任何命令异常直接杀死整个进程，UAF 调查中确认的最大扩散面
+- `execute_commands()` 单命令异常边界：捕获后所属任务组标 FAILED
+  （新增 `fail_group_of_command`，多段组走 `finish_segment(false)`
+  收尾并记录错误消息），同轮其余命令与引擎继续运行
+- `execute_routine_commands()` 例程命令异常只跳过本轮（例程是全局性
+  后台任务，无对应任务组可标失败）
+- Socket 事件回调逻辑提取为 `handle_socket_ready()` 并整体 try/catch：
+  回调在 EventPoll 线程上下文执行，异常逃逸即 terminate；回调失败仅
+  丢失一次唤醒（挂起命令由超时清理回收）
+- 新增 3 个异常注入测试（`download_engine_v2_run_test.cpp`）：注入
+  抛 `std::runtime_error` / 非 std 异常的命令验证引擎存活 + 组标
+  FAILED + 同轮命令不受影响；例程异常验证引擎继续运行；protocols
+  全量 424 用例通过，ASan 构建 3 轮无告警
+
 ### 2026-09-12 - Daemon 下载参数配置化（daemon.json "download" 节）
 - `daemon.json` 新增 `download` 节（`max_concurrent_tasks`/
   `max_overall_speed_limit`），启动时应用、SIGHUP 重载热更，与
