@@ -63,7 +63,15 @@ public:
     /// 当前 WebSocket 订阅者数量（测试与监控用）
     std::size_t websocket_client_count();
 
+    /// 运行时热更新认证配置（SIGHUP 配置重载用），线程安全；
+    /// 对后续到达的请求立即生效，已建立的 WebSocket 会话不受影响。
+    void update_auth(std::string secret, bool allow_origin_all);
+
 private:
+    /// auth 配置的带锁读取（会被配置重载并发更新，禁止直读 config_）
+    std::string auth_secret() const;
+    bool auth_allow_origin_all() const;
+
     void accept_loop();
     void handle_connection(int client_fd);
 
@@ -82,6 +90,10 @@ private:
     falcon::DownloadEngine* engine_ = nullptr;
     TaskStorage* storage_ = nullptr;
     JsonRpcServerConfig config_;
+    // 认证配置的运行时视图（update_auth 热更目标；启动值来自 config_）
+    mutable std::mutex auth_mutex_;
+    std::string auth_secret_;
+    bool auth_allow_origin_all_ = false;
     std::function<void()> shutdown_handler_;
     std::string session_id_;
 

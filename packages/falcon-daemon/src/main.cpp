@@ -81,6 +81,8 @@ int main(int argc, char* argv[]) {
     // 先扫出配置文件参数并加载（优先级：CLI 显式参数 > 配置文件 > 默认值；
     // 下面的解析循环只在参数显式给出时写入配置结构，天然覆盖文件值）。
     // 必须在 daemonize 之前完成：pid_file/working_dir/log_file 影响守护化行为。
+    // active_conf_path 记录实际生效的配置文件，SIGHUP 重载时重读它。
+    std::string active_conf_path;
     {
         std::string conf_path;
         bool no_conf = false;
@@ -108,6 +110,7 @@ int main(int argc, char* argv[]) {
                 for (const auto& warning : result.warnings) {
                     std::cerr << "Warning: " << warning << "\n";
                 }
+                active_conf_path = path;
             }
         }
     }
@@ -368,11 +371,65 @@ int main(int argc, char* argv[]) {
                 drain_engine();
                 stop_persistence();
             },
-            [&engine]() {
-                // Reload callback（配置重载：当前记录运行状态）
-                FALCON_LOG_INFO_STREAM("Reloading configuration...");
-                FALCON_LOG_INFO_STREAM("Active tasks: " << engine.get_active_task_count()
-                                     << ", Total speed: " << engine.get_total_speed() << " B/s");
+            [&]() {
+                // Reload callback：重读 daemon.json，热更认证项，其余告警需重启。
+                // 失败时保持现有配置继续运行（区别于启动时的硬失败）。
+                if (active_conf_path.empty()) {
+                    FALCON_LOG_INFO_STREAM("Config reload skipped: no config file in use");
+                    return;
+                }
+
+                falcon::daemon::rpc::JsonRpcServerConfig new_rpc = rpc_config;
+                falcon::daemon::DaemonConfig new_daemon = daemon_config;
+                std::string new_task_db = task_db_path;
+                bool new_enable_rpc = enable_rpc;
+                bool new_run_as_daemon = run_as_daemon;
+                const auto result = falcon::daemon::apply_config_file(
+                    active_conf_path, new_rpc, new_daemon, new_task_db,
+                    new_enable_rpc, new_run_as_daemon);
+                if (!result.ok) {
+                    FALCON_LOG_WARN_STREAM("Config reload failed, keeping current config: "
+                                         << result.error);
+                    return;
+                }
+                for (const auto& warning : result.warnings) {
+                    FALCON_LOG_WARN_STREAM("Config reload: " << warning);
+                }
+
+                // 可热更：RPC 认证（对后续请求立即生效；secret 不落日志）
+                if (rpc_server &&
+                    (new_rpc.secret != rpc_config.secret ||
+                     new_rpc.allow_origin_all != rpc_config.allow_origin_all)) {
+                    rpc_server->update_auth(new_rpc.secret, new_rpc.allow_origin_all);
+                    FALCON_LOG_INFO_STREAM("RPC auth settings updated (applied immediately)");
+                }
+
+                // 需重启：监听、存储、守护化相关
+                if (new_enable_rpc != enable_rpc ||
+                    new_rpc.listen_port != rpc_config.listen_port ||
+                    new_rpc.bind_address != rpc_config.bind_address) {
+                    FALCON_LOG_WARN_STREAM("Config reload: RPC listen settings changed, "
+                                         "restart required to apply");
+                }
+                if (new_task_db != task_db_path) {
+                    FALCON_LOG_WARN_STREAM("Config reload: task_db_path changed, "
+                                         "restart required to apply");
+                }
+                if (new_run_as_daemon != run_as_daemon ||
+                    new_daemon.pid_file != daemon_config.pid_file ||
+                    new_daemon.working_dir != daemon_config.working_dir ||
+                    new_daemon.log_file != daemon_config.log_file) {
+                    FALCON_LOG_WARN_STREAM("Config reload: daemon settings changed, "
+                                         "restart required to apply");
+                }
+
+                // 采纳为新基线，下一次重载据此对比
+                rpc_config = new_rpc;
+                daemon_config = new_daemon;
+                task_db_path = new_task_db;
+                enable_rpc = new_enable_rpc;
+                run_as_daemon = new_run_as_daemon;
+                FALCON_LOG_INFO_STREAM("Configuration reloaded from " << active_conf_path);
             }
         );
 

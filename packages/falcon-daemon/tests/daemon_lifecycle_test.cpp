@@ -169,8 +169,6 @@ void run_daemonize_success_probe(int wfd, const std::string& pid_file,
     cfg.redirect_stdio = false;
     cfg.create_pid_file = true;
     falcon::daemon::DaemonManager dm(cfg);
-    std::atomic<bool> reloaded{false};
-    dm.set_reload_callback([&] { reloaded = true; });
 
     const bool ok = dm.daemonize();
     report_byte(wfd, ok ? 'D' : 'F');
@@ -184,7 +182,9 @@ void run_daemonize_success_probe(int wfd, const std::string& pid_file,
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
         ::raise(SIGHUP);
-        report_byte(wfd, reloaded.load() ? 'R' : 'r');
+        // SIGHUP 在信号处理器里只置 pending 标志（async-signal-safe），
+        // 实际回调由 run() 循环执行——本探针未进入 run()，故断言标志位
+        report_byte(wfd, dm.reload_pending() ? 'R' : 'r');
     }
     ::close(wfd);
 }
@@ -365,8 +365,15 @@ TEST(DaemonManagerTest, RunLoopStoresReloadCallback) {
 
     std::thread runner([&] { dm.run([] {}, [&] { reloaded = true; }); });
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    dm.reload();
-    EXPECT_TRUE(reloaded.load());
+    // SIGHUP 路径：request_reload() 只置标志，run() 循环负责执行回调
+    dm.request_reload();
+    bool fired = false;
+    for (int i = 0; i < 100 && !fired; ++i) {
+        fired = reloaded.load();
+        if (!fired) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    EXPECT_TRUE(fired);
+    EXPECT_FALSE(dm.reload_pending());  // 消费后标志清零
     dm.request_stop();
     runner.join();
 }

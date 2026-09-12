@@ -148,9 +148,23 @@ public:
     void set_reload_callback(ServiceControlCallback callback);
 
     /**
-     * @brief 触发重载回调
+     * @brief 触发重载回调（同步执行，供编程调用）
      */
     void reload();
+
+    /**
+     * @brief 请求重载（async-signal-safe：仅置标志，实际重载由 run()
+     *        主循环在普通线程上下文执行）
+     *
+     * 信号处理器里禁止打日志/读文件/加锁，SIGHUP 处理必须走本入口
+     * 而非 reload()。
+     */
+    void request_reload();
+
+    /**
+     * @brief 是否有待执行的重载请求
+     */
+    bool reload_pending() const;
 
     /**
      * @brief 兼容别名：请求停止
@@ -225,6 +239,7 @@ private:
     DaemonConfig config_;
     std::atomic<DaemonState> state_{DaemonState::NotStarted};
     std::atomic<bool> stop_requested_{false};
+    std::atomic<bool> reload_pending_{false};
     ServiceControlCallback stop_callback_;
     ServiceControlCallback reload_callback_;
     mutable std::string last_error_;

@@ -546,6 +546,86 @@ TEST_F(MainIntegrationTest, RpcSecretEnforcesToken) {
     EXPECT_EQ(exit_code_of(p), 0);
 }
 
+TEST_F(MainIntegrationTest, ConfFileReloadUpdatesSecretOnSighup) {
+    TempDirGuard tmp(make_temp_dir());
+    const std::string conf = tmp.path + "/daemon.json";
+    const uint16_t port = pick_free_port();
+    ASSERT_NE(port, 0);
+
+    const auto write_conf = [&](const char* secret) {
+        std::ofstream out(conf);
+        out << "{\"rpc\":{\"enabled\":true,\"host\":\"127.0.0.1\","
+            << "\"port\":" << port << ",\"secret\":\"" << secret << "\"}}";
+    };
+    write_conf("reload-old-secret");
+
+    Proc p;
+    ASSERT_TRUE(proc_start(p, {"--conf-path", conf}, ""));
+    ASSERT_TRUE(wait_until([&] { return tcp_connect(port); }, 8000));
+
+    // Old secret from the file works.
+    auto resp = http_post(port, make_rpc_body("system.listMethods", "[\"token:reload-old-secret\"]"));
+    ASSERT_TRUE(resp.has_value());
+    EXPECT_TRUE(contains(http_body(*resp), "aria2.addUri")) << *resp;
+
+    // Rewrite the file with a new secret, then SIGHUP.
+    write_conf("reload-new-secret");
+    ASSERT_EQ(::kill(p.pid, SIGHUP), 0);
+    // Main loop consumes the pending reload within ~100ms; poll for the
+    // new secret to be enforced (config parse + server update take a moment).
+    bool applied = false;
+    for (int i = 0; i < 250 && !applied; ++i) {
+        auto probe = http_post(port, make_rpc_body("system.listMethods", "[\"token:reload-new-secret\"]"));
+        applied = probe.has_value() && contains(http_body(*probe), "aria2.addUri");
+        if (!applied) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    EXPECT_TRUE(applied) << "new secret never became active after SIGHUP";
+
+    // Old secret is rejected after the reload.
+    resp = http_post(port, make_rpc_body("system.listMethods", "[\"token:reload-old-secret\"]"));
+    ASSERT_TRUE(resp.has_value());
+    EXPECT_TRUE(contains(http_body(*resp), "-32001")) << *resp;
+
+    proc_signal(p, SIGTERM);
+    EXPECT_TRUE(proc_finish(p, 8000));
+    EXPECT_EQ(exit_code_of(p), 0);
+}
+
+TEST_F(MainIntegrationTest, ConfFileReloadKeepsRunningOnBrokenFile) {
+    TempDirGuard tmp(make_temp_dir());
+    const std::string conf = tmp.path + "/daemon.json";
+    const uint16_t port = pick_free_port();
+    ASSERT_NE(port, 0);
+
+    {
+        std::ofstream out(conf);
+        out << "{\"rpc\":{\"enabled\":true,\"host\":\"127.0.0.1\","
+            << "\"port\":" << port << ",\"secret\":\"survivor-secret\"}}";
+    }
+
+    Proc p;
+    ASSERT_TRUE(proc_start(p, {"--conf-path", conf}, ""));
+    ASSERT_TRUE(wait_until([&] { return tcp_connect(port); }, 8000));
+
+    // Break the file, then SIGHUP: reload must fail open (keep the current
+    // config) instead of killing a running daemon.
+    {
+        std::ofstream out(conf);
+        out << "{ this is not json";
+    }
+    ASSERT_EQ(::kill(p.pid, SIGHUP), 0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    // Daemon is still alive and still authenticates with the old secret.
+    auto resp = http_post(port, make_rpc_body("system.listMethods", "[\"token:survivor-secret\"]"));
+    ASSERT_TRUE(resp.has_value()) << "daemon died after reloading a broken config";
+    EXPECT_TRUE(contains(http_body(*resp), "aria2.addUri")) << *resp;
+
+    proc_signal(p, SIGTERM);
+    EXPECT_TRUE(proc_finish(p, 8000));
+    EXPECT_EQ(exit_code_of(p), 0);
+}
+
 TEST_F(MainIntegrationTest, RpcInvalidHostFailsFast) {
     auto r = run_wait({"--enable-rpc", "--rpc-listen-host", "not-an-ip"}, 15000);
     ASSERT_FALSE(r.timed_out);

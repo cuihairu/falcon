@@ -186,6 +186,14 @@ void DaemonManager::run(ServiceControlCallback stop_callback,
     // 主循环
     while (!stop_requested_.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        // SIGHUP 只在信号处理器里置 reload_pending_，真正的重载
+        // （读文件/解析/回调）必须在普通线程上下文执行
+        if (reload_pending_.exchange(false)) {
+            FALCON_LOG_INFO_STREAM("Reload requested (SIGHUP)");
+            if (reload_callback_) {
+                reload_callback_();
+            }
+        }
     }
 
     // 调用停止回调
@@ -478,6 +486,14 @@ void DaemonManager::reload() {
     }
 }
 
+void DaemonManager::request_reload() {
+    reload_pending_ = true;
+}
+
+bool DaemonManager::reload_pending() const {
+    return reload_pending_.load();
+}
+
 bool DaemonManager::is_running() const {
     return state_ == DaemonState::Running && !stop_requested_.load();
 }
@@ -591,7 +607,9 @@ static void unix_signal_handler(int signum) {
                 instance->stop();
                 break;
             case SIGHUP:
-                instance->reload();
+                // 信号处理器内仅置标志（async-signal-safe）；
+                // 重载由 run() 主循环执行
+                instance->request_reload();
                 break;
         }
     }

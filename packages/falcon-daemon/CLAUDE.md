@@ -6,6 +6,23 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-12 - SIGHUP 配置重载（daemon.json 热更新）
+- `DaemonManager` 新增 `request_reload()`（仅置原子标志，
+  async-signal-safe）/ `reload_pending()`；`run()` 主循环消费标志后
+  在普通线程上下文执行重载回调——修复此前 `unix_signal_handler` 直接
+  在信号处理器里调回调（打日志/读文件均非 signal-safe）的缺陷
+- `reload()`（编程触发）保留同步语义不变
+- main.cpp 重载回调：重读 `active_conf_path`（启动时实际生效的配置
+  文件，`--no-conf`/默认路径未命中则跳过重载）；重载失败（文件缺失/
+  JSON 非法）保持现有配置继续运行（区别于启动时硬失败），并告警
+- 热更分级：`rpc.secret`/`rpc.allow_origin_all` 经
+  `JsonRpcServer::update_auth` 立即生效（带锁读写，已建 WebSocket
+  会话不受影响）；监听地址/端口、task_db_path、daemon 节各项变化
+  告警"restart required"
+- 测试：lifecycle 信号探针改断言 `reload_pending()`、run 循环消费
+  路径用例；main 集成新增 2 用例（SIGHUP 换 secret 生效 + 旧 secret
+  被拒、坏配置文件重载不死机保持旧 secret）；daemon 全量 225 用例通过
+
 ### 2026-09-12 - daemon.json 配置文件加载
 - 新增 `daemon/config.{hpp,cpp}`：`apply_config_file` 解析 JSON 配置文件
   并应用到配置结构；三节 schema——`rpc`（enabled/host/port/secret/
@@ -264,6 +281,13 @@ Windows Service Options（仅 Windows）:
 - 配置文件给出 `pid_file` 时与 `--pid-file` 行为一致（隐含创建 PID 文件）
 - 未知节/未知键打印告警到 stderr 但不失败；类型错误报错退出
 
+**SIGHUP 热重载**：向运行中的 daemon 发送 SIGHUP（或 systemd
+`ExecReload=/bin/kill -HUP $MAINPID`）会重读启动时实际生效的配置
+文件。`rpc.secret`/`rpc.allow_origin_all` 立即生效（已建立的连接不
+受影响）；监听地址/端口、`storage.task_db_path`、`daemon` 节各项
+变化仅告警"restart required"。重载失败（文件缺失/JSON 非法）保持
+现有配置继续运行。`--no-conf` 启动时无文件可重载，SIGHUP 记日志跳过。
+
 ---
 
 ## 对外接口
@@ -429,8 +453,7 @@ curl http://127.0.0.1:6800/jsonrpc -d '
 
 ## 下一步开发计划
 
-1. **配置重载**：SIGHUP 触发 `daemon.json` 热重载（当前 reload 回调仅记录运行状态）
-2. **下载参数配置化**：全局并发数/限速等引擎参数纳入 `daemon.json`（经 `changeGlobalOption` 已可运行时修改）
+1. **下载参数配置化**：全局并发数/限速等引擎参数纳入 `daemon.json`（经 `changeGlobalOption` 已可运行时修改）
 
 ---
 

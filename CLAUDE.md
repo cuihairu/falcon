@@ -2,6 +2,17 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-12 - Daemon SIGHUP 配置重载（daemon.json 热更新）
+- SIGHUP 触发重读启动时生效的 daemon.json：`rpc.secret`/
+  `allow_origin_all` 经 `JsonRpcServer::update_auth` 立即生效，
+  监听/存储/守护化项变化告警"restart required"；重载失败保持现有
+  配置继续运行
+- 修复信号处理器直接执行重载回调的缺陷：新增 async-signal-safe 的
+  `DaemonManager::request_reload()`（仅置原子标志），`run()` 主循环
+  在普通线程上下文消费执行
+- 新增 2 个 main 集成用例（SIGHUP 换 secret 生效、坏配置重载不死机）；
+  daemon 全量 225 用例通过
+
 ### 2026-09-12 - 修复 V2 引擎多段下载悬垂引用（Windows CI 崩溃根因）
 - `HttpResponseCommand::options_` 由引用成员改为值拷贝：其构造方
   `HttpInitiateConnectionCommand` 在 `send_http_request` 末尾把自己

@@ -473,10 +473,33 @@ struct JsonRpcServer::HttpResponse {
 JsonRpcServer::JsonRpcServer(falcon::DownloadEngine* engine,
                                JsonRpcServerConfig config,
                                TaskStorage* storage)
-    : engine_(engine), storage_(storage), config_(std::move(config)) {}
+    : engine_(engine),
+      storage_(storage),
+      config_(config),
+      auth_secret_(config.secret),
+      auth_allow_origin_all_(config.allow_origin_all) {
+    // config_ 仅作启动快照（监听地址/端口等不可热更项）；
+    // secret/allow_origin_all 经 update_auth 热更，读取一律走带锁访问器
+}
 
 void JsonRpcServer::set_shutdown_handler(std::function<void()> handler) {
     shutdown_handler_ = std::move(handler);
+}
+
+void JsonRpcServer::update_auth(std::string secret, bool allow_origin_all) {
+    std::lock_guard<std::mutex> lock(auth_mutex_);
+    auth_secret_ = std::move(secret);
+    auth_allow_origin_all_ = allow_origin_all;
+}
+
+std::string JsonRpcServer::auth_secret() const {
+    std::lock_guard<std::mutex> lock(auth_mutex_);
+    return auth_secret_;
+}
+
+bool JsonRpcServer::auth_allow_origin_all() const {
+    std::lock_guard<std::mutex> lock(auth_mutex_);
+    return auth_allow_origin_all_;
 }
 
 bool JsonRpcServer::start() {
@@ -785,7 +808,7 @@ void JsonRpcServer::handle_websocket(int client_fd, const HttpRequest& req) {
         << "Upgrade: websocket\r\n"
         << "Connection: Upgrade\r\n"
         << "Sec-WebSocket-Accept: " << ws_compute_accept_key(key) << "\r\n";
-    if (config_.allow_origin_all) {
+    if (auth_allow_origin_all()) {
         oss << "Access-Control-Allow-Origin: *\r\n";
     }
     oss << "\r\n";
@@ -889,7 +912,8 @@ JsonRpcServer::HttpResponse JsonRpcServer::handle_http_request(const HttpRequest
     resp.headers["Content-Type"] = "application/json";
     resp.headers["Connection"] = "close";
 
-    if (config_.allow_origin_all) {
+    const bool allow_all = auth_allow_origin_all();
+    if (allow_all) {
         resp.headers["Access-Control-Allow-Origin"] = "*";
         resp.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS";
         resp.headers["Access-Control-Allow-Headers"] = "Content-Type";
@@ -917,7 +941,7 @@ JsonRpcServer::HttpResponse JsonRpcServer::handle_http_request(const HttpRequest
     }
 
     resp = handle_jsonrpc(req.body);
-    if (config_.allow_origin_all) {
+    if (allow_all) {
         resp.headers["Access-Control-Allow-Origin"] = "*";
         resp.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS";
         resp.headers["Access-Control-Allow-Headers"] = "Content-Type";
@@ -932,6 +956,9 @@ JsonRpcServer::HttpResponse JsonRpcServer::handle_jsonrpc(const std::string& bod
     HttpResponse resp;
     resp.status_code = 200;
     resp.status_text = "OK";
+
+    // 认证配置可被 SIGHUP 重载热更：请求内固定一份快照，保证一致性
+    const std::string auth_secret = this->auth_secret();
 
     json id = nullptr;
     try {
@@ -951,7 +978,7 @@ JsonRpcServer::HttpResponse JsonRpcServer::handle_jsonrpc(const std::string& bod
         }
 
         // aria2-style authentication: first param "token:<secret>"
-        if (!validate_and_strip_token(params, config_.secret)) {
+        if (!validate_and_strip_token(params, auth_secret)) {
             resp.body = make_error(id, -32001, "Unauthorized").dump();
             return resp;
         }
@@ -959,7 +986,7 @@ JsonRpcServer::HttpResponse JsonRpcServer::handle_jsonrpc(const std::string& bod
         std::function<json(const std::string&, json)> dispatch;
         dispatch = [&](const std::string& m, json p) -> json {
             // For system.multicall inner calls, some clients may redundantly include token again.
-            maybe_strip_token(p, config_.secret);
+            maybe_strip_token(p, auth_secret);
 
             if (m == "system.listMethods") {
                 return json::array({
