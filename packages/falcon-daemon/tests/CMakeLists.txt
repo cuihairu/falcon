@@ -35,8 +35,29 @@ target_include_directories(falcon_daemon_rpc_tests
 
 target_compile_features(falcon_daemon_rpc_tests PRIVATE cxx_std_17)
 
+# daemon.json 配置文件加载（config.cpp 直接编进测试目标）
+add_executable(falcon_daemon_config_tests
+    config_test.cpp
+    ../src/daemon/config.cpp
+)
+
+target_link_libraries(falcon_daemon_config_tests
+    PRIVATE
+        falcon_daemon_rpc
+        GTest::gtest
+        GTest::gtest_main
+)
+
+target_include_directories(falcon_daemon_config_tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+)
+
+target_compile_features(falcon_daemon_config_tests PRIVATE cxx_std_17)
+
 include(GoogleTest)
 gtest_discover_tests(falcon_daemon_rpc_tests)
+gtest_discover_tests(falcon_daemon_config_tests)
 
 # Task Storage Tests (requires SQLite3)
 if(SQLite3_FOUND AND TARGET falcon_daemon_storage)

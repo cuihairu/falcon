@@ -591,4 +591,140 @@ TEST_F(MainIntegrationTest, DaemonModeLifecycle) {
     EXPECT_TRUE(file_exists(log_file));
 }
 
+// ===========================================================================
+// Config file (--conf-path) tests
+// ===========================================================================
+
+void write_file(const std::string& path, const std::string& content) {
+    std::ofstream out(path);
+    ASSERT_TRUE(out.good()) << path;
+    out << content;
+}
+
+TEST_F(MainIntegrationTest, HelpMentionsConfPath) {
+    auto r = run_wait({"--help"});
+    ASSERT_FALSE(r.timed_out);
+    EXPECT_EQ(r.exit_code, 0);
+    EXPECT_TRUE(contains(r.out, "--conf-path")) << r.out;
+    EXPECT_TRUE(contains(r.out, "--no-conf")) << r.out;
+}
+
+TEST_F(MainIntegrationTest, ConfPathMissingFileExitsOne) {
+    auto r = run_wait({"--conf-path", "/falcon-does-not-exist/daemon.json"});
+    ASSERT_FALSE(r.timed_out);
+    EXPECT_EQ(r.exit_code, 1);
+    EXPECT_TRUE(contains(r.err, "cannot open config file")) << r.err;
+}
+
+TEST_F(MainIntegrationTest, ConfPathInvalidJsonExitsOne) {
+    TempDirGuard tmp(make_temp_dir());
+    const std::string conf = tmp.path + "/daemon.json";
+    write_file(conf, "{not valid json");
+
+    auto r = run_wait({"--conf-path", conf});
+    ASSERT_FALSE(r.timed_out);
+    EXPECT_EQ(r.exit_code, 1);
+    EXPECT_TRUE(contains(r.err, "failed to parse config file")) << r.err;
+}
+
+// rpc.enabled + rpc.port 从配置文件生效：无 CLI 参数也启动 RPC
+TEST_F(MainIntegrationTest, ConfPathStartsRpcAndStopsCleanly) {
+    const uint16_t port = pick_free_port();
+    ASSERT_NE(port, 0);
+
+    TempDirGuard tmp(make_temp_dir());
+    const std::string conf = tmp.path + "/daemon.json";
+    write_file(conf, R"({
+        "rpc": { "enabled": true, "port": )" + std::to_string(port) + R"( }
+    })");
+
+    auto r = run_terminate({"--conf-path", conf}, port);
+    ASSERT_FALSE(r.timed_out) << r.out << r.err;
+    EXPECT_EQ(r.exit_code, 0);
+}
+
+// CLI 显式参数覆盖配置文件值：文件 port=A，CLI --rpc-listen-port B → B 生效
+TEST_F(MainIntegrationTest, CliOverridesConfigFilePort) {
+    const uint16_t file_port = pick_free_port();
+    const uint16_t cli_port = pick_free_port();
+    ASSERT_NE(file_port, 0);
+    ASSERT_NE(cli_port, 0);
+
+    TempDirGuard tmp(make_temp_dir());
+    const std::string conf = tmp.path + "/daemon.json";
+    write_file(conf, R"({
+        "rpc": { "enabled": true, "port": )" + std::to_string(file_port) + R"( }
+    })");
+
+    auto r = run_terminate({"--conf-path", conf,
+                            "--rpc-listen-port", std::to_string(cli_port)},
+                           cli_port);
+    ASSERT_FALSE(r.timed_out) << r.out << r.err;
+    EXPECT_EQ(r.exit_code, 0);
+    // CLI 端口生效后，文件端口不应被占用
+    EXPECT_FALSE(tcp_connect(file_port)) << "file port was used instead of CLI port";
+}
+
+// 文件中的 secret 生效 + 未知键告警不致命
+TEST_F(MainIntegrationTest, ConfigFileSecretAndUnknownKeyWarning) {
+    const uint16_t port = pick_free_port();
+    ASSERT_NE(port, 0);
+
+    TempDirGuard tmp(make_temp_dir());
+    const std::string conf = tmp.path + "/daemon.json";
+    write_file(conf, R"({
+        "rpc": { "enabled": true, "port": )" + std::to_string(port) +
+                      R"(, "secret": "conf-secret", "prot": 6800 },
+        "mystery_section": {}
+    })");
+
+    Proc p;
+    ASSERT_TRUE(proc_start(p, {"--conf-path", conf}, ""));
+    ASSERT_TRUE(wait_until([&] { return tcp_connect(port); }, 8000));
+
+    // 无 token → -32001（secret 来自配置文件）
+    auto resp = http_post(port, make_rpc_body("system.listMethods", "[]"));
+    ASSERT_TRUE(resp.has_value());
+    EXPECT_TRUE(contains(http_body(*resp), "-32001")) << *resp;
+
+    proc_signal(p, SIGTERM);
+    EXPECT_TRUE(proc_finish(p, 8000));
+    EXPECT_EQ(exit_code_of(p), 0);
+
+    // 未知节/键告警到 stderr，但进程正常启动
+    EXPECT_TRUE(contains(p.err, "unknown key in 'rpc' section: prot")) << p.err;
+    EXPECT_TRUE(contains(p.err, "unknown config section: mystery_section")) << p.err;
+}
+
+// --no-conf 短路一切配置文件加载（显式路径也被忽略）
+TEST_F(MainIntegrationTest, NoConfIgnoresConfPath) {
+    auto r = run_terminate({"--no-conf",
+                            "--conf-path", "/falcon-does-not-exist/daemon.json"});
+    ASSERT_FALSE(r.timed_out) << r.out << r.err;
+    EXPECT_EQ(r.exit_code, 0);
+}
+
+// 默认路径 $HOME/.config/falcon/daemon.json 存在时自动加载（aria2 语义）
+TEST_F(MainIntegrationTest, DefaultConfigPathAutoLoaded) {
+    const uint16_t port = pick_free_port();
+    ASSERT_NE(port, 0);
+
+    TempDirGuard tmp(make_temp_dir());
+    fs::create_directories(tmp.path + "/.config/falcon");
+    write_file(tmp.path + "/.config/falcon/daemon.json",
+               R"({ "rpc": { "enabled": true, "port": )" + std::to_string(port) + R"( } })");
+
+    // 子进程继承 HOME → 默认配置路径指向 tmp
+    const char* old_home = ::getenv("HOME");
+    const std::string old_home_str = old_home ? old_home : "";
+    ::setenv("HOME", tmp.path.c_str(), 1);
+
+    auto r = run_terminate({}, port);
+
+    if (!old_home_str.empty()) ::setenv("HOME", old_home_str.c_str(), 1);
+
+    ASSERT_FALSE(r.timed_out) << r.out << r.err;
+    EXPECT_EQ(r.exit_code, 0);
+}
+
 } // namespace

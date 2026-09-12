@@ -6,6 +6,23 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-12 - daemon.json 配置文件加载
+- 新增 `daemon/config.{hpp,cpp}`：`apply_config_file` 解析 JSON 配置文件
+  并应用到配置结构；三节 schema——`rpc`（enabled/host/port/secret/
+  allow_origin_all）、`daemon`（run_as_daemon/pid_file/working_dir/
+  log_file）、`storage`（task_db_path）
+- 优先级：命令行显式参数 > 配置文件 > 内置默认值（实现：先加载配置
+  文件，再走既有 argv 解析——CLI 分支只在参数显式给出时写入，天然覆盖）
+- 新增参数 `--conf-path <file>`（显式指定必须存在）与 `--no-conf`
+  （短路一切加载）；未指定时默认尝试 `~/.config/falcon/daemon.json`，
+  存在才加载（aria2 语义）
+- 容错：文件不存在/JSON 非法/类型错误 → 报错退出（在 daemonize 之前，
+  错误可见）；未知节与未知键 → stderr 告警不失败（向前兼容，拼错键名
+  不静默）；路径值支持 `~/` 前缀展开
+- 测试：`falcon_daemon_config_tests`（12 用例：全量/部分键/错误/告警/
+  展开）+ `main_integration_test` 新增 8 用例（真实二进制验证文件启动、
+  CLI 覆盖、secret 生效、默认路径自动加载、--no-conf）；全量 1444 用例通过
+
 ### 2026-09-12 - WebSocket 事件流客户端（桌面端对接）
 - 新增 `websocket_rpc_client.{hpp,cpp}`：`WebSocketRpcClient`——与 daemon
   维持一条 WebSocket 长连接，请求/响应同连接按 id 匹配，服务器通知经
@@ -143,6 +160,8 @@ packages/falcon-daemon/src/
 ├── main.cpp                  # 入口：参数解析 → DaemonManager 组装与接线
 ├── daemon/
 │   ├── daemon.hpp/.cpp       # DaemonManager：生命周期、信号、pid 文件、停机排水
+│   ├── config.hpp/.cpp       # daemon.json 配置文件加载（JSON → 配置结构，
+│   │                         #   优先级 CLI > 文件 > 默认值；~ 路径展开）
 │   └── (daemonize POSIX 细节)
 ├── rpc/
 │   ├── json_rpc_server.hpp/.cpp  # aria2 兼容 JSON-RPC 2.0 服务器（28 个方法）
@@ -174,6 +193,9 @@ cmake --build build --target falcon-daemon
 # 前台运行（调试用）
 ./build/bin/falcon-daemon --enable-rpc --rpc-listen-port 6800
 
+# 经配置文件运行
+./build/bin/falcon-daemon --conf-path /etc/falcon/daemon.json
+
 # 后台运行（守护进程模式）
 ./build/bin/falcon-daemon --daemon --enable-rpc --pid-file /var/run/falcon-daemon.pid
 ```
@@ -182,6 +204,12 @@ cmake --build build --target falcon-daemon
 
 ```bash
 falcon-daemon [OPTIONS]
+
+Global Options:
+  -h, --help                  显示帮助
+  --conf-path <file>          配置文件（JSON）；默认尝试
+                              ~/.config/falcon/daemon.json（存在才加载）
+  --no-conf                   不加载任何配置文件（显式 --conf-path 也忽略）
 
 RPC Options:
   --enable-rpc[=true|false]   启用 JSON-RPC 服务器（默认 false）
@@ -203,7 +231,38 @@ Windows Service Options（仅 Windows）:
   --service-name <name>       服务名（默认 falcon-daemon）
 ```
 
-> 配置文件（`daemon.json`）加载尚未实现，目前仅命令行参数。
+### 配置文件（daemon.json）
+
+加载时机与优先级：**命令行显式参数 > 配置文件 > 内置默认值**。
+配置文件在 daemonize 之前加载（pid_file/working_dir/log_file 影响守护化
+行为）；显式 `--conf-path` 指定的文件必须存在且合法，否则进程报错退出；
+默认路径存在才加载、不存在静默跳过。
+
+```json
+{
+  "rpc": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 6800,
+    "secret": "YOUR_TOKEN",
+    "allow_origin_all": false
+  },
+  "daemon": {
+    "run_as_daemon": false,
+    "pid_file": "/var/run/falcon-daemon.pid",
+    "working_dir": "/var/lib/falcon",
+    "log_file": "/var/log/falcon/daemon.log"
+  },
+  "storage": {
+    "task_db_path": "~/.config/falcon/tasks.db"
+  }
+}
+```
+
+- 只覆盖文件中出现的键，未出现的键保持下层值
+- 路径值支持 `~/` 前缀展开（HOME / USERPROFILE）
+- 配置文件给出 `pid_file` 时与 `--pid-file` 行为一致（隐含创建 PID 文件）
+- 未知节/未知键打印告警到 stderr 但不失败；类型错误报错退出
 
 ---
 
@@ -323,7 +382,8 @@ RPC 的 `pauseAll`/`unpauseAll`/`removeDownloadResult`/`purgeDownloadResult`
 | `falcon_daemon_rpc_storage_tests` | `json_rpc_storage_test.cpp` | RPC × storage 集成（回落/删除联动/批量落库/停机回调） |
 | `falcon_daemon_storage_tests` | `task_storage_test.cpp` `task_storage_listener_test.cpp` | 持久化与监听器 |
 | `falcon_daemon_lifecycle_tests` | `daemon_lifecycle_test.cpp` | 守护进程生命周期（POSIX） |
-| `falcon_daemon_main_tests` | `main_integration_test.cpp` | 真实二进制参数/退出码（POSIX） |
+| `falcon_daemon_config_tests` | `config_test.cpp` | daemon.json 解析/优先级/容错/~ 展开 |
+| `falcon_daemon_main_tests` | `main_integration_test.cpp` | 真实二进制参数/退出码/配置文件加载（POSIX） |
 
 ```bash
 ctest --test-dir build -R "JsonRpc|TaskStorage|StorageListener|DaemonLifecycle|MainIntegration"
@@ -369,8 +429,8 @@ curl http://127.0.0.1:6800/jsonrpc -d '
 
 ## 下一步开发计划
 
-1. **配置文件加载**：`daemon.json`（RPC/storage/下载参数）与命令行参数合并
-2. **认证增强**：secret 持久化、配置文件管理（当前仅命令行传入）
+1. **配置重载**：SIGHUP 触发 `daemon.json` 热重载（当前 reload 回调仅记录运行状态）
+2. **下载参数配置化**：全局并发数/限速等引擎参数纳入 `daemon.json`（经 `changeGlobalOption` 已可运行时修改）
 
 ---
 

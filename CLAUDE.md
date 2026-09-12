@@ -2,6 +2,16 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-12 - Daemon 配置文件加载（daemon.json）
+- 新增 `daemon.json` 配置文件：`rpc`（enabled/host/port/secret/
+  allow_origin_all）、`daemon`（run_as_daemon/pid_file/working_dir/
+  log_file）、`storage`（task_db_path）三节，路径支持 `~` 展开
+- 优先级：命令行显式参数 > 配置文件 > 默认值；`--conf-path <file>`
+  显式指定（必须存在），默认尝试 `~/.config/falcon/daemon.json`（存在
+  才加载，aria2 语义），`--no-conf` 短路一切加载
+- 容错：JSON 非法/类型错误报错退出（daemonize 之前），未知键告警不失败
+- 新增 12 个解析单测 + 8 个真实二进制集成用例（全量 1444 用例通过）
+
 ### 2026-09-12 - 桌面端接入 Daemon 事件流
 - 新增 `WebSocketRpcClient`（daemon 包，随 `falcon_daemon_rpc_client` 库）：
   WS 单连接承载请求/响应与服务器通知，断线自动重连，`call()` 语义与
@@ -641,19 +651,29 @@ CLI 程序支持配置文件（`~/.config/falcon/config.json`）：
 }
 ```
 
-Daemon 配置文件（`/etc/falcon/daemon.json` 或 `~/.config/falcon/daemon.json`）：
+Daemon 配置文件（默认 `~/.config/falcon/daemon.json`，或 `--conf-path` 显式指定）：
 ```json
 {
   "rpc": {
+    "enabled": true,
     "host": "127.0.0.1",
     "port": 6800,
-    "enable_auth": true
+    "secret": "YOUR_TOKEN",
+    "allow_origin_all": false
+  },
+  "daemon": {
+    "run_as_daemon": false,
+    "pid_file": "/var/run/falcon-daemon.pid",
+    "working_dir": "/var/lib/falcon",
+    "log_file": "/var/log/falcon/daemon.log"
   },
   "storage": {
     "task_db_path": "/var/lib/falcon/tasks.db"
   }
 }
 ```
+
+优先级：命令行显式参数 > 配置文件 > 内置默认值；`--no-conf` 跳过加载。
 
 ---
 
@@ -694,6 +714,7 @@ Daemon 配置文件（`/etc/falcon/daemon.json` 或 `~/.config/falcon/daemon.jso
    - ✅ aria2 兼容 API（26 个方法，含查询回落、批量控制、会话管理）
    - ✅ 任务持久化（SQLite：状态/进度落库、停机保存、重启恢复）
    - ✅ 事件流订阅（同端口 WebSocket 推送 aria2 兼容通知 + 进度通知）
+   - ✅ 配置文件加载（daemon.json，CLI > 文件 > 默认值）
 
 2. **桌面应用（Qt6）**
    - ✅ 迅雷风格 UI

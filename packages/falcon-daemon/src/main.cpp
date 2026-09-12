@@ -5,6 +5,7 @@
 
 #include "rpc/json_rpc_server.hpp"
 #include "daemon/daemon.hpp"
+#include "daemon/config.hpp"
 
 #ifdef FALCON_HAS_SQLITE3
 #include "storage/task_storage.hpp"
@@ -35,6 +36,9 @@ void show_help() {
         << "  falcon-daemon [OPTIONS]\n\n"
         << "Options:\n"
         << "  -h, --help                  Show this help\n"
+        << "  --conf-path <file>          Config file (JSON); default: try\n"
+        << "                              ~/.config/falcon/daemon.json\n"
+        << "  --no-conf                   Do not load any config file\n"
         << "  --enable-rpc[=true|false]   Enable JSON-RPC server (default: false)\n"
         << "  --rpc-listen-port <port>    Listen port (default: 6800)\n"
         << "  --rpc-secret <token>        Require token:<token> in JSON-RPC params\n"
@@ -55,6 +59,7 @@ void show_help() {
         << "Examples:\n"
         << "  falcon-daemon --enable-rpc --rpc-listen-port 6800\n"
         << "  falcon-daemon --enable-rpc --rpc-secret mytoken\n"
+        << "  falcon-daemon --conf-path /etc/falcon/daemon.json\n"
         << "  falcon-daemon -d --enable-rpc --pid-file /var/run/falcon.pid\n";
 }
 
@@ -73,6 +78,40 @@ int main(int argc, char* argv[]) {
     std::string service_name = "falcon-daemon";
 #endif
 
+    // 先扫出配置文件参数并加载（优先级：CLI 显式参数 > 配置文件 > 默认值；
+    // 下面的解析循环只在参数显式给出时写入配置结构，天然覆盖文件值）。
+    // 必须在 daemonize 之前完成：pid_file/working_dir/log_file 影响守护化行为。
+    {
+        std::string conf_path;
+        bool no_conf = false;
+        for (int i = 1; i < argc; ++i) {
+            const std::string arg = argv[i];
+            if (arg == "--conf-path" && i + 1 < argc) {
+                conf_path = argv[++i];
+            } else if (arg == "--no-conf") {
+                no_conf = true;
+            }
+        }
+
+        if (!no_conf) {
+            const std::string path =
+                conf_path.empty() ? falcon::daemon::get_default_config_file() : conf_path;
+            // 显式指定必须存在；默认路径存在才加载（aria2 语义）
+            if (!conf_path.empty() || std::filesystem::exists(path)) {
+                auto result = falcon::daemon::apply_config_file(
+                    path, rpc_config, daemon_config, task_db_path,
+                    enable_rpc, run_as_daemon);
+                if (!result.ok) {
+                    std::cerr << "Error loading config file: " << result.error << "\n";
+                    return 1;
+                }
+                for (const auto& warning : result.warnings) {
+                    std::cerr << "Warning: " << warning << "\n";
+                }
+            }
+        }
+    }
+
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--help" || arg == "-h") {
@@ -81,6 +120,13 @@ int main(int argc, char* argv[]) {
         }
 
         // RPC options
+        if (arg == "--conf-path" && i + 1 < argc) {
+            ++i;  // 已在上方配置文件加载阶段消费
+            continue;
+        }
+        if (arg == "--no-conf") {
+            continue;
+        }
         if (arg == "--enable-rpc") {
             enable_rpc = true;
             continue;

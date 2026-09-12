@@ -129,6 +129,7 @@ if(nlohmann_json_FOUND)
 
     add_executable(falcon-daemon
         src/main.cpp
+        src/daemon/config.cpp
     )
 
     target_link_libraries(falcon-daemon
