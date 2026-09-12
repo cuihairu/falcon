@@ -172,9 +172,23 @@ void DownloadTask::update_progress(Bytes downloaded, Bytes total,
     current_speed_.store(speed);
     last_progress_time_ = std::chrono::steady_clock::now();
 
-    if (listener_) {
-        listener_->on_progress(get_progress_info());
+    if (!listener_) {
+        return;
     }
+
+    // progress_interval_ms 消费点：on_progress 按任务间隔节流下发。
+    // V1 curl 回调与 V2 每 recv 块都直打此咽喉，不节流即事件风暴；
+    // 存储值（上方三个 store）始终即时更新，节流只作用于监听回调。
+    // 终态进度（downloaded >= total）不节流，监听者必须能看到 100%
+    const auto now = last_progress_time_;
+    const bool final_update = (total > 0 && downloaded >= total);
+    if (!final_update &&
+        now - last_on_progress_ <
+            std::chrono::milliseconds(options_.progress_interval_ms)) {
+        return;
+    }
+    last_on_progress_ = now;
+    listener_->on_progress(get_progress_info());
 }
 
 void DownloadTask::set_file_info(const FileInfo& info) {

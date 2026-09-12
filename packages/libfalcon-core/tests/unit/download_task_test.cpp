@@ -526,3 +526,45 @@ TEST_F(DownloadTaskTest, RemainingTimeWithZeroSpeed) {
     auto remaining = task->estimated_remaining();
     EXPECT_EQ(remaining.count(), 0);
 }
+
+/// progress_interval_ms 消费验证：on_progress 按任务间隔节流下发，
+/// 终态进度（downloaded >= total）不节流；存储值不受节流影响。
+/// 吞没界用 1s 间隔 + 50ms 短睡：调度延迟近 1s 才会误判，防 CI 抖动
+TEST_F(DownloadTaskTest, ProgressIntervalThrottlesListenerCallback) {
+    DownloadOptions opts;
+    opts.progress_interval_ms = 1000;
+    auto task = std::make_shared<DownloadTask>(31, "https://example.com/throttle.bin", opts);
+
+    class CountingListener final : public IEventListener {
+    public:
+        void on_progress(const ProgressInfo&) override { count.fetch_add(1); }
+        std::atomic<int> count{0};
+    };
+    CountingListener listener;
+    task->set_listener(&listener);
+
+    // 连发突发：首发放行，其余落在间隔窗口内被吞没
+    for (int i = 1; i <= 10; ++i) {
+        task->update_progress(static_cast<Bytes>(i * 10), 1000, 100);
+    }
+    EXPECT_EQ(listener.count.load(), 1)
+        << "间隔内突发应只下发一次 on_progress，实际 "
+        << listener.count.load();
+
+    // 未到间隔：继续吞没
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    task->update_progress(200, 1000, 100);
+    EXPECT_EQ(listener.count.load(), 1);
+
+    // 终态进度不节流：间隔内也必须放行（监听者要能看到 100%）
+    task->update_progress(1000, 1000, 100);
+    EXPECT_EQ(listener.count.load(), 2);
+
+    // 间隔已过：恢复下发（非终态更新）
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+    task->update_progress(300, 1000, 100);
+    EXPECT_EQ(listener.count.load(), 3);
+
+    // 存储值即时更新，不受节流影响
+    EXPECT_EQ(task->downloaded_bytes(), 300);
+}

@@ -2,6 +2,22 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-12 - 进度回调节流闭环（progress_interval_ms 端到端生效）
+- 修复事件风暴缺陷：`DownloadTask::update_progress` 每次调用都
+  无条件下发 `on_progress`，而 V1 curl 写回调与 V2 每 recv 块都直打
+  该咽喉——监听链全量挨打（TaskStorageListener 自带 1s 节流只保
+  DB 写入，其余监听者无防护）；
+  `DownloadOptions::progress_interval_ms`（默认 500ms）恰为缺的
+  节流值，此前全链路零消费（仅序列化往返）
+- 节流收在 `DownloadTask::update_progress` 单点：非终态更新距上次
+  下发不足 `progress_interval_ms` 即吞没；终态进度（downloaded ≥
+  total）不节流，监听者必须能看到 100%；存储值（downloaded/total/
+  speed）始终即时更新，节流只作用于监听回调
+- 新增用例（download_task_test）：间隔内突发只下发一次 / 短睡后
+  仍吞没（1s 间隔 + 50ms 短睡，调度延迟近 1s 才会误判，防 CI
+  抖动）/ 终态穿透 / 间隔恢复下发 / 存储值不受节流影响；全量
+  1472 ctest 通过，ASan 44 用例零告警
+
 ### 2026-09-12 - V2 引擎停机排水（run() 退出关闭命令持有的 fd）
 - 补齐 33efedc 超时清理修复的姊妹项：运行期挂起 fd 由超时清理
   收口，但 shutdown/force_shutdown/异常停机退出 run() 时仍在队列

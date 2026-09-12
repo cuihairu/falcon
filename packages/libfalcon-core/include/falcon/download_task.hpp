@@ -181,6 +181,9 @@ private:
 
     TimePoint start_time_;
     TimePoint last_progress_time_;
+    /// 上次 on_progress 实际下发时刻：progress_interval_ms 节流基准
+    /// （epoch 起，首次更新必然超过任一合理间隔而直接放行）
+    TimePoint last_on_progress_{};
 
     std::shared_ptr<IProtocolHandler> handler_;
     IEventListener* listener_ = nullptr;
