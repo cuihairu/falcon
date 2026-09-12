@@ -64,8 +64,13 @@ void ensure_winsock_for_limit_test() {
 }
 
 inline int test_getpid() { return _getpid(); }
+// Winsock（winsock2.h）无 socklen_t/ssize_t：长度参数与 recv/send 返回值均为 int
+using sock_len = int;
+using recv_ssize = int;
 #else
 inline int test_getpid() { return static_cast<int>(::getpid()); }
+using sock_len = socklen_t;
+using recv_ssize = ssize_t;
 #endif
 
 /// 最小回环 HTTP server：支持 HEAD（文件探测）与 GET（下载数据）
@@ -92,7 +97,7 @@ public:
         }
 
         sockaddr_in bound{};
-        socklen_t len = sizeof(bound);
+        sock_len len = sizeof(bound);
         if (::getsockname(listen_fd_, reinterpret_cast<sockaddr*>(&bound), &len) != 0) {
             stop();
             return false;
@@ -141,7 +146,7 @@ private:
                 continue;  // 超时或错误：重新检查 running_
             }
             sockaddr_in peer{};
-            socklen_t peer_len = sizeof(peer);
+            sock_len peer_len = sizeof(peer);
             int conn = ::accept(listen_fd_, reinterpret_cast<sockaddr*>(&peer), &peer_len);
             if (conn < 0) {
                 if (!running_) return;
@@ -157,7 +162,7 @@ private:
         char buf[2048];
         while (request.find("\r\n\r\n") == std::string::npos &&
                request.size() < 16 * 1024) {
-            ssize_t n = ::recv(conn, buf, sizeof(buf), 0);
+            recv_ssize n = ::recv(conn, buf, sizeof(buf), 0);
             if (n <= 0) {
                 CLOSE_SOCKET(conn);
                 return;
@@ -182,7 +187,7 @@ private:
     void send_all(int conn, const char* data, std::size_t size) {
         std::size_t sent = 0;
         while (sent < size) {
-            ssize_t n = ::send(conn, data + sent,
+            recv_ssize n = ::send(conn, data + sent,
 #ifdef _WIN32
                                static_cast<int>(size - sent),
 #else
