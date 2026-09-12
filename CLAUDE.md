@@ -2,6 +2,24 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-12 - V2 引擎单任务限速（任务窗口 + 与全局取严）
+- `DownloadOptions::speed_limit` 在 V2 引擎同样零消费端（V1 有
+  curl 通道，V2 裸 socket 路径全速跑），复用全局限速的滑动窗口
+  机制扩展为 per-task 记账：`report_downloaded_bytes(task_id, n)`
+  同时记全局窗口与任务窗口（多连接分段共享任务窗口，预算先到
+  先得自然分摊——任务总限速语义）
+- `recv_budget(task_id, task_limit)` 取 min(全局预算, 任务预算)；
+  任务限速值从 RequestGroup 读取（命令不持有 options）
+- 任务级节流不跳过 execute_commands（单任务受限不能拖累其他任务），
+  只把本轮 poll 拉长到最早的任务预算恢复点；预算挂起不注册 socket
+  事件（数据已在内核缓冲会立即唤醒形成忙旋，改为回队轮询）
+- 两个实测缺陷修复：任务窗口淘汰只挂在 report 上，预算耗尽挂起
+  期间没有新 report → 预算永不恢复死锁（30s 超时），改为 recv_budget
+  查询时同步淘汰；终态任务窗口条目每轮清理防 map 无限增长
+- 新增 2 个端到端用例：任务自身 64KB/s（≥2.5s，实测 3.5s）+
+  全局/任务取严双向验证；全量回归 protocols 551 + core 402 +
+  daemon 229，ASan 15 用例零告警
+
 ### 2026-09-12 - V2 引擎全局限速（读层预算 + 事件循环节流）
 - `EngineConfigV2::global_speed_limit` 从零消费端变为端到端生效：
   `HttpDownloadCommand::receive_data` 每次 recv 后

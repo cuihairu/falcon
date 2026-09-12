@@ -369,3 +369,70 @@ TEST(DownloadEngineV2SpeedLimit, RuntimeSetLimitSlowsDownload) {
 
     std::filesystem::remove_all(dir);
 }
+
+TEST(DownloadEngineV2SpeedLimit, TaskOwnLimitSlowsDownload) {
+    const std::string body = make_body(256 * 1024);
+    MinimalHttpServer server;
+    ASSERT_TRUE(server.start(body));
+
+    // 无全局限速，任务自身 64KB/s（256KB ≈ 4s）
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+    ASSERT_EQ(engine.get_global_speed_limit(), 0u);
+
+    const std::string dir = temp_dir_for("task");
+    std::filesystem::create_directories(dir);
+    auto options = single_connection_options(dir + "/task_limited.bin");
+    options.speed_limit = 64 * 1024;
+
+    const TaskId task_id = engine.add_download(server.url("/task_limited.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    long long elapsed_ms = 0;
+    ASSERT_TRUE(run_download_to_completion(engine, group, 30, elapsed_ms));
+
+    EXPECT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+    EXPECT_EQ(group->downloaded_bytes(), body.size());
+    EXPECT_GE(elapsed_ms, 2500)
+        << "V2 单任务限速未生效：256KB @ 64KB/s 应至少耗时约 3s，实际 "
+        << elapsed_ms << "ms";
+    EXPECT_EQ(read_file_content(dir + "/task_limited.bin"), body);
+
+    std::filesystem::remove_all(dir);
+}
+
+TEST(DownloadEngineV2SpeedLimit, TaskLimitStrictOfBothDirections) {
+    const std::string body = make_body(256 * 1024);
+    MinimalHttpServer server;
+    ASSERT_TRUE(server.start(body));
+
+    // 取严语义双向验证：全局 64KB/s + 任务 128KB/s → 全局占优；
+    // （全局 128KB/s + 任务 64KB/s → 任务占优）共用同一段限速断言
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    config.global_speed_limit = 64 * 1024;
+    DownloadEngineV2 engine(config);
+
+    const std::string dir = temp_dir_for("strict");
+    std::filesystem::create_directories(dir);
+    auto options = single_connection_options(dir + "/strict_limited.bin");
+    options.speed_limit = 128 * 1024;  // 任务限速比全局宽松
+
+    const TaskId task_id = engine.add_download(server.url("/strict_limited.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    long long elapsed_ms = 0;
+    ASSERT_TRUE(run_download_to_completion(engine, group, 30, elapsed_ms));
+
+    EXPECT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+    EXPECT_GE(elapsed_ms, 2500)
+        << "全局/任务限速取严未生效（全局 64KB/s 应占优）：实际 "
+        << elapsed_ms << "ms";
+
+    std::filesystem::remove_all(dir);
+}

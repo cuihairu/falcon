@@ -211,21 +211,23 @@ public:
     std::uint64_t get_global_speed_limit() const noexcept;
 
     /**
-     * @brief 命令报告本轮接收字节数（全局限速统计入口）
+     * @brief 命令报告本轮接收字节数（限速统计入口）
      *
-     * 下载命令在每次成功接收后调用；引擎以滑动窗口统计全局速率，
-     * 超限时在事件循环中节流
+     * 下载命令在每次成功接收后调用；引擎同时记入全局窗口（总体
+     * 限速）与该任务窗口（单任务限速），达限后在事件循环中节流
      */
-    void report_downloaded_bytes(Bytes n);
+    void report_downloaded_bytes(TaskId task_id, Bytes n);
 
     /**
-     * @brief 当前接收预算（字节）：全局限速 − 滑动窗口占用
+     * @brief 当前接收预算（字节）：min(全局限速, 任务限速) − 窗口占用
      *
      * 下载命令在每次 recv 前查询并截断单次读取量；预算为 0 表示
-     * 本秒配额已用完，应挂起等待（引擎节流期不执行数据面命令）。
-     * 不限速时返回 UINT64_MAX。仅引擎线程调用（与窗口统计同线程）
+     * 本秒配额已用完，应挂起等待（引擎节流期不再读数据）。
+     * task_limit 为该任务的 options.speed_limit（0 = 任务不限速，
+     * 仅受全局限速约束）。不限速时返回 UINT64_MAX。
+     * 仅引擎线程调用（与窗口统计同线程）
      */
-    std::uint64_t recv_budget() const noexcept;
+    std::uint64_t recv_budget(TaskId task_id, std::uint64_t task_limit) noexcept;
 
 private:
     /**
@@ -268,6 +270,19 @@ private:
     /// 淘汰、接收预算恢复为止（与 recv_budget 的预算语义一致）
     void evaluate_throttle(std::chrono::steady_clock::time_point now);
 
+    /// 淘汰单个任务窗口的过期样本；样本清空后返回 true（条目可删）
+    bool prune_task_window(TaskId task_id,
+                           std::chrono::steady_clock::time_point now);
+
+    /// 移除终态/不存在任务的窗口条目（防 map 随历史任务无限增长）
+    void prune_finished_task_windows();
+
+    /// 窗口预算恢复时间点：最早一个使剩余样本和 < limit 的样本满龄
+    /// 时刻（ts + 1s + 1ms）；未达限返回 epoch（无节流语义）
+    static std::chrono::steady_clock::time_point window_recovery_point(
+        const std::deque<std::pair<std::chrono::steady_clock::time_point, Bytes>>& samples,
+        Bytes total, std::uint64_t limit);
+
     /// 成员变量
     std::unique_ptr<net::EventPoll> event_poll_;
     std::unique_ptr<RequestGroupMan> request_group_man_;
@@ -305,6 +320,16 @@ private:
     Bytes speed_window_bytes_ = 0;
     /// 限速节流剩余等待（receive_data 让出后累计，poll 时消费）
     std::chrono::steady_clock::time_point throttle_until_{};
+
+    /// 单任务限速：每任务一个 1s 滑动窗口（多连接分段共享本任务窗口）
+    struct TaskSpeedWindow {
+        std::deque<std::pair<std::chrono::steady_clock::time_point, Bytes>> samples;
+        Bytes total = 0;
+    };
+    std::unordered_map<TaskId, TaskSpeedWindow> task_windows_;
+    /// 任务级节流：本轮 poll 最长等到该时间点（最早的任务预算恢复点），
+    /// 仅拉长等待、不跳过 execute_commands（其他任务照常执行）
+    std::chrono::steady_clock::time_point task_throttle_until_{};
 
     // 配置
     EngineConfigV2 config_;

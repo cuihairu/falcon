@@ -194,20 +194,59 @@ std::uint64_t DownloadEngineV2::get_global_speed_limit() const noexcept {
     return global_speed_limit_.load(std::memory_order_relaxed);
 }
 
-std::uint64_t DownloadEngineV2::recv_budget() const noexcept {
+std::uint64_t DownloadEngineV2::recv_budget(TaskId task_id,
+                                            std::uint64_t task_limit) noexcept {
+    constexpr auto kUnlimited = std::numeric_limits<std::uint64_t>::max();
+
     const auto limit = global_speed_limit_.load(std::memory_order_relaxed);
-    if (limit == 0) {
-        return std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t budget = kUnlimited;
+
+    // 全局预算
+    if (limit > 0) {
+        budget = speed_window_bytes_ >= limit ? 0 : limit - speed_window_bytes_;
     }
-    return speed_window_bytes_ >= limit ? 0 : limit - speed_window_bytes_;
+
+    // 任务预算（取严）
+    if (task_limit > 0) {
+        std::uint64_t task_budget = kUnlimited;
+        // 查询时同步淘汰过期样本：预算耗尽挂起期间没有新 report，
+        // 任务窗口只能靠查询方的淘汰恢复，否则预算永不恢复（死锁）
+        const auto now = std::chrono::steady_clock::now();
+        prune_task_window(task_id, now);
+        auto it = task_windows_.find(task_id);
+        if (it != task_windows_.end() && it->second.total >= task_limit) {
+            task_budget = 0;
+            // 记录本轮 poll 最长等待点：睡到预算恢复，抑制空轮询。
+            // 直接赋值（不合并）：过期恢复点判定 now < until 不成立，
+            // 自然退化为常规 poll 节奏，无正确性影响
+            const auto rp = window_recovery_point(
+                it->second.samples, it->second.total, task_limit);
+            if (rp != std::chrono::steady_clock::time_point{}) {
+                task_throttle_until_ = rp;
+            }
+        } else if (it != task_windows_.end()) {
+            task_budget = task_limit - it->second.total;
+        }
+        budget = std::min(budget, task_budget);
+    }
+
+    return budget;
 }
 
-void DownloadEngineV2::report_downloaded_bytes(Bytes n) {
+void DownloadEngineV2::report_downloaded_bytes(TaskId task_id, Bytes n) {
     if (n == 0) return;
     const auto now = std::chrono::steady_clock::now();
+
+    // 全局窗口
     speed_samples_.emplace_back(now, n);
     speed_window_bytes_ += n;
     prune_speed_window(now);
+
+    // 任务窗口（多连接分段共享同一任务窗口，先到先得自然分摊）
+    auto& win = task_windows_[task_id];
+    win.samples.emplace_back(now, n);
+    win.total += n;
+    prune_task_window(task_id, now);
 }
 
 void DownloadEngineV2::prune_speed_window(std::chrono::steady_clock::time_point now) {
@@ -218,29 +257,65 @@ void DownloadEngineV2::prune_speed_window(std::chrono::steady_clock::time_point 
     }
 }
 
+bool DownloadEngineV2::prune_task_window(TaskId task_id,
+                                         std::chrono::steady_clock::time_point now) {
+    auto it = task_windows_.find(task_id);
+    if (it == task_windows_.end()) {
+        return true;
+    }
+    const auto cutoff = now - std::chrono::seconds(1);
+    auto& win = it->second;
+    while (!win.samples.empty() && win.samples.front().first < cutoff) {
+        win.total -= win.samples.front().second;
+        win.samples.pop_front();
+    }
+    if (win.samples.empty()) {
+        task_windows_.erase(it);
+        return true;
+    }
+    return false;
+}
+
+void DownloadEngineV2::prune_finished_task_windows() {
+    for (auto it = task_windows_.begin(); it != task_windows_.end();) {
+        const auto* group = request_group_man_ ? request_group_man_->find_group(it->first)
+                                               : nullptr;
+        const bool finished = !group ||
+                              group->status() == RequestGroupStatus::COMPLETED ||
+                              group->status() == RequestGroupStatus::FAILED ||
+                              group->status() == RequestGroupStatus::REMOVED;
+        it = finished ? task_windows_.erase(it) : std::next(it);
+    }
+}
+
+std::chrono::steady_clock::time_point DownloadEngineV2::window_recovery_point(
+    const std::deque<std::pair<std::chrono::steady_clock::time_point, Bytes>>& samples,
+    Bytes total, std::uint64_t limit) {
+    if (limit == 0 || total < limit || samples.empty()) {
+        return {};  // 未达限：无节流语义
+    }
+    // 找最早的 k 使去掉前 k 个样本后剩余和 < limit——第 k 个样本满龄
+    // （时间戳 + 1s）时窗口恰好降到 limit 以下、预算恢复
+    Bytes suffix = total;
+    std::size_t k = 0;
+    while (k < samples.size() && suffix >= limit) {
+        suffix -= samples[k].second;
+        ++k;
+    }
+    // k == size() 时全部样本满龄后窗口归零，取末样本锚点
+    const auto anchor = k < samples.size() ? samples[k].first : samples.back().first;
+    // +1ms：prune 用严格小于判定，样本恰满 1s 时还未淘汰
+    return anchor + std::chrono::seconds(1) + std::chrono::milliseconds(1);
+}
+
 void DownloadEngineV2::evaluate_throttle(std::chrono::steady_clock::time_point now) {
     prune_speed_window(now);
     const auto limit = global_speed_limit_.load(std::memory_order_relaxed);
     if (limit == 0 || speed_window_bytes_ < limit) {
         return;  // 窗口未达限：不节流
     }
-    // 窗口达限：等到足够多的旧样本满 1s 龄淘汰、接收预算恢复为止。
-    // 找最早的 k 使去掉前 k 个样本后剩余和 < limit——第 k 个样本满龄
-    // （时间戳 + 1s）时窗口恰好降到 limit 以下
-    Bytes suffix = speed_window_bytes_;
-    std::size_t k = 0;
-    while (k < speed_samples_.size() && suffix >= limit) {
-        suffix -= speed_samples_[k].second;
-        ++k;
-    }
-    // k == size() 时全部样本满龄后窗口归零（suffix < limit），取末样本锚点
-    const auto anchor = k < speed_samples_.size()
-                            ? speed_samples_[k].first
-                            : speed_samples_.back().first;
-    // +1ms：prune 用严格小于判定，样本恰满 1s 时还未淘汰
-    const auto until =
-        anchor + std::chrono::seconds(1) + std::chrono::milliseconds(1);
-    if (until > throttle_until_) {
+    const auto until = window_recovery_point(speed_samples_, speed_window_bytes_, limit);
+    if (until != std::chrono::steady_clock::time_point{} && until > throttle_until_) {
         throttle_until_ = until;
     }
 }
@@ -285,6 +360,22 @@ void DownloadEngineV2::run() {
                 }
             }
 
+            // 任务级限速节流：只拉长本轮 poll 等待（睡到最早的任务预算
+            // 恢复点，抑制预算耗尽的空轮询），不跳过 execute_commands
+            // ——单任务限速不能拖累其他任务的命令执行
+            if (!throttled) {
+                const auto now = std::chrono::steady_clock::now();
+                if (now < task_throttle_until_) {
+                    const auto remain_ms =
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            task_throttle_until_ - now)
+                            .count();
+                    poll_timeout_ms = std::min(
+                        poll_timeout_ms,
+                        static_cast<int>(std::clamp<long long>(remain_ms, 1, 1000)));
+                }
+            }
+
             // 执行例程命令
             execute_routine_commands();
 
@@ -306,6 +397,9 @@ void DownloadEngineV2::run() {
 
             // 更新任务状态
             update_task_status();
+
+            // 清理终态任务的限速窗口条目
+            prune_finished_task_windows();
 
             // 从等待队列激活新任务
             request_group_man_->fill_request_group_from_reserver(this);

@@ -1237,16 +1237,27 @@ void HttpDownloadCommand::fail_group_on_segment_error(RequestGroup& group,
 
 AbstractCommand::ExecutionResult HttpDownloadCommand::receive_data(DownloadEngineV2* engine) {
     char buffer[65536];  // 64KB 缓冲区
+
+    // 单任务限速值（任务 options.speed_limit，0 = 不限）：
+    // 从请求组读取一次，recv 循环内复用
+    std::uint64_t task_limit = 0;
+    if (engine) {
+        if (auto* group = engine->request_group_man()->find_group(get_task_id())) {
+            task_limit = group->options().speed_limit;
+        }
+    }
+
     for (int iter = 0; iter < 64; ++iter) {
-        // 全局限速：本轮接收预算耗尽即挂起——引擎节流窗口恢复前不再
-        // 读数据（单次 execute 最多循环 64 轮，若不在读层限流，一次
-        // 就能把整个文件拉完，引擎循环级节流永远插不进来）
+        // 限速（全局 + 单任务取严）：本轮接收预算耗尽即挂起——引擎
+        // 节流窗口恢复前不再读数据（单次 execute 最多循环 64 轮，若
+        // 不在读层限流，一次就能把整个文件拉完，循环级节流永远插不
+        // 进来）。预算挂起不注册 socket 事件：此时数据通常已在内核
+        // 缓冲，注册会被立即唤醒形成忙旋；直接回队，由引擎把 poll
+        // 拉长到预算恢复点
         std::uint64_t chunk = sizeof(buffer);
         if (engine) {
-            const std::uint64_t budget = engine->recv_budget();
+            const std::uint64_t budget = engine->recv_budget(get_task_id(), task_limit);
             if (budget == 0) {
-                engine->register_socket_event(
-                    socket_fd_, static_cast<int>(net::IOEvent::READ), id());
                 return ExecutionResult::WAIT_FOR_SOCKET;
             }
             // 单次读取量截断到预算内：预算很小时不能整缓冲读，
@@ -1275,9 +1286,9 @@ AbstractCommand::ExecutionResult HttpDownloadCommand::receive_data(DownloadEngin
             return ExecutionResult::ERROR_OCCURRED;
         }
 
-        // 全局限速统计：报告接收量给引擎（滑动窗口 → 节流）
+        // 限速统计：报告接收量给引擎（全局 + 单任务滑动窗口 → 节流）
         if (engine) {
-            engine->report_downloaded_bytes(static_cast<Bytes>(n));
+            engine->report_downloaded_bytes(get_task_id(), static_cast<Bytes>(n));
         }
 
         if (chunked_encoding_) {
