@@ -2,6 +2,30 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-12 - V2 引擎临时文件发布闭环（temp_extension 端到端生效 + 死配置清扫）
+- `EngineConfig::temp_extension` 与 `auto_start` 为最后两个零消费
+  配置：temp_extension 自初始核心库即无任何实现；auto_start 唯一
+  "引用"在被误提交进库的 `falcon-cli/src/main.cpp.bak` 死备份文件里
+  （已随本commit 删除，.bak/.orig/.rej 全库清零）
+- V2 实现临时文件发布语义（aria2 同思路）：temp_extension 非空
+  （默认 ".falcon.tmp"）时数据写 `<最终名><扩展名>`，任务组完成时
+  **原子改名**为最终名——下载中途与失败之后，半成品不再顶着最终名
+  出现（媒体播放器/用户不会误取半截文件）；改名在 Completed 之前，
+  监听者看到完成时成品必然已就位，改名失败按失败收尾不会假报
+  COMPLETED；失败/中断的临时文件保留（未来断点续传挂点），最终名
+  文件不受影响
+- 与既有闭环的正交性：overwrite 门禁仍查最终名（授权覆盖的二次
+  下载由"trunc 临时文件 + 完成改名"天然原子化，旧文件要么完整保留
+  要么被完整替换，不再有中间态）；磁盘写缓冲冲刷先于改名（发布时
+  数据必然全部落盘）；temp_extension 置空即直写最终名
+- V1 两个字段删除（temp_extension 特性归属 EngineConfigV2，
+  auto_start 描述的是引擎固定行为；V1 生产引擎数据路径不动）
+- 新增 2 个用例（download_engine_v2_run_test）：完成改名（最终名
+  完整成品 + 临时文件消失）/ 置空直写对照；异常销毁用例改为断言
+  滞留数据落在临时路径且最终名不产生；既有多段定位写测试种子改
+  预置临时路径（模拟引擎真实状态，完成断言经 rename 后不变）；
+  全量 1477 ctest 通过，ASan 136 用例零告警
+
 ### 2026-09-12 - V2 引擎磁盘写缓冲闭环（enable_disk_cache/disk_cache_size 端到端生效）
 - `enable_disk_cache`/`disk_cache_size` 自初始核心库（9b73dca 时代）
   即为愿望式配置，两引擎全链路零消费且默认 `true`（配置在撒谎）；

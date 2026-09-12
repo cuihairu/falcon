@@ -1098,7 +1098,8 @@ TEST_F(HttpCommandsCoverageTest, PositionedSegmentWriteAppendsAtOffset) {
 
     // 首段先写入前 8 字节（模拟段 0 已完成）
     {
-        std::ofstream seed(out_path, std::ios::binary | std::ios::trunc);
+        std::ofstream seed(out_path + ".falcon.tmp",
+                        std::ios::binary | std::ios::trunc);  // 引擎实际写临时路径
         seed << "01234567";
     }
 
@@ -1132,7 +1133,8 @@ TEST_F(HttpCommandsCoverageTest, PositionedSegmentWriteInBatches) {
     ASSERT_NE(handle.task, nullptr);
 
     {
-        std::ofstream seed(out_path, std::ios::binary | std::ios::trunc);
+        std::ofstream seed(out_path + ".falcon.tmp",
+                        std::ios::binary | std::ios::trunc);  // 引擎实际写临时路径
         seed << "AAAABBBB";
     }
 
@@ -1169,7 +1171,8 @@ TEST_F(HttpCommandsCoverageTest, SegmentOverrunDataIsDropped) {
     ASSERT_NE(handle.task, nullptr);
 
     {
-        std::ofstream seed(out_path, std::ios::binary | std::ios::trunc);
+        std::ofstream seed(out_path + ".falcon.tmp",
+                        std::ios::binary | std::ios::trunc);  // 引擎实际写临时路径
         seed << "01234567";
     }
 

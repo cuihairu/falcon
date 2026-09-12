@@ -501,6 +501,11 @@ private:
     /// 冲刷写缓冲并关闭输出文件；完成/失败收尾与析构兜底共用
     /// @return false 表示冲刷或关闭失败
     bool finish_output();
+
+    /// 发布下载成果：临时文件改名为最终名（temp_extension 消费点）。
+    /// 无临时扩展名或已发布时直接成功
+    /// @return false 表示改名失败（错误已写入 task）
+    bool publish_output(const DownloadTask::Ptr& task);
     void complete_group_if_all_segments_done(RequestGroup& group,
                                              const DownloadTask::Ptr& task,
                                              bool success);
@@ -530,6 +535,10 @@ private:
     // 不经 execute 收尾分支）由析构兜底冲刷，防缓冲数据静默丢失
     std::vector<char> write_buffer_;
     std::size_t write_buffer_capacity_ = 0;
+
+    // 临时文件路径（temp_extension 消费点）：非空时数据实际写此路径，
+    // 组完成时原子改名为最终名；与最终名相同 = 直写，无发布步骤
+    std::string write_path_;
 
     // 分块传输编码状态
     bool chunked_encoding_ = false;

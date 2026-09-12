@@ -95,12 +95,6 @@ struct EngineConfig {
 
     /// Log level: 0=off, 1=error, 2=warn, 3=info, 4=debug, 5=trace
     int log_level = 3;
-
-    /// Temporary file extension during download
-    std::string temp_extension = ".falcon.tmp";
-
-    /// Auto-start queued tasks when slot available
-    bool auto_start = true;
 };
 
 }  // namespace falcon

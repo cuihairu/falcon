@@ -1357,9 +1357,85 @@ TEST(DownloadEngineV2RunTest, DiskCacheFlushedOnAbnormalDestroy) {
     ASSERT_TRUE(wait_group_terminal(engine, group, 15, elapsed_ms));
 
     EXPECT_EQ(group->status(), RequestGroupStatus::FAILED);
-    // 析构兜底冲刷：滞留缓冲的 4KB 必须已在文件里，逐字节一致
-    EXPECT_EQ(read_file_content(out_path), body.substr(0, partial))
+    // 析构兜底冲刷：滞留缓冲的 4KB 必须已在临时文件里，逐字节一致；
+    // 失败不改名——半成品不顶着最终名（temp_extension 语义）
+    const std::string temp_path = out_path + ".falcon.tmp";
+    EXPECT_EQ(read_file_content(temp_path), body.substr(0, partial))
         << "异常销毁路径未冲刷写缓冲（滞留数据静默丢失）";
+    EXPECT_FALSE(std::filesystem::exists(out_path))
+        << "失败任务不应产生最终名文件";
+
+    std::filesystem::remove_all(dir);
+    server.stop();
+}
+
+/// 默认配置（temp_extension=".falcon.tmp"）：下载期间数据写临时文件，
+/// 组完成时原子改名为最终名——监听者看到 COMPLETED 时成品已就位，
+/// 临时文件消失
+TEST(DownloadEngineV2RunTest, TempFileRenamedToFinalOnCompletion) {
+    const std::string body = make_body(32 * 1024);
+    MinimalHttpServer server;
+    ASSERT_TRUE(server.start(body));
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;  // temp_extension 保持默认 .falcon.tmp
+    DownloadEngineV2 engine(config);
+
+    const std::string dir = run_test_temp_dir("tempfile_done");
+    std::filesystem::create_directories(dir);
+    const std::string out_path = dir + "/final.bin";
+
+    DownloadOptions options;
+    options.output_filename = out_path;
+    options.max_connections = 1;
+
+    const TaskId task_id = engine.add_download(server.url("/final.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    long long elapsed_ms = 0;
+    ASSERT_TRUE(wait_group_terminal(engine, group, 20, elapsed_ms));
+
+    EXPECT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+    EXPECT_EQ(read_file_content(out_path), body)
+        << "完成后最终名文件必须是完整成品";
+    EXPECT_FALSE(std::filesystem::exists(out_path + ".falcon.tmp"))
+        << "改名发布后临时文件必须消失";
+
+    std::filesystem::remove_all(dir);
+    server.stop();
+}
+
+/// temp_extension 置空：直写最终名（禁用临时文件语义的对照路径）
+TEST(DownloadEngineV2RunTest, TempExtensionEmptyWritesDirectly) {
+    const std::string body = make_body(32 * 1024);
+    MinimalHttpServer server;
+    ASSERT_TRUE(server.start(body));
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    config.temp_extension = "";  // 禁用临时文件语义
+    DownloadEngineV2 engine(config);
+
+    const std::string dir = run_test_temp_dir("tempfile_off");
+    std::filesystem::create_directories(dir);
+    const std::string out_path = dir + "/direct.bin";
+
+    DownloadOptions options;
+    options.output_filename = out_path;
+    options.max_connections = 1;
+
+    const TaskId task_id = engine.add_download(server.url("/direct.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    long long elapsed_ms = 0;
+    ASSERT_TRUE(wait_group_terminal(engine, group, 20, elapsed_ms));
+
+    EXPECT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+    EXPECT_EQ(read_file_content(out_path), body);
 
     std::filesystem::remove_all(dir);
     server.stop();

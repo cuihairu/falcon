@@ -18,6 +18,7 @@
 #include <falcon/protocols/net/socket_pool.hpp>
 
 #include <memory>
+#include <string>
 #include <deque>
 #include <utility>
 #include <vector>
@@ -45,6 +46,11 @@ struct EngineConfigV2 {
     /// 命令进入 waiting_commands_ 后允许的最长等待时长（秒）
     /// 超时后由 cleanup_completed_commands 移除，防止对端异常导致资源泄漏
     int command_wait_timeout_seconds = 120;
+    /// 下载临时文件扩展名（temp_extension 消费点）：非空时数据先写
+    /// <最终名><扩展名>，任务组完成时原子改名为最终名——半成品不再
+    /// 顶着最终名出现；置空则直接写最终名。失败/中断的临时文件保留
+    /// 在磁盘（未来断点续传的挂点），最终名文件不受影响
+    std::string temp_extension = ".falcon.tmp";
 };
 
 /**

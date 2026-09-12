@@ -39,6 +39,8 @@ typedef SSIZE_T ssize_t;
 
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
+#include <system_error>
 #include <thread>
 #include <cstring>
 #include <sstream>
@@ -1197,17 +1199,23 @@ bool HttpDownloadCommand::execute(DownloadEngineV2* engine) {
     }
 
     if (!file_opened_) {
-        const auto& out_path = task->output_path();
+        // 临时文件语义（temp_extension 消费点）：数据实际写
+        // <最终名><扩展名>，组完成时原子改名为最终名——下载中途与
+        // 失败之后，半成品都不会顶着最终名出现
+        const std::string& final_path = task->output_path();
+        const std::string& ext = engine->config().temp_extension;
+        write_path_ = ext.empty() ? final_path : final_path + ext;
+
         if (segment_id_ == 0) {
             // 首段/单连接模式：创建（截断）文件
-            output_.open(out_path, std::ios::binary | std::ios::trunc);
+            output_.open(write_path_, std::ios::binary | std::ios::trunc);
         } else {
             // 多连接分段：文件由首段创建，本段按偏移定位写入
             //（各 ofstream 独立维护写位置，不会互相干扰）
-            output_.open(out_path, std::ios::binary | std::ios::in | std::ios::out);
+            output_.open(write_path_, std::ios::binary | std::ios::in | std::ios::out);
         }
         if (!output_) {
-            task->set_error("Failed to open output file: " + out_path);
+            task->set_error("Failed to open output file: " + write_path_);
             task->set_status(TaskStatus::Failed);
             group->set_error_message(task->error_message());
             group->set_status(RequestGroupStatus::FAILED);
@@ -1298,21 +1306,45 @@ bool HttpDownloadCommand::execute(DownloadEngineV2* engine) {
 
 void HttpDownloadCommand::complete_group_if_all_segments_done(
     RequestGroup& group, const DownloadTask::Ptr& task, bool success) {
-    // 单段模式：本段结束即任务完成（保持既有行为）
-    if (!group.is_multi_segment()) {
-        if (success) {
-            task->set_status(TaskStatus::Completed);
-            group.set_status(RequestGroupStatus::COMPLETED);
-        }
+    if (!success) {
+        return;  // 失败路径由 fail_group_on_segment_error 收尾，临时文件保留
+    }
+
+    // 单段模式：本段结束即任务完成（保持既有行为）；多分段模式：仅当
+    // 全部分段结束且无失败时才置完成（失败已在
+    // fail_group_on_segment_error 中立即置失败）
+    const bool all_done = !group.is_multi_segment() ||
+                          (group.finish_segment(success) &&
+                           !group.has_segment_failure());
+    if (!all_done) {
         return;
     }
 
-    // 多分段模式：仅当全部分段结束且无失败时才置完成；
-    // 失败已在 fail_group_on_segment_error 中立即置失败
-    if (group.finish_segment(success) && !group.has_segment_failure()) {
-        task->set_status(TaskStatus::Completed);
-        group.set_status(RequestGroupStatus::COMPLETED);
+    // 发布下载成果：临时文件原子改名为最终名。改名在 Completed 之前，
+    // 监听者看到完成时成品必然已就位；改名失败按失败收尾，不会假报
+    // COMPLETED
+    if (!publish_output(task)) {
+        fail_group_on_segment_error(group, task);
+        return;
     }
+    task->set_status(TaskStatus::Completed);
+    group.set_status(RequestGroupStatus::COMPLETED);
+}
+
+bool HttpDownloadCommand::publish_output(const DownloadTask::Ptr& task) {
+    if (write_path_.empty() || write_path_ == task->output_path()) {
+        return true;  // 直写最终名（未启用临时扩展名）或已发布
+    }
+    std::error_code rename_ec;
+    std::filesystem::rename(write_path_, task->output_path(), rename_ec);
+    if (rename_ec) {
+        task->set_error("下载完成但发布失败（临时文件改名 " + write_path_ +
+                        " → " + task->output_path() + "）: " +
+                        rename_ec.message());
+        return false;
+    }
+    write_path_.clear();  // 幂等防护：重复收尾不再尝试改名
+    return true;
 }
 
 void HttpDownloadCommand::fail_group_on_segment_error(RequestGroup& group,
