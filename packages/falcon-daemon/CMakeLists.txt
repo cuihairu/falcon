@@ -60,6 +60,8 @@ if(nlohmann_json_FOUND)
         src/rpc/json_rpc_client.hpp
         src/rpc/aria2_snapshots.cpp
         src/rpc/aria2_snapshots.hpp
+        src/rpc/websocket_frame.cpp
+        src/rpc/websocket_frame.hpp
         src/daemon/daemon.cpp
         src/daemon/daemon.hpp
     )

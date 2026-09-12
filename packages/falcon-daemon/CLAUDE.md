@@ -6,6 +6,40 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-12 - WebSocket 事件流订阅（aria2 兼容通知）
+- 新增 `websocket_frame.{hpp,cpp}`：RFC 6455 协议层（无 socket 依赖、无
+  OpenSSL 依赖——SHA1/base64 自实现）：
+  - `ws_compute_accept_key`（Sec-WebSocket-Accept）、`ws_encode_frame`
+    （服务端帧，不掩码）、`WsFrameParser`（增量解析客户端帧：掩码、
+    126/127 扩展长度、text 分片聚合、ping/pong/close 透传；1 MiB 消息
+    上限防内存滥用，协议违规进入 error 状态）
+- `JsonRpcServer` 同端口支持 WebSocket 升级（`ws://host:6800/jsonrpc`，
+  aria2 真实行为，AriaNg 实时模式可直接对接）：
+  - `handle_connection` 按 `Upgrade: websocket + Sec-WebSocket-Key` 分流，
+    握手后进入会话循环：text 帧走与 HTTP 相同的 `handle_jsonrpc` 分发
+    （含 token 认证），ping→pong，close→回应后断开
+  - 删除死代码原型 `websocket_server.{hpp,cpp}`（从未接入构建，
+    POSIX-only、依赖不存在的 `base64.h`，与 xml_rpc_server 同例）
+- 事件流：新增内部类 `RpcEventBridge`（IEventListener，start/stop 时挂接/
+  摘除引擎），引擎事件 → JSON-RPC 通知广播到全部 WebSocket 订阅者：
+  - aria2 兼容：`onDownloadStart`（含 Paused 恢复）/`onDownloadPause`/
+    `onDownloadComplete`/`onDownloadError`/`onDownloadStop`
+  - params[0] 为 gid + Falcon 扩展进度快照（status/totalLength/
+    completedLength/downloadSpeed），严格 aria2 客户端忽略未知字段
+  - Falcon 扩展 `falcon.onProgress`：进度推送，每任务节流（默认 1 秒，
+    `JsonRpcServerConfig::progress_push_interval` 可配）
+  - `broadcast_notification` 公开（快照后逐连接发送，写互斥 per-connection；
+    发送失败 shutdown 唤醒会话线程，由其统一注销，避免跨线程 close 的
+    fd 复用竞争）
+- 认证：WS 握手不鉴权（对齐 aria2）；WS 上的 JSON-RPC 请求逐条校验
+  `token:<secret>`；通知广播不受 secret 限制
+- 停机安全：`stop()` 先摘事件桥，再 shutdown 全部 WS 会话 fd 唤醒阻塞在
+  recv 的会话线程——有活动订阅者时 `forceShutdown` 不再挂死
+- 新增 `tests/websocket_test.cpp`（15 用例入 `falcon_daemon_rpc_tests`）：
+  RFC 6455 向量、帧解析（掩码/分片/控制帧/坏操作码/超长帧/孤立
+  continuation）、回环握手、WS 上的 JSON-RPC 与认证、真实引擎事件链的
+  状态/进度通知与节流、广播 fan-out、关闭帧清理、活动订阅者下的停机
+
 ### 2026-09-11 - RPC 客户端库与快照转换层（桌面应用支撑）
 - 新增 `aria2_snapshots.{hpp,cpp}`：纯 C++ 把 aria2 `tell*`/`getGlobalStat`
   JSON 应答转换为 `TaskSnapshot`/`GlobalStats`（容错解析：字节字段接受
@@ -72,8 +106,10 @@
 1. **常驻后台**：作为系统服务持续运行（`--daemon` 模式、PID 文件、信号处理）
 2. **aria2 兼容 RPC**：HTTP + JSON-RPC 2.0，`token:<secret>` 认证，
    aria2 客户端/前端（如 AriaNg）可直接对接
-3. **任务持久化**：SQLite 状态/进度实时落库，停机保存、重启恢复
-4. **多客户端支持**：无状态 HTTP 请求，天然支持多客户端并发
+3. **事件流订阅**：同端口 WebSocket 升级，推送 aria2 兼容状态通知与
+   Falcon 扩展进度通知
+4. **任务持久化**：SQLite 状态/进度实时落库，停机保存、重启恢复
+5. **多客户端支持**：无状态 HTTP 请求，天然支持多客户端并发
 
 ## 源码结构
 
@@ -85,10 +121,12 @@ packages/falcon-daemon/src/
 │   └── (daemonize POSIX 细节)
 ├── rpc/
 │   ├── json_rpc_server.hpp/.cpp  # aria2 兼容 JSON-RPC 2.0 服务器（28 个方法）
+│   │                             #   + WebSocket 升级与通知广播（RpcEventBridge）
+│   ├── websocket_frame.hpp/.cpp  # RFC 6455 帧编解码（握手应答/掩码/分片，
+│   │                             #   自实现 SHA1+base64，无 OpenSSL 依赖）
 │   ├── json_rpc_client.hpp/.cpp  # JSON-RPC 2.0 客户端（libcurl；随
 │   │                             #   falcon_daemon_rpc_client 库供桌面链接）
-│   ├── aria2_snapshots.hpp/.cpp  # aria2 JSON → TaskSnapshot/GlobalStats 转换
-│   └── websocket_server.hpp/.cpp # 预留（未来事件流订阅），未接入构建
+│   └── aria2_snapshots.hpp/.cpp  # aria2 JSON → TaskSnapshot/GlobalStats 转换
 └── storage/
     ├── task_storage.hpp/.cpp         # SQLite 持久化（TaskRecord CRUD）
     └── task_storage_listener.hpp/.cpp # IEventListener → 实时落库
@@ -173,6 +211,31 @@ Windows Service Options（仅 Windows）:
 | 1 | 任务忙/操作失败（如移除活动任务） |
 | 2 | gid 不存在 |
 
+### WebSocket 事件流订阅
+
+- 端点：`ws://<host>:<port>/jsonrpc`（`/` 同义）——与 HTTP JSON-RPC 同端口，
+  GET + `Upgrade: websocket` + `Sec-WebSocket-Key` 完成升级
+- 会话内双向 JSON-RPC：text 帧即请求，与 HTTP 走同一分发（token 认证、
+  全部 28 个方法可用）；ping/pong、close 按 RFC 6455 处理
+- 通知推送（服务端 → 客户端，JSON-RPC 通知格式，无 id）：
+
+| 通知 | 触发 |
+|------|------|
+| `aria2.onDownloadStart` | 任务进入 Downloading（含 Paused 恢复） |
+| `aria2.onDownloadPause` | 任务暂停 |
+| `aria2.onDownloadComplete` | 下载成功 |
+| `aria2.onDownloadError` | 下载失败 |
+| `aria2.onDownloadStop` | 任务取消 |
+| `falcon.onProgress` | 下载中进度更新（Falcon 扩展，每任务默认 1 秒节流） |
+
+- params[0] 均为 `gid` + Falcon 扩展快照（`status`/`totalLength`/
+  `completedLength`/`downloadSpeed`；`falcon.onProgress` 另含数值型
+  `progress` 0~1），aria2 严格客户端只读 gid 不受影响
+- 认证：握手不鉴权（对齐 aria2），会话内每条请求需 `token:<secret>`；
+  通知广播不受 secret 限制
+- 对接示例（AriaNg：WebSocket 服务地址填同一 `host:port`、路径 `/jsonrpc`）；
+  停机时服务器主动关闭全部订阅连接
+
 ### 查询的存储回落
 
 引擎内存态优先；`gid → TaskId` 在引擎查不到时回落 TaskStorage
@@ -226,7 +289,7 @@ RPC 的 `pauseAll`/`unpauseAll`/`removeDownloadResult`/`purgeDownloadResult`
 
 | 测试目标 | 文件 | 覆盖 |
 |----------|------|------|
-| `falcon_daemon_rpc_tests` | `json_rpc_server_test.cpp` | RPC 基础 |
+| `falcon_daemon_rpc_tests` | `json_rpc_server_test.cpp` `websocket_test.cpp` | RPC 基础；WebSocket 帧协议/握手/通知/节流/停机 |
 | `falcon_daemon_rpc_client_tests` | `json_rpc_client_test.cpp` `aria2_snapshots_test.cpp` | 客户端 × 真实服务器回环 + 快照转换 |
 | `falcon_daemon_rpc_coverage_tests` | `json_rpc_server_coverage_test.cpp` | HTTP 层 + 全方法 |
 | `falcon_daemon_rpc_storage_tests` | `json_rpc_storage_test.cpp` | RPC × storage 集成（回落/删除联动/批量落库/停机回调） |
@@ -278,10 +341,10 @@ curl http://127.0.0.1:6800/jsonrpc -d '
 
 ## 下一步开发计划
 
-1. **事件流订阅**：基于 `websocket_server` 或 SSE 推送任务状态/进度
-2. **配置文件加载**：`daemon.json`（RPC/storage/下载参数）与命令行参数合并
-3. **桌面客户端对接**：apps/desktop 增加 RPC 客户端，替换进程内引擎直连
-4. **认证增强**：secret 持久化、配置文件管理（当前仅命令行传入）
+1. **配置文件加载**：`daemon.json`（RPC/storage/下载参数）与命令行参数合并
+2. **桌面客户端对接**：apps/desktop `DaemonRpcBackend` 从 500ms 轮询迁移到
+   WebSocket 事件流驱动（通知触发刷新）
+3. **认证增强**：secret 持久化、配置文件管理（当前仅命令行传入）
 
 ---
 

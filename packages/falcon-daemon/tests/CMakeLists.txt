@@ -15,9 +15,10 @@ endif()
 
 enable_testing()
 
-# RPC Tests
+# RPC Tests（含 WebSocket 事件流订阅）
 add_executable(falcon_daemon_rpc_tests
     json_rpc_server_test.cpp
+    websocket_test.cpp
 )
 
 target_link_libraries(falcon_daemon_rpc_tests

@@ -1,0 +1,663 @@
+// WebSocket 事件流订阅测试
+// 覆盖：握手（RFC 6455 向量）、帧解析（掩码/分片/控制帧/错误）、
+// WS 上的 JSON-RPC、引擎状态变更通知、进度通知节流、广播 fan-out、
+// 关闭帧与停机清理。
+
+#include "rpc/json_rpc_server.hpp"
+#include "rpc/websocket_frame.hpp"
+
+#include <falcon/download_engine.hpp>
+
+#include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#pragma comment(lib, "ws2_32.lib")
+#else
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
+
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cstring>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <thread>
+#include <vector>
+
+namespace {
+
+using json = nlohmann::json;
+using namespace falcon;
+using falcon::daemon::rpc::WS_OP_CLOSE;
+using falcon::daemon::rpc::WS_OP_CONTINUATION;
+using falcon::daemon::rpc::WS_OP_PING;
+using falcon::daemon::rpc::WS_OP_PONG;
+using falcon::daemon::rpc::WS_OP_TEXT;
+using falcon::daemon::rpc::WsFrame;
+using falcon::daemon::rpc::WsFrameParser;
+using falcon::daemon::rpc::ws_compute_accept_key;
+
+#ifdef _WIN32
+using recv_send_size_t = int;
+static int socket_close(int fd) { return ::closesocket(static_cast<SOCKET>(fd)); }
+static void ensure_winsock_started() {
+    static std::once_flag once;
+    std::call_once(once, []() {
+        WSADATA data{};
+        WSAStartup(MAKEWORD(2, 2), &data);
+    });
+}
+static void set_recv_timeout_ms(int fd, int ms) {
+    DWORD timeout = static_cast<DWORD>(ms);
+    ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO,
+                 reinterpret_cast<const char*>(&timeout), sizeof(timeout));
+}
+#else
+using recv_send_size_t = ssize_t;
+static int socket_close(int fd) { return ::close(fd); }
+static void ensure_winsock_started() {}
+static void set_recv_timeout_ms(int fd, int ms) {
+    timeval tv{};
+    tv.tv_sec = ms / 1000;
+    tv.tv_usec = (ms % 1000) * 1000;
+    ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+}
+#endif
+
+struct ScopedFd {
+    int fd = -1;
+    ~ScopedFd() {
+        if (fd >= 0) socket_close(fd);
+    }
+    ScopedFd() = default;
+    explicit ScopedFd(int f) : fd(f) {}
+    ScopedFd(const ScopedFd&) = delete;
+    ScopedFd& operator=(const ScopedFd&) = delete;
+};
+
+static bool send_all(int fd, const std::string& data) {
+    std::size_t off = 0;
+    while (off < data.size()) {
+        const auto chunk_len = static_cast<
+#ifdef _WIN32
+            int
+#else
+            std::size_t
+#endif
+            >(data.size() - off);
+        recv_send_size_t n = ::send(fd, data.data() + off, chunk_len, 0);
+        if (n <= 0) return false;
+        off += static_cast<std::size_t>(n);
+    }
+    return true;
+}
+
+// 客户端 → 服务端帧必须掩码（RFC 6455）
+static std::string ws_client_frame(std::uint8_t opcode, const std::string& payload) {
+    static std::atomic<std::uint32_t> counter{0x1};
+    const std::uint32_t seed = counter.fetch_add(1) * 2654435761u + 0x9E3779B9u;
+    std::uint8_t key[4] = {static_cast<std::uint8_t>(seed >> 24),
+                           static_cast<std::uint8_t>(seed >> 16),
+                           static_cast<std::uint8_t>(seed >> 8),
+                           static_cast<std::uint8_t>(seed)};
+
+    std::string f;
+    f.push_back(static_cast<char>(0x80u | opcode));
+    const std::size_t n = payload.size();
+    if (n < 126) {
+        f.push_back(static_cast<char>(0x80u | n));
+    } else if (n < 65536) {
+        f.push_back(static_cast<char>(0x80u | 126));
+        f.push_back(static_cast<char>((n >> 8) & 0xFF));
+        f.push_back(static_cast<char>(n & 0xFF));
+    } else {
+        f.push_back(static_cast<char>(0x80u | 127));
+        for (int i = 7; i >= 0; --i) {
+            f.push_back(static_cast<char>((n >> (i * 8)) & 0xFF));
+        }
+    }
+    f.append(reinterpret_cast<const char*>(key), 4);
+    for (std::size_t i = 0; i < n; ++i) {
+        f.push_back(static_cast<char>(payload[i] ^ key[i % 4]));
+    }
+    return f;
+}
+
+// 服务端帧（不掩码）手工构造，用于 FrameParser 纯单测
+static std::string raw_server_frame(std::uint8_t fin, std::uint8_t opcode,
+                                    bool masked, const std::string& payload,
+                                    std::uint32_t mask = 0) {
+    std::string f;
+    f.push_back(static_cast<char>((fin ? 0x80u : 0u) | opcode));
+    const std::size_t n = payload.size();
+    if (n < 126) {
+        f.push_back(static_cast<char>((masked ? 0x80u : 0u) | n));
+    } else if (n < 65536) {
+        f.push_back(static_cast<char>((masked ? 0x80u : 0u) | 126));
+        f.push_back(static_cast<char>((n >> 8) & 0xFF));
+        f.push_back(static_cast<char>(n & 0xFF));
+    } else {
+        f.push_back(static_cast<char>((masked ? 0x80u : 0u) | 127));
+        for (int i = 7; i >= 0; --i) {
+            f.push_back(static_cast<char>((n >> (i * 8)) & 0xFF));
+        }
+    }
+    if (masked) {
+        std::uint8_t key[4] = {static_cast<std::uint8_t>(mask >> 24),
+                               static_cast<std::uint8_t>(mask >> 16),
+                               static_cast<std::uint8_t>(mask >> 8),
+                               static_cast<std::uint8_t>(mask)};
+        f.append(reinterpret_cast<const char*>(key), 4);
+        for (std::size_t i = 0; i < n; ++i) {
+            f.push_back(static_cast<char>(payload[i] ^ key[i % 4]));
+        }
+    } else {
+        f += payload;
+    }
+    return f;
+}
+
+// 最小 WebSocket 测试客户端：握手 → 掩码帧收发
+class WsTestClient {
+public:
+    WsTestClient() { ensure_winsock_started(); }
+    ~WsTestClient() { close(); }
+
+    WsTestClient(const WsTestClient&) = delete;
+    WsTestClient& operator=(const WsTestClient&) = delete;
+
+    bool connect(uint16_t port, const std::string& path = "/jsonrpc") {
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(port);
+        ::inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+        for (int attempt = 0; attempt < 50; ++attempt) {
+            fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+            if (fd_ < 0) return false;
+            if (::connect(fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0) {
+                break;
+            }
+            socket_close(fd_);
+            fd_ = -1;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        if (fd_ < 0) return false;
+
+        std::string req;
+        req += "GET " + path + " HTTP/1.1\r\n";
+        req += "Host: 127.0.0.1\r\n";
+        req += "Upgrade: websocket\r\n";
+        req += "Connection: Upgrade\r\n";
+        req += "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n";
+        req += "Sec-WebSocket-Version: 13\r\n\r\n";
+        if (!send_all(fd_, req)) return false;
+
+        std::string buf;
+        while (buf.find("\r\n\r\n") == std::string::npos) {
+            char tmp[1024];
+            recv_send_size_t n = ::recv(fd_, tmp, sizeof(tmp), 0);
+            if (n <= 0) return false;
+            buf.append(tmp, tmp + n);
+        }
+        const auto pos = buf.find("\r\n\r\n");
+        handshake_response_ = buf.substr(0, pos);
+        // 握手响应之后可能已捎带首帧数据，一并喂入解析器
+        buffered_ = buf.substr(pos + 4);
+        if (!buffered_.empty()) {
+            parser_.feed(buffered_.data(), buffered_.size());
+            buffered_.clear();
+            pending_ = parser_.pop_messages();
+        }
+        return handshake_response_.rfind("HTTP/1.1 101", 0) == 0;
+    }
+
+    const std::string& handshake_response() const { return handshake_response_; }
+
+    bool send_frame(std::uint8_t opcode, const std::string& payload) {
+        return send_all(fd_, ws_client_frame(opcode, payload));
+    }
+
+    // 读一条完整消息；timeout_ms 内无数据或连接断开返回 nullopt
+    std::optional<WsFrame> read_frame(int timeout_ms) {
+        set_recv_timeout_ms(fd_, timeout_ms);
+        while (true) {
+            if (!pending_.empty()) {
+                WsFrame msg = pending_.front();
+                pending_.erase(pending_.begin());
+                return msg;
+            }
+            char tmp[4096];
+            recv_send_size_t n = ::recv(fd_, tmp, sizeof(tmp), 0);
+            if (n <= 0) return std::nullopt;
+            parser_.feed(tmp, static_cast<std::size_t>(n));
+            if (parser_.error()) return std::nullopt;
+            pending_ = parser_.pop_messages();
+        }
+    }
+
+    // 读取循环直到收到指定 method 的通知帧（跳过 JSON-RPC 响应）
+    std::optional<json> read_notification(const std::string& method, int timeout_ms) {
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+        while (std::chrono::steady_clock::now() < deadline) {
+            const int remain = static_cast<int>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    deadline - std::chrono::steady_clock::now())
+                    .count());
+            if (remain <= 0) break;
+            auto frame = read_frame(remain);
+            if (!frame) break;
+            if (frame->opcode != WS_OP_TEXT) continue;
+            json parsed = json::parse(frame->payload, nullptr, false);
+            if (parsed.is_discarded()) continue;
+            if (parsed.value("method", "") == method) {
+                return std::optional<json>(std::in_place, std::move(parsed));
+            }
+        }
+        return std::nullopt;
+    }
+
+    bool closed_by_server(int timeout_ms) {
+        set_recv_timeout_ms(fd_, timeout_ms);
+        char tmp[256];
+        recv_send_size_t n = ::recv(fd_, tmp, sizeof(tmp), 0);
+        return n <= 0;
+    }
+
+    void close() {
+        if (fd_ >= 0) {
+            socket_close(fd_);
+            fd_ = -1;
+        }
+    }
+
+private:
+    int fd_ = -1;
+    std::string handshake_response_;
+    std::string buffered_; // 握手响应后的多余字节（并入解析器）
+    WsFrameParser parser_;
+    std::vector<WsFrame> pending_;
+};
+
+// 阻塞式协议处理器：download() 进入即置 Downloading、可发进度事件，
+// 阻塞直到 release()，随后置 Completed —— 用于驱动真实引擎事件链
+class BlockingHandler final : public IProtocolHandler {
+public:
+    struct ProgressStep {
+        float progress;
+        Bytes downloaded;
+        int delay_ms;
+    };
+
+    std::string protocol_name() const override { return "ws_blocking"; }
+    std::vector<std::string> supported_schemes() const override { return {"https"}; }
+    bool can_handle(const std::string& url) const override {
+        return url.rfind("https://", 0) == 0;
+    }
+    FileInfo get_file_info(const std::string& url, const DownloadOptions&) override {
+        FileInfo info;
+        info.url = url;
+        info.filename = "ws_test.bin";
+        info.total_size = 1000;
+        info.supports_resume = false;
+        return info;
+    }
+
+    void download(DownloadTask::Ptr task, IEventListener* listener) override {
+        task->set_status(TaskStatus::Downloading);
+        for (const auto& step : progress_steps_) {
+            if (!listener) break;
+            ProgressInfo info;
+            info.task_id = task->id();
+            info.progress = step.progress;
+            info.downloaded_bytes = step.downloaded;
+            info.total_bytes = 1000;
+            info.speed = 100;
+            listener->on_progress(info);
+            if (step.delay_ms > 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(step.delay_ms));
+            }
+        }
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            cv_.wait(lock, [this] { return released_.load(); });
+        }
+        task->set_status(TaskStatus::Completed);
+    }
+
+    void pause(DownloadTask::Ptr task) override { task->set_status(TaskStatus::Paused); }
+    void resume(DownloadTask::Ptr task, IEventListener* listener) override {
+        download(std::move(task), listener);
+    }
+    void cancel(DownloadTask::Ptr task) override { task->set_status(TaskStatus::Cancelled); }
+
+    void set_progress_steps(std::vector<ProgressStep> steps) {
+        progress_steps_ = std::move(steps);
+    }
+
+    void release() {
+        released_.store(true);
+        cv_.notify_all();
+    }
+
+private:
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    std::atomic<bool> released_{false};
+    std::vector<ProgressStep> progress_steps_;
+};
+
+struct ServerHarness {
+    DownloadEngine engine;
+    falcon::daemon::rpc::JsonRpcServerConfig cfg;
+    std::unique_ptr<falcon::daemon::rpc::JsonRpcServer> server;
+
+    explicit ServerHarness(const std::string& secret = "",
+                           std::chrono::milliseconds progress_interval =
+                               std::chrono::milliseconds{1000}) {
+        cfg.listen_port = 0;
+        cfg.bind_address = "127.0.0.1";
+        cfg.secret = secret;
+        cfg.allow_origin_all = false;
+        cfg.progress_push_interval = progress_interval;
+        server = std::make_unique<falcon::daemon::rpc::JsonRpcServer>(&engine, cfg);
+        server->start();
+    }
+
+    ~ServerHarness() { server->stop(); }
+};
+
+} // namespace
+
+// ============================================================================
+// 纯协议层单测
+// ============================================================================
+
+TEST(WsProtocolTest, AcceptKeyRfc6455Vector) {
+    // RFC 6455 §1.3 示例
+    EXPECT_EQ(ws_compute_accept_key("dGhlIHNhbXBsZSBub25jZQ=="),
+              "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
+}
+
+TEST(WsProtocolTest, FrameParserMaskedText) {
+    WsFrameParser parser;
+    const std::string payload = "{\"jsonrpc\":\"2.0\",\"id\":1}";
+    // 客户端帧：掩码 key = 0x01020304
+    std::string frame = raw_server_frame(1, WS_OP_TEXT, true, payload, 0x01020304u);
+    // 分两段喂入，验证增量解析
+    parser.feed(frame.data(), 3);
+    EXPECT_TRUE(parser.pop_messages().empty());
+    parser.feed(frame.data() + 3, frame.size() - 3);
+
+    auto msgs = parser.pop_messages();
+    ASSERT_EQ(msgs.size(), 1u);
+    EXPECT_EQ(msgs[0].opcode, WS_OP_TEXT);
+    EXPECT_EQ(msgs[0].payload, payload);
+}
+
+TEST(WsProtocolTest, FrameParserFragmentationWithControl) {
+    WsFrameParser parser;
+    // text 分片中间插入 ping：控制帧应立即透传，text 聚合为一条
+    const std::string part1 = raw_server_frame(0, WS_OP_TEXT, false, "Hel");
+    parser.feed(part1.data(), part1.size());
+    parser.feed(raw_server_frame(0, WS_OP_PING, false, "hb").data(),
+                raw_server_frame(0, WS_OP_PING, false, "hb").size());
+    parser.feed(raw_server_frame(0, WS_OP_CONTINUATION, false, "lo").data(),
+                raw_server_frame(0, WS_OP_CONTINUATION, false, "lo").size());
+    parser.feed(raw_server_frame(1, WS_OP_CONTINUATION, false, "!").data(),
+                raw_server_frame(1, WS_OP_CONTINUATION, false, "!").size());
+
+    auto msgs = parser.pop_messages();
+    ASSERT_EQ(msgs.size(), 2u);
+    EXPECT_EQ(msgs[0].opcode, WS_OP_PING);
+    EXPECT_EQ(msgs[0].payload, "hb");
+    EXPECT_EQ(msgs[1].opcode, WS_OP_TEXT);
+    EXPECT_EQ(msgs[1].payload, "Hello!");
+}
+
+TEST(WsProtocolTest, FrameParserRejectsBadOpcode) {
+    WsFrameParser parser;
+    const std::string frame = raw_server_frame(1, 0x3, false, "x");
+    parser.feed(frame.data(), frame.size());
+    EXPECT_TRUE(parser.error());
+    EXPECT_TRUE(parser.pop_messages().empty());
+}
+
+TEST(WsProtocolTest, FrameParserRejectsOversize) {
+    WsFrameParser parser;
+    // 127 扩展长度声明超大 payload（不实际发送数据也应判错）
+    std::string frame;
+    frame.push_back(static_cast<char>(0x80u | WS_OP_TEXT));
+    frame.push_back(static_cast<char>(127));
+    for (int i = 0; i < 8; ++i) {
+        frame.push_back(static_cast<char>(i == 0 ? 0x02 : 0x00)); // 32 位声明远超上限
+    }
+    parser.feed(frame.data(), frame.size());
+    EXPECT_TRUE(parser.error());
+}
+
+TEST(WsProtocolTest, FrameParserRejectsOrphanContinuation) {
+    WsFrameParser parser;
+    const std::string frame = raw_server_frame(1, 0x0, false, "x");
+    parser.feed(frame.data(), frame.size());
+    EXPECT_TRUE(parser.error());
+}
+
+// ============================================================================
+// 回环集成测试
+// ============================================================================
+
+TEST(WsServerTest, HandshakeOverLoopback) {
+    ServerHarness h;
+    WsTestClient client;
+    ASSERT_TRUE(client.connect(h.server->port()));
+    // RFC 6455 示例 key 对应的 Accept 值
+    EXPECT_NE(client.handshake_response().find("Sec-WebSocket-Accept: "
+                                               "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="),
+              std::string::npos);
+    EXPECT_EQ(h.server->websocket_client_count(), 1u);
+}
+
+TEST(WsServerTest, PlainGetNotUpgraded) {
+    ServerHarness h;
+    ensure_winsock_started();
+    ScopedFd fd = [&] {
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(h.server->port());
+        ::inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+        int s = ::socket(AF_INET, SOCK_STREAM, 0);
+        ::connect(s, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+        return ScopedFd{s};
+    }();
+    ASSERT_GE(fd.fd, 0);
+
+    const std::string req =
+        "GET /jsonrpc HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+    ASSERT_TRUE(send_all(fd.fd, req));
+
+    std::string resp;
+    char tmp[1024];
+    while (true) {
+        recv_send_size_t n = ::recv(fd.fd, tmp, sizeof(tmp), 0);
+        if (n <= 0) break;
+        resp.append(tmp, tmp + n);
+    }
+    EXPECT_NE(resp.find("405"), std::string::npos);
+}
+
+TEST(WsServerTest, JsonRpcOverWebsocket) {
+    ServerHarness h;
+    WsTestClient client;
+    ASSERT_TRUE(client.connect(h.server->port()));
+
+    json req = {{"jsonrpc", "2.0"}, {"id", 7}, {"method", "system.listMethods"},
+                {"params", json::array()}};
+    ASSERT_TRUE(client.send_frame(WS_OP_TEXT, req.dump()));
+
+    auto frame = client.read_frame(5000);
+    ASSERT_TRUE(frame.has_value());
+    EXPECT_EQ(frame->opcode, WS_OP_TEXT);
+    json resp = json::parse(frame->payload);
+    EXPECT_EQ(resp.value("id", 0), 7);
+    ASSERT_TRUE(resp.contains("result"));
+    EXPECT_TRUE(resp["result"].is_array());
+}
+
+TEST(WsServerTest, JsonRpcOverWebsocketAuth) {
+    ServerHarness h("s3cr3t");
+    WsTestClient client;
+    ASSERT_TRUE(client.connect(h.server->port()));
+
+    // 缺 token：与 HTTP 同一认证路径
+    json req1 = {{"jsonrpc", "2.0"}, {"id", 1}, {"method", "system.listMethods"},
+                 {"params", json::array()}};
+    ASSERT_TRUE(client.send_frame(WS_OP_TEXT, req1.dump()));
+    auto frame1 = client.read_frame(5000);
+    ASSERT_TRUE(frame1.has_value());
+    json resp1 = json::parse(frame1->payload);
+    ASSERT_TRUE(resp1.contains("error"));
+    EXPECT_EQ(resp1["error"]["code"], -32001);
+
+    // 正确 token
+    json req2 = {{"jsonrpc", "2.0"}, {"id", 2}, {"method", "system.listMethods"},
+                 {"params", json::array({"token:s3cr3t"})}};
+    ASSERT_TRUE(client.send_frame(WS_OP_TEXT, req2.dump()));
+    auto frame2 = client.read_frame(5000);
+    ASSERT_TRUE(frame2.has_value());
+    json resp2 = json::parse(frame2->payload);
+    EXPECT_TRUE(resp2.contains("result"));
+}
+
+TEST(WsServerTest, DownloadNotificationsOverWebsocket) {
+    auto handler = std::make_unique<BlockingHandler>();
+    auto* handler_ptr = handler.get();
+    ServerHarness h;
+    h.engine.register_handler(std::move(handler));
+
+    WsTestClient client;
+    ASSERT_TRUE(client.connect(h.server->port()));
+
+    // 通过 WS 发起下载（顺带覆盖 WS 上的 addUri）
+    json req = {{"jsonrpc", "2.0"}, {"id", 1}, {"method", "aria2.addUri"},
+                {"params", json::array({json::array({"https://example.com/ws.bin"})})}};
+    ASSERT_TRUE(client.send_frame(WS_OP_TEXT, req.dump()));
+
+    auto start = client.read_notification("aria2.onDownloadStart", 5000);
+    ASSERT_TRUE(start.has_value());
+    ASSERT_TRUE(start->contains("params"));
+    ASSERT_TRUE((*start)["params"].is_array() && !(*start)["params"].empty());
+    // Falcon 扩展进度快照字段
+    EXPECT_TRUE((*start)["params"][0].contains("status"));
+    EXPECT_TRUE((*start)["params"][0].contains("completedLength"));
+
+    handler_ptr->release();
+
+    auto complete = client.read_notification("aria2.onDownloadComplete", 5000);
+    ASSERT_TRUE(complete.has_value());
+    EXPECT_EQ((*complete)["params"][0]["gid"], (*start)["params"][0]["gid"]);
+}
+
+TEST(WsServerTest, ProgressNotificationAndThrottling) {
+    auto handler = std::make_unique<BlockingHandler>();
+    auto* handler_ptr = handler.get();
+    // 间隔 10 秒：同一任务 80ms 内的两次进度只推第一条（节流生效）
+    ServerHarness h("", std::chrono::milliseconds{10000});
+    h.engine.register_handler(std::move(handler));
+
+    handler_ptr->set_progress_steps({{0.25f, 250, 0}, {0.50f, 500, 80}});
+
+    WsTestClient client;
+    ASSERT_TRUE(client.connect(h.server->port()));
+
+    json req = {{"jsonrpc", "2.0"}, {"id", 1}, {"method", "aria2.addUri"},
+                {"params", json::array({json::array({"https://example.com/p.bin"})})}};
+    ASSERT_TRUE(client.send_frame(WS_OP_TEXT, req.dump()));
+
+    auto start = client.read_notification("aria2.onDownloadStart", 5000);
+    ASSERT_TRUE(start.has_value());
+
+    auto progress = client.read_notification("falcon.onProgress", 5000);
+    ASSERT_TRUE(progress.has_value());
+    // progress 是 Falcon 扩展的浮点（0~1）
+    EXPECT_TRUE((*progress)["params"][0].contains("progress"));
+    // 节流窗口内（80ms < 10s）不应出现第二条
+    auto second = client.read_notification("falcon.onProgress", 300);
+    EXPECT_FALSE(second.has_value());
+
+    handler_ptr->release();
+}
+
+TEST(WsServerTest, BroadcastFanout) {
+    ServerHarness h;
+    WsTestClient a, b;
+    ASSERT_TRUE(a.connect(h.server->port()));
+    ASSERT_TRUE(b.connect(h.server->port()));
+
+    h.server->broadcast_notification("falcon.test",
+                                     R"([{"gid":"0000000000000042"}])");
+
+    auto fa = a.read_frame(5000);
+    ASSERT_TRUE(fa.has_value());
+    json ja = json::parse(fa->payload);
+    EXPECT_EQ(ja.value("method", ""), "falcon.test");
+    EXPECT_EQ(ja["params"][0]["gid"], "0000000000000042");
+    // 通知无 id 字段（JSON-RPC 通知语义）
+    EXPECT_FALSE(ja.contains("id"));
+
+    auto fb = b.read_frame(5000);
+    ASSERT_TRUE(fb.has_value());
+    json jb = json::parse(fb->payload);
+    EXPECT_EQ(jb.value("method", ""), "falcon.test");
+}
+
+TEST(WsServerTest, CloseFrameRoundtripAndCleanup) {
+    ServerHarness h;
+    {
+        WsTestClient client;
+        ASSERT_TRUE(client.connect(h.server->port()));
+        ASSERT_EQ(h.server->websocket_client_count(), 1u);
+
+        ASSERT_TRUE(client.send_frame(WS_OP_CLOSE, std::string("\x03\xE8", 2)));
+        auto frame = client.read_frame(5000);
+        ASSERT_TRUE(frame.has_value());
+        EXPECT_EQ(frame->opcode, WS_OP_CLOSE);
+        // 服务端随后关闭连接
+        EXPECT_TRUE(client.closed_by_server(5000));
+    }
+    // 会话线程退出后注册表清理
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (h.server->websocket_client_count() != 0 &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    EXPECT_EQ(h.server->websocket_client_count(), 0u);
+}
+
+TEST(WsServerTest, StopWithActiveSubscriberDoesNotHang) {
+    ServerHarness h;
+    WsTestClient client;
+    ASSERT_TRUE(client.connect(h.server->port()));
+
+    // 客户端保持连接（阻塞在服务器会话线程的 recv），stop() 必须 shutdown 唤醒
+    const auto started = std::chrono::steady_clock::now();
+    h.server->stop();
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+    EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count(),
+              5000);
+    EXPECT_EQ(h.server->websocket_client_count(), 0u);
+}

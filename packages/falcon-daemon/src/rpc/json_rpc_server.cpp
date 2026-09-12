@@ -1,5 +1,7 @@
 #include "json_rpc_server.hpp"
 
+#include "rpc/websocket_frame.hpp"
+
 #ifdef FALCON_HAS_SQLITE3
 #include "storage/task_storage.hpp"
 #endif
@@ -306,7 +308,152 @@ static void maybe_strip_token(json& params, const std::string& secret) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// WebSocket 订阅者状态与事件桥
+// ---------------------------------------------------------------------------
+
 } // namespace
+
+/// 每连接写互斥。广播线程与该连接的会话线程经 shared_ptr 共享，
+/// 保证注销后仍在途的广播发送可以安全完成。
+struct WsClientState {
+    std::mutex send_mutex;
+};
+
+namespace {
+
+/// 通知 params[0]：gid + Falcon 扩展进度快照（aria2 原生通知只带 gid，
+/// 额外字段对严格客户端是透明超集）
+static json notification_entry(const falcon::DownloadTask* task) {
+    json entry;
+    entry["gid"] = task_id_to_gid(task->id());
+    entry["status"] = aria2_status_from_task(*task);
+    entry["totalLength"] = std::to_string(task->total_bytes());
+    entry["completedLength"] = std::to_string(task->downloaded_bytes());
+    entry["downloadSpeed"] = std::to_string(task->speed());
+    return entry;
+}
+
+} // namespace
+
+// 引擎事件 → WebSocket JSON-RPC 通知桥。
+// 回调来自 EventDispatcher 线程；detach() 后（停机）所有事件被丢弃，
+// 与 TaskStorageListener 相同的 mutex + 空指针检查模式。
+// engine 指针与 server 生命周期一致（构造后不变），无需随 mutex 保护。
+class RpcEventBridge final : public falcon::IEventListener {
+public:
+    RpcEventBridge(JsonRpcServer* server, falcon::DownloadEngine* engine)
+        : server_(server), engine_(engine) {}
+
+    void attach(JsonRpcServer* server) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        server_ = server;
+        last_progress_push_.clear();
+    }
+
+    void detach() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        server_ = nullptr;
+        last_progress_push_.clear();
+    }
+
+    void set_progress_interval(std::chrono::milliseconds interval) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        progress_interval_ = interval;
+    }
+
+    void on_status_changed(falcon::TaskId task_id, falcon::TaskStatus old_status,
+                           falcon::TaskStatus new_status) override {
+        const char* method = nullptr;
+        switch (new_status) {
+            case falcon::TaskStatus::Downloading:
+                // 下载真正开始（含从 Paused 恢复）；Preparing 归入 active 但不算 Start
+                if (old_status == falcon::TaskStatus::Pending ||
+                    old_status == falcon::TaskStatus::Preparing ||
+                    old_status == falcon::TaskStatus::Paused) {
+                    method = "aria2.onDownloadStart";
+                }
+                break;
+            case falcon::TaskStatus::Paused:
+                method = "aria2.onDownloadPause";
+                break;
+            case falcon::TaskStatus::Completed:
+                method = "aria2.onDownloadComplete";
+                break;
+            case falcon::TaskStatus::Failed:
+                method = "aria2.onDownloadError";
+                break;
+            case falcon::TaskStatus::Cancelled:
+                method = "aria2.onDownloadStop";
+                break;
+            default:
+                break;
+        }
+        if (!method) return;
+
+        // 进度快照取自引擎当前内存态；任务可能已被移除（退化为仅 gid）
+        json params = json::array();
+        if (auto task = engine_->get_task(task_id)) {
+            params.push_back(notification_entry(task.get()));
+        } else {
+            params.push_back(json{{"gid", task_id_to_gid(task_id)}});
+        }
+
+        JsonRpcServer* server = server_ptr();
+        if (!server) return;
+        server->broadcast_notification(method, params.dump());
+    }
+
+    void on_progress(const falcon::ProgressInfo& info) override {
+        if (info.task_id == falcon::INVALID_TASK_ID) return;
+
+        const auto now = std::chrono::steady_clock::now();
+        JsonRpcServer* server = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!server_) return;
+            // Falcon 扩展：进度按任务节流推送（aria2 无此通知，未知 method
+            // 会被兼容客户端忽略）
+            auto [it, inserted] =
+                last_progress_push_.try_emplace(info.task_id, now);
+            if (!inserted) {
+                if (now - it->second < progress_interval_) return;
+                it->second = now;
+            }
+            server = server_;
+        }
+
+        json params = json::array();
+        json entry;
+        entry["gid"] = task_id_to_gid(info.task_id);
+        if (auto task = engine_->get_task(info.task_id)) {
+            entry["status"] = aria2_status_from_task(*task);
+        }
+        entry["progress"] = info.progress;
+        entry["totalLength"] = std::to_string(info.total_bytes);
+        entry["completedLength"] = std::to_string(info.downloaded_bytes);
+        entry["downloadSpeed"] = std::to_string(info.speed);
+        params.push_back(std::move(entry));
+        server->broadcast_notification("falcon.onProgress", params.dump());
+    }
+
+private:
+    JsonRpcServer* server_ptr() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return server_;
+    }
+
+    std::mutex mutex_;
+    JsonRpcServer* server_ = nullptr; // mutex_ 保护
+    falcon::DownloadEngine* engine_ = nullptr;
+    std::chrono::milliseconds progress_interval_{1000};
+    std::unordered_map<falcon::TaskId, std::chrono::steady_clock::time_point>
+        last_progress_push_;
+};
+
+JsonRpcServer::~JsonRpcServer() {
+    stop();
+}
 
 struct JsonRpcServer::HttpRequest {
     std::string method;
@@ -322,14 +469,11 @@ struct JsonRpcServer::HttpResponse {
     std::string body;
 };
 
+// 构造/析构放在 RpcEventBridge 完整定义之后（unique_ptr 成员析构需要完整类型）
 JsonRpcServer::JsonRpcServer(falcon::DownloadEngine* engine,
                                JsonRpcServerConfig config,
                                TaskStorage* storage)
     : engine_(engine), storage_(storage), config_(std::move(config)) {}
-
-JsonRpcServer::~JsonRpcServer() {
-    stop();
-}
 
 void JsonRpcServer::set_shutdown_handler(std::function<void()> handler) {
     shutdown_handler_ = std::move(handler);
@@ -395,6 +539,11 @@ bool JsonRpcServer::start() {
         return false;
     }
 
+    // 事件桥：引擎状态/进度 → WebSocket 通知广播（与 accept 线程同生命周期）
+    event_bridge_ = std::make_unique<RpcEventBridge>(this, engine_);
+    event_bridge_->set_progress_interval(config_.progress_push_interval);
+    engine_->add_listener(event_bridge_.get());
+
     accept_thread_ = std::thread([this] { accept_loop(); });
     // 每次 start() 生成新的会话 id（aria2.getSessionInfo 返回值）
     {
@@ -411,6 +560,25 @@ bool JsonRpcServer::start() {
 
 void JsonRpcServer::stop() {
     stop_requested_ = true;
+
+    // 先摘除事件桥：之后引擎事件不再进入广播路径
+    if (event_bridge_) {
+        engine_->remove_listener(event_bridge_.get());
+        event_bridge_->detach();
+    }
+
+    // 唤醒阻塞在 recv 的 WebSocket 会话线程（长连接不会因 listen fd 关闭而断开）
+    std::vector<int> ws_fds;
+    {
+        std::lock_guard<std::mutex> lock(ws_clients_mutex_);
+        ws_fds.reserve(ws_clients_.size());
+        for (const auto& [fd, state] : ws_clients_) {
+            ws_fds.push_back(fd);
+        }
+    }
+    for (int fd : ws_fds) {
+        socket_shutdown(fd);
+    }
 
     if (listen_fd_ >= 0) {
         socket_shutdown(listen_fd_);
@@ -430,6 +598,9 @@ void JsonRpcServer::stop() {
     for (auto& t : workers) {
         if (t.joinable()) t.join();
     }
+
+    // 会话线程已全部退出，注册表应已清空；兜底释放
+    event_bridge_.reset();
 }
 
 void JsonRpcServer::accept_loop() {
@@ -559,9 +730,157 @@ void JsonRpcServer::handle_connection(int client_fd) {
         return;
     }
 
+    // WebSocket 升级：接管连接进入事件流会话循环（aria2 兼容：与 HTTP
+    // JSON-RPC 同端口同路径，如 ws://host:6800/jsonrpc）
+    if (is_websocket_upgrade(*req)) {
+        handle_websocket(fd.fd, *req);
+        return;
+    }
+
     auto resp = handle_http_request(*req);
     const std::string out = format_http_response(resp);
     send_all(fd.fd, out);
+}
+
+bool JsonRpcServer::is_websocket_upgrade(const HttpRequest& req) const {
+    if (req.method != "GET") return false;
+    auto upgrade = req.headers.find("upgrade");
+    if (upgrade == req.headers.end() ||
+        to_lower(upgrade->second).find("websocket") == std::string::npos) {
+        return false;
+    }
+    auto key = req.headers.find("sec-websocket-key");
+    return key != req.headers.end() && !key->second.empty();
+}
+
+bool JsonRpcServer::ws_send_frame(int client_fd, std::uint8_t opcode,
+                                  const std::string& payload) {
+    std::shared_ptr<WsClientState> state;
+    {
+        std::lock_guard<std::mutex> lock(ws_clients_mutex_);
+        auto it = ws_clients_.find(client_fd);
+        if (it == ws_clients_.end()) return false;
+        state = it->second;
+    }
+    std::lock_guard<std::mutex> send_lock(state->send_mutex);
+    return send_all(client_fd, ws_encode_frame(opcode, payload));
+}
+
+void JsonRpcServer::handle_websocket(int client_fd, const HttpRequest& req) {
+    ScopedFd fd(client_fd);
+
+    // 仅 /jsonrpc 与 / 提供 WebSocket 升级（与 HTTP JSON-RPC 端点一致）
+    if (req.path != "/" && req.path != "/jsonrpc") {
+        HttpResponse resp;
+        resp.status_code = 404;
+        resp.status_text = "Not Found";
+        resp.body = R"({"error":"not found"})";
+        send_all(fd.fd, format_http_response(resp));
+        return;
+    }
+
+    const std::string key = req.headers.at("sec-websocket-key");
+    std::ostringstream oss;
+    oss << "HTTP/1.1 101 Switching Protocols\r\n"
+        << "Upgrade: websocket\r\n"
+        << "Connection: Upgrade\r\n"
+        << "Sec-WebSocket-Accept: " << ws_compute_accept_key(key) << "\r\n";
+    if (config_.allow_origin_all) {
+        oss << "Access-Control-Allow-Origin: *\r\n";
+    }
+    oss << "\r\n";
+    if (!send_all(fd.fd, oss.str())) {
+        return;
+    }
+
+    // 注册为订阅者；连接 fd 的注销统一由本线程完成（广播失败只 shutdown
+    // 唤醒本线程，避免跨线程 close 引发 fd 复用竞争）
+    auto state = std::make_shared<WsClientState>();
+    {
+        std::lock_guard<std::mutex> lock(ws_clients_mutex_);
+        ws_clients_[fd.fd] = state;
+    }
+
+    WsFrameParser parser;
+    bool disconnect = false;
+    char tmp[4096];
+    while (!stop_requested_.load() && !disconnect) {
+        recv_send_size_t n = ::recv(fd.fd, tmp, sizeof(tmp), 0);
+        if (n <= 0) break;
+
+        parser.feed(tmp, static_cast<std::size_t>(n));
+        if (parser.error()) {
+            // 协议违规：按 RFC 6455 以 1002 关闭
+            ws_send_frame(fd.fd, WS_OP_CLOSE,
+                          std::string("\x03\xEA", 2));
+            break;
+        }
+
+        for (const auto& msg : parser.pop_messages()) {
+            switch (msg.opcode) {
+                case WS_OP_TEXT:
+                case WS_OP_BINARY:
+                    // WS 上的 JSON-RPC 与 HTTP 走同一分发路径（含 token 校验）
+                    if (!ws_send_frame(fd.fd, WS_OP_TEXT,
+                                       handle_jsonrpc(msg.payload).body)) {
+                        disconnect = true;
+                    }
+                    break;
+                case WS_OP_PING:
+                    if (!ws_send_frame(fd.fd, WS_OP_PONG, msg.payload)) {
+                        disconnect = true;
+                    }
+                    break;
+                case WS_OP_CLOSE:
+                    // 回应关闭帧后结束会话
+                    ws_send_frame(fd.fd, WS_OP_CLOSE, msg.payload);
+                    disconnect = true;
+                    break;
+                default:
+                    break;
+            }
+            if (disconnect) break;
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(ws_clients_mutex_);
+        ws_clients_.erase(fd.fd);
+    }
+}
+
+void JsonRpcServer::broadcast_notification(const std::string& method,
+                                           const std::string& params_json) {
+    // JSON-RPC 通知：无 id 字段
+    std::string body;
+    body.reserve(40 + method.size() + params_json.size());
+    body += "{\"jsonrpc\":\"2.0\",\"method\":\"";
+    body += method;
+    body += "\",\"params\":";
+    body += params_json;
+    body += "}";
+
+    const std::string frame = ws_encode_frame(WS_OP_TEXT, body);
+
+    // 快照后逐连接发送，避免持注册锁做 I/O
+    std::vector<std::pair<int, std::shared_ptr<WsClientState>>> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(ws_clients_mutex_);
+        snapshot.assign(ws_clients_.begin(), ws_clients_.end());
+    }
+    for (const auto& [fd, state] : snapshot) {
+        std::lock_guard<std::mutex> send_lock(state->send_mutex);
+        if (!send_all(fd, frame)) {
+            // 发送失败说明对端已断：shutdown 唤醒阻塞在 recv 的会话线程，
+            // 由其完成注销与 fd 关闭
+            socket_shutdown(fd);
+        }
+    }
+}
+
+std::size_t JsonRpcServer::websocket_client_count() {
+    std::lock_guard<std::mutex> lock(ws_clients_mutex_);
+    return ws_clients_.size();
 }
 
 JsonRpcServer::HttpResponse JsonRpcServer::handle_http_request(const HttpRequest& req) {

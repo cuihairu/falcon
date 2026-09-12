@@ -2,6 +2,20 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-12 - Daemon WebSocket 事件流订阅
+- daemon 同端口支持 WebSocket 升级（`ws://host:6800/jsonrpc`，aria2 真实
+  行为，AriaNg 实时模式可直接对接）；WS 上的 JSON-RPC 与 HTTP 共用分发与
+  `token:` 认证，28 个方法全会话内可用
+- 新增 `websocket_frame.{hpp,cpp}`：RFC 6455 协议层（增量帧解析、掩码、
+  分片聚合、控制帧；SHA1/base64 自实现，daemon 不新增 OpenSSL 依赖）
+- 引擎事件经 `RpcEventBridge` 广播为 JSON-RPC 通知：aria2 兼容
+  `onDownloadStart/Pause/Complete/Error/Stop` + Falcon 扩展
+  `falcon.onProgress`（每任务 1 秒节流）；params[0] 携带 gid + 进度快照
+- 删除从未接入构建的死代码原型 `websocket_server.{hpp,cpp}`
+- 停机安全：有活动订阅者时 `stop()` shutdown 唤醒会话线程，不挂死
+- 新增 15 个 WebSocket 测试用例（RFC 向量/帧协议/真实引擎事件链回环），
+  daemon 全量 149 用例本地通过
+
 ### 2026-09-12 - V2 引擎 Windows 运行时适配
 - 修复 `http_commands.cpp` 三类 Winsock 运行时缺陷（此前仅"能编译"，跳过测试
   掩盖了无法实际运行）：
@@ -668,7 +682,7 @@ Daemon 配置文件（`/etc/falcon/daemon.json` 或 `~/.config/falcon/daemon.jso
    - ✅ HTTP RPC 服务器
    - ✅ aria2 兼容 API（26 个方法，含查询回落、批量控制、会话管理）
    - ✅ 任务持久化（SQLite：状态/进度落库、停机保存、重启恢复）
-   - 🔄 事件流订阅（websocket/SSE 推送任务进度）
+   - ✅ 事件流订阅（同端口 WebSocket 推送 aria2 兼容通知 + 进度通知）
 
 2. **桌面应用（Qt6）**
    - ✅ 迅雷风格 UI
