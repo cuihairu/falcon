@@ -71,9 +71,16 @@ void warn_unknown_keys(const nlohmann::json& section,
 std::string expand_home_path(const std::string& path) {
     if (path.rfind("~/", 0) != 0) return path;
 #ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
     char buf[MAX_PATH];
     const DWORD n = GetEnvironmentVariableA("USERPROFILE", buf, MAX_PATH);
-    const std::string home = n > 0 ? std::string(buf, n) : std::string();
+    const std::string home_str = n > 0 ? std::string(buf, n) : std::string();
 #else
     const char* home = std::getenv("HOME");
     const std::string home_str = home ? home : std::string();
