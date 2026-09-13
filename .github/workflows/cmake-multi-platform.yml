@@ -231,6 +231,9 @@ jobs:
         timeout-minutes: 5
         run: |
           sudo apt-get update
+          # 桌面端 Qt 用发行版系统包（qt6-base-dev）：vcpkg qtbase[xcb]
+          # 不产出 libqxcb.so 平台插件且耗时 20+ 分钟，系统包布局天然
+          # 自洽。vcpkg 继续供给其余依赖（与 nightly 打包路线一致）
           sudo apt-get install -y \
             build-essential \
             autoconf \
@@ -240,26 +243,7 @@ jobs:
             libcurl4-openssl-dev \
             libsqlite3-dev \
             libgl1-mesa-dev \
-            libx11-dev \
-            libx11-xcb-dev \
-            libxcb1-dev \
-            libxcb-cursor-dev \
-            libxcb-icccm4-dev \
-            libxcb-image0-dev \
-            libxcb-keysyms1-dev \
-            libxcb-randr0-dev \
-            libxcb-render0-dev \
-            libxcb-render-util0-dev \
-            libxcb-shape0-dev \
-            libxcb-shm0-dev \
-            libxcb-sync-dev \
-            libxcb-util-dev \
-            libxcb-xfixes0-dev \
-            libxcb-xinerama0-dev \
-            libxcb-xkb-dev \
-            libxext-dev \
-            libxkbcommon-dev \
-            libxkbcommon-x11-dev
+            qt6-base-dev
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'

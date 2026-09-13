@@ -58,6 +58,10 @@ jobs:
         timeout-minutes: 15
         run: |
           sudo apt-get update
+          # 桌面端 Qt 改用发行版系统包（qt6-base-dev）：vcpkg qtbase
+          # [xcb] 在 Linux 上构建成功但不产出 libqxcb.so 平台插件
+          # （五轮排查未解），系统包的 qxcb 与 qmake 布局天然自洽，
+          # linuxdeploy-plugin-qt 的标准路径。vcpkg 继续供给其余依赖
           sudo apt-get install -y \
             build-essential \
             autoconf \
@@ -68,29 +72,7 @@ jobs:
             libcurl4-openssl-dev \
             libsqlite3-dev \
             libssl-dev \
-            libx11-dev \
-            libx11-xcb-dev \
-            libxcb1-dev \
-            libxcb-cursor-dev \
-            libxcb-icccm4-dev \
-            libxcb-image0-dev \
-            libxcb-keysyms1-dev \
-            libxcb-randr0-dev \
-            libxcb-render0-dev \
-            libxcb-render-util0-dev \
-            libxcb-shape0-dev \
-            libxcb-shm0-dev \
-            libxcb-sync-dev \
-            libxcb-util-dev \
-            libxcb-xfixes0-dev \
-            libxcb-xinput-dev \
-            libxcb-xinerama0 \
-            libxcb-xinerama0-dev \
-            libxcb-xkb-dev \
-            libxext-dev \
-            libxcb-cursor0 \
-            libxkbcommon-dev \
-            libxkbcommon-x11-dev \
+            qt6-base-dev \
             patchelf \
             wget
 
@@ -243,51 +225,35 @@ jobs:
           ln -sf usr/share/icons/hicolor/256x256/apps/falcon-desktop.png FalconDesktop/AppDir/.DirIcon
           ln -sf usr/share/icons/hicolor/256x256/apps/falcon-desktop.png FalconDesktop/AppDir/falcon-desktop.png
 
-          # linuxdeploy-plugin-qt 需要 qmake 查询 Qt 安装布局；Qt 经
-          # vcpkg manifest 装在 build-desktop/vcpkg_installed/<triplet>/
-          # tools/Qt6/bin，不在 PATH（此前 nightly 连续失败于此）
-          QMAKE_BIN="$(find "${GITHUB_WORKSPACE}/build-desktop/vcpkg_installed" \
-            -type f \( -name qmake -o -name qmake6 \) 2>/dev/null | head -n1)"
+          # linuxdeploy-plugin-qt 需要 qmake 查询 Qt 安装布局。桌面端
+          # Qt 用发行版系统包（见 Install dependencies 步骤），qmake6
+          # 由 qt6-base-dev 提供（PATH 内 /usr/bin/qmake6，兜底搜
+          # /usr/lib/qt6/bin）
+          QMAKE_BIN="$(command -v qmake6 || command -v qmake || true)"
           if [ -z "$QMAKE_BIN" ]; then
-            echo "ERROR: qmake not found in vcpkg_installed tree"
-            find "${GITHUB_WORKSPACE}/build-desktop/vcpkg_installed" -maxdepth 4 -type d | head -40
+            QMAKE_BIN="$(find /usr/lib -type f -name qmake6 2>/dev/null | head -n1)"
+          fi
+          if [ -z "$QMAKE_BIN" ]; then
+            echo "ERROR: system qmake6 not found"
+            dpkg -l | grep qt6 || true
             exit 1
           fi
           export QMAKE="$QMAKE_BIN"
           export PATH="$(dirname "$QMAKE_BIN"):$PATH"
           echo "Using qmake: $QMAKE_BIN"
 
-          # vcpkg Qt 布局诊断与自适应：QT_INSTALL_PLUGINS 报告的目录
-          # 可能不是插件实际安装处（libqxcb.so 曾被 ldd 解析成功却在
-          # QT_INSTALL_PLUGINS/platforms 下报不存在）。找到实际插件
-          # 目录后对齐到插件查询的路径
-          QCB_SO="$(find "${GITHUB_WORKSPACE}/build-desktop/vcpkg_installed" \
-            -name "libqxcb.so" 2>/dev/null | head -n1)"
-          echo "libqxcb.so found at: ${QCB_SO:-<none — xcb plugin not built>}"
-          if [ -z "$QCB_SO" ]; then
-            echo "Full plugin dir dump:"
-            find "${GITHUB_WORKSPACE}/build-desktop/vcpkg_installed/x64-linux" \
-              -type d -name platforms 2>/dev/null
-            find "${GITHUB_WORKSPACE}/build-desktop/vcpkg_installed/x64-linux/Qt6" \
-              -maxdepth 2 -type d 2>/dev/null
+          # 快速失败前置检查：系统 xcb 平台插件必须存在（插件运行时
+          # 发现由 plugin-qt 生成的 AppDir qt.conf 解决）
+          XCB_PLUGIN="$("$QMAKE_BIN" -query QT_INSTALL_PLUGINS)/platforms/libqxcb.so"
+          if [ ! -f "$XCB_PLUGIN" ]; then
+            echo "ERROR: xcb platform plugin not found at $XCB_PLUGIN"
             exit 1
           fi
-          EXPECTED_PLUGINS_DIR="$("$QMAKE_BIN" -query QT_INSTALL_PLUGINS)"
-          ACTUAL_PLUGINS_DIR="$(dirname "$(dirname "$QCB_SO")")"
-          echo "QT_INSTALL_PLUGINS: $EXPECTED_PLUGINS_DIR"
-          echo "Actual plugins dir: $ACTUAL_PLUGINS_DIR"
-          if [ "$ACTUAL_PLUGINS_DIR" != "$EXPECTED_PLUGINS_DIR" ]; then
-            echo "Plugin path mismatch: mirroring into $EXPECTED_PLUGINS_DIR"
-            mkdir -p "$EXPECTED_PLUGINS_DIR"
-            cp -a "$ACTUAL_PLUGINS_DIR/." "$EXPECTED_PLUGINS_DIR/"
-          fi
+          echo "xcb platform plugin: $XCB_PLUGIN"
 
-          # Qt 经 vcpkg 安装：qmake 报告的 QT_INSTALL_LIBS
-          # （tools/Qt6/lib）与实际链接库目录（<triplet>/lib）前缀不一致，
-          # 插件的 ldd 前缀匹配恒为空 → "Could not find Qt modules to
-          # deploy"。自动检测在 vcpkg 布局下不可用，改用 EXTRA_QT_MODULES
-          # 显式声明（分号分隔，与 desktop 链接的组件一致；core/gui 为
-          # 依赖闭包基座一并声明），跳过自动检测
+          # 显式声明要部署的 Qt 模块（分号分隔，与 desktop 链接的组件
+          # 一致；core/gui 为依赖闭包基座一并声明）。系统 qmake 下自动
+          # 检测本应可用，显式声明保留作确定性兜底
           export EXTRA_QT_MODULES="core;gui;widgets;network;concurrent"
 
           # 使用 linuxdeploy 打包（qt 插件与 appimage 输出同一调用，官方

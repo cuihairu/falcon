@@ -29,14 +29,30 @@
 - 第四层（预审发现）：Create Nightly Release job 此前从未真正执行
   （总挂在 Package 层），默认只读 GITHUB_TOKEN 对 delete-asset 与
   release 发布必然 403——workflow 顶层补 `permissions: contents: write`
-- 第五层：qtbase[xcb] 构建成功后 linuxdeploy-plugin-qt 仍在
-  QT_INSTALL_PLUGINS/platforms 下报 libqxcb.so 不存在——但插件日志里
-  出现了 libqxcb.so 的 ldd 依赖列表（libxcb-cursor 为 qxcb 特有），
-  说明文件实际存在、只是 vcpkg 安装布局与 qmake 报告的插件目录不一致。
-  Package 步骤加自适应：找到实际 libqxcb.so，目录不一致则镜像到
-  QT_INSTALL_PLUGINS；找不到则 dump 诊断并 fail fast
-- 同日早前修复已验证生效：Linux qmake 定位（vcpkg_installed 树内
-  find）、Windows 150min 步骤超时放宽、macOS macdeployqt 绝对路径
+- 第五层（诊断轮证伪一版误判）：qtbase[xcb] 构建成功后
+  linuxdeploy-plugin-qt 仍报 libqxcb.so 不存在——曾据插件日志的
+  ldd 依赖列表误判"文件存在仅路径不匹配"做镜像修复，随后的诊断行
+  证明 **libqxcb.so 全树不存在**（platforms 目录在、目录为空）。
+  Qt 源码考古闭环确认静态逻辑应产出插件（`if(QT_FEATURE_xcb)`
+  是唯一门禁，强制语义下 build 成功即 feature=ON；Linux 默认
+  QT_QPA_PLATFORMS=["xcb"]，DEFAULT_IF 恒真；QT_AUTODETECT_ANDROID
+  不置 ANDROID 变量；vcpkg 端口无插件裁剪）——实际产物与全部静态
+  推理矛盾，根因藏在无法取到的 runner configure 输出里
+- 第六层（终局方案）：Linux 桌面端弃用 vcpkg qtbase，改用发行版
+  系统 Qt6（qt6-base-dev）——vcpkg.json desktop feature 删除
+  `platform: "linux"` 条目（!linux 两平台不变）；nightly 与 ci 的
+  Linux apt 清单以 qt6-base-dev 替换整套 xcb/xkb 开发包。理由：
+  ① 系统包的 libqxcb.so 与 qmake 布局天然自洽，linuxdeploy-
+  plugin-qt 回到全社区标准路径（插件运行时发现由其自动生成的
+  AppDir qt.conf 解决，AppRun 无需 QT_PLUGIN_PATH）；② vcpkg
+  toolchain 不设 FIND_ROOT_PATH_MODE=ONLY（仅响应外部设置，且
+  ONLY 时也补 `/` 到搜索路径），系统 Qt6 的 find_package 可达，
+  已核验；③ Linux job 省掉 22 分钟 qtbase 构建。depend-info 验证：
+  x64-linux 零 qtbase，x64-osx/x64-windows 保留。残余风险：系统
+  Qt 版本（6.4/6.8+）低于此前 vcpkg 的 6.10.2，desktop 源码若用
+  新 API 需随编译报错适配
+- 同日早前修复已验证生效：Linux qmake 定位、Windows 150min 步骤
+  超时放宽、macOS macdeployqt 绝对路径
 
 ### 2026-09-13 - V1 段下载完整性闭环（Range 撒谎服务器静默损坏防护）
 - 修复生产引擎（daemon/CLI 的 HTTP 段下载路径）三连环静默损坏缺陷：
