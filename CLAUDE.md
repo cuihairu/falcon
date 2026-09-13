@@ -22,6 +22,12 @@
 - nightly 的 workflow_dispatch 触发会连带发布 Release，不在 CI 轮
   里验证；qt.conf 修复随下次 scheduled nightly 生效，CMake Build 的
   Package (Windows) 步骤随本次推送验证
+- 手动 nightly 验证发现第二层：CRT 拷贝通配 `2022\*` 在 windows-
+  latest 上不匹配（VS 目录布局漂移），失败仅 WARNING 静默产出缺
+  vcruntime140.dll 的残包；放宽为 `*\*\VC\Redist` 双 ProgramFiles
+  候选 + System32 兜底（装过 VS 的机器系统目录必有同版本 DLL），
+  并把 vcruntime140.dll 加进打包后关键文件校验（缺了让 job 失败，
+  不再静默出残包）
 
 ### 2026-09-13 - V2 引擎断点续传闭环（.falcon.ctrl 控制文件 + If-Range 内容变更防护）
 - V2 此前失败/中断即进度归零：多段模式所有段位置写入同一临时文件，

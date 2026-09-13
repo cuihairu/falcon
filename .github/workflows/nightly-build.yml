@@ -430,16 +430,33 @@ jobs:
           }
 
           # MSVC CRT 运行时：目标机器未安装 VC++ Redistributable 时避免缺
-          # vcruntime140.dll / vcruntime140_1.dll / msvcp140.dll
-          $crtDirs = Get-ChildItem `
-            "$env:ProgramFiles\Microsoft Visual Studio\2022\*\VC\Redist\MSVC\*\x64\Microsoft.VC143.CRT" `
-            -Directory -ErrorAction SilentlyContinue
+          # vcruntime140.dll / vcruntime140_1.dll / msvcp140.dll。
+          # runner 的 VS 目录布局会漂移（2026-09-13 windows-latest 实测
+          # 2022/* 通配不中），放宽年份/版本通配并以 System32 兜底
+          # （装过 VS 的机器系统目录必有同版本 Redist DLL）
+          $crtDirs = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio\*\*\VC\Redist\MSVC\*\x64\Microsoft.VC*.CRT" -Directory -ErrorAction SilentlyContinue
+          if (-not $crtDirs) {
+            $crtDirs = Get-ChildItem "${env:ProgramFiles(x86)}\Microsoft Visual Studio\*\*\VC\Redist\MSVC\*\x64\Microsoft.VC*.CRT" -Directory -ErrorAction SilentlyContinue
+          }
           if ($crtDirs) {
             $crtDir = $crtDirs | Sort-Object FullName -Descending | Select-Object -First 1
             Copy-Item "$($crtDir.FullName)\*.dll" falcon-desktop/ -Force
             Write-Host "Copied MSVC CRT from $($crtDir.FullName)"
           } else {
-            Write-Warning "MSVC CRT redist directory not found; target machines need VC++ Redistributable"
+            $crtFiles = @("vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll")
+            $found = @()
+            foreach ($f in $crtFiles) {
+              $p = Join-Path $env:SystemRoot "System32\$f"
+              if (Test-Path $p) {
+                Copy-Item $p falcon-desktop/ -Force
+                $found += $f
+              }
+            }
+            if ($found.Count -gt 0) {
+              Write-Host "Copied MSVC CRT from System32: $($found -join ', ')"
+            } else {
+              Write-Warning "MSVC CRT not found (Redist dir and System32 both empty); target machines need VC++ Redistributable"
+            }
           }
 
           # qt.conf 把插件根指到 plugins/ 子目录。Qt 运行时只自动搜
@@ -453,7 +470,7 @@ jobs:
           7z a -tzip ..\..\..\$zipName falcon-desktop\
 
           # 验证关键文件都在包里
-          $required = @("falcon-desktop.exe", "qt.conf", "Qt6Core.dll", "Qt6Gui.dll", "Qt6Widgets.dll", "plugins\platforms\qwindows.dll")
+          $required = @("falcon-desktop.exe", "qt.conf", "Qt6Core.dll", "Qt6Gui.dll", "Qt6Widgets.dll", "plugins\platforms\qwindows.dll", "vcruntime140.dll")
           cd ../../../
           foreach ($f in $required) {
             if (-not (Test-Path "build-desktop\bin\Release\falcon-desktop\$f")) {
