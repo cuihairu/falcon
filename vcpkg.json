@@ -30,7 +30,8 @@
           "features": [
             "widgets",
             "network",
-            "concurrent"
+            "concurrent",
+            "xcb"
           ]
         }
       ]
