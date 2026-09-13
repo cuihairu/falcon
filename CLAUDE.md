@@ -2,6 +2,20 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-13 - Nightly Linux AppImage 打包修复（Qt 模块检测在 vcpkg 布局下失效）
+- linuxdeploy-plugin-qt 的模块自动检测机制：对 AppDir 内 ELF 跑 ldd，
+  按路径前缀匹配 qmake 报告的 QT_INSTALL_LIBS 计模块数。Qt 经 vcpkg
+  安装时该机制不可用——qmake 报告 `tools/Qt6/lib`，实际链接的 Qt 库
+  却从 `<triplet>/lib` 解析，前缀永不一致 → `Found Qt modules:` 恒
+  为空 → `Could not find Qt modules to deploy`（Nightly Linux Package
+  连续两轮失败的根因；非调用顺序问题，合并调用也不解决）
+- 修复：`EXTRA_QT_MODULES="core;gui;widgets;network;concurrent"` 显式
+  声明（分号分隔，与 apps/desktop 链接的 Qt6 组件一致）跳过自动检测；
+  顺带把 `--plugin qt` 与 `--output appimage` 合并为单次 linuxdeploy
+  调用（官方推荐用法）
+- 同日早前修复已验证生效：Linux qmake 定位（vcpkg_installed 树内
+  find）、Windows 150min 步骤超时放宽、macOS macdeployqt 绝对路径
+
 ### 2026-09-13 - V1 段下载完整性闭环（Range 撒谎服务器静默损坏防护）
 - 修复生产引擎（daemon/CLI 的 HTTP 段下载路径）三连环静默损坏缺陷：
   ① `download_segment_curl` 对 Range 请求不校验 206——服务器宣称
