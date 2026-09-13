@@ -23,6 +23,9 @@
   （`Feature "xcb": Forcing to "ON" breaks its condition`，不会静默
   降级），改为按平台拆分 qtbase 依赖条目：`platform: "linux"` 带
   xcb / `platform: "!linux"` 不带（depend-info 三平台解析验证）
+- 第三层：qtbase 的 xcb 强制拉起 `system_xcb_xinput`，Ubuntu apt
+  清单独缺 `libxcb-xinput-dev`（其余 xcb 系列全齐），补装后 configure
+  通过（icu.h/sctp.h/tzdb 等 try-compile 报错是可选特性探测，非致命）
 - 同日早前修复已验证生效：Linux qmake 定位（vcpkg_installed 树内
   find）、Windows 150min 步骤超时放宽、macOS macdeployqt 绝对路径
 
