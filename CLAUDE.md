@@ -13,6 +13,13 @@
   声明（分号分隔，与 apps/desktop 链接的 Qt6 组件一致）跳过自动检测；
   顺带把 `--plugin qt` 与 `--output appimage` 合并为单次 linuxdeploy
   调用（官方推荐用法）
+- 验证 run 暴露第二层缺陷：vcpkg qtbase 默认不构建 xcb 平台插件
+  （`platforms/libqxcb.so`），qt 插件部署 gui 模块的平台插件时报
+  `Cannot deploy non-existing library file`——没有它 AppImage 即使
+  打包成功在用户桌面上也起不来。修复：vcpkg.json desktop feature 的
+  qtbase 增加 `"xcb"`（Qt configure 开 FEATURE_xcb；所需系统 X11
+  开发包 Ubuntu CI 步骤早已备齐，Windows/macOS 上 Qt configure 自动
+  禁用 xcb 无副作用）
 - 同日早前修复已验证生效：Linux qmake 定位（vcpkg_installed 树内
   find）、Windows 150min 步骤超时放宽、macOS macdeployqt 绝对路径
 
