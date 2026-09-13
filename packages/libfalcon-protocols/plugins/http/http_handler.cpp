@@ -6,6 +6,7 @@
 #include <falcon/protocols/segment_downloader.hpp>
 #include <falcon/exceptions.hpp>
 #include <algorithm>
+#include <cstdint>
 #include <iostream>
 #include <atomic>
 #include <chrono>
@@ -285,11 +286,13 @@ static bool download_segment_curl(
 
     // Open file for writing (append if resuming an existing segment)
     std::ios::openmode mode = std::ios::binary;
+    std::uintmax_t existing_size = 0;
     {
         std::error_code ec;
         if (std::filesystem::exists(output_path, ec) && !ec) {
             auto sz = std::filesystem::file_size(output_path, ec);
             if (!ec && sz > 0) {
+                existing_size = sz;
                 mode |= std::ios::app;
             } else {
                 mode |= std::ios::trunc;
@@ -336,7 +339,25 @@ static bool download_segment_curl(
     CURLcode res = curl_easy_perform(curl);
 
     file.close();
+
+    long response_code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
     curl_easy_cleanup(curl);
+
+    if (res == CURLE_OK && response_code >= 400) {
+        return false;
+    }
+
+    // start > 0 的段请求必须得到 206：服务器忽略 Range 会以 200 回传
+    // 整个文件，追加进已有段文件即静默损坏——截回本次续传起点按失败
+    // 收尾（重试机制接管），绝不把损坏数据留给 merge
+    if (res == CURLE_OK && start > 0 && response_code != 206) {
+        if (existing_size > 0) {
+            std::error_code resize_ec;
+            std::filesystem::resize_file(output_path, existing_size, resize_ec);
+        }
+        return false;
+    }
 
     return res == CURLE_OK && !cancelled.load();
 }
@@ -578,6 +599,20 @@ public:
                     if (response_code < 500) {
                         throw NetworkException(last_error);
                     }
+                } else if (start_offset > 0 && response_code != 206) {
+                    // 续传请求被以 200 应答（Range 被忽略，服务器把整个
+                    // 文件传回）：追加进临时文件即静默损坏——清空临时
+                    // 文件从头重下（下次尝试自然走完整下载路径），一次
+                    // 有界的浪费尝试优于损坏的成品
+                    last_error =
+                        "Server ignored Range request (200 instead of 206)";
+                    std::error_code resize_ec;
+                    std::filesystem::resize_file(temp_path, 0, resize_ec);
+                    if (resize_ec) {
+                        throw FileIOException(
+                            "Failed to reset temp file after ignored Range: " +
+                            temp_path);
+                    }
                 } else {
                     // Move temp file to final destination
                     if (std::rename(temp_path.c_str(), task->output_path().c_str()) != 0) {
@@ -619,7 +654,6 @@ public:
         seg_config.max_retries = options.max_retries;
         seg_config.retry_delay_ms = options.retry_delay_seconds * 1000;
         seg_config.adaptive_sizing = options.adaptive_segment_sizing;
-        seg_config.validate_pieces = false;
 
         // 段下载限速：把任务限速（综合引擎全局/任务限制）均摊到各连接。
         // 段是短生命周期连接，启动时静态分摊即可（download_segment_curl

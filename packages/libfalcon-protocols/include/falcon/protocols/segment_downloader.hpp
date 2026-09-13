@@ -125,9 +125,6 @@ struct SegmentConfig {
 
     /// Time in seconds to wait before restarting slow connection
     std::size_t slow_timeout = 30;
-
-    /// Enable piece validation (check downloaded bytes match expected)
-    bool validate_pieces = true;
 };
 
 /// Segment downloader for multi-threaded chunked downloads

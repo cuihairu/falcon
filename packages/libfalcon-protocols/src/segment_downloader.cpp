@@ -14,6 +14,7 @@
 #include <iostream>
 #include <random>
 #include <sstream>
+#include <system_error>
 
 namespace falcon {
 
@@ -258,7 +259,14 @@ bool SegmentDownloader::start(SegmentDownloadFunc download_func) {
             auto sz = file.tellg();
             if (sz <= 0) continue;
             Bytes downloaded = static_cast<Bytes>(sz);
-            downloaded = std::min(downloaded, segment->size());
+            if (downloaded > segment->size()) {
+                // 超尺寸段不可信（Range 被服务器忽略、旧版缺陷遗留的损坏
+                // 段文件）：删除整段重下，绝不带着可疑数据进 merge
+                file.close();
+                std::error_code rm_ec;
+                std::filesystem::remove(segment_path, rm_ec);
+                continue;
+            }
             segment->downloaded.store(downloaded);
             if (downloaded >= segment->size()) {
                 segment->completed.store(true);
@@ -458,23 +466,24 @@ void SegmentDownloader::download_segment(
             );
 
             if (success && !cancelled_.load()) {
-                Bytes downloaded = segment_size;
-                if (config_.validate_pieces) {
-                    std::ifstream file(download_path, std::ios::binary | std::ios::ate);
-                    if (!file.is_open()) {
-                        throw FileIOException("Failed to open segment file: " + download_path);
-                    }
-                    Bytes downloaded_this_attempt = static_cast<Bytes>(file.tellg());
-                    downloaded = std::min(segment_size, existing_downloaded + downloaded_this_attempt);
-                    if (downloaded < segment_size) {
-                        throw FileIOException("Segment incomplete after download: seg" +
-                                              std::to_string(segment->index));
-                    }
+                // 精确尺寸校验（取代 validate_pieces 开关的宽松校验）：
+                // 段文件完成时必须恰好等于段长——短传（无 Content-Length
+                // 时提前断连 curl 也可报 OK）与超发（Range 被忽略回传
+                // 整个文件）都在这里拦下，损坏段不进 merge；尺寸不符按
+                // 失败走下方 best-effort 更新与重试
+                std::error_code size_ec;
+                const auto actual_size =
+                    std::filesystem::file_size(download_path, size_ec);
+                if (!size_ec && actual_size == segment_size) {
+                    segment->downloaded.store(segment_size);
+                    complete_segment(segment);
+                    break;
                 }
-
-                segment->downloaded.store(downloaded);
-                complete_segment(segment);
-                break;
+                last_error = "Segment size mismatch: seg" +
+                             std::to_string(segment->index) +
+                             " (expected " + std::to_string(segment_size) +
+                             ", got " +
+                             std::to_string(size_ec ? 0 : actual_size) + ")";
             } else if (cancelled_.load()) {
                 break;
             }
@@ -490,11 +499,19 @@ void SegmentDownloader::download_segment(
             std::ifstream file(segment_path, std::ios::binary | std::ios::ate);
             if (file.is_open()) {
                 Bytes downloaded = static_cast<Bytes>(file.tellg());
-                downloaded = std::min(downloaded, segment_size);
-                segment->downloaded.store(downloaded);
-                if (downloaded >= segment_size) {
-                    complete_segment(segment);
-                    break;
+                if (downloaded > segment_size) {
+                    // 超尺寸段不可信（本次尝试已确认数据损坏）：删除，
+                    // 下次尝试从段头重来
+                    file.close();
+                    std::error_code rm_ec;
+                    std::filesystem::remove(segment_path, rm_ec);
+                    segment->downloaded.store(0);
+                } else {
+                    segment->downloaded.store(downloaded);
+                    if (downloaded >= segment_size) {
+                        complete_segment(segment);
+                        break;
+                    }
                 }
             }
         }
@@ -544,6 +561,22 @@ bool SegmentDownloader::merge_segments() {
     // Merge segments in order
     for (const auto& segment : segments_) {
         std::string segment_path = get_segment_path(segment->index);
+
+        // 最终闸门：merge 前逐段校验尺寸，任何漂移（短传/超发/外部
+        // 篡改）都拒绝出成品——错误的 COMPLETED 比失败的下载更糟
+        std::error_code size_ec;
+        const auto actual_size =
+            std::filesystem::file_size(segment_path, size_ec);
+        if (size_ec || actual_size != segment->size()) {
+            std::remove(temp_output.c_str());
+            throw FileIOException("Segment size mismatch before merge: seg" +
+                                  std::to_string(segment->index) +
+                                  " (expected " +
+                                  std::to_string(segment->size()) + ", got " +
+                                  std::to_string(size_ec ? 0 : actual_size) +
+                                  ")");
+        }
+
         std::ifstream input_file(segment_path, std::ios::binary);
         if (!input_file.is_open()) {
             throw FileIOException("Failed to open segment file: " + segment_path);

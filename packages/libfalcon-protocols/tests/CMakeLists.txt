@@ -131,6 +131,7 @@ target_include_directories(falcon_protocols_tests PRIVATE
 add_executable(falcon_http_tests
     unit/http_handler_test.cpp
     unit/global_speed_limit_test.cpp
+    unit/range_integrity_test.cpp
 )
 
 target_link_libraries(falcon_http_tests

@@ -60,8 +60,10 @@ static bool mock_segment_download(
         return false;
     }
 
-    // Create segment file with pattern
-    std::ofstream file(output_path, std::ios::binary);
+    // Create segment file with pattern（app 追加：忠实模拟 206 服务器
+    // 语义——既有前缀保留，只补 Range 剩余部分，段文件恰好多出
+    // end - start + 1 字节）
+    std::ofstream file(output_path, std::ios::binary | std::ios::app);
     if (!file.is_open()) {
         return false;
     }
@@ -673,6 +675,153 @@ TEST(SegmentDownloaderResume, DisabledResume) {
 }
 
 //==============================================================================
+// 完整性测试（静默损坏防护）
+//==============================================================================
+
+// 旧版缺陷场景：Range 被服务器忽略时整个文件被追加进段文件，段超尺寸
+// 却被 min() clamp "祝福"为完成，损坏数据静默并入成品。现在超尺寸段
+// 必须在启动检测时被删除重下（对旧版遗留的损坏段文件自愈）
+TEST(SegmentDownloaderIntegrity, OversizedSegmentFileIsDiscardedAndHealed) {
+    DownloadOptions options;
+    options.resume_enabled = true;
+
+    auto task = std::make_shared<MockDownloadTask>(1, "http://test.example.com/file.bin", options);
+    task->set_test_file_info(1024 * 10);  // 10 KB → 4 段 × 2560 B
+
+    SegmentConfig config;
+    config.num_connections = 4;
+    config.min_segment_size = 1024;
+    config.min_file_size = 1;
+    config.max_retries = 2;
+
+    const std::string output_path = make_unique_temp_path("falcon_test_integrity_oversized.bin");
+
+    // 预置一个超尺寸段文件（3072 > 2560）模拟旧版损坏遗留，
+    // 其余段正常预置部分数据
+    const auto seed = [&output_path](std::size_t idx, std::size_t bytes) {
+        std::ofstream seg(output_path + ".falcon.tmp.seg" + std::to_string(idx),
+                          std::ios::binary);
+        std::vector<char> data(bytes, static_cast<char>(idx));
+        seg.write(data.data(), static_cast<std::streamsize>(data.size()));
+    };
+    seed(0, 3072);  // 超尺寸：不可信
+    seed(1, 512);
+    seed(2, 512);
+
+    SegmentDownloader downloader(task, "http://test.example.com/file.bin",
+                                 output_path, config);
+
+    bool success = downloader.start(mock_segment_download);
+
+    EXPECT_TRUE(success);
+    if (success) {
+        // 成品尺寸必须精确等于文件大小（超尺寸段绝不能混入 merge）
+        std::error_code ec;
+        const auto merged = std::filesystem::file_size(output_path, ec);
+        EXPECT_FALSE(ec);
+        EXPECT_EQ(merged, 10240U);
+    }
+    std::remove(output_path.c_str());
+}
+
+// 传输中损坏场景：mock 模拟忽略续传位置的"撒谎服务器"——每次都按
+// 段全长追加（有既有前缀时段文件超尺寸）。精确尺寸校验必须拦下首次
+// 尝试、删除损坏段、从段头重试后恢复，最终成品尺寸精确
+TEST(SegmentDownloaderIntegrity, CorruptAppendIsDetectedAndHealed) {
+    DownloadOptions options;
+    options.resume_enabled = true;
+
+    auto task = std::make_shared<MockDownloadTask>(1, "http://test.example.com/file.bin", options);
+    task->set_test_file_info(1024 * 10);
+
+    SegmentConfig config;
+    config.num_connections = 1;  // 单段覆盖整个文件，段全长 = end + 1
+    config.min_segment_size = 1024;
+    config.min_file_size = 1;
+    config.max_retries = 2;
+    config.retry_delay_ms = 0;
+
+    const std::string output_path = make_unique_temp_path("falcon_test_integrity_append.bin");
+
+    // 预置部分数据，迫使首次尝试走续传路径
+    {
+        std::ofstream seg(output_path + ".falcon.tmp.seg0", std::ios::binary);
+        std::vector<char> data(512, '\0');
+        seg.write(data.data(), static_cast<std::streamsize>(data.size()));
+    }
+
+    // 模拟忽略续传位置的"撒谎服务器"：无论 start 调整到哪，都按段
+    // 全长（end + 1，单段场景即文件全长）追加——首次尝试后段文件
+    // 超尺寸（512 + 10240），精确尺寸校验必须拦下
+    auto liar_download = [](const std::string&, Bytes /*start*/, Bytes end,
+                            const std::string& path,
+                            std::atomic<bool>& cancelled) -> bool {
+        if (cancelled.load()) return false;
+        const Bytes full_length = end + 1;
+        std::ofstream file(path, std::ios::binary | std::ios::app);
+        if (!file.is_open()) return false;
+        std::vector<char> data(static_cast<std::size_t>(full_length), 'x');
+        file.write(data.data(), static_cast<std::streamsize>(data.size()));
+        file.close();
+        return true;
+    };
+
+    SegmentDownloader downloader(task, "http://test.example.com/file.bin",
+                                 output_path, config);
+
+    bool success = downloader.start(liar_download);
+
+    EXPECT_TRUE(success);  // 损坏段被删除重下后应恢复
+    if (success) {
+        std::error_code ec;
+        const auto merged = std::filesystem::file_size(output_path, ec);
+        EXPECT_FALSE(ec);
+        EXPECT_EQ(merged, 10240U);
+    }
+    std::remove(output_path.c_str());
+}
+
+// 短传场景：mock 每次只写 Range 的一半，尺寸永远到不了段长——
+// 精确尺寸校验必须让下载失败（旧版 validate_pieces=false 时静默报成功）
+TEST(SegmentDownloaderIntegrity, ShortTransferIsRejected) {
+    DownloadOptions options;
+
+    auto task = std::make_shared<MockDownloadTask>(1, "http://test.example.com/file.bin", options);
+    task->set_test_file_info(1024 * 5);
+
+    SegmentConfig config;
+    config.num_connections = 1;
+    config.min_segment_size = 1024;
+    config.min_file_size = 1;
+    config.max_retries = 1;
+    config.retry_delay_ms = 0;
+
+    const std::string output_path = make_unique_temp_path("falcon_test_integrity_short.bin");
+
+    auto half_download = [](const std::string&, Bytes start, Bytes end,
+                            const std::string& path,
+                            std::atomic<bool>& cancelled) -> bool {
+        if (cancelled.load()) return false;
+        const Bytes size = (end - start + 1) / 2;
+        if (size == 0) return false;
+        std::ofstream file(path, std::ios::binary | std::ios::app);
+        if (!file.is_open()) return false;
+        std::vector<char> data(static_cast<std::size_t>(size), 'y');
+        file.write(data.data(), static_cast<std::streamsize>(data.size()));
+        file.close();
+        return true;
+    };
+
+    SegmentDownloader downloader(task, "http://test.example.com/file.bin",
+                                 output_path, config);
+
+    bool success = downloader.start(half_download);
+
+    EXPECT_FALSE(success);  // 短传必须失败，不得静默出成品
+    std::remove(output_path.c_str());
+}
+
+//==============================================================================
 // 配置测试
 //==============================================================================
 
@@ -687,14 +836,12 @@ TEST(SegmentConfig, CustomConfiguration) {
     config.retry_delay_ms = 5000;
     config.buffer_size = 64 * 1024;  // 64 KB
     config.adaptive_sizing = false;
-    config.validate_pieces = true;
     config.slow_speed_threshold = 1024;  // 1 KB/s
 
     EXPECT_EQ(config.num_connections, 16);
     EXPECT_EQ(config.min_segment_size, 512 * 1024);
     EXPECT_EQ(config.max_segment_size, 10 * 1024 * 1024);
     EXPECT_FALSE(config.adaptive_sizing);
-    EXPECT_TRUE(config.validate_pieces);
 }
 
 TEST(SegmentConfig, EdgeCaseConfiguration) {

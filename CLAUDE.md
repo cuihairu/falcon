@@ -2,6 +2,32 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-13 - V1 段下载完整性闭环（Range 撒谎服务器静默损坏防护）
+- 修复生产引擎（daemon/CLI 的 HTTP 段下载路径）三连环静默损坏缺陷：
+  ① `download_segment_curl` 对 Range 请求不校验 206——服务器宣称
+  Accept-Ranges 却忽略 Range 回 200 全量（透明代理/CGI 常见）时，
+  curl 把整个文件传回并追加进已有段文件；② 成功路径不看段文件尺寸
+  （`validate_pieces=false` 硬编码，宽松校验形同虚设），200-全量/
+  短传的段无条件按 segment_size 记账标记完成；③ 恢复检测与失败
+  更新两处 `min(file_size, segment_size)` clamp 把超尺寸段"祝福"为
+  完成 + merge 零校验——损坏数据静默并入成品，错误结果报 COMPLETED
+- 修复四层防线：`start > 0` 的段请求要求 206（否则截回本次续传起点
+  按失败收尾，损坏数据不留给 merge）；段成功路径无条件精确尺寸校验
+  （恰好等于段长，取代 validate_pieces 开关的宽松校验——该死配置
+  字段删除）；超尺寸段删除整段重下（对旧版缺陷时代遗留的损坏段
+  文件自愈）；merge 前逐段校验作最终闸门
+- `download_single` 同域加固：续传请求被以 200 应答时清空临时文件
+  降级完整重下（一次有界的浪费尝试优于损坏成品；现代 libcurl 自带
+  resume 守卫先拒时行为不变）；段重试记账修正——失败后从段文件
+  尺寸 best-effort 更新进度，超尺寸不再 clamp 成完成而是删除重来
+- 新增测试：`SegmentDownloaderIntegrity` 3 用例（超尺寸遗留段自愈/
+  撒谎 mock 损坏追加检测后恢复/短传拒绝不得静默出成品）+
+  `RangeIntegrity` 2 个回环端到端（新增 RangeLiarServer：HEAD 宣称
+  Accept-Ranges、GET 一律 200 全量——单路续传终局不变量"绝不
+  COMPLETED + 内容损坏"、分段路径必须失败干净且成品不出现）；
+  `mock_segment_download` 改 app 追加写入（忠于 206 服务器语义，
+  旧截断重写契约在精确校验下会假失败）
+
 ### 2026-09-12 - V2 引擎临时文件发布闭环（temp_extension 端到端生效 + 死配置清扫）
 - `EngineConfig::temp_extension` 与 `auto_start` 为最后两个零消费
   配置：temp_extension 自初始核心库即无任何实现；auto_start 唯一
