@@ -2,6 +2,51 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-13 - V2 适配层与进程开关（V2EngineHost + V2HttpDownloadAdapter，默认关）
+- V2 引擎以 V1 契约下的 HTTP 数据面接入生产的适配层落地（M2）：
+  V1 引擎/TaskManager/事件/持久化全不动，`HttpHandler::download()`
+  开头按进程级开关分叉——`v2_http_enabled()`（默认 false）且
+  options 无 curl 专属能力时桥接到共享 V2 引擎，逐任务可回退
+  curl；pause/cancel 先置 V1 状态再转发引擎（幂等），resume 无需
+  分支（V1 resume 即重新 download()，桥接层续跑 PAUSED 组）
+- `V2EngineHost`（进程单例，v2_engine_host.{hpp,cpp}）：engine()
+  惰性启动共享引擎 + 专用 run 线程；`configure()` 引擎启动前置配
+  置（幂等，启动后告警忽略）；`shutdown_and_join()` 排水停机——
+  pause_all → 轮询全部组安顿（新增 `RequestGroupMan::all_settled`
+  判据，PAUSED 视为已安顿）→ shutdown → join run 线程；halt 后的
+  引擎不可复用，实例销毁待重建；宿主强制 wait_when_idle=true +
+  max_concurrent_tasks 抬升至 ≥64（V1 TaskManager 权威排队，V2
+  侧不二次排队）
+- 修复引擎实例重建即停机的挂死：run() 入口复位 halt_requested_
+  （实例复用语义），「创建后立即 shutdown」的停机请求先于 run
+  线程入口到达会被吞掉 → run 线程永久轮询、join 挂死；engine()
+  现在等待线程真正进入 run()（新增 `is_running()`，running_ 顺势
+  原子化——add_download 路径本就跨线程宽松读）才返回
+- `V2HttpDownloadAdapter`（plugins/http）：`supports()` 回退表——
+  socks/HTTPS 代理（parse_http_proxy 判 Unsupported）、cookie
+  引擎（CURLOPT_COOKIEFILE/JAR）、HTTP 401 认证、Referer 头
+  （防盗链语义 V2 不发送）一律回退 V1；`run()` 保持 V1 worker
+  线程阻塞语义（可重入）：HEAD 探测照旧（on_file_info 先于
+  on_progress）→ find_group：PAUSED 组 resume_task 续跑，无组则
+  add_download_as 注入（V1 id + 已确定 output_path，两侧写同一
+  文件）→ 桥接轮询（200ms）：组状态为主判据，COMPLETED →
+  set_status(Completed)，FAILED → throw（V1 worker catch 统一
+  set_error+Failed，事件序列与 V1 逐一对齐），组侧 PAUSED → V1
+  状态对齐后挂起，V1 侧 pause/cancel 优先转发
+- 新增 v2_http_adapter_test.cpp 12 用例：`WithParamInterface<bool>`
+  参数化 V1/V2 等价对照（worker 收口路径忠实复刻 task_manager）——
+  下载完成+事件顺序（file_info 先于 progress、终态回调）/ 404
+  错误传播 / 多分段 / 慢发暂停→恢复（V2 侧含排水停机 → 引擎重建
+  → 控制文件断点续传）/ 取消，两侧成品逐字节一致；supports 回退
+  表（含 proxy_type 覆盖指向 socks、http 代理带认证放行）；宿主
+  生命周期（惰性启动/配置生效/停机销毁/重建新实例）；全量 1535
+  ctest 通过，ASan 适配层+引擎相关 131 用例零告警
+- M3 待接：daemon.json `download.http_engine` / CLI
+  `--http-engine` / desktop 环境变量 → set_v2_http_enabled +
+  configure；daemon drain 尾部 shutdown_and_join（停机窗口硬要求
+  ——V2 稀疏临时文件与 V1 前缀续传布局不兼容，跨引擎混杂恢复会
+  写花数据）
+
 ### 2026-09-13 - V2 引擎 HTTP 代理支持（absolute-form 请求行 + CONNECT 隧道）
 - V2 数据面此前无法穿透代理（aria2 生产部署的常见网络形态）；补齐
   明文 HTTP 代理全路径，socks/TLS 代理明确判 Unsupported（M2 适配层

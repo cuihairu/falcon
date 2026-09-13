@@ -12,6 +12,7 @@ project(libfalcon-protocols
 
 add_library(falcon_protocols
     src/download_engine_v2.cpp
+    src/v2_engine_host.cpp
     src/segment_downloader.cpp
     src/incremental_download.cpp
     src/request_group.cpp

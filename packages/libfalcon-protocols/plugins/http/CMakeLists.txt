@@ -12,6 +12,7 @@ project(falcon_plugin_http
 
 add_library(falcon_plugin_http OBJECT
     http_handler.cpp
+    v2_http_download_adapter.cpp
 )
 
 target_link_libraries(falcon_plugin_http

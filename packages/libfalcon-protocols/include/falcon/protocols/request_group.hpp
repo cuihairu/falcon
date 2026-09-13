@@ -503,6 +503,26 @@ public:
     }
 
     /**
+     * @brief 是否全部组已安顿（无 WAITING/ACTIVE 组）
+     *
+     * 宿主排水判据（V2EngineHost::shutdown_and_join）：pause_all 后
+     * 所有组应固化为 PAUSED（断点已保存）或终态，全部安顿后才能收
+     * 引擎。与 all_completed 不同，PAUSED 视为已安顿
+     */
+    bool all_settled() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (const auto& group : all_groups_) {
+            if (!group) continue;
+            const auto st = group->status();
+            if (st == RequestGroupStatus::WAITING ||
+                st == RequestGroupStatus::ACTIVE) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
      * @brief 设置最大并发数
      */
     void set_max_concurrent(std::size_t max_concurrent) {

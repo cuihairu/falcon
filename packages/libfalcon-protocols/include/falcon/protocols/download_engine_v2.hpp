@@ -236,6 +236,15 @@ public:
     }
 
     /**
+     * @brief 事件循环是否存活（run() 已进入且未退出）
+     *
+     * V2EngineHost 惰性启动后等待此标志：run() 入口会复位
+     * halt_requested_（实例复用语义），「创建后立即 shutdown」的
+     * 停机请求必须等该复位点过后才能到达，否则被吞
+     */
+    bool is_running() const { return running_.load(std::memory_order_acquire); }
+
+    /**
      * @brief 获取全局统计信息
      */
     struct Statistics {
@@ -365,7 +374,9 @@ private:
 
     // 状态
     std::atomic<int> halt_requested_{0};
-    bool running_ = false;
+    /// 引擎事件循环存活标志：run() 入口置位、退出复位；add_download
+    /// （调用方线程）与宿主（等线程进入 run()）跨线程读取，须原子
+    std::atomic<bool> running_{false};
 
     // 全局限速：limit 原子供其他线程热更；统计仅引擎线程访问（单线程事件循环）
     std::atomic<std::uint64_t> global_speed_limit_{0};

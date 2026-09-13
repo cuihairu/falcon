@@ -3,7 +3,10 @@
 
 #include "http_handler.hpp"
 
+#include "v2_http_download_adapter.hpp"
+
 #include <falcon/protocols/segment_downloader.hpp>
+#include <falcon/protocols/v2_engine_host.hpp>
 #include <falcon/exceptions.hpp>
 #include <algorithm>
 #include <cstdint>
@@ -772,11 +775,24 @@ FileInfo HttpHandler::get_file_info(const std::string& url,
 }
 
 void HttpHandler::download(DownloadTask::Ptr task, IEventListener* listener) {
+    // V2 数据面分叉（默认关，逐任务可回退 curl）：开关开启且 options
+    // 无 curl 专属能力时桥接到共享 V2 引擎
+    if (V2HttpDownloadAdapter::supports(task->options())) {
+        // 保 V1 事件序列：on_file_info 先于任何 on_progress
+        const FileInfo info = impl_->get_file_info(task->url(), task->options());
+        task->set_file_info(info);
+        V2HttpDownloadAdapter(task).run();
+        return;
+    }
     impl_->download(task, listener);
 }
 
 void HttpHandler::pause(DownloadTask::Ptr task) {
     impl_->pause(task);
+    // V2 组同步暂停（V1 任务无 V2 组时引擎侧幂等返回 false）
+    if (auto engine = V2EngineHost::instance().try_engine()) {
+        engine->pause_task(task->id());
+    }
 }
 
 void HttpHandler::resume(DownloadTask::Ptr task, IEventListener* listener) {
@@ -785,6 +801,10 @@ void HttpHandler::resume(DownloadTask::Ptr task, IEventListener* listener) {
 
 void HttpHandler::cancel(DownloadTask::Ptr task) {
     impl_->cancel(task);
+    // V2 组同步取消（桥接轮询亦会兜底转发，幂等）
+    if (auto engine = V2EngineHost::instance().try_engine()) {
+        engine->cancel_task(task->id());
+    }
 }
 
 std::unique_ptr<IProtocolHandler> create_http_handler() {
