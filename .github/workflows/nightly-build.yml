@@ -6,6 +6,12 @@ on:
     - cron: '0 0 * * *'
   workflow_dispatch:  # 允许手动触发
 
+# Create Nightly Release 通过 gh/softprops 删除旧资产并发布 release，
+# 默认只读 token 会在该 job 必然 403（此前 Package 层反复失败，
+# Release job 从未真正执行到，问题未暴露）
+permissions:
+  contents: write
+
 jobs:
   build-nightly:
     name: Nightly ${{ matrix.os_name }}
