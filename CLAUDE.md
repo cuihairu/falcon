@@ -17,9 +17,12 @@
   （`platforms/libqxcb.so`），qt 插件部署 gui 模块的平台插件时报
   `Cannot deploy non-existing library file`——没有它 AppImage 即使
   打包成功在用户桌面上也起不来。修复：vcpkg.json desktop feature 的
-  qtbase 增加 `"xcb"`（Qt configure 开 FEATURE_xcb；所需系统 X11
-  开发包 Ubuntu CI 步骤早已备齐，Windows/macOS 上 Qt configure 自动
-  禁用 xcb 无副作用）
+  qtbase 增加 `"xcb"`（所需系统 X11 开发包 Ubuntu CI 步骤早已备齐）。
+  **Qt configure 的 feature 是强制语义**——首次修复无平台限定导致
+  macOS/Windows 的 qtbase configure 直接失败
+  （`Feature "xcb": Forcing to "ON" breaks its condition`，不会静默
+  降级），改为按平台拆分 qtbase 依赖条目：`platform: "linux"` 带
+  xcb / `platform: "!linux"` 不带（depend-info 三平台解析验证）
 - 同日早前修复已验证生效：Linux qmake 定位（vcpkg_installed 树内
   find）、Windows 150min 步骤超时放宽、macOS macdeployqt 绝对路径
 
