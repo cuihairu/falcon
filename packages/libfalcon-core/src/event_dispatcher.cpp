@@ -23,6 +23,12 @@ public:
         , dropped_count_(0) {}
 
     ~Impl() {
+        // 先摘全部监听者再停线程：clear 与在途回调互斥（回调全程持
+        // listeners_mutex_），返回后队列残留事件的处理将打到空表——
+        // 调用方漏摘的监听者指针不再被触碰（纵深防御；正常路径仍应
+        // 在监听者对象析构前 remove_listener，本防护只覆盖「监听者
+        // 比 dispatcher 长寿」的顺序）
+        clear_listeners();
         stop(false);
     }
 

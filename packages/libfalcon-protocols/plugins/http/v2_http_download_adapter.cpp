@@ -8,6 +8,7 @@
 #include "v2_http_download_adapter.hpp"
 
 #include <falcon/protocols/commands/http_commands.hpp>
+#include <falcon/protocols/request_group.hpp>
 #include <falcon/protocols/v2_engine_host.hpp>
 
 #include <chrono>
@@ -45,6 +46,12 @@ bool V2HttpDownloadAdapter::supports(const DownloadOptions& options) {
 
 V2HttpDownloadAdapter::V2HttpDownloadAdapter(DownloadTask::Ptr task)
     : task_(std::move(task)) {}
+
+void V2HttpDownloadAdapter::sync_final_progress(const RequestGroup& group) {
+    const auto progress = group.get_progress();
+    task_->update_progress(progress.downloaded, progress.total,
+                           progress.speed);
+}
 
 void V2HttpDownloadAdapter::run() {
     auto* host = &V2EngineHost::instance();
@@ -102,10 +109,15 @@ void V2HttpDownloadAdapter::run() {
 
         switch (group->status()) {
         case RequestGroupStatus::COMPLETED:
+            // 终态先同步最终进度（200ms 粒度下最后一次轮询可能落在
+            // 终态分支——完成/暂停任务必须携带完整 total/downloaded）
+            sync_final_progress(*group);
             // 成品已由 temp_extension 原子改名发布
             task_->set_status(TaskStatus::Completed);
             return;
         case RequestGroupStatus::FAILED:
+            // 失败同样收口进度（半程进度是错误报告的上下文）
+            sync_final_progress(*group);
             // throw → V1 worker catch：set_error（on_error）+
             // set_status(Failed)（on_status_changed），与 V1 序列一致
             throw std::runtime_error(
@@ -114,6 +126,7 @@ void V2HttpDownloadAdapter::run() {
         case RequestGroupStatus::PAUSED:
             // V2 侧被暂停（如宿主停机 pause_all）：V1 状态对齐后挂起，
             // resume 时经 download() 重新进入续跑
+            sync_final_progress(*group);
             task_->set_status(TaskStatus::Paused);
             return;
         default:

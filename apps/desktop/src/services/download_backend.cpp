@@ -10,11 +10,14 @@
 #include <rpc/websocket_rpc_client.hpp>
 
 #include <falcon/download_engine.hpp>
+#include <falcon/protocols/v2_engine_host.hpp>
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <mutex>
+#include <string>
 #include <utility>
 
 namespace falcon::desktop {
@@ -47,8 +50,22 @@ falcon::daemon::rpc::TaskSnapshot snapshot_from_download_task(
 
 class InProcessBackend final : public IDownloadBackend {
 public:
-    InProcessBackend() : engine_(std::make_unique<falcon::DownloadEngine>()) {}
-    ~InProcessBackend() override = default;
+    InProcessBackend() : engine_(std::make_unique<falcon::DownloadEngine>()) {
+        // V2 HTTP 数据面兜底开关：FALCON_HTTP_ENGINE=v2 时启用（默认
+        // v1，设置页暂无入口）。惰性启动，首个走 V2 的任务才创建引擎
+        if (const char* env = std::getenv("FALCON_HTTP_ENGINE")) {
+            if (std::string(env) == "v2") {
+                auto& host = falcon::V2EngineHost::instance();
+                host.set_v2_http_enabled(true);
+                host.configure(falcon::EngineConfigV2{});
+            }
+        }
+    }
+
+    ~InProcessBackend() override {
+        // 收 V2 引擎宿主（未启用时为无操作），先于 V1 引擎析构
+        falcon::V2EngineHost::instance().shutdown_and_join();
+    }
 
     AddTaskResult add_task(const std::string& url,
                            const falcon::DownloadOptions& options,

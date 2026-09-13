@@ -237,6 +237,10 @@ CliArgs parse_args(int argc, char* argv[]) {
             if (i + 1 < argc) {
                 args.http_passwd = argv[++i];
             }
+        } else if (arg == "--http-engine") {
+            if (i + 1 < argc) {
+                args.http_engine = argv[++i];
+            }
         } else if (arg == "--proxy-user") {
             if (i + 1 < argc) {
                 args.proxy_user = argv[++i];

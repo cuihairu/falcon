@@ -198,7 +198,8 @@ ConfigLoadResult apply_config_file(const std::string& path,
             return result;
         }
         warn_unknown_keys(download, {"max_concurrent_tasks",
-                                     "max_overall_speed_limit"},
+                                     "max_overall_speed_limit",
+                                     "http_engine"},
                           "download", result.warnings);
         // optional 语义：键出现才覆盖，未出现保持引擎默认
         if (download.contains("max_concurrent_tasks")) {
@@ -214,6 +215,21 @@ ConfigLoadResult apply_config_file(const std::string& path,
                 return result;
             }
             download_config.max_overall_speed_limit = value;
+        }
+        if (download.contains("http_engine")) {
+            std::string value;
+            if (!read_key(download, "http_engine", value, result.error)) {
+                return result;
+            }
+            // 非法值告警忽略（保持调用方现值，默认 v1）：拼错引擎名不
+            // 静默失效，也不至于让守护进程起不来
+            if (value != "v1" && value != "v2") {
+                result.warnings.push_back(
+                    "invalid value for key 'download.http_engine': " + value +
+                    " (expected \"v1\" or \"v2\"), ignoring");
+            } else {
+                download_config.http_engine = value;
+            }
         }
     }
 

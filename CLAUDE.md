@@ -2,6 +2,49 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-13 - V2 引擎接入生产接线（M3：daemon/CLI 配置面 + 停机与恢复缺陷三连修）
+- 三生产二进制接线完成，默认 `v1` 全关（灰度开关逐任务可回退 curl）：
+  - daemon：daemon.json `download.http_engine: "v1"|"v2"`（非法值告警
+    忽略保持现值）+ `--http-engine` flag（非法值报错退出）；启动接线
+    在任务恢复**之前**（恢复的 Downloading 任务 start_task 即进下载
+    路径）；drain_engine 尾部 `V2EngineHost::shutdown_and_join()`（V1
+    pause_all → V2 组 PAUSED 固化断点 → 桥接返回 → 收引擎）；SIGHUP
+    重载遇开关变化告警 "restart required"（V2 稀疏临时文件与 V1 前缀
+    续传布局不兼容，翻转开关必须在停机窗口）
+  - CLI：`--http-engine` flag + 校验；`shutdown_and_join()` 在摘要
+    生成前（任务全部终态/暂停后桥接已返回）
+  - desktop：InProcessBackend 构造读 `FALCON_HTTP_ENGINE` 环境变量
+    兜底、析构收引擎（本机无 Qt6，随 CI Qt6 job 编译验证）
+- **修复停机 SIGSEGV**（V2 暂停任务后 SIGTERM，"Daemon stopped" 打印
+  后 main 局部对象析构阶段崩；strace -k 栈回溯定位）：EventDispatcher
+  以裸指针持有监听者且 worker 线程存活到引擎析构，监听者对象先死而
+  引擎后死时，引擎停机派发的尾部事件回调悬垂指针（虚调用读已释放
+  vptr）。三处修复：daemon/CLI 注册点加 RAII ListenerDetacher（先于
+  监听者析构摘除，覆盖全部退出路径）；EventDispatcher 析构先
+  clear_listeners 再 stop（clear 与在途回调互斥——纵深防御，只覆盖
+  「监听者比 dispatcher 长寿」的顺序）。V1 时代窗口从未命中，V2 停机
+  事件密度（pause→PAUSED→桥接收尾）放大了它
+- **修复重启恢复任务 id 错位**（潜伏既有缺陷，V2 E2E 首次踩中）：
+  daemon 启动恢复走 `add_task` 重新分配 id，而 RPC 按持久化记录的
+  gid 寻址——重启后 pause/unpause/remove 全部 "Task not found"
+  （tellStatus 有 storage 回落而显示正常，掩盖了引擎内无任务）。
+  DownloadEngine 新增 `add_task_as_id(id, url, options)`（id 冲突返回
+  nullptr；CAS 语义推高计数器绝不回退），恢复循环改用原 id 进引擎
+- **修复恢复任务 Paused 状态未还原**：add_task 重建的任务是初始
+  Pending，`resume_task` 按 Paused 判定 → unpause 恒 "Resume failed"；
+  恢复循环对 Paused 记录显式 `set_status(Paused)`
+- **修复适配层终态进度同步缺口**（M2 既有缺陷）：桥接 200ms 轮询粒度
+  下最后一次进度可能落在终态分支，快任务完成时 V1 task total/
+  downloaded 恒 0（tellStatus 报 0/0+complete）——`sync_final_progress`
+  在 COMPLETED/FAILED/PAUSED 三终态分支前同步组内进度
+- 测试：config 3 新用例（http_engine 解析/非法值告警忽略/默认值）；
+  main_integration 新增真实二进制 E2E 两用例（自含 RangeFileServer：
+  HEAD 探测 + Range 双边界忠实解析 206——Range 撒谎会被 M1 防护拒绝）：
+  4MB 多段下载完成逐字节一致 + 无临时/控制文件残留；2MB 慢发暂停 →
+  SIGTERM 排水 → 同 DB 重启 → unpause → 断点续传完成逐字节一致 +
+  两次停机 exit 0。全量 ctest 1028 通过（6 预存在跳过），ASan V2/HTTP
+  相关用例零告警，CLI `--http-engine v2` 冒烟成品逐字节一致
+
 ### 2026-09-13 - V2 适配层与进程开关（V2EngineHost + V2HttpDownloadAdapter，默认关）
 - V2 引擎以 V1 契约下的 HTTP 数据面接入生产的适配层落地（M2）：
   V1 引擎/TaskManager/事件/持久化全不动，`HttpHandler::download()`

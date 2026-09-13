@@ -26,6 +26,7 @@
 #include <fcntl.h>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <optional>
 #include <poll.h>
 #include <sstream>
@@ -849,6 +850,359 @@ TEST_F(MainIntegrationTest, DefaultConfigPathAutoLoaded) {
 
     ASSERT_FALSE(r.timed_out) << r.out << r.err;
     EXPECT_EQ(r.exit_code, 0);
+}
+
+// ===========================================================================
+// V2 HTTP engine (--http-engine v2) end-to-end tests
+// ===========================================================================
+
+std::string make_payload(std::size_t size) {
+    std::string data(size, '\0');
+    for (std::size_t i = 0; i < size; ++i) {
+        data[i] = static_cast<char>((i * 31 + 17) % 251);
+    }
+    return data;
+}
+
+std::string read_file_bytes(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(in),
+                       std::istreambuf_iterator<char>());
+}
+
+/// 从 JSON 应答里提取字符串字段（result/status/completedLength 足够）
+std::string json_string_field(const std::string& body, const std::string& field) {
+    const std::string key = "\"" + field + "\":";
+    const auto pos = body.find(key);
+    if (pos == std::string::npos) return "";
+    const auto first = body.find('"', pos + key.size());
+    if (first == std::string::npos) return "";
+    const auto last = body.find('"', first + 1);
+    if (last == std::string::npos) return "";
+    return body.substr(first + 1, last - first - 1);
+}
+
+// 回环 HTTP 文件服务器：内存负载，HEAD → 200 + Accept-Ranges，
+// GET 带 Range → 206 区间、不带 → 200 全量。慢速分块投递（构造参数）
+// 为暂停/轮询留出传输窗口；每连接独立线程，析构统一 join。
+class RangeFileServer {
+public:
+    RangeFileServer(std::string path, std::string payload, int chunk_delay_ms)
+        : path_(std::move(path)), payload_(std::move(payload)),
+          chunk_delay_ms_(chunk_delay_ms) {}
+
+    ~RangeFileServer() { stop(); }
+
+    RangeFileServer(const RangeFileServer&) = delete;
+    RangeFileServer& operator=(const RangeFileServer&) = delete;
+
+    bool start() {
+        const int s = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (s < 0) return false;
+        int one = 1;
+        ::setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        addr.sin_port = 0;
+        if (::bind(s, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 ||
+            ::listen(s, 16) != 0) {
+            ::close(s);
+            return false;
+        }
+        sockaddr_in bound{};
+        socklen_t len = sizeof(bound);
+        if (::getsockname(s, reinterpret_cast<sockaddr*>(&bound), &len) != 0) {
+            ::close(s);
+            return false;
+        }
+        port_ = ntohs(bound.sin_port);
+        url_ = "http://127.0.0.1:" + std::to_string(port_) + path_;
+        listen_fd_ = s;
+        accept_thread_ = std::thread([this] { accept_loop(); });
+        return true;
+    }
+
+    const std::string& url() const { return url_; }
+
+    void stop() {
+        if (listen_fd_ >= 0) {
+            ::shutdown(listen_fd_, SHUT_RDWR);
+            ::close(listen_fd_);
+            listen_fd_ = -1;
+        }
+        if (accept_thread_.joinable()) accept_thread_.join();
+        // join accept 线程后再收连接线程：此后不再有新的 push
+        for (auto& t : conn_threads_) {
+            if (t.joinable()) t.join();
+        }
+        conn_threads_.clear();
+    }
+
+private:
+    void accept_loop() {
+        while (listen_fd_ >= 0) {
+            pollfd pfd{};
+            pfd.fd = listen_fd_;
+            pfd.events = POLLIN;
+            if (::poll(&pfd, 1, 200) <= 0) continue;
+            const int c = ::accept(listen_fd_, nullptr, nullptr);
+            if (c < 0) continue;
+            conn_threads_.emplace_back([this, c] { handle_connection(c); });
+        }
+    }
+
+    void handle_connection(int fd) {
+        std::string req;
+        char buf[2048];
+        while (req.find("\r\n\r\n") == std::string::npos && req.size() < 32 * 1024) {
+            const ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
+            if (n <= 0) break;
+            req.append(buf, buf + n);
+        }
+
+        const bool is_head = req.rfind("HEAD", 0) == 0;
+        // Range: bytes=A-B / bytes=A-（无 B = 到文件尾）。
+        // 双边界都必须忠实：206 长度与请求区间不符会被客户端的内容
+        // 变更防护拒绝（Range 撒谎检测），任务按失败收口
+        bool has_range = false;
+        std::size_t range_begin = 0;
+        std::size_t range_end = std::string::npos;
+        const std::string range_key = "Range: bytes=";
+        const auto range_pos = req.find(range_key);
+        if (range_pos != std::string::npos) {
+            has_range = true;
+            std::size_t i = range_pos + range_key.size();
+            while (i < req.size() && req[i] >= '0' && req[i] <= '9') {
+                range_begin = range_begin * 10 + static_cast<std::size_t>(req[i] - '0');
+                ++i;
+            }
+            if (i < req.size() && req[i] == '-') {
+                ++i;
+                if (req[i] >= '0' && req[i] <= '9') {
+                    range_end = 0;
+                    while (i < req.size() && req[i] >= '0' && req[i] <= '9') {
+                        range_end = range_end * 10 +
+                                    static_cast<std::size_t>(req[i] - '0');
+                        ++i;
+                    }
+                }
+            }
+        }
+
+        const std::string common =
+            "Accept-Ranges: bytes\r\nETag: \"falcon-v2-e2e\"\r\nConnection: close\r\n";
+        if (is_head) {
+            const std::string head =
+                "HTTP/1.1 200 OK\r\nContent-Length: " +
+                std::to_string(payload_.size()) + "\r\n" + common + "\r\n";
+            send_all(fd, head.data(), head.size());
+            ::close(fd);
+            return;
+        }
+
+        if (has_range && range_begin >= payload_.size()) {
+            const std::string resp =
+                "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Length: 0\r\n" +
+                common + "\r\n";
+            send_all(fd, resp.data(), resp.size());
+            ::close(fd);
+            return;
+        }
+
+        std::string status_head;
+        const char* data = payload_.data();
+        std::size_t size = payload_.size();
+        if (has_range) {
+            const std::size_t end =
+                range_end == std::string::npos
+                    ? payload_.size() - 1
+                    : std::min(range_end, payload_.size() - 1);
+            status_head =
+                "HTTP/1.1 206 Partial Content\r\nContent-Length: " +
+                std::to_string(end - range_begin + 1) +
+                "\r\nContent-Range: bytes " + std::to_string(range_begin) + "-" +
+                std::to_string(end) + "/" + std::to_string(payload_.size()) +
+                "\r\n" + common + "\r\n";
+            data += range_begin;
+            size = end - range_begin + 1;
+        } else {
+            status_head =
+                "HTTP/1.1 200 OK\r\nContent-Length: " +
+                std::to_string(payload_.size()) + "\r\n" + common + "\r\n";
+        }
+
+        if (!send_all(fd, status_head.data(), status_head.size())) {
+            ::close(fd);
+            return;
+        }
+        // 分块投递：慢速模式下块间留出暂停/轮询窗口
+        const std::size_t chunk = 64 * 1024;
+        std::size_t off = 0;
+        while (off < size) {
+            const std::size_t n = std::min(chunk, size - off);
+            if (!send_all(fd, data + off, n)) break;
+            off += n;
+            if (chunk_delay_ms_ > 0) {
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(chunk_delay_ms_));
+            }
+        }
+        ::close(fd);
+    }
+
+    static bool send_all(int fd, const char* data, std::size_t size) {
+        std::size_t off = 0;
+        while (off < size) {
+#ifdef __APPLE__
+            const int flags = 0;
+#else
+            const int flags = MSG_NOSIGNAL;
+#endif
+            const ssize_t n = ::send(fd, data + off, size - off, flags);
+            if (n <= 0) return false;
+            off += static_cast<std::size_t>(n);
+        }
+        return true;
+    }
+
+    std::string path_;
+    std::string payload_;
+    int chunk_delay_ms_;
+    int listen_fd_ = -1;
+    uint16_t port_ = 0;
+    std::string url_;
+    std::thread accept_thread_;
+    std::vector<std::thread> conn_threads_;
+};
+
+/// 启动 v2 模式 daemon（--no-conf + 独立 task_db），等待 RPC 端口就绪
+static bool start_v2_daemon(Proc& p, uint16_t rpc_port, const std::string& db_path) {
+    if (!proc_start(p, {"--no-conf", "--enable-rpc",
+                        "--rpc-listen-port", std::to_string(rpc_port),
+                        "--http-engine", "v2",
+                        "--task-db", db_path},
+                    "")) {
+        return false;
+    }
+    return wait_until([&] {
+        poll_drain(p, 20);
+        return tcp_connect(rpc_port);
+    }, 8000);
+}
+
+TEST_F(MainIntegrationTest, HttpEngineV2DownloadCompletesEndToEnd) {
+    // 4MB：越过单段门禁，覆盖 V2 多段布局的成品发布
+    const std::string payload = make_payload(4 * 1024 * 1024);
+    RangeFileServer server("/v2e2e.bin", payload, 0);
+    ASSERT_TRUE(server.start());
+
+    const uint16_t port = pick_free_port();
+    ASSERT_NE(port, 0);
+    TempDirGuard tmp(make_temp_dir());
+    const std::string db = tmp.path + "/tasks.db";
+
+    Proc p;
+    ASSERT_TRUE(start_v2_daemon(p, port, db));
+
+    const std::string params =
+        "[[\"" + server.url() + "\"],{\"dir\":\"" + tmp.path + "\"}]";
+    const auto add = http_post(port, make_rpc_body("aria2.addUri", params));
+    ASSERT_TRUE(add.has_value()) << "no addUri response";
+    const std::string gid = json_string_field(http_body(*add), "result");
+    ASSERT_FALSE(gid.empty()) << *add;
+
+    const bool complete = wait_until([&] {
+        const auto st =
+            http_post(port, make_rpc_body("aria2.tellStatus", "[\"" + gid + "\"]"));
+        return st && contains(http_body(*st), "\"status\":\"complete\"");
+    }, 20000);
+    ASSERT_TRUE(complete) << "task never completed";
+
+    proc_signal(p, SIGTERM);
+    EXPECT_TRUE(proc_finish(p, 10000));
+    EXPECT_EQ(exit_code_of(p), 0) << p.err;
+
+    // 成品逐字节一致；临时文件与控制文件已随发布消失
+    const std::string final_path = tmp.path + "/v2e2e.bin";
+    EXPECT_EQ(read_file_bytes(final_path), payload);
+    EXPECT_FALSE(file_exists(final_path + ".falcon.tmp"));
+    EXPECT_FALSE(file_exists(final_path + ".falcon.ctrl"));
+}
+
+TEST_F(MainIntegrationTest, HttpEngineV2PauseRestartResumeCompletes) {
+    // 2MB 慢发（64KB 块 × 25ms ≈ 0.8s 全量）：留出暂停窗口。
+    // 暂停 → SIGTERM 排水（V2 断点固化）→ 重启恢复 Paused 任务 →
+    // unpause 续传 → 完成，成品逐字节一致。
+    const std::string payload = make_payload(2 * 1024 * 1024);
+    RangeFileServer server("/v2resume.bin", payload, 25);
+    ASSERT_TRUE(server.start());
+
+    const uint16_t port1 = pick_free_port();
+    const uint16_t port2 = pick_free_port();
+    ASSERT_NE(port1, 0);
+    ASSERT_NE(port2, 0);
+    TempDirGuard tmp(make_temp_dir());
+    const std::string db = tmp.path + "/tasks.db";
+
+    Proc p1;
+    ASSERT_TRUE(start_v2_daemon(p1, port1, db));
+
+    const std::string params =
+        "[[\"" + server.url() + "\"],{\"dir\":\"" + tmp.path + "\"}]";
+    const auto add = http_post(port1, make_rpc_body("aria2.addUri", params));
+    ASSERT_TRUE(add.has_value()) << "no addUri response";
+    const std::string gid = json_string_field(http_body(*add), "result");
+    ASSERT_FALSE(gid.empty()) << *add;
+
+    // 等传输出进度后立即暂停
+    const bool started = wait_until([&] {
+        const auto st =
+            http_post(port1, make_rpc_body("aria2.tellStatus", "[\"" + gid + "\"]"));
+        if (!st) return false;
+        const std::string body = http_body(*st);
+        return contains(body, "\"status\":\"active\"") &&
+               json_string_field(body, "completedLength") != "0" &&
+               !json_string_field(body, "completedLength").empty();
+    }, 10000);
+    ASSERT_TRUE(started) << "task never became active with progress";
+
+    const auto pause = http_post(port1, make_rpc_body("aria2.pause", "[\"" + gid + "\"]"));
+    ASSERT_TRUE(pause.has_value()) << "pause request failed";
+    const bool paused = wait_until([&] {
+        const auto st =
+            http_post(port1, make_rpc_body("aria2.tellStatus", "[\"" + gid + "\"]"));
+        return st && contains(http_body(*st), "\"status\":\"paused\"");
+    }, 5000);
+    ASSERT_TRUE(paused) << "task never paused";
+
+    // 排水停机（断点固化 + 状态落库），再以 v2 模式重启
+    proc_signal(p1, SIGTERM);
+    EXPECT_TRUE(proc_finish(p1, 10000));
+    EXPECT_EQ(exit_code_of(p1), 0) << p1.err;
+
+    Proc p2;
+    ASSERT_TRUE(start_v2_daemon(p2, port2, db));
+
+    const auto un =
+        http_post(port2, make_rpc_body("aria2.unpause", "[\"" + gid + "\"]"));
+    ASSERT_TRUE(un.has_value()) << "unpause request failed: " << *un;
+
+    const bool complete = wait_until([&] {
+        const auto st =
+            http_post(port2, make_rpc_body("aria2.tellStatus", "[\"" + gid + "\"]"));
+        return st && contains(http_body(*st), "\"status\":\"complete\"");
+    }, 30000);
+    ASSERT_TRUE(complete) << "resumed task never completed";
+
+    proc_signal(p2, SIGTERM);
+    EXPECT_TRUE(proc_finish(p2, 10000));
+    EXPECT_EQ(exit_code_of(p2), 0) << p2.err;
+
+    const std::string final_path = tmp.path + "/v2resume.bin";
+    EXPECT_EQ(read_file_bytes(final_path), payload);
+    EXPECT_FALSE(file_exists(final_path + ".falcon.tmp"));
+    EXPECT_FALSE(file_exists(final_path + ".falcon.ctrl"));
 }
 
 } // namespace

@@ -39,6 +39,10 @@ struct ConfigLoadResult {
 struct DownloadConfig {
     std::optional<std::size_t> max_concurrent_tasks;        ///< 全局并发任务数
     std::optional<std::uint64_t> max_overall_speed_limit;   ///< 全局总限速（字节/秒，0=不限）
+    /// HTTP 数据面引擎："v1"（libcurl，默认）|"v2"（实验性 V2 引擎）。
+    /// 变更需在停机窗口重启生效——V2 多段稀疏临时文件与 V1 前缀续传
+    /// 布局不兼容，运行中的进程不允许切换引擎续传既有任务
+    std::string http_engine = "v1";
 };
 
 /**
@@ -52,7 +56,7 @@ struct DownloadConfig {
  * - rpc: enabled / host / port / secret / allow_origin_all
  * - daemon: run_as_daemon / pid_file / working_dir / log_file
  * - storage: task_db_path
- * - download: max_concurrent_tasks / max_overall_speed_limit
+ * - download: max_concurrent_tasks / max_overall_speed_limit / http_engine
  *
  * @param path 配置文件路径
  * @param rpc_config RPC 服务器配置（就地更新）

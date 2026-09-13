@@ -8,6 +8,7 @@
 #include <falcon/download_engine.hpp>
 #include <falcon/download_options.hpp>
 #include <falcon/event_listener.hpp>
+#include <falcon/protocols/v2_engine_host.hpp>
 #include "arg_parser.hpp"
 #include "config_loader.hpp"
 #include "terminal.hpp"
@@ -312,6 +313,7 @@ void show_help() {
     std::cout << "      --save-cookies <文件>  aria2: 保存 Cookies 到文件\n";
     std::cout << "      --http-user <用户>     aria2: HTTP 认证用户名\n";
     std::cout << "      --http-passwd <密码>    aria2: HTTP 认证密码\n";
+    std::cout << "      --http-engine <v1|v2>  HTTP 下载引擎（默认 v1；v2 实验性）\n";
     std::cout << "      --use-head             aria2: 使用 HEAD 方法获取文件信息\n";
     std::cout << "      --conditional-download aria2: 条件下载（仅当远程文件更新时）\n";
     std::cout << "      --auto-file-renaming   aria2: 自动重命名文件\n\n";
@@ -656,6 +658,19 @@ int main(int argc, char* argv[]) {
     }
 
     try {
+        // HTTP 数据面引擎开关（--http-engine，默认 v1）
+        if (!args.http_engine.empty() && args.http_engine != "v1" && args.http_engine != "v2") {
+            std::cerr << term::red("Error: ") << "invalid value for --http-engine: "
+                      << args.http_engine << " (expected \"v1\" or \"v2\")\n";
+            return 1;
+        }
+        auto& v2_host = falcon::V2EngineHost::instance();
+        const bool v2_http_enabled = args.http_engine == "v2";
+        v2_host.set_v2_http_enabled(v2_http_enabled);
+        if (v2_http_enabled) {
+            v2_host.configure(falcon::EngineConfigV2{});
+        }
+
         // 创建下载引擎
         falcon::EngineConfig engine_config;
         engine_config.max_concurrent_tasks = static_cast<std::size_t>(args.max_concurrent_downloads);
@@ -672,6 +687,15 @@ int main(int argc, char* argv[]) {
         if (!args.quiet) {
             engine.add_listener(&listener);
         }
+
+        // 事件分发器以裸指针持有监听者，摘除是注册方责任：本作用域退出
+        // （含提前 return/异常）时先于 listener 析构摘除，否则引擎停机
+        // 派发的尾部事件会回调悬垂对象（daemon 停机 SIGSEGV 的同型窗口）
+        struct ListenerDetacher {
+            falcon::DownloadEngine& engine;
+            falcon::IEventListener* listener;
+            ~ListenerDetacher() { engine.remove_listener(listener); }
+        } listener_detacher{engine, &listener};
 
         // 添加下载任务
         auto tasks = engine.add_tasks(urls, options);
@@ -728,6 +752,10 @@ int main(int argc, char* argv[]) {
         } else {
             engine.wait_all();
         }
+
+        // 收 V2 引擎宿主（未启用时为无操作）：任务全部终态/暂停后桥接
+        // 已返回，摘要与退出码基于最终状态生成
+        falcon::V2EngineHost::instance().shutdown_and_join();
 
         if (g_interrupted || !success) {
             std::cerr << "\n" << term::yellow("Download cancelled") << "\n";

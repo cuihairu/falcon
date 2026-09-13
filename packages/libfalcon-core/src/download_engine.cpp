@@ -100,6 +100,39 @@ public:
 
         // 创建任务
         TaskId id = next_task_id_++;
+        return add_task_object(id, url, options, handler);
+    }
+
+    DownloadTask::Ptr add_task_as_id(TaskId id,
+                                     const std::string& url,
+                                     const DownloadOptions& options) {
+        if (url.empty()) {
+            throw InvalidURLException("Empty URL");
+        }
+
+        auto* handler = protocol_registry_.get_handler_for_url(url);
+        if (!handler) {
+            throw UnsupportedProtocolException("No handler for URL: " + url);
+        }
+
+        if (task_manager_.get_task(id) != nullptr) {
+            return nullptr;  // id 已被占用（重复恢复或与新任务撞车）
+        }
+        // 计数器推到 id 之上（CAS 语义与 set_next_task_id 相同——绝不
+        // 回退）：后续自动分配不会撞上恢复进来的 id
+        TaskId current = next_task_id_.load();
+        while (current <= id &&
+               !next_task_id_.compare_exchange_weak(current, id + 1)) {
+        }
+        return add_task_object(id, url, options, handler);
+    }
+
+private:
+    // add_task/add_task_as_id 共用主体：handler 已解析、id 已确定
+    DownloadTask::Ptr add_task_object(TaskId id,
+                                      const std::string& url,
+                                      const DownloadOptions& options,
+                                      IProtocolHandler* handler) {
         auto task = std::make_shared<DownloadTask>(id, url, options);
 
         // 设置协议处理器
@@ -156,6 +189,7 @@ public:
         return task;
     }
 
+public:
     std::vector<DownloadTask::Ptr> add_tasks(
         const std::vector<std::string>& urls,
         const DownloadOptions& options) {
@@ -384,6 +418,11 @@ DownloadEngine::~DownloadEngine() = default;
 DownloadTask::Ptr DownloadEngine::add_task(const std::string& url,
                                             const DownloadOptions& options) {
     return impl_->add_task(url, options);
+}
+
+DownloadTask::Ptr DownloadEngine::add_task_as_id(
+    TaskId id, const std::string& url, const DownloadOptions& options) {
+    return impl_->add_task_as_id(id, url, options);
 }
 
 std::vector<DownloadTask::Ptr> DownloadEngine::add_tasks(

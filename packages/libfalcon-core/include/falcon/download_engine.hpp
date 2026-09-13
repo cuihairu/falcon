@@ -45,6 +45,16 @@ public:
     [[nodiscard]] DownloadTask::Ptr add_task(const std::string& url,
                                               const DownloadOptions& options = {});
 
+    /// Add a task under a specific id (restart recovery: RPC addresses
+    /// tasks by the id persisted from a previous run, so a restored task
+    /// must re-enter the engine under that same id). The id counter is
+    /// advanced past id so later automatic allocation never collides.
+    /// @param id Requested task id; must not already be in use
+    /// @return Task pointer, or nullptr if the id is already taken
+    [[nodiscard]] DownloadTask::Ptr add_task_as_id(
+        TaskId id, const std::string& url,
+        const DownloadOptions& options = {});
+
     /// Add multiple download tasks
     /// @param urls List of URLs
     /// @param options Common download options

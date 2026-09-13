@@ -44,6 +44,8 @@ struct CliArgs {
     std::string save_cookies;
     std::string http_user;
     std::string http_passwd;
+    /// HTTP 数据面引擎："" 未指定（= v1）|"v1"|"v2"（实验性 V2 引擎）
+    std::string http_engine;
     bool use_head = false;
     bool conditional_download = false;
     bool auto_renaming = false;

@@ -98,7 +98,8 @@ TEST(ConfigTest, ApplyFullConfig) {
         },
         "download": {
             "max_concurrent_tasks": 5,
-            "max_overall_speed_limit": 1048576
+            "max_overall_speed_limit": 1048576,
+            "http_engine": "v2"
         }
     })"));
 
@@ -126,6 +127,7 @@ TEST(ConfigTest, ApplyFullConfig) {
     EXPECT_EQ(*c.download.max_concurrent_tasks, 5u);
     ASSERT_TRUE(c.download.max_overall_speed_limit.has_value());
     EXPECT_EQ(*c.download.max_overall_speed_limit, 1048576u);
+    EXPECT_EQ(c.download.http_engine, "v2");
 }
 
 TEST(ConfigTest, DownloadSectionOptionalSemantics) {
@@ -153,6 +155,35 @@ TEST(ConfigTest, DownloadSectionAbsentKeepsNullopt) {
     ASSERT_TRUE(result.ok) << result.error;
     EXPECT_FALSE(c.download.max_concurrent_tasks.has_value());
     EXPECT_FALSE(c.download.max_overall_speed_limit.has_value());
+    // 未出现的键保持默认：HTTP 数据面引擎默认 v1
+    EXPECT_EQ(c.download.http_engine, "v1");
+}
+
+TEST(ConfigTest, HttpEngineV1Explicit) {
+    const TempFile file(write_config(
+        R"({ "download": { "http_engine": "v1" } })"));
+
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    ASSERT_TRUE(result.ok) << result.error;
+    EXPECT_TRUE(result.warnings.empty());
+    EXPECT_EQ(c.download.http_engine, "v1");
+}
+
+TEST(ConfigTest, HttpEngineInvalidValueWarnsAndIgnores) {
+    const TempFile file(write_config(
+        R"({ "download": { "http_engine": "curl" } })"));
+
+    AllConfigs c;
+    // 预置调用方现值：非法值告警忽略，保持现值不覆盖
+    c.download.http_engine = "v2";
+
+    const auto result = load(file.path, c);
+    ASSERT_TRUE(result.ok) << result.error;
+    ASSERT_EQ(result.warnings.size(), 1u);
+    EXPECT_NE(result.warnings[0].find("download.http_engine"), std::string::npos)
+        << result.warnings[0];
+    EXPECT_EQ(c.download.http_engine, "v2");
 }
 
 TEST(ConfigTest, DownloadSectionTypeMismatchFails) {

@@ -2,6 +2,7 @@
 
 #include <falcon/download_engine.hpp>
 #include <falcon/logger.hpp>
+#include <falcon/protocols/v2_engine_host.hpp>
 
 #include "rpc/json_rpc_server.hpp"
 #include "daemon/daemon.hpp"
@@ -49,7 +50,9 @@ void show_help() {
         << "  --pid-file <path>           PID file path\n"
         << "  --working-dir <dir>         Working directory\n"
         << "  --log-file <path>           Log file path (redirects stdout/stderr)\n"
-        << "  --task-db <path>            Task database path (default: ~/.config/falcon/tasks.db)\n\n"
+        << "  --task-db <path>            Task database path (default: ~/.config/falcon/tasks.db)\n"
+        << "  --http-engine <v1|v2>       HTTP download engine (default: v1;\n"
+        << "                              v2 = experimental, restart to change)\n\n"
 #ifdef _WIN32
         << "Windows Service Options:\n"
         << "  --install-service           Install as Windows service\n"
@@ -178,6 +181,16 @@ int main(int argc, char* argv[]) {
             task_db_path = argv[++i];
             continue;
         }
+        if (arg == "--http-engine" && i + 1 < argc) {
+            const std::string value = argv[++i];
+            if (value != "v1" && value != "v2") {
+                std::cerr << "Invalid value for --http-engine: " << value
+                          << " (expected \"v1\" or \"v2\")\n";
+                return 1;
+            }
+            download_config.http_engine = value;
+            continue;
+        }
 
 #ifdef _WIN32
         // Windows Service options
@@ -260,6 +273,18 @@ int main(int argc, char* argv[]) {
             engine.set_global_speed_limit(*download_config.max_overall_speed_limit);
         }
 
+        // HTTP 数据面引擎开关（默认 v1，--http-engine / daemon.json
+        // download.http_engine 选择）。必须在任务恢复之前设置：恢复的
+        // Downloading 任务 start_task 即进入下载路径。开关翻转只在启动
+        // 时生效——V2 多段稀疏临时文件与 V1 前缀续传布局不兼容，运行中
+        // 切换会让既有任务以错误的续传布局恢复（SIGHUP 仅告警需重启）
+        auto& v2_host = falcon::V2EngineHost::instance();
+        const bool v2_http_enabled = download_config.http_engine == "v2";
+        v2_host.set_v2_http_enabled(v2_http_enabled);
+        if (v2_http_enabled) {
+            v2_host.configure(falcon::EngineConfigV2{});
+        }
+
         // Initialize task storage if SQLite3 is available
 #ifdef FALCON_HAS_SQLITE3
         std::unique_ptr<falcon::daemon::TaskStorage> task_storage;
@@ -301,8 +326,10 @@ int main(int argc, char* argv[]) {
                     continue;
                 }
 
-                // Re-create the task in the engine
-                auto task = engine.add_task(record.url, record.options);
+                // Re-create the task in the engine under its persisted id:
+                // RPC 按该 id 寻址（gid ↔ TaskId），若 add_task 重新分配，
+                // 重启后 pause/unpause/remove 等操作全部落到错误的 id 上
+                auto task = engine.add_task_as_id(record.id, record.url, record.options);
                 if (task) {
                     // Restore the output path recorded before shutdown
                     if (!record.output_path.empty()) {
@@ -312,6 +339,11 @@ int main(int argc, char* argv[]) {
                     if (record.status == falcon::TaskStatus::Downloading ||
                         record.status == falcon::TaskStatus::Preparing) {
                         engine.start_task(task->id());
+                    } else if (record.status == falcon::TaskStatus::Paused) {
+                        // add_task_as_id 重建的任务是初始 Pending；暂停
+                        // 任务必须还原为 Paused，resume_task 才会接受
+                        // （aria2.unpause / resume_all 均按 Paused 判定）
+                        task->set_status(falcon::TaskStatus::Paused);
                     }
                     FALCON_LOG_INFO_STREAM("Restored task: " << record.url);
                 }
@@ -328,6 +360,17 @@ int main(int argc, char* argv[]) {
             task_listener = std::make_unique<falcon::daemon::TaskStorageListener>(task_storage.get());
             engine.add_listener(task_listener.get());
         }
+
+        // 事件分发器以裸指针持有监听者且 worker 线程存活到引擎析构，
+        // 摘除是注册方责任：监听者对象先死而引擎后死时，引擎停机派发的
+        // 尾部事件会回调悬垂指针（V2 停机事件密度下实测 SIGSEGV）。RAII
+        // 覆盖全部退出路径（正常停机/RPC 启动失败/异常）；未注册时为
+        // nullptr，remove_listener 对空指针安全
+        struct ListenerDetacher {
+            falcon::DownloadEngine& engine;
+            falcon::IEventListener* listener;
+            ~ListenerDetacher() { engine.remove_listener(listener); }
+        } listener_detacher{engine, task_listener.get()};
 #else
         FALCON_LOG_INFO_STREAM("Task persistence disabled (SQLite3 not available)");
 #endif
@@ -341,6 +384,9 @@ int main(int argc, char* argv[]) {
             for (int i = 0; i < 50 && engine.get_active_task_count() > 0; ++i) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
+            // 活动任务归零（V2 组已随各任务 pause 固化断点为 PAUSED）后
+            // 收 V2 引擎宿主：排水 + 停 run 线程，避免进程退出挂在孤儿线程上
+            falcon::V2EngineHost::instance().shutdown_and_join();
         };
 
 #ifdef FALCON_HAS_SQLITE3
@@ -432,6 +478,12 @@ int main(int argc, char* argv[]) {
                     new_rpc.listen_port != rpc_config.listen_port ||
                     new_rpc.bind_address != rpc_config.bind_address) {
                     FALCON_LOG_WARN_STREAM("Config reload: RPC listen settings changed, "
+                                         "restart required to apply");
+                }
+                // 引擎切换必须在停机窗口：运行中翻转会让既有任务以错误
+                // 的续传布局恢复（V2 稀疏临时文件 vs V1 前缀布局）
+                if (new_download.http_engine != download_config.http_engine) {
+                    FALCON_LOG_WARN_STREAM("Config reload: download.http_engine changed, "
                                          "restart required to apply");
                 }
                 if (new_task_db != task_db_path) {

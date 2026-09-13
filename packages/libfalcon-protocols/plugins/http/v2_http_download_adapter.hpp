@@ -12,6 +12,8 @@
 
 namespace falcon {
 
+class RequestGroup;  // 完整定义经 cpp 内 include（终态进度同步用）
+
 /**
  * @brief V2 HTTP 下载适配器
  *
@@ -40,6 +42,10 @@ public:
     void run();
 
 private:
+    /// 组终态（COMPLETED/FAILED/PAUSED）的最终进度同步：终态分支不在
+    /// 轮询 default 分支上，200ms 粒度下最后一次进度可能没机会下发
+    void sync_final_progress(const RequestGroup& group);
+
     DownloadTask::Ptr task_;  // V1 任务（状态权威归 V1 侧）
 };
 
