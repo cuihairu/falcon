@@ -38,6 +38,24 @@ namespace {
 // 自动分配与显式注入（add_download_as）共用一个 ID 计数器：注入侧
 // 把计数器推到注入 ID 之上，自动分配不再撞上外部（V1 契约）占用的 ID
 std::atomic<TaskId> g_task_id_counter{1};
+
+/// 暂停清扫命令：任务组暂停后由 pause_task 投递，引擎线程执行时
+/// 收走该任务挂起中的连接（挂起命令不经 execute，execute 入口的
+/// PAUSED 守卫覆盖不到它们），关闭 fd 并销毁
+class HttpPauseSweepCommand : public AbstractCommand {
+public:
+    explicit HttpPauseSweepCommand(TaskId task_id)
+        : AbstractCommand(task_id) {}
+
+    bool execute(DownloadEngineV2* engine) override {
+        if (engine) {
+            engine->sweep_task_connections(get_task_id());
+        }
+        return handle_result(ExecutionResult::OK);
+    }
+
+    const char* name() const override { return "HttpPauseSweepCommand"; }
+};
 } // namespace
 
 //==============================================================================
@@ -136,7 +154,13 @@ TaskId DownloadEngineV2::add_download_as(TaskId id,
 
 bool DownloadEngineV2::pause_task(TaskId id) {
     FALCON_LOG_INFO_STREAM("暂停任务: id=" << id);
-    return request_group_man_->pause_group(id);
+    if (!request_group_man_->pause_group(id)) {
+        return false;
+    }
+    // 投递清扫：收走该任务挂起中的连接。execute 入口的 PAUSED 守卫
+    // 只覆盖还在执行队列里的命令，挂起等事件的命令由清扫收口
+    add_command(std::make_unique<HttpPauseSweepCommand>(id));
+    return true;
 }
 
 bool DownloadEngineV2::resume_task(TaskId id) {
@@ -736,12 +760,74 @@ void DownloadEngineV2::fail_group_of_command(TaskId task_id, const std::string& 
     if (!group) {
         return;
     }
+    // 状态守卫：暂停/移除/已完成组不被超时清理等路径误杀——暂停组
+    // 的挂起连接正被清扫收走，竞态窗口内到达的失败路径不得把非失败
+    // 语义改写成 FAILED
+    const auto st = group->status();
+    if (st == RequestGroupStatus::PAUSED || st == RequestGroupStatus::REMOVED ||
+        st == RequestGroupStatus::COMPLETED) {
+        return;
+    }
     if (group->is_multi_segment()) {
         group->finish_segment(false);
     }
     group->save_resume_now();  // 续传追踪中则固化断点（超时清理等收口路径）
     group->set_error_message(reason);
     group->set_status(RequestGroupStatus::FAILED);
+}
+
+void DownloadEngineV2::sweep_task_connections(TaskId task_id) {
+    struct SweptEntry {
+        CommandId cmd_id;
+        int fd;
+        std::unique_ptr<Command> command;
+    };
+    std::vector<SweptEntry> swept;
+    {
+        std::lock_guard<std::mutex> lock(socket_map_mutex_);
+        for (auto it = waiting_commands_.begin();
+             it != waiting_commands_.end();) {
+            if (!it->second || it->second->get_task_id() != task_id) {
+                ++it;
+                continue;
+            }
+            SweptEntry entry;
+            entry.cmd_id = it->first;
+            entry.fd = it->second->socket_fd();
+            entry.command = std::move(it->second);
+            swept.push_back(std::move(entry));
+            it = waiting_commands_.erase(it);
+        }
+        for (const auto& entry : swept) {
+            waiting_command_times_.erase(entry.cmd_id);
+            socket_wait_map_.erase(entry.cmd_id);
+            if (entry.fd >= 0) {
+                auto scm = socket_command_map_.find(entry.fd);
+                if (scm != socket_command_map_.end() &&
+                    scm->second == entry.cmd_id) {
+                    socket_command_map_.erase(scm);
+                }
+            }
+        }
+    }
+
+    // 锁外：摘除事件监听并关闭 fd（平台 IO 调用不应持锁），随后给
+    // 命令检查点机会（下载命令冲刷残留缓冲并上报断点），最后销毁
+    for (auto& entry : swept) {
+        if (entry.fd >= 0) {
+            event_poll_->remove_event(entry.fd);
+            close_socket_fd(entry.fd);
+        }
+        if (entry.command) {
+            entry.command->prepare_sweep(this);
+        }
+    }
+    // swept 在作用域结束时销毁命令对象
+
+    if (!swept.empty()) {
+        FALCON_LOG_INFO_STREAM("暂停清扫: task=" << task_id
+                              << ", 收走挂起连接 " << swept.size() << " 条");
+    }
 }
 
 void DownloadEngineV2::handle_socket_ready(int socket_fd, int ready_events) {

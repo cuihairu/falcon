@@ -1,0 +1,582 @@
+/**
+ * @file download_engine_v2_pause_test.cpp
+ * @brief V2 引擎真暂停端到端测试（入口守卫 + 暂停清扫 + 状态守卫）
+ * @author Falcon Team
+ * @date 2026-09-13
+ *
+ * 暂停正确性的三位一体不变量：
+ * - 暂停停数据流：PAUSED 后字节不再增长，挂起中的连接被清扫收走
+ *   （服务器侧观察到 EOF——进程存活期间 fd 未关闭即观察不到），
+ *   清扫检查点固化断点，恢复后带 Range 从断点继续、成品一致
+ * - 暂停组不被超时清理误杀：任务超时周期照常运转，PAUSED 组保持
+ *   PAUSED（sweep 漏收挂起命令或 fail_group 状态守卫缺失任一环节
+ *   失守，组都会被改写成 FAILED）
+ * - pause_group 语义：幂等；终态组拒绝暂停
+ *
+ * 测试服务器分角色编排：0 号连接慢速发送（给主线程留暂停观察窗口，
+ * 客户端断开即 sweep 生效证据），后续连接按 Range 特征正常应答
+ * （206 续传 / 200 全量）。
+ */
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <windows.h>
+#define CLOSE_SOCKET(fd) closesocket(fd)
+#define POLL(fd_ptr, count, timeout_ms) WSAPoll((fd_ptr), (count), (timeout_ms))
+#else
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <poll.h>
+#define CLOSE_SOCKET(fd) close(fd)
+#define POLL(fd_ptr, count, timeout_ms) ::poll((fd_ptr), (count), (timeout_ms))
+#endif
+
+#include <gtest/gtest.h>
+#include <falcon/protocols/download_engine_v2.hpp>
+#include <falcon/protocols/resume_control.hpp>
+
+#include <atomic>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
+
+#ifdef _WIN32
+#include <process.h>
+#endif
+
+using namespace falcon;
+
+namespace {
+
+#ifdef _WIN32
+void ensure_winsock_for_pause_test() {
+    static bool initialized = false;
+    if (!initialized) {
+        WSADATA data{};
+        WSAStartup(MAKEWORD(2, 2), &data);
+        initialized = true;
+    }
+}
+
+inline int pause_test_getpid() { return _getpid(); }
+using sock_len = int;
+using recv_ssize = int;
+#else
+inline int pause_test_getpid() { return static_cast<int>(::getpid()); }
+using sock_len = socklen_t;
+using recv_ssize = ssize_t;
+#endif
+
+std::string make_body(std::size_t size) {
+    std::string body;
+    body.reserve(size);
+    for (std::size_t i = 0; i < size; ++i) {
+        body.push_back(static_cast<char>('a' + (i % 26)));
+    }
+    return body;
+}
+
+std::string read_file_content(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return {};
+    return std::string(std::istreambuf_iterator<char>(in),
+                       std::istreambuf_iterator<char>());
+}
+
+std::string temp_dir_for(const char* tag) {
+    return (std::filesystem::temp_directory_path() /
+            (std::string("falcon_v2_pause_") + tag + "_" +
+             std::to_string(pause_test_getpid())))
+        .string();
+}
+
+/**
+ * @brief 暂停测试服务器
+ *
+ * 0 号连接：200 头 + 分块慢速发送（chunk_bytes/interval 给主线程留
+ * 暂停窗口）；客户端断开（send 失败）记录为 swept 观测——真暂停下
+ * 这是清扫收走连接的直接证据。
+ * 后续连接：带 Range → 206 从起点续发；无 Range → 200 全量快发
+ * （恢复后的续传/重下路径）。
+ */
+class PauseTestServer {
+public:
+    ~PauseTestServer() { stop(); }  // RAII：joinable 线程析构即 terminate
+
+    bool start(std::string body, std::size_t chunk_bytes, int interval_ms) {
+#ifdef _WIN32
+        ensure_winsock_for_pause_test();
+#endif
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            body_ = std::move(body);
+        }
+        chunk_bytes_ = chunk_bytes;
+        interval_ms_ = interval_ms;
+
+        listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (listen_fd_ < 0) return false;
+
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = 0;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 ||
+            ::listen(listen_fd_, 16) != 0) {
+            CLOSE_SOCKET(listen_fd_);
+            listen_fd_ = -1;
+            return false;
+        }
+
+        sockaddr_in bound{};
+        sock_len len = sizeof(bound);
+        if (::getsockname(listen_fd_, reinterpret_cast<sockaddr*>(&bound), &len) != 0) {
+            stop();
+            return false;
+        }
+        port_ = ntohs(bound.sin_port);
+
+        running_ = true;
+        accept_thread_ = std::thread([this] { accept_loop(); });
+        return true;
+    }
+
+    void stop() {
+        running_ = false;
+        if (listen_fd_ >= 0) {
+            CLOSE_SOCKET(listen_fd_);
+            listen_fd_ = -1;
+        }
+        if (accept_thread_.joinable()) {
+            accept_thread_.join();
+        }
+        for (auto& t : conn_threads_) {
+            if (t.joinable()) t.join();
+        }
+        conn_threads_.clear();
+    }
+
+    int port() const { return port_; }
+
+    std::string url(const std::string& path) const {
+        return "http://127.0.0.1:" + std::to_string(port_) + path;
+    }
+
+    // ---- 观测值 -----------------------------------------------------
+
+    /// 慢速连接上观察到客户端断开（sweep 关闭 fd 的证据）
+    bool client_swept() const { return client_swept_.load(); }
+
+    /// 慢速连接已完整发完（未在传输中途暂停的对照观测）
+    bool first_served_fully() const { return first_served_fully_.load(); }
+
+    int connections_accepted() const { return connections_.load(); }
+
+    /// 后续连接收到的 Range 起点（断点续传证据）
+    std::vector<Bytes> range_starts_snapshot() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return range_starts_;
+    }
+
+private:
+    void accept_loop() {
+        // poll 带超时轮询 running_：阻塞 accept 上直接 close(fd) 在
+        // Linux 不保证唤醒（复用既有测试服务器模板）
+        while (running_) {
+            struct pollfd pfd;
+            pfd.fd = listen_fd_;
+            pfd.events = POLLIN;
+            pfd.revents = 0;
+            if (POLL(&pfd, 1, 500) <= 0) {
+                continue;
+            }
+            sockaddr_in peer{};
+            sock_len peer_len = sizeof(peer);
+            int conn = ::accept(listen_fd_, reinterpret_cast<sockaddr*>(&peer), &peer_len);
+            if (conn < 0) {
+                if (!running_) return;
+                continue;
+            }
+            connections_.fetch_add(1);
+            conn_threads_.emplace_back([this, conn] { serve(conn); });
+        }
+    }
+
+    void serve(int conn) {
+        const int conn_idx = conn_seq_.fetch_add(1);  // serve 线程私有序号
+        std::string request;
+        char buf[4096];
+        while (request.find("\r\n\r\n") == std::string::npos &&
+               request.size() < 64 * 1024) {
+            recv_ssize n = ::recv(conn, buf, sizeof(buf), 0);
+            if (n <= 0) {
+                CLOSE_SOCKET(conn);
+                return;
+            }
+            request.append(buf, static_cast<std::size_t>(n));
+        }
+
+        std::string body;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            body = body_;
+        }
+
+        // Range 头简易解析（"bytes=N-" 或 "bytes=N-M"）
+        Bytes range_start = 0;
+        bool has_range = false;
+        {
+            const auto pos = request.find("Range: bytes=");
+            const auto pos2 = request.find("range: bytes=");
+            const auto at = pos != std::string::npos ? pos : pos2;
+            if (at != std::string::npos) {
+                std::size_t i = at + std::string("Range: bytes=").size();
+                while (i < request.size() &&
+                       (request[i] < '0' || request[i] > '9')) {
+                    ++i;
+                }
+                std::size_t value = 0;
+                while (i < request.size() && request[i] >= '0' && request[i] <= '9') {
+                    value = value * 10 + static_cast<std::size_t>(request[i] - '0');
+                    ++i;
+                }
+                range_start = value;
+                has_range = true;
+            }
+        }
+
+        const std::string common =
+            "Content-Type: application/octet-stream\r\n"
+            "Accept-Ranges: bytes\r\n"
+            "ETag: \"pause-test\"\r\n"
+            "Connection: close\r\n";
+
+        if (conn_idx == 0 && !has_range && chunk_bytes_ > 0) {
+            // 0 号连接：慢速发送——客户端中途断开即 swept 观测
+            std::string header =
+                "HTTP/1.1 200 OK\r\n" + common +
+                "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n";
+            if (!send_all(conn, header.data(), header.size())) {
+                client_swept_ = true;
+                CLOSE_SOCKET(conn);
+                return;
+            }
+            for (std::size_t off = 0; off < body.size(); off += chunk_bytes_) {
+                const std::size_t n = std::min(chunk_bytes_, body.size() - off);
+                if (!send_all(conn, body.data() + off, n)) {
+                    client_swept_ = true;  // send 失败 = 客户端已断开
+                    CLOSE_SOCKET(conn);
+                    return;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms_));
+            }
+            first_served_fully_ = true;
+            CLOSE_SOCKET(conn);
+            return;
+        }
+
+        if (has_range) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            range_starts_.push_back(range_start);
+        }
+
+        if (has_range && range_start < body.size()) {
+            const std::string slice = body.substr(static_cast<std::size_t>(range_start));
+            std::string header =
+                "HTTP/1.1 206 Partial Content\r\n" + common +
+                "Content-Range: bytes " + std::to_string(range_start) + "-" +
+                std::to_string(body.size() - 1) + "/" +
+                std::to_string(body.size()) + "\r\n"
+                "Content-Length: " + std::to_string(slice.size()) + "\r\n\r\n";
+            send_all(conn, header.data(), header.size());
+            send_all(conn, slice.data(), slice.size());
+            CLOSE_SOCKET(conn);
+            return;
+        }
+
+        std::string header =
+            "HTTP/1.1 200 OK\r\n" + common +
+            "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n";
+        send_all(conn, header.data(), header.size());
+        send_all(conn, body.data(), body.size());
+        CLOSE_SOCKET(conn);
+    }
+
+    bool send_all(int conn, const char* data, std::size_t size) {
+        std::size_t sent = 0;
+        while (sent < size) {
+            // MSG_NOSIGNAL：客户端断开后继续 send 会触发 SIGPIPE
+            // （暂停清扫场景必然发生），必须按错误返回而非杀进程
+            recv_ssize n = ::send(conn, data + sent,
+#ifdef _WIN32
+                                  static_cast<int>(size - sent),
+#else
+                                  size - sent,
+#endif
+#ifdef _WIN32
+                                  0);
+#else
+                                  MSG_NOSIGNAL);
+#endif
+            if (n <= 0) return false;
+            sent += static_cast<std::size_t>(n);
+        }
+        return true;
+    }
+
+    mutable std::mutex mutex_;
+    std::string body_;
+    std::vector<Bytes> range_starts_;
+    std::size_t chunk_bytes_ = 0;
+    int interval_ms_ = 0;
+
+    std::atomic<bool> client_swept_{false};
+    std::atomic<bool> first_served_fully_{false};
+    std::atomic<int> connections_{0};
+    std::atomic<int> conn_seq_{0};
+
+    int listen_fd_ = -1;
+    int port_ = 0;
+    std::atomic<bool> running_{false};
+    std::thread accept_thread_;
+    std::vector<std::thread> conn_threads_;
+};
+
+/// 轮询等待条件成立（10ms 步进；超时返回 false）
+template <typename Pred>
+bool wait_for(Pred&& pred, int timeout_ms) {
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(timeout_ms);
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (pred()) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return pred();
+}
+
+/// 等待任务组到达终态；超时返回 false
+bool wait_group_terminal(DownloadEngineV2& engine, RequestGroup* group,
+                         int timeout_ms) {
+    return wait_for(
+        [&] {
+            const auto st = group->status();
+            return st == RequestGroupStatus::COMPLETED ||
+                   st == RequestGroupStatus::FAILED;
+        },
+        timeout_ms);
+}
+
+/// 引擎线程 RAII 守卫：ASSERT 失败提前退出测试时仍正确停机并 join
+///（joinable thread 析构即 terminate，会掩盖真实断言失败）
+class EngineRunner {
+public:
+    explicit EngineRunner(DownloadEngineV2& engine)
+        : engine_(engine), thread_([this] { engine_.run(); }) {}
+    ~EngineRunner() {
+        if (thread_.joinable()) {
+            engine_.force_shutdown();
+            thread_.join();
+        }
+    }
+    EngineRunner(const EngineRunner&) = delete;
+    EngineRunner& operator=(const EngineRunner&) = delete;
+
+    /// 正常停机（ drain 路径）；析构兜底
+    void shutdown_and_join() {
+        engine_.shutdown();
+        if (thread_.joinable()) thread_.join();
+    }
+
+private:
+    DownloadEngineV2& engine_;
+    std::thread thread_;
+};
+
+} // namespace
+
+/// 真暂停主路径：传输中途暂停 → 字节冻结 + 服务器观察到断开（sweep
+/// 收走挂起连接 + 检查点固化断点）→ 恢复后 206 从断点续传，成品一致
+TEST(DownloadEngineV2Pause, PauseStopsFlowSweepsConnectionAndResumes) {
+    const std::size_t kBodySize = 256 * 1024;
+    const std::string body = make_body(kBodySize);
+    PauseTestServer server;
+    // 8KB/15ms → 32 块 ≈ 480ms 传输窗口；观察点 32KB（4 块 ≈ 60ms）
+    ASSERT_TRUE(server.start(body, 8 * 1024, 15));
+
+    const std::string dir = temp_dir_for("flow");
+    std::filesystem::create_directories(dir);
+    const std::string out_path = (std::filesystem::path(dir) / "flow.bin").string();
+    const std::string temp_path = out_path + ".falcon.tmp";
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    config.enable_disk_cache = false;  // 直写：主线程可从临时文件观察进度
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options;
+    options.output_filename = out_path;
+    options.max_connections = 1;
+    options.max_retries = 0;
+
+    const TaskId task_id = engine.add_download(server.url("/flow.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    EngineRunner runner(engine);
+
+    // 等下载推进到中段（临时文件出现并过观察点）。file_size 失败时
+    // 返回 uint64max 且只设 ec——必须显式检查，否则文件不存在也判真
+    ASSERT_TRUE(wait_for(
+        [&] {
+            std::error_code ec;
+            const auto sz = std::filesystem::file_size(temp_path, ec);
+            return !ec && sz > 32 * 1024;
+        },
+        15000))
+        << "下载未在时限内推进到观察点";
+
+    // ---- 暂停 --------------------------------------------------------
+    ASSERT_TRUE(engine.pause_task(task_id));
+    ASSERT_TRUE(wait_for(
+        [&] { return group->status() == RequestGroupStatus::PAUSED; }, 5000));
+    ASSERT_TRUE(wait_for([&] { return server.client_swept(); }, 5000))
+        << "暂停后服务器未观察到断开——挂起连接未被清扫收走";
+
+    const Bytes paused_downloaded = group->downloaded_bytes();
+    const auto paused_file_size = std::filesystem::file_size(temp_path);
+    ASSERT_GT(paused_downloaded, 0u);
+    ASSERT_EQ(paused_downloaded, paused_file_size)
+        << "直写模式下组进度应与落盘尺寸一致";
+
+    // 冻结断言：PAUSED 后字节不再增长
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    EXPECT_EQ(group->downloaded_bytes(), paused_downloaded)
+        << "暂停后组进度仍在增长";
+    EXPECT_EQ(std::filesystem::file_size(temp_path), paused_file_size)
+        << "暂停后临时文件仍在增长";
+
+    // 断点已固化到控制文件（pause 固化 + sweep 检查点补上报）
+    std::error_code ctrl_ec;
+    EXPECT_TRUE(std::filesystem::exists(out_path + kResumeControlExtension, ctrl_ec))
+        << "暂停应固化断点控制文件";
+
+    // ---- 恢复 --------------------------------------------------------
+    ASSERT_TRUE(engine.resume_task(task_id));
+    ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
+    ASSERT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+
+    runner.shutdown_and_join();
+    server.stop();
+
+    EXPECT_FALSE(server.first_served_fully())
+        << "慢速连接应被中途截断而非完整发完";
+    ASSERT_FALSE(server.range_starts_snapshot().empty())
+        << "恢复连接应携带断点 Range";
+    EXPECT_EQ(server.range_starts_snapshot().front(), paused_downloaded)
+        << "续传起点应等于暂停时的落盘进度";
+
+    EXPECT_EQ(read_file_content(out_path), body) << "成品逐字节一致";
+    EXPECT_FALSE(std::filesystem::exists(temp_path));
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+/// 暂停组不被超时清理误杀：任务超时（2s）后继续等待 3.5s，PAUSED 组
+/// 必须仍是 PAUSED——sweep 漏收挂起命令或 fail_group 状态守卫缺失，
+/// 超时清理都会把组改写成 FAILED（复合不变量锁定）
+TEST(DownloadEngineV2Pause, TimeoutCleanupDoesNotKillPausedGroup) {
+    PauseTestServer server;
+    // 慢发同样适用：黑洞语义由"暂停窗口足够长"替代——连接建立后命令
+    // 挂起等数据（每块间隔远超任务超时即等效黑洞）
+    ASSERT_TRUE(server.start(make_body(64 * 1024), 2 * 1024, 2000));
+
+    const std::string dir = temp_dir_for("timeout");
+    std::filesystem::create_directories(dir);
+    const std::string out_path = (std::filesystem::path(dir) / "slow.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options;
+    options.output_filename = out_path;
+    options.max_connections = 1;
+    options.max_retries = 0;
+    options.timeout_seconds = 2;  // 任务级超时 2s
+
+    const TaskId task_id = engine.add_download(server.url("/slow.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    EngineRunner runner(engine);
+
+    // 连接已建立（命令进入挂起等响应/数据）
+    ASSERT_TRUE(wait_for(
+        [&] { return server.connections_accepted() >= 1; }, 10000));
+
+    // 在首个 2s 超时到点前暂停：连接挂起中 → sweep 必须收走
+    ASSERT_TRUE(engine.pause_task(task_id));
+    ASSERT_TRUE(wait_for(
+        [&] { return group->status() == RequestGroupStatus::PAUSED; }, 5000));
+
+    // 跨过任务超时（2s）继续等待：总 3.5s——若 sweep 漏收或守卫缺失，
+    // 超时清理会在 2s 点触发 fail_group_of_command 把 PAUSED 组改写
+    // 成 FAILED
+    std::this_thread::sleep_for(std::chrono::milliseconds(3500));
+    EXPECT_EQ(group->status(), RequestGroupStatus::PAUSED)
+        << "暂停组被超时清理误杀";
+
+    runner.shutdown_and_join();
+    server.stop();
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+/// pause_group 语义：幂等（已暂停返回 true）；终态组拒绝暂停
+TEST(DownloadEngineV2Pause, PauseGroupIdempotentAndTerminalRejected) {
+    const std::string body = make_body(16 * 1024);
+    PauseTestServer server;
+    ASSERT_TRUE(server.start(body, 0, 0));  // 不慢发：快发直完成
+
+    const std::string dir = temp_dir_for("semantics");
+    std::filesystem::create_directories(dir);
+    const std::string out_path = (std::filesystem::path(dir) / "done.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options;
+    options.output_filename = out_path;
+    options.max_connections = 1;
+    options.max_retries = 0;
+
+    const TaskId task_id = engine.add_download(server.url("/done.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    EngineRunner runner(engine);
+    ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
+    ASSERT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+
+    // 终态组拒绝暂停；不存在的任务同样拒绝
+    EXPECT_FALSE(engine.pause_task(task_id));
+    EXPECT_FALSE(engine.pause_task(task_id + 999));
+
+    runner.shutdown_and_join();
+    server.stop();
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}

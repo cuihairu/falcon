@@ -2,6 +2,41 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-13 - V2 引擎真暂停（入口守卫 + 暂停清扫 + 状态守卫三位一体）
+- 此前 pause_group 只改组状态，命令照常执行/挂起——数据流继续走、
+  连接保持到自然结束，"暂停"名不副实；且存在既有死代码缺陷：
+  pause_group 先 set_status(PAUSED) 再调 RequestGroup::pause()，
+  后者仅在 ACTIVE 态执行副作用，检查恒假——断点固化与内部任务
+  暂停从未执行过
+- 三位一体收口（暂停语义 = 冻结数据流 + 收走连接 + 固化断点）：
+  ① 三命令 execute 入口 PAUSED 守卫（Initiate/Response/Download/
+  Retry 四处）：已暂停的命令不再推进——下载命令冲刷残留缓冲 +
+  上报断点 + 关 fd 后静默退出（非失败语义），Retry 不再续建重试
+  链；② 新 HttpPauseSweepCommand → DownloadEngineV2::
+  sweep_task_connections(task)：pause_task 成功后投递，引擎线程内
+  收走挂起等事件的命令（不经 execute，入口守卫覆盖不到）——锁内
+  收集命令所有权并清四表，锁外摘事件监听、关 fd；③
+  fail_group_of_command 顶部状态守卫：PAUSED/REMOVED/COMPLETED
+  直接 return，堵"暂停与清扫之间竞态窗口内的超时清理把非失败
+  语义改写成 FAILED"
+- 命令清扫检查点 prepare_sweep() 虚函数（基类默认无操作，下载
+  命令 override）：冲刷写缓冲 + report_segment_flushed + 
+  save_resume_now——析构路径只冲刷不上报（命令可能比引擎后销毁，
+  悬垂指针风险），清扫在引擎线程内可安全触达任务组，必须补上报
+  才能固化断点；pause 顺序修复后 RequestGroup::pause() 的
+  save_resume_now 也在暂停瞬间生效（终态组拒绝暂停、已暂停幂等）
+- 恢复闭环复用断点续传链路：resume_group → 组回 WAITING → 重新
+  激活时 create_initial_command 携带断点 Range + If-Range → 206
+  校验 → 从暂停时落盘进度继续（init 有 download_task_ 幂等守卫，
+  内存断点不丢）
+- 新增 download_engine_v2_pause_test.cpp 3 用例（PauseTestServer：
+  0 号连接分块慢发留暂停窗口、send 带 MSG_NOSIGNAL 防客户端断开
+  触发 SIGPIPE 杀测试进程；客户端断开作为 sweep 生效的服务器侧
+  证据）：传输中途暂停字节冻结 + sweep 收走连接 + 断点 = 暂停时
+  落盘进度 + 恢复 206 续传成品一致 / 跨任务超时周期 PAUSED 不被
+  误杀（sweep 漏收或守卫缺失任一失守即红）/ 幂等 + 终态拒绝；
+  全量 1498 ctest 通过，ASan 引擎相关 145 用例零告警
+
 ### 2026-09-13 - V2 引擎宿主化前置（wait_when_idle 常驻 + 显式 ID 注入 + 终态组回收）
 - V2 接入生产（作 V1 契约下的 HTTP 数据面）的三块地基，默认行为零变化：
   ① `EngineConfigV2::wait_when_idle`（默认 false 完全保留测试语义）：

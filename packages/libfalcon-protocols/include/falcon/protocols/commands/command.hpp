@@ -103,6 +103,16 @@ public:
      */
     virtual int socket_fd() const noexcept { return -1; }
 
+    /**
+     * @brief 引擎清扫（暂停回收挂起连接）前的检查点
+     *
+     * 有落盘状态的命令 override：冲刷写缓冲并把最终落盘进度上报
+     * 任务组（默认无操作）。析构路径只冲刷不上报（悬垂指针风险），
+     * 清扫路径在引擎线程内执行、可以安全触达任务组，必须补上报
+     * 才能固化断点
+     */
+    virtual void prepare_sweep(DownloadEngineV2* /*engine*/) {}
+
 protected:
     explicit Command(TaskId task_id)
         : task_id_(task_id), command_id_(generate_command_id()) {}

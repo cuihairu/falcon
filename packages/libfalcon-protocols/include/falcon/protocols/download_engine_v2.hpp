@@ -129,6 +129,17 @@ public:
     bool pause_task(TaskId id);
 
     /**
+     * @brief 清扫指定任务挂起中的连接（暂停收口）
+     *
+     * 引擎线程内执行（pause_task 投递 HttpPauseSweepCommand 触发）：
+     * 收走 waiting_commands_ 中属于该任务的命令（挂起命令不经
+     * execute，execute 入口的 PAUSED 守卫覆盖不到它们），锁内清
+     * 四表、锁外摘事件监听并关 fd，销毁前给命令 prepare_sweep
+     * 检查点（冲刷写缓冲 + 固化断点）
+     */
+    void sweep_task_connections(TaskId task_id);
+
+    /**
      * @brief 恢复任务
      */
     bool resume_task(TaskId id);

@@ -558,6 +558,17 @@ bool RequestGroupMan::pause_group(TaskId id) {
     auto* group = it->second;
     if (!group) return false;
 
+    // 终态组不可暂停；已暂停则幂等成功
+    const auto st = group->status();
+    if (st == RequestGroupStatus::COMPLETED || st == RequestGroupStatus::FAILED ||
+        st == RequestGroupStatus::REMOVED) {
+        FALCON_LOG_WARN_STREAM("任务已终态，无法暂停: id=" << id);
+        return false;
+    }
+    if (st == RequestGroupStatus::PAUSED) {
+        return true;
+    }
+
     // 若在活动队列中，移回等待队列
     auto active_it = std::find(request_groups_.begin(), request_groups_.end(), group);
     if (active_it != request_groups_.end()) {
@@ -565,8 +576,13 @@ bool RequestGroupMan::pause_group(TaskId id) {
         reserved_groups_.push_back(group);
     }
 
-    group->set_status(RequestGroupStatus::PAUSED);
+    // RequestGroup::pause 仅在 ACTIVE 态执行副作用（固化断点 + 暂停
+    // 内部任务），必须先调 pause() 再补标状态；旧实现顺序颠倒使
+    // ACTIVE 检查恒假，两条副作用从未执行
     group->pause();
+    if (group->status() != RequestGroupStatus::PAUSED) {
+        group->set_status(RequestGroupStatus::PAUSED);
+    }
     return true;
 }
 

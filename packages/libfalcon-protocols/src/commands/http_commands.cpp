@@ -299,6 +299,19 @@ bool HttpInitiateConnectionCommand::execute(DownloadEngineV2* engine) {
             return handle_result(ExecutionResult::ERROR_OCCURRED);
         }
 
+        // 已暂停：静默退出（连接阶段无落盘状态）
+        {
+            auto* group_man = engine->request_group_man();
+            auto* group = group_man ? group_man->find_group(get_task_id()) : nullptr;
+            if (group && group->status() == RequestGroupStatus::PAUSED) {
+                if (socket_fd_ >= 0) {
+                    close_socket_fd(socket_fd_);
+                    socket_fd_ = -1;
+                }
+                return handle_result(ExecutionResult::OK);
+            }
+        }
+
         switch (connection_state_) {
             case HttpConnectionState::DISCONNECTED:
                 // 创建新连接
@@ -856,6 +869,14 @@ bool HttpResponseCommand::execute(DownloadEngineV2* engine) {
     auto* group = group_man ? group_man->find_group(get_task_id()) : nullptr;
     auto task = group ? group->download_task() : nullptr;
 
+    // 已暂停：静默退出（响应阶段无落盘状态，头内残带字节随连接丢弃；
+    // 恢复时重新发起请求，断点从已落盘数据计）
+    if (group && group->status() == RequestGroupStatus::PAUSED) {
+        close_socket_fd(socket_fd_);
+        socket_fd_ = -1;
+        return handle_result(ExecutionResult::OK);
+    }
+
     auto fail = [&](const std::string& msg, bool retryable = false) {
         // 连接级失败（对端重置/立即断开等）：单连接任务调度延迟重试，
         // 任务组保持 ACTIVE 等待重试链。语义性失败（HTTP 状态错误、
@@ -1412,6 +1433,15 @@ bool HttpDownloadCommand::execute(DownloadEngineV2* engine) {
         return handle_result(ExecutionResult::OK);
     }
 
+    // 已暂停：冲刷残留缓冲并上报断点后静默退出（非失败语义；恢复
+    // 时由重新发起的命令从断点继续）
+    if (group->status() == RequestGroupStatus::PAUSED) {
+        prepare_sweep(engine);
+        close_socket_fd(socket_fd_);
+        socket_fd_ = -1;
+        return handle_result(ExecutionResult::OK);
+    }
+
     auto task = group->download_task();
     if (!task) {
         group->set_error_message("V2 HttpDownload 缺少 DownloadTask");
@@ -1794,6 +1824,21 @@ bool HttpDownloadCommand::finish_output() {
     return flushed && static_cast<bool>(output_);
 }
 
+void HttpDownloadCommand::prepare_sweep(DownloadEngineV2* engine) {
+    // 暂停清扫检查点：冲刷残留缓冲（滞留数据不丢），随后把最终落盘
+    // 进度上报任务组并固化断点——析构路径只冲刷不上报（命令可能比
+    // 引擎后销毁），清扫在引擎线程内执行可以安全触达任务组
+    if (!finish_output() || !engine) {
+        return;
+    }
+    auto* group_man = engine->request_group_man();
+    auto* group = group_man ? group_man->find_group(get_task_id()) : nullptr;
+    if (group) {
+        group->report_segment_flushed(segment_id_, downloaded_bytes_);
+        group->save_resume_now();
+    }
+}
+
 bool HttpDownloadCommand::handle_chunked_encoding(const char* data, std::size_t size, DownloadEngineV2* engine) {
     // 将新数据追加到缓冲区
     chunk_buffer_.append(data, size);
@@ -1962,6 +2007,15 @@ HttpRetryCommand::HttpRetryCommand(
 }
 
 bool HttpRetryCommand::execute(DownloadEngineV2* engine) {
+    // 已暂停：静默退出，不再续建重试链
+    if (engine) {
+        auto* group_man = engine->request_group_man();
+        auto* group = group_man ? group_man->find_group(get_task_id()) : nullptr;
+        if (group && group->status() == RequestGroupStatus::PAUSED) {
+            return handle_result(ExecutionResult::OK);
+        }
+    }
+
     if (!should_retry()) {
         FALCON_LOG_ERROR_STREAM("达到最大重试次数: " << max_retries_);
         fail_group_terminal(engine, get_task_id(),

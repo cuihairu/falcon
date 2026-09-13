@@ -524,6 +524,12 @@ public:
     int socket_fd() const noexcept override { return socket_fd_; }
 
     /**
+     * @brief 暂停清扫检查点：冲刷残留缓冲并把最终落盘进度上报任务组
+     * （析构只冲刷不上报，清扫路径负责固化断点）
+     */
+    void prepare_sweep(DownloadEngineV2* engine) override;
+
+    /**
      * @brief 获取分段起始偏移
      */
     Bytes offset() const noexcept {
