@@ -257,6 +257,31 @@ jobs:
           export PATH="$(dirname "$QMAKE_BIN"):$PATH"
           echo "Using qmake: $QMAKE_BIN"
 
+          # vcpkg Qt 布局诊断与自适应：QT_INSTALL_PLUGINS 报告的目录
+          # 可能不是插件实际安装处（libqxcb.so 曾被 ldd 解析成功却在
+          # QT_INSTALL_PLUGINS/platforms 下报不存在）。找到实际插件
+          # 目录后对齐到插件查询的路径
+          QCB_SO="$(find "${GITHUB_WORKSPACE}/build-desktop/vcpkg_installed" \
+            -name "libqxcb.so" 2>/dev/null | head -n1)"
+          echo "libqxcb.so found at: ${QCB_SO:-<none — xcb plugin not built>}"
+          if [ -z "$QCB_SO" ]; then
+            echo "Full plugin dir dump:"
+            find "${GITHUB_WORKSPACE}/build-desktop/vcpkg_installed/x64-linux" \
+              -type d -name platforms 2>/dev/null
+            find "${GITHUB_WORKSPACE}/build-desktop/vcpkg_installed/x64-linux/Qt6" \
+              -maxdepth 2 -type d 2>/dev/null
+            exit 1
+          fi
+          EXPECTED_PLUGINS_DIR="$("$QMAKE_BIN" -query QT_INSTALL_PLUGINS)"
+          ACTUAL_PLUGINS_DIR="$(dirname "$(dirname "$QCB_SO")")"
+          echo "QT_INSTALL_PLUGINS: $EXPECTED_PLUGINS_DIR"
+          echo "Actual plugins dir: $ACTUAL_PLUGINS_DIR"
+          if [ "$ACTUAL_PLUGINS_DIR" != "$EXPECTED_PLUGINS_DIR" ]; then
+            echo "Plugin path mismatch: mirroring into $EXPECTED_PLUGINS_DIR"
+            mkdir -p "$EXPECTED_PLUGINS_DIR"
+            cp -a "$ACTUAL_PLUGINS_DIR/." "$EXPECTED_PLUGINS_DIR/"
+          fi
+
           # Qt 经 vcpkg 安装：qmake 报告的 QT_INSTALL_LIBS
           # （tools/Qt6/lib）与实际链接库目录（<triplet>/lib）前缀不一致，
           # 插件的 ldd 前缀匹配恒为空 → "Could not find Qt modules to
