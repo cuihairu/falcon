@@ -2,6 +2,27 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-13 - Windows 桌面包 Qt 插件搜索修复（qt.conf 缺失 + CI 产物裸 exe）
+- 用户实测解压 nightly Windows zip 运行报 `Could not find the Qt
+  platform plugin "windows"`：Qt6Core/Gui DLL 都加载成功才走到平台
+  插件搜索，排除缺 DLL——根因是插件被归到 `plugins/` 子目录而
+  Qt 运行时只自动搜 `<exe 目录>/platforms/`（windeployqt 布局，
+  applicationDirPath 作为兜底库路径只补这一层），`plugins/` 布局
+  没有 qt.conf 指引必挂
+- nightly 打包补写 `qt.conf`（`[Paths] Plugins = plugins`，相对
+  qt.conf 所在目录解析），并把 qt.conf 加入打包后关键文件校验清单
+- CI（cmake-multi-platform）Windows 产物同场修复：此前只上传裸
+  falcon-desktop.exe（连 Qt DLL 都没有，用户机器直接缺 DLL 报错）；
+  新增 Package (Windows) 步骤与 nightly 对齐——exe/daemon +
+  vcpkg 依赖 DLL（manifest 树优先、经典树兜底）+ Qt 插件四类 +
+  qt.conf + MSVC CRT（免装 VC++ Redistributable），整目录上传
+- 顺带发现 desktop CMakeLists 的 vcpkg DLL 复制为 `copy_if_different
+  *.dll` 字面量（CMake -E 不做 glob，`|| cd .` 吞错静默无效），
+  workflow 侧自拷贝绕开，CMake 文件不动
+- nightly 的 workflow_dispatch 触发会连带发布 Release，不在 CI 轮
+  里验证；qt.conf 修复随下次 scheduled nightly 生效，CMake Build 的
+  Package (Windows) 步骤随本次推送验证
+
 ### 2026-09-13 - V2 引擎断点续传闭环（.falcon.ctrl 控制文件 + If-Range 内容变更防护）
 - V2 此前失败/中断即进度归零：多段模式所有段位置写入同一临时文件，
   段文件无从区分哪些区间有效（有洞即零）；补齐持久化断点——

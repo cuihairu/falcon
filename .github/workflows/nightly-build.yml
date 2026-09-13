@@ -442,12 +442,18 @@ jobs:
             Write-Warning "MSVC CRT redist directory not found; target machines need VC++ Redistributable"
           }
 
+          # qt.conf 把插件根指到 plugins/ 子目录。Qt 运行时只自动搜
+          # <exe 目录>/platforms/（windeployqt 布局），我们按 plugins/
+          # 子目录归类插件，没有 qt.conf 指引就搜不到 qwindows.dll——
+          # GUI 报 "Could not find the Qt platform plugin windows"
+          Set-Content -Path falcon-desktop/qt.conf -Value "[Paths]`nPlugins = plugins"
+
           # 打包为 zip（向上三级到根目录：bin/Release -> bin -> build-desktop -> root）
           $zipName = "falcon-desktop-windows-${{ steps.version.outputs.version }}.zip"
           7z a -tzip ..\..\..\$zipName falcon-desktop\
 
           # 验证关键文件都在包里
-          $required = @("falcon-desktop.exe", "Qt6Core.dll", "Qt6Gui.dll", "Qt6Widgets.dll", "plugins\platforms\qwindows.dll")
+          $required = @("falcon-desktop.exe", "qt.conf", "Qt6Core.dll", "Qt6Gui.dll", "Qt6Widgets.dll", "plugins\platforms\qwindows.dll")
           cd ../../../
           foreach ($f in $required) {
             if (-not (Test-Path "build-desktop\bin\Release\falcon-desktop\$f")) {

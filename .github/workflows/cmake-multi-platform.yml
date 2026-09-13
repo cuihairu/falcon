@@ -335,11 +335,73 @@ jobs:
           path: ${{ github.workspace }}/build-desktop/bin/falcon-desktop*
           retention-days: 7
 
+      # Windows 产物必须可直接运行：此前只上传裸 exe，用户机器上缺
+      # Qt DLL 与平台插件必然起不来。目录布局与 nightly 一致（exe +
+      # 全部依赖 DLL + plugins/ 子目录 + qt.conf 指引 + MSVC CRT）
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          cd ${{ github.workspace }}/build-desktop/bin/Release
+
+          New-Item -ItemType Directory -Force -Path falcon-desktop
+          Copy-Item falcon-desktop.exe falcon-desktop/
+          Copy-Item falcon-daemon.exe falcon-desktop/ -ErrorAction SilentlyContinue
+
+          # vcpkg manifest 模式下依赖 DLL 在 <build>/vcpkg_installed/<triplet>/bin，
+          # 经典模式才在 <workspace>/vcpkg/installed/<triplet>/bin
+          $triplet = "${{ matrix.vcpkg-triplet }}"
+          $manifestBin = "${{ github.workspace }}/build-desktop/vcpkg_installed/$triplet/bin"
+          $classicBin = "${{ github.workspace }}/vcpkg/installed/$triplet/bin"
+          if (Test-Path $manifestBin) {
+            Copy-Item "$manifestBin/*.dll" falcon-desktop/ -Force
+            Write-Host "Copied DLLs from manifest tree: $manifestBin"
+          } elseif (Test-Path $classicBin) {
+            Copy-Item "$classicBin/*.dll" falcon-desktop/ -Force
+            Write-Host "Copied DLLs from classic tree: $classicBin"
+          } else {
+            Write-Error "vcpkg DLL directory not found (checked manifest and classic trees)"
+            exit 1
+          }
+
+          # Qt 插件随包（缺 platforms/qwindows.dll 时 GUI 无法启动）
+          $qtPluginDir = "${{ github.workspace }}/build-desktop/vcpkg_installed/$triplet/Qt6/plugins"
+          if (Test-Path $qtPluginDir) {
+            foreach ($category in @("platforms", "styles", "imageformats", "tls")) {
+              $src = Join-Path $qtPluginDir $category
+              if (Test-Path $src) {
+                New-Item -ItemType Directory -Force -Path "falcon-desktop/plugins/$category" | Out-Null
+                Copy-Item "$src/*.dll" "falcon-desktop/plugins/$category/" -Force
+              }
+            }
+            Write-Host "Copied Qt plugins from $qtPluginDir"
+          } else {
+            Write-Warning "Qt plugin directory not found: $qtPluginDir"
+          }
+
+          # qt.conf 把插件根指到 plugins/ 子目录（Qt 只自动搜
+          # <exe 目录>/platforms/，缺指引就报 "Could not find the Qt
+          # platform plugin windows"——nightly 首个 Windows 包同款缺陷）
+          Set-Content -Path falcon-desktop/qt.conf -Value "[Paths]`nPlugins = plugins"
+
+          # MSVC CRT：目标机器未装 VC++ Redistributable 时避免缺
+          # vcruntime140.dll / msvcp140.dll
+          $crtDirs = Get-ChildItem "$env:ProgramFiles/Microsoft Visual Studio/2022/*/VC/Redist/MSVC/*/x64/Microsoft.VC143.CRT" -Directory -ErrorAction SilentlyContinue
+          if ($crtDirs) {
+            $crtDir = $crtDirs | Sort-Object FullName -Descending | Select-Object -First 1
+            Copy-Item "$($crtDir.FullName)/*.dll" falcon-desktop/ -Force
+            Write-Host "Copied MSVC CRT from $($crtDir.FullName)"
+          } else {
+            Write-Warning "MSVC CRT redist not found; target machines need VC++ Redistributable"
+          }
+          Get-ChildItem falcon-desktop -Name
+
       - name: Upload artifacts (Windows)
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v7
         timeout-minutes: 3
         with:
           name: falcon-desktop-${{ matrix.os }}
-          path: ${{ github.workspace }}/build-desktop/bin/Release/falcon-desktop.exe
+          path: ${{ github.workspace }}/build-desktop/bin/Release/falcon-desktop/
           retention-days: 7
