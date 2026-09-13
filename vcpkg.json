@@ -30,9 +30,20 @@
           "features": [
             "widgets",
             "network",
+            "concurrent"
+          ],
+          "platform": "!linux"
+        },
+        {
+          "name": "qtbase",
+          "default-features": false,
+          "features": [
+            "widgets",
+            "network",
             "concurrent",
             "xcb"
-          ]
+          ],
+          "platform": "linux"
         }
       ]
     }
