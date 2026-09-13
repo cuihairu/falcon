@@ -15,6 +15,7 @@ add_library(falcon_protocols
     src/segment_downloader.cpp
     src/incremental_download.cpp
     src/request_group.cpp
+    src/resume_control.cpp
     src/file_hash.cpp
     src/commands/command.cpp
     src/commands/http_commands.cpp

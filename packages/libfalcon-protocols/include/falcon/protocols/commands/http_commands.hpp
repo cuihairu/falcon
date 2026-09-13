@@ -49,6 +49,22 @@ enum class HttpConnectionState {
     COMPLETE
 };
 
+class RequestGroup;
+class HttpInitiateConnectionCommand;
+
+/**
+ * @brief 按任务组的续传状态为初始连接设置断点范围（断点续传）
+ *
+ * 选择第一个未完成且已有落盘进度的分段，请求从断点继续（附带
+ * If-Range 验证头）；全部段无进度时不设置 Range（普通全新 GET）。
+ * 初始连接始终承载该段——跨会话恢复时段 0 可能已完成，此时承载
+ * 第一个未完成段
+ *
+ * @return true 设置了续传范围
+ */
+bool apply_group_resume_range(HttpInitiateConnectionCommand& cmd,
+                              const RequestGroup& group);
+
 /**
  * @brief HTTP 分段范围（多连接分段下载）
  */
@@ -160,6 +176,16 @@ public:
     bool has_range() const noexcept { return has_range_; }
 
     /**
+     * @brief 设置 If-Range 验证头（断点续传内容一致性防护）
+     *
+     * 携带 Range 的请求附 If-Range 后：服务器资源未变更才回 206（从
+     * 断点续传），已变更则回 200 全量——响应命令据此放弃续传按全新
+     * 下载处理，绝不把新内容错位写进旧断点。ETag 优先，其次
+     * Last-Modified（RFC 7233）
+     */
+    void set_if_range(std::string value) { if_range_ = std::move(value); }
+
+    /**
      * @brief 获取分段编号
      */
     SegmentId range_segment_id() const noexcept { return range_segment_id_; }
@@ -210,11 +236,15 @@ private:
     // 连接级重试计数（max_retries 语义：首连 + max_retries 次重试）
     int retry_count_ = 0;
 
-    // 多连接分段信息（初始连接无 Range；段 1..N-1 的连接带 Range）
+    // 多连接分段信息（初始连接无 Range；段 1..N-1 的连接带 Range；
+    // 断点续传时初始连接也可承载带 Range 的续传段）
     bool has_range_ = false;
     SegmentId range_segment_id_ = 0;
     Bytes range_offset_ = 0;
     Bytes range_length_ = 0;
+
+    // If-Range 验证值（续传请求附带；非续传请求为空）
+    std::string if_range_;
 
     std::string resolved_ip_;
     bool connect_in_progress_ = false;
@@ -360,6 +390,16 @@ private:
     bool schedule_multi_segment_download(DownloadEngineV2* engine);
     bool validate_segment_response() const;
 
+    /// 断点续传：初始连接响应按组内续传计划调度（校验 206/全量一致性，
+    /// 失败即放弃续传转全新下载）
+    bool schedule_resume_download(DownloadEngineV2* engine, RequestGroup& group);
+
+    /// 为除 except_segment 外的所有未完成分段建立续传连接
+    ///（已完成的分段在 prepare_resumed_multi_segment 中预记账）
+    void schedule_remaining_resume_segments(DownloadEngineV2* engine,
+                                            RequestGroup& group,
+                                            std::size_t except_segment);
+
     int socket_fd_;
     std::shared_ptr<HttpRequest> http_request_;
     std::shared_ptr<HttpResponse> http_response_;
@@ -423,6 +463,14 @@ public:
      * @param segment_id 分段 ID
      * @param offset 分段起始偏移
      * @param length 分段长度（0 表示到文件末尾）
+     * @param initial_data 响应头后已随同到达的响应体前缀
+     * @param resumed_bytes 断点续传预置字节数：本分段在上一会话已确认
+     *        落盘的进度（段 0/单连接续传用——写位置 = offset + 该值，
+     *        完成判定/进度分母仍按段全长；其余段续传由 Range 起点天然
+     *        承载，保持默认 0）
+     * @param truncate_output 打开输出文件时是否截断（全新下载的段 0 用
+     *        默认 true 创建/重置文件；断点续传的段 0 必须传 false——
+     *        临时文件里存着本段与其他段的已落盘数据，截断即销毁断点）
      */
     HttpDownloadCommand(TaskId task_id,
                         int socket_fd,
@@ -430,7 +478,9 @@ public:
                         SegmentId segment_id,
                         Bytes offset,
                         Bytes length = 0,
-                        std::string initial_data = {});
+                        std::string initial_data = {},
+                        Bytes resumed_bytes = 0,
+                        bool truncate_output = true);
 
     ~HttpDownloadCommand() override;
 
@@ -526,6 +576,7 @@ private:
     bool file_opened_ = false;
     std::string initial_data_;
     bool initial_written_ = false;
+    bool truncate_output_ = true;  // 打开输出文件是否截断（续传的段 0 为 false）
     std::ofstream output_;
 
     // 磁盘写缓冲（enable_disk_cache/disk_cache_size 消费点）：数据先

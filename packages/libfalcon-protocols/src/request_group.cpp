@@ -9,6 +9,7 @@
 #include <falcon/logger.hpp>
 #include <falcon/protocols/download_engine_v2.hpp>
 #include <falcon/protocols/commands/http_commands.hpp>
+#include <falcon/protocols/resume_control.hpp>
 
 #include <algorithm>
 #include <filesystem>
@@ -124,8 +125,9 @@ bool RequestGroup::init() {
 
     // 输出文件已存在且未显式允许覆盖 → 直接失败（aria2 allow-overwrite=false
     // 同语义）。此前 HttpDownloadCommand 首段无条件 trunc，默认配置
-    // （overwrite_existing=false）也会静默销毁已存在的同名文件；V2 暂无
-    // 断点续传，已存在文件没有可续传语义，覆盖必须显式授权。
+    // （overwrite_existing=false）也会静默销毁已存在的同名文件；断点
+    // 续传接管了"已存在半成品"的语义：失败/中断留下的临时文件 + 控制
+    // 文件可恢复下载，最终名文件仍然受覆盖保护。
     if (!options_.overwrite_existing) {
         std::error_code exists_ec;
         const std::string& out_path = download_task_->output_path();
@@ -140,6 +142,8 @@ bool RequestGroup::init() {
             return false;
         }
     }
+
+    try_load_resume_state(url);
 
     if (starts_with(url, "http://")) {
         return true;
@@ -169,7 +173,11 @@ std::unique_ptr<Command> RequestGroup::create_initial_command() {
         return nullptr;
     }
 
-    return std::make_unique<HttpInitiateConnectionCommand>(id_, current_uri(), options_);
+    auto cmd = std::make_unique<HttpInitiateConnectionCommand>(id_, current_uri(), options_);
+    // 跨会话恢复：init() 已从控制文件加载续传状态时，初始连接直接
+    // 携带第一个未完成段的 Range 与 If-Range（无有效断点时为无操作）
+    apply_group_resume_range(*cmd, *this);
+    return cmd;
 }
 
 RequestGroup::Progress RequestGroup::get_progress() const {
@@ -199,6 +207,10 @@ void RequestGroup::pause() {
     if (status_ == RequestGroupStatus::ACTIVE) {
         status_ = RequestGroupStatus::PAUSED;
         FALCON_LOG_INFO_STREAM("暂停 RequestGroup: id=" << id_);
+
+        // 暂停即固化进度：控制文件带最新各段断点，恢复（跨引擎重启
+        // 重新添加任务）时从断点继续
+        save_resume_now();
 
         if (download_task_) {
             download_task_->pause();
@@ -250,6 +262,188 @@ bool RequestGroup::finish_segment(bool success) {
 bool RequestGroup::has_segment_failure() const {
     std::lock_guard<std::mutex> lock(segment_mutex_);
     return segment_failure_;
+}
+
+//==============================================================================
+// 断点续传状态
+//==============================================================================
+
+std::string RequestGroup::temp_file_path() const {
+    if (temp_extension_.empty() || !download_task_) {
+        return {};
+    }
+    return download_task_->output_path() + temp_extension_;
+}
+
+std::string RequestGroup::control_file_path() const {
+    if (!download_task_) {
+        return {};
+    }
+    return download_task_->output_path() + kResumeControlExtension;
+}
+
+void RequestGroup::try_load_resume_state(const std::string& url) {
+    // 续传的四个前置条件：任务开启续传（默认开）、未显式授权覆盖
+    //（覆盖 = 明确要求重下）、有临时文件语义（挂点所在）、控制文件可解析
+    if (!options_.resume_enabled || options_.overwrite_existing ||
+        temp_extension_.empty()) {
+        return;
+    }
+
+    const std::string ctrl_path = control_file_path();
+    const std::string temp_path = temp_file_path();
+    ResumeControl control;
+    if (!load_resume_control(ctrl_path, control)) {
+        return;  // 无控制文件（首次下载）或文件损坏 → 全新下载
+    }
+
+    // 严格校验：URL 必须一致（不同 URL 指向同一输出路径视为新任务）；
+    // 临时文件尺寸必须与各段断点吻合——下限证明控制文件记录的数据
+    // 确实落过盘，上限证明位置写没有越界（越界即文件已损坏）。
+    // 汇总进度恰好等于总长不该发生（完成路径已删除控制文件），视为
+    // 异常状态重下
+    if (control.url != url) {
+        FALCON_LOG_INFO_STREAM("续传控制文件 URL 不匹配，放弃续传: " << ctrl_path);
+        remove_resume_control(ctrl_path);
+        return;
+    }
+
+    std::error_code ec;
+    const auto temp_size = std::filesystem::file_size(temp_path, ec);
+    if (ec) {
+        FALCON_LOG_INFO_STREAM("续传临时文件缺失，放弃续传: " << temp_path);
+        remove_resume_control(ctrl_path);
+        return;
+    }
+
+    Bytes max_written = 0;
+    Bytes total_downloaded = 0;
+    for (const auto& seg : control.segments) {
+        // 只统计有进度的段：零进度段尚未写过数据，其 offset 不构成
+        // 对临时文件尺寸的下界约束（多段并行时前面的段可能还没轮到）
+        if (seg.downloaded > 0) {
+            max_written = std::max(max_written, seg.offset + seg.downloaded);
+        }
+        total_downloaded += seg.downloaded;
+    }
+    if (temp_size < max_written || temp_size > control.total ||
+        total_downloaded >= control.total) {
+        FALCON_LOG_WARN_STREAM("续传状态校验失败（临时文件 " << temp_size
+                              << " 字节，控制文件记录上界 " << max_written
+                              << "，总进度 " << total_downloaded << "/"
+                              << control.total << "），放弃续传");
+        remove_resume_control(ctrl_path);
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(segment_mutex_);
+    resume_ = std::move(control);
+    resume_valid_ = true;
+    last_ctrl_save_ = {};
+    FALCON_LOG_INFO_STREAM("恢复断点续传: id=" << id_ << ", 已完成 "
+                          << total_downloaded << "/" << resume_.total
+                          << " 字节, " << resume_.segments.size() << " 段");
+}
+
+void RequestGroup::begin_resume_tracking(std::string url,
+                                         Bytes total,
+                                         std::string etag,
+                                         std::string last_modified,
+                                         std::vector<ResumeSegment> segments) {
+    // 与 try_load_resume_state 相同的前置门禁：续传被禁用或显式授权
+    // 覆盖（明确要求重下）时不建立追踪；总长未知（chunked 等）无从续传
+    if (!options_.resume_enabled || options_.overwrite_existing ||
+        total == 0 || segments.empty()) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(segment_mutex_);
+    resume_ = ResumeControl{};
+    resume_.url = std::move(url);
+    resume_.total = total;
+    resume_.etag = std::move(etag);
+    resume_.last_modified = std::move(last_modified);
+    resume_.segments = std::move(segments);
+    resume_valid_ = true;
+    last_ctrl_save_ = std::chrono::steady_clock::now();
+    if (!save_resume_control(control_file_path(), resume_)) {
+        FALCON_LOG_WARN_STREAM("续传控制文件初版写入失败（下载不受影响）: id=" << id_);
+    }
+}
+
+void RequestGroup::report_segment_flushed(std::size_t segment_index, Bytes downloaded) {
+    std::lock_guard<std::mutex> lock(segment_mutex_);
+    if (!resume_valid_ || segment_index >= resume_.segments.size()) {
+        return;
+    }
+    auto& seg = resume_.segments[segment_index];
+    if (downloaded <= seg.downloaded) {
+        return;  // 单调不回退：乱序/重复上报直接忽略
+    }
+    seg.downloaded = std::min(downloaded, seg.length);
+
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last_ctrl_save_ < std::chrono::seconds(1)) {
+        return;  // 节流：控制文件写盘每秒至多一次，失败时由收口强制保存
+    }
+    last_ctrl_save_ = now;
+    save_resume_control(control_file_path(), resume_);
+}
+
+void RequestGroup::save_resume_now() {
+    std::lock_guard<std::mutex> lock(segment_mutex_);
+    if (!resume_valid_) {
+        return;
+    }
+    last_ctrl_save_ = std::chrono::steady_clock::now();
+    save_resume_control(control_file_path(), resume_);
+}
+
+void RequestGroup::clear_resume_tracking() {
+    const std::string ctrl_path = control_file_path();
+    std::lock_guard<std::mutex> lock(segment_mutex_);
+    resume_valid_ = false;
+    resume_ = ResumeControl{};
+    remove_resume_control(ctrl_path);
+}
+
+void RequestGroup::abandon_resume() {
+    const std::string ctrl_path = control_file_path();
+    {
+        std::lock_guard<std::mutex> lock(segment_mutex_);
+        resume_valid_ = false;
+        resume_ = ResumeControl{};
+    }
+    remove_resume_control(ctrl_path);
+    FALCON_LOG_INFO_STREAM("放弃断点续传，按全新下载处理: id=" << id_);
+}
+
+void RequestGroup::prepare_resumed_multi_segment() {
+    std::lock_guard<std::mutex> lock(segment_mutex_);
+    if (!resume_valid_ || segment_total_ > 0 || resume_.segments.size() <= 1) {
+        return;  // 幂等保护；单段续传无需分段跟踪
+    }
+
+    segment_total_ = resume_.segments.size();
+    segment_finished_ = 0;
+    segment_failure_ = false;
+
+    Bytes resumed_total = 0;
+    for (const auto& seg : resume_.segments) {
+        resumed_total += seg.downloaded;
+        if (seg.downloaded >= seg.length) {
+            ++segment_finished_;  // 已完成段不再建立连接
+        }
+    }
+    downloaded_bytes_ += resumed_total;
+    if (files_[0].total_size == 0) {
+        files_[0].total_size = resume_.total;
+    }
+
+    FALCON_LOG_INFO_STREAM("多分段续传恢复: id=" << id_ << ", 分段数="
+                          << segment_total_ << ", 已完成分段="
+                          << segment_finished_ << ", 断点合计 " << resumed_total
+                          << " 字节");
 }
 
 //==============================================================================
@@ -327,6 +521,9 @@ void RequestGroupMan::fill_request_group_from_reserver(DownloadEngineV2* engine)
             found_waiting = true;
 
             if (engine) {
+                // 激活时注入引擎临时文件扩展名：续传状态据此定位
+                // 临时文件做尺寸校验（配置在组创建后才可见）
+                group->set_temp_extension(engine->config().temp_extension);
                 auto cmd = group->create_initial_command();
                 if (cmd) {
                     engine->add_command(std::move(cmd));

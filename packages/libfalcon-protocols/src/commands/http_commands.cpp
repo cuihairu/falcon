@@ -159,6 +159,7 @@ void fail_group_terminal(DownloadEngineV2* engine, TaskId task_id,
     auto* man = engine->request_group_man();
     auto* group = man ? man->find_group(task_id) : nullptr;
     if (!group) return;
+    group->save_resume_now();  // 续传追踪中则固化断点（未追踪时空操作）
     group->set_error_message(reason);
     group->set_status(RequestGroupStatus::FAILED);
     if (auto task = group->download_task()) {
@@ -175,7 +176,56 @@ std::string to_lower(std::string s) {
     }
     return s;
 }
+
+/// 解析 Content-Range 头的起始偏移（"bytes <start>-<end>/<total>"，
+/// 宽容处理 "bytes=" 与空白变体）。断点续传响应必须校验起点：长度
+/// 一致而起点错位的数据同样会破坏其他分段
+bool parse_content_range_start(const std::string& value, Bytes& start) {
+    std::size_t i = 0;
+    while (i < value.size() && !std::isdigit(static_cast<unsigned char>(value[i]))) {
+        ++i;
+    }
+    if (i >= value.size()) {
+        return false;
+    }
+    try {
+        std::size_t consumed = 0;
+        const unsigned long long v = std::stoull(value.substr(i), &consumed);
+        start = static_cast<Bytes>(v);
+        return consumed > 0;
+    } catch (...) {
+        return false;
+    }
+}
 } // namespace
+
+//==============================================================================
+// 断点续传范围辅助
+//==============================================================================
+
+bool apply_group_resume_range(HttpInitiateConnectionCommand& cmd,
+                              const RequestGroup& group) {
+    if (!group.has_resume_state()) {
+        return false;
+    }
+    const ResumeControl plan = group.resume_plan();
+    // 初始连接承载第一个"未完成且已有落盘进度"的段（进度为 0 的段从
+    // 头下载即可，无需 Range；全部无进度 = 全新 GET）
+    for (std::size_t i = 0; i < plan.segments.size(); ++i) {
+        const auto& seg = plan.segments[i];
+        if (seg.downloaded > 0 && seg.downloaded < seg.length) {
+            cmd.set_range(static_cast<SegmentId>(i),
+                          seg.offset + seg.downloaded,
+                          seg.length - seg.downloaded);
+            const std::string if_range = group.resume_if_range();
+            if (!if_range.empty()) {
+                cmd.set_if_range(if_range);
+            }
+            return true;
+        }
+    }
+    return false;
+}
 
 //==============================================================================
 // HttpInitiateConnectionCommand 实现
@@ -611,7 +661,8 @@ bool HttpInitiateConnectionCommand::prepare_http_request() {
     http_request_->set_header("Accept", "*/*");
     http_request_->set_header("Connection", "close");
 
-    // 多连接分段：非首段连接携带 Range 请求头
+    // 多连接分段：非首段连接携带 Range 请求头；断点续传时初始连接也
+    // 可承载带 Range 的续传段（set_range 对段 0 同样合法）
     if (has_range_) {
         const Bytes range_end = range_offset_ + range_length_ - 1;
         http_request_->set_header(
@@ -619,6 +670,11 @@ bool HttpInitiateConnectionCommand::prepare_http_request() {
             "bytes=" + std::to_string(range_offset_) + "-" + std::to_string(range_end));
         FALCON_LOG_DEBUG_STREAM("分段 " << range_segment_id_ << " 请求范围: bytes="
                                 << range_offset_ << "-" << range_end);
+        // If-Range 内容一致性防护：资源已变更时服务器回 200 全量，
+        // 响应命令据此放弃续传（断点数据是旧内容的，不能接新内容）
+        if (!if_range_.empty()) {
+            http_request_->set_header("If-Range", if_range_);
+        }
     }
 
     if (!options_.referer.empty()) {
@@ -730,6 +786,7 @@ void HttpInitiateConnectionCommand::notify_segment_failure(DownloadEngineV2* eng
             return;
         }
         group->finish_segment(false);
+        group->save_resume_now();  // 固化各段断点（未追踪时空操作）
         group->set_error_message(reason);
         group->set_status(RequestGroupStatus::FAILED);
         if (auto task = group->download_task()) {
@@ -822,6 +879,8 @@ bool HttpResponseCommand::execute(DownloadEngineV2* engine) {
             }
             group->set_error_message(msg);
             group->set_status(RequestGroupStatus::FAILED);
+            // 失败收口固化断点：控制文件带最新进度，重加任务从断点继续
+            group->save_resume_now();
         }
         close_socket_fd(socket_fd_);
         socket_fd_ = -1;
@@ -858,8 +917,10 @@ bool HttpResponseCommand::execute(DownloadEngineV2* engine) {
                     ", length " + std::to_string(content_length_) + ")");
     }
 
-    // 总量设置：仅初始连接执行（分段响应的 Content-Length 是段长而非文件长）
-    if (task && content_length_ > 0 && segment_id_ == 0) {
+    // 总量设置：仅初始连接执行（分段响应的 Content-Length 是段长而非文件长）。
+    // 续传初始响应的 Content-Length 是剩余量，进度由续传调度统一预置
+    if (task && content_length_ > 0 && segment_id_ == 0 &&
+        !(group && group->has_resume_state())) {
         task->update_progress(task->downloaded_bytes(), content_length_, 0);
     }
 
@@ -1047,6 +1108,23 @@ bool HttpResponseCommand::schedule_multi_segment_download(DownloadEngineV2* engi
     group->begin_multi_segment(plan.size());
     group->set_total_size(content_length_);
 
+    // 建立续传追踪：分段计划 + 验证头写入控制文件（各段进度初始为 0），
+    // 失败/中断后重加任务即可按此计划断点续传
+    {
+        std::vector<ResumeSegment> resume_segs;
+        resume_segs.reserve(plan.size());
+        for (const auto& r : plan) {
+            resume_segs.push_back(ResumeSegment{r.offset, r.length, 0});
+        }
+        const auto hdr = [this](const char* key) -> std::string {
+            const auto it = headers_.find(key);
+            return it != headers_.end() ? it->second : std::string();
+        };
+        group->begin_resume_tracking(source_url_, content_length_,
+                                     hdr("etag"), hdr("last-modified"),
+                                     std::move(resume_segs));
+    }
+
     // 段 0：复用当前连接（服务器对该连接的 200/206 响应体按计划长度截取）
     schedule_next(engine,
                   std::make_unique<HttpDownloadCommand>(get_task_id(),
@@ -1067,12 +1145,137 @@ bool HttpResponseCommand::schedule_multi_segment_download(DownloadEngineV2* engi
     return true;
 }
 
+bool HttpResponseCommand::schedule_resume_download(DownloadEngineV2* engine,
+                                                    RequestGroup& group) {
+    const ResumeControl plan = group.resume_plan();
+    if (plan.segments.empty()) {
+        return false;  // 理论不可达（has_resume_state 为真必有计划）
+    }
+    const ResumeSegment& seg0 = plan.segments.front();
+
+    // 防御：多段任务不参与连接级重试，多段模式下不应再收到初始响应；
+    // 一旦出现（引擎状态被外部扰动）按放弃续传处理，绝不重复调度
+    if (group.is_multi_segment()) {
+        FALCON_LOG_WARN_STREAM("续传响应出现在多段下载中，放弃续传: task="
+                              << get_task_id());
+        group.abandon_resume();
+        schedule_next(engine, std::make_unique<HttpInitiateConnectionCommand>(
+                                  get_task_id(), source_url_, options_));
+        return true;
+    }
+
+    // 响应一致性校验：带 Range 的续传请求必须得到 206 且长度与请求
+    // 一致、Content-Range 起点与请求起点一致；未带 Range（断点为 0）
+    // 的请求期望全量响应。服务器资源已变更（If-Range 失效）或不再
+    // 支持 Range 时校验失败——断点数据是旧内容的，绝不能接续新内容
+    const bool range_requested = range_length_ > 0;
+    bool response_ok = false;
+    if (range_requested) {
+        response_ok = status_code_ == 206 && content_length_ == range_length_;
+        if (response_ok) {
+            Bytes content_start = 0;
+            response_ok = parse_content_range_start(
+                              headers_["content-range"], content_start) &&
+                          content_start == range_offset_;
+        }
+    } else {
+        response_ok = content_length_ == plan.total;
+    }
+
+    if (!response_ok) {
+        FALCON_LOG_INFO_STREAM("续传响应不一致（status=" << status_code_
+                              << ", length=" << content_length_
+                              << ", 请求起点=" << range_offset_
+                              << ", 请求长度=" << range_length_
+                              << ", content-range=" << headers_["content-range"]
+                              << "），放弃续传: task=" << get_task_id());
+        group.abandon_resume();
+        // 本连接的响应体起点与全新请求不符，不能复用——重新发起无
+        // Range 的全新下载
+        schedule_next(engine, std::make_unique<HttpInitiateConnectionCommand>(
+                                  get_task_id(), source_url_, options_));
+        return true;
+    }
+
+    FALCON_LOG_INFO_STREAM("断点续传继续下载: task=" << get_task_id()
+                          << ", 段 0 断点 " << seg0.downloaded << "/"
+                          << seg0.length << ", 共 " << plan.segments.size()
+                          << " 段");
+
+    if (plan.segments.size() > 1) {
+        // 组级状态重建：分段跟踪、已完成段预记账、聚合进度预置
+        group.prepare_resumed_multi_segment();
+    } else {
+        // 单连接续传：断点直接计入组聚合（多段路径由 prepare 预置）
+        group.add_downloaded_bytes(seg0.downloaded);
+    }
+    if (auto task = group.download_task()) {
+        task->update_progress(group.downloaded_bytes(), plan.total, 0);
+    }
+
+    // 段 0 未完成：本连接继续收尾该段（服务器已从断点发送）。不截断
+    // 打开——临时文件里是上一会话的断点数据，截断即销毁续传基础
+    if (seg0.downloaded < seg0.length) {
+        schedule_next(engine,
+                      std::make_unique<HttpDownloadCommand>(get_task_id(),
+                                                            socket_fd_,
+                                                            http_response_,
+                                                            /*segment_id=*/0,
+                                                            /*offset=*/0,
+                                                            seg0.length,
+                                                            initial_body_,
+                                                            /*resumed_bytes=*/seg0.downloaded,
+                                                            /*truncate_output=*/false));
+    } else {
+        // 段 0 已完成（初始连接承载的是其他未完成段，由 segment 分支
+        // 调度）：本连接不再承载下载，直接释放
+        close_socket_fd(socket_fd_);
+        socket_fd_ = -1;
+    }
+
+    // 其余未完成分段各自建立续传连接（已完成段不建连接）
+    schedule_remaining_resume_segments(engine, group, /*except_segment=*/0);
+    return true;
+}
+
+void HttpResponseCommand::schedule_remaining_resume_segments(
+    DownloadEngineV2* engine, RequestGroup& group, std::size_t except_segment) {
+    const ResumeControl plan = group.resume_plan();
+    const std::string if_range = group.resume_if_range();
+    for (std::size_t i = 0; i < plan.segments.size(); ++i) {
+        if (i == except_segment) {
+            continue;
+        }
+        const auto& seg = plan.segments[i];
+        if (seg.downloaded >= seg.length) {
+            continue;  // 已完成段：prepare_resumed_multi_segment 已预记账
+        }
+        auto conn = std::make_unique<HttpInitiateConnectionCommand>(
+            get_task_id(), source_url_, options_);
+        conn->set_range(static_cast<SegmentId>(i),
+                        seg.offset + seg.downloaded,
+                        seg.length - seg.downloaded);
+        if (!if_range.empty()) {
+            conn->set_if_range(if_range);
+        }
+        schedule_next(engine, std::move(conn));
+    }
+}
+
 bool HttpResponseCommand::determine_download_strategy(DownloadEngineV2* engine) {
     if (!engine) return false;
 
+    auto* group_man = engine->request_group_man();
+    auto* group = group_man ? group_man->find_group(get_task_id()) : nullptr;
+
     // 分段连接（段 1..N-1）的响应：按该段范围调度下载命令，
-    // 不再产生新的分段/连接
+    // 不再产生新的分段/连接。断点续传的首个分段响应（初始连接承载
+    // 段 k > 0 的跨会话恢复）在此顺带重建组级分段状态并发起其余分段
     if (segment_id_ > 0) {
+        if (group && group->has_resume_state() && !group->is_multi_segment()) {
+            group->prepare_resumed_multi_segment();
+            schedule_remaining_resume_segments(engine, *group, segment_id_);
+        }
         schedule_next(engine,
                       std::make_unique<HttpDownloadCommand>(get_task_id(),
                                                             socket_fd_,
@@ -1082,6 +1285,12 @@ bool HttpResponseCommand::determine_download_strategy(DownloadEngineV2* engine) 
                                                             range_length_,
                                                             initial_body_));
         return true;
+    }
+
+    // 断点续传：初始连接响应按组内续传计划调度（跨会话恢复 + 同进程
+    // 连接级重试共用此路径）。全新下载此时还没有续传状态，走原路径
+    if (group && group->has_resume_state()) {
+        return schedule_resume_download(engine, *group);
     }
 
     // 多连接分段：服务器支持 Range、文件足够大、允许多连接、
@@ -1107,6 +1316,16 @@ bool HttpResponseCommand::determine_download_strategy(DownloadEngineV2* engine) 
                                                         /*offset=*/0,
                                                         content_length_,
                                                         initial_body_));
+    // 建立续传追踪（总长未知/chunked 下载无从续传，begin 内部自行忽略）
+    if (group) {
+        const auto hdr = [this](const char* key) -> std::string {
+            const auto it = headers_.find(key);
+            return it != headers_.end() ? it->second : std::string();
+        };
+        group->begin_resume_tracking(source_url_, content_length_,
+                                     hdr("etag"), hdr("last-modified"),
+                                     {{/*offset=*/0, content_length_, /*downloaded=*/0}});
+    }
     return true;
 }
 
@@ -1149,7 +1368,9 @@ HttpDownloadCommand::HttpDownloadCommand(
     SegmentId segment_id,
     Bytes offset,
     Bytes length,
-    std::string initial_data)
+    std::string initial_data,
+    Bytes resumed_bytes,
+    bool truncate_output)
     : AbstractCommand(task_id)
     , socket_fd_(socket_fd)
     , http_response_(std::move(response))
@@ -1157,7 +1378,9 @@ HttpDownloadCommand::HttpDownloadCommand(
     , offset_(offset)
     , length_(length)
     , current_offset_(offset)
+    , downloaded_bytes_(resumed_bytes)
     , initial_data_(std::move(initial_data))
+    , truncate_output_(truncate_output)
     , last_update_(std::chrono::steady_clock::now())
 {
 }
@@ -1206,19 +1429,18 @@ bool HttpDownloadCommand::execute(DownloadEngineV2* engine) {
         const std::string& ext = engine->config().temp_extension;
         write_path_ = ext.empty() ? final_path : final_path + ext;
 
-        if (segment_id_ == 0) {
-            // 首段/单连接模式：创建（截断）文件
+        if (segment_id_ == 0 && truncate_output_) {
+            // 全新下载的首段/单连接模式：创建（截断）文件
             output_.open(write_path_, std::ios::binary | std::ios::trunc);
         } else {
-            // 多连接分段：文件由首段创建，本段按偏移定位写入
-            //（各 ofstream 独立维护写位置，不会互相干扰）
+            // 不截断打开：多连接分段（文件由首段创建，本段按偏移定位
+            // 写入）与断点续传的首段（临时文件已有断点数据）共用；
+            // 续传文件缺失在 try_load_resume_state 校验阶段已被拒绝
             output_.open(write_path_, std::ios::binary | std::ios::in | std::ios::out);
         }
         if (!output_) {
             task->set_error("Failed to open output file: " + write_path_);
-            task->set_status(TaskStatus::Failed);
-            group->set_error_message(task->error_message());
-            group->set_status(RequestGroupStatus::FAILED);
+            fail_group_on_segment_error(*group, task);
             close_socket_fd(socket_fd_);
             socket_fd_ = -1;
             return handle_result(ExecutionResult::ERROR_OCCURRED);
@@ -1237,7 +1459,8 @@ bool HttpDownloadCommand::execute(DownloadEngineV2* engine) {
             task->mark_started();
             task->set_status(TaskStatus::Downloading);
             if (length_ > 0 && !group->is_multi_segment()) {
-                task->update_progress(0, length_, 0);
+                // 断点续传时 downloaded_bytes_ 已预置上一会话的断点
+                task->update_progress(downloaded_bytes_, length_, 0);
             }
         }
     }
@@ -1310,6 +1533,10 @@ void HttpDownloadCommand::complete_group_if_all_segments_done(
         return;  // 失败路径由 fail_group_on_segment_error 收尾，临时文件保留
     }
 
+    // 最终落盘进度上报（finish_output 冲刷了残留缓冲，此刻 downloaded
+    // 与磁盘一致）；未开启续传追踪时为无代价空操作
+    group.report_segment_flushed(segment_id_, downloaded_bytes_);
+
     // 单段模式：本段结束即任务完成（保持既有行为）；多分段模式：仅当
     // 全部分段结束且无失败时才置完成（失败已在
     // fail_group_on_segment_error 中立即置失败）
@@ -1327,6 +1554,8 @@ void HttpDownloadCommand::complete_group_if_all_segments_done(
         fail_group_on_segment_error(group, task);
         return;
     }
+    // 成品已发布：续传使命完成，删除控制文件（半成品挂点随之消失）
+    group.clear_resume_tracking();
     task->set_status(TaskStatus::Completed);
     group.set_status(RequestGroupStatus::COMPLETED);
 }
@@ -1349,12 +1578,19 @@ bool HttpDownloadCommand::publish_output(const DownloadTask::Ptr& task) {
 
 void HttpDownloadCommand::fail_group_on_segment_error(RequestGroup& group,
                                                       const DownloadTask::Ptr& task) {
+    // 失败收口固化断点：finish_output 已冲刷残留缓冲，此刻把最终落盘
+    // 进度写进控制文件，重加任务即可从断点继续
+    group.report_segment_flushed(segment_id_, downloaded_bytes_);
     if (group.is_multi_segment()) {
         group.finish_segment(false);
     }
+    FALCON_LOG_ERROR_STREAM("分段下载失败: task=" << get_task_id()
+                          << ", segment=" << segment_id_
+                          << ", reason=" << task->error_message());
     group.set_error_message(task->error_message());
     group.set_status(RequestGroupStatus::FAILED);
     task->set_status(TaskStatus::Failed);
+    group.save_resume_now();
 }
 
 AbstractCommand::ExecutionResult HttpDownloadCommand::receive_data(DownloadEngineV2* engine) {
@@ -1466,13 +1702,13 @@ bool HttpDownloadCommand::write_to_segment(const char* data,
         // 内容与位置和逐块直写完全一致）
         write_buffer_.insert(write_buffer_.end(), data, data + allowed);
     } else {
-        // 直写路径——定位写入：非首段按段偏移寻址（每个 ofstream
-        // 独立维护写位置）
-        if (segment_id_ != 0) {
-            output_.seekp(static_cast<std::streamoff>(offset_ + downloaded_bytes_));
-            if (!output_) {
-                return false;
-            }
+        // 直写路径——定位写入：每个 ofstream 独立维护写位置，无条件
+        // seek 到本段当前写入点（offset_ + 已落盘前缀）。首段/单连接
+        // 续传同样如此：断点前缀已在临时文件里，必须从断点处接写，
+        // 绝不能从文件头覆盖
+        output_.seekp(static_cast<std::streamoff>(offset_ + downloaded_bytes_));
+        if (!output_) {
+            return false;
         }
 
         output_.write(data, static_cast<std::streamsize>(allowed));
@@ -1483,6 +1719,8 @@ bool HttpDownloadCommand::write_to_segment(const char* data,
 
     downloaded_bytes_ += static_cast<Bytes>(allowed);
     bytes_since_last_update_ += static_cast<Bytes>(allowed);
+
+    bool flushed_now = write_buffer_capacity_ == 0;
 
     if (engine) {
         auto* group_man = engine->request_group_man();
@@ -1499,6 +1737,11 @@ bool HttpDownloadCommand::write_to_segment(const char* data,
                     task->update_progress(downloaded_bytes_, length_, download_speed_);
                 }
             }
+            if (flushed_now) {
+                // 直写路径数据已确认落盘：同步上报续传进度（未开启
+                // 追踪时为无代价空操作；缓冲路径在攒满冲刷后上报）
+                group->report_segment_flushed(segment_id_, downloaded_bytes_);
+            }
         }
     }
 
@@ -1507,7 +1750,17 @@ bool HttpDownloadCommand::write_to_segment(const char* data,
     // 攒满落盘：冲刷失败按写失败处理（调用方段错误收尾）
     if (write_buffer_capacity_ > 0 &&
         write_buffer_.size() >= write_buffer_capacity_) {
-        return flush_write_buffer();
+        if (!flush_write_buffer()) {
+            return false;
+        }
+        // 缓冲已清空，此刻 downloaded_bytes_ 与磁盘一致
+        if (engine) {
+            auto* group_man = engine->request_group_man();
+            auto* group = group_man ? group_man->find_group(get_task_id()) : nullptr;
+            if (group) {
+                group->report_segment_flushed(segment_id_, downloaded_bytes_);
+            }
+        }
     }
     return true;
 }
@@ -1516,13 +1769,12 @@ bool HttpDownloadCommand::flush_write_buffer() {
     if (write_buffer_.empty()) {
         return true;
     }
-    if (segment_id_ != 0) {
-        // 多段模式按段偏移定位：已落盘字节数 = 已接收字节数 − 缓冲滞留数
-        output_.seekp(static_cast<std::streamoff>(
-            offset_ + downloaded_bytes_ - write_buffer_.size()));
-        if (!output_) {
-            return false;
-        }
+    // 按段偏移定位：已落盘字节数 = 已接收字节数 − 缓冲滞留数。无条件
+    // seek（首段续传同样适用——缓冲里是断点之后的数据，必须写到断点处）
+    output_.seekp(static_cast<std::streamoff>(
+        offset_ + downloaded_bytes_ - write_buffer_.size()));
+    if (!output_) {
+        return false;
     }
     output_.write(write_buffer_.data(),
                   static_cast<std::streamsize>(write_buffer_.size()));
@@ -1734,6 +1986,14 @@ bool HttpRetryCommand::execute(DownloadEngineV2* engine) {
         auto next_cmd = std::make_unique<HttpInitiateConnectionCommand>(
             get_task_id(), url_, options_);
         next_cmd->set_retry_count(retry_count_);
+        // 连接级重试也可能发生在断点续传响应阶段（Range 已带、响应头
+        // 未到即断连）——重发请求必须原样携带续传范围与 If-Range，
+        // 否则服务器回 200 全量，进度归零还会覆盖已下载数据
+        auto* group_man = engine->request_group_man();
+        auto* group = group_man ? group_man->find_group(get_task_id()) : nullptr;
+        if (group) {
+            apply_group_resume_range(*next_cmd, *group);
+        }
         schedule_next(engine, std::move(next_cmd));
     }
 

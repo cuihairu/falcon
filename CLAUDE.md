@@ -2,6 +2,45 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-13 - V2 引擎断点续传闭环（.falcon.ctrl 控制文件 + If-Range 内容变更防护）
+- V2 此前失败/中断即进度归零：多段模式所有段位置写入同一临时文件，
+  段文件无从区分哪些区间有效（有洞即零）；补齐持久化断点——
+  `<最终名>.falcon.ctrl` 行式控制文件（aria2 `.aria2` 同思路）记录
+  url/total/etag/last_modified + `seg=<idx> <offset> <length>
+  <downloaded>` 各段断点，原子写（tmp+rename），加载端严格校验
+  （魔数/段序连续/计划恰好覆盖 [0,total)/进度不越段界）
+- 落盘进度记账：写路径直写成功与缓冲冲刷成功两处上报（单调取 max
+  防乱序，1s 节流写盘）；失败收口（段错误/组终态/超时清理/暂停）
+  全部强制保存兜底；完成发布成品即删控制文件。析构路径不 report
+  （命令可能比引擎后销毁，悬垂指针风险；有界丢失最多一个写缓冲，
+  保守重下安全）
+- 恢复流：init() 加载控制文件 → 严格校验（URL 一致 + 临时文件尺寸
+  与断点吻合（只统计有进度段的 offset+downloaded 做下界——零进度
+  段的 offset 不构成约束）+ sum<total）→ 初始连接携带第一个未完成
+  段的 Range + If-Range（ETag 优先）→ 段 0 预置断点继续收尾，其余
+  段各自续传连接；跨会话恢复与同进程连接级重试共用一套分支
+  （HttpRetryCommand 重发时原样携带续传范围）
+- If-Range 内容变更防护（RFC 7233）：续传响应必须 206 且长度/起点
+  与请求一致；资源已变更回 200 或 Range 被无视时校验失败 →
+  abandon（删控制文件）→ 重新发起无 Range 全新下载——断点数据
+  绝不接续新内容，成品不可能混合新旧
+- 顺带修复三处既有缺陷：① 续传的段 0 此前会以 trunc 打开临时文件
+  （截断即销毁全部断点数据）且首段直写从位置 0 覆盖（不 seekp）——
+  新增 truncate_output 构造参数区分全新/续传，写位置统一无条件
+  seekp(offset+已落盘)；② 文件打开失败分支静默置 FAILED 无任何
+  日志（多段段间创建竞态无从排查），统一收口 fail_group_on_segment_
+  error 并补错误日志；③ 多段任务不参与连接级重试的既有语义使续传
+  分支天然免于重复 begin_multi_segment（幂等守卫兜底）
+- 门禁：resume_enabled=false（对照）/ overwrite_existing=true（显式
+  覆盖=要求重下）/ 控制文件损坏 / 临时文件缺失，均回退全新下载且
+  清理失效挂点；总长未知（chunked）不建立追踪
+- 新增 9 用例（download_engine_v2_resume_test.cpp，自含
+  ResumeTestServer 按 Range 特征应答 206/200 并记录断言）：单连接/
+  多分段续传端到端（成品逐字节一致）、内容变更放弃续传转全新、
+  Range 撒谎防护、resume 关闭/控制文件损坏/临时文件缺失/覆盖授权
+  四条回退对照、控制文件 save/load 往返+严格校验单测；全量 1491
+  ctest 通过，ASan 引擎相关 39 用例零告警
+
 ### 2026-09-13 - Nightly Linux AppImage 打包修复（Qt 模块检测在 vcpkg 布局下失效）
 - linuxdeploy-plugin-qt 的模块自动检测机制：对 AppDir 内 ELF 跑 ldd，
   按路径前缀匹配 qmake 报告的 QT_INSTALL_LIBS 计模块数。Qt 经 vcpkg

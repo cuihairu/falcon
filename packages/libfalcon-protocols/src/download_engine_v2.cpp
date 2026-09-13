@@ -683,6 +683,7 @@ void DownloadEngineV2::fail_group_of_command(TaskId task_id, const std::string& 
     if (group->is_multi_segment()) {
         group->finish_segment(false);
     }
+    group->save_resume_now();  // 续传追踪中则固化断点（超时清理等收口路径）
     group->set_error_message(reason);
     group->set_status(RequestGroupStatus::FAILED);
 }

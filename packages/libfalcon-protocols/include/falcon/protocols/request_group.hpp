@@ -13,8 +13,10 @@
 #include <falcon/types.hpp>
 #include <falcon/download_options.hpp>
 #include <falcon/protocols/segment_downloader.hpp>
+#include <falcon/protocols/resume_control.hpp>
 #include <falcon/protocols/commands/command.hpp>
 
+#include <chrono>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -266,6 +268,95 @@ public:
      */
     bool has_segment_failure() const;
 
+    // ------------------------------------------------------------------
+    // 断点续传状态（V2 引擎）
+    // ------------------------------------------------------------------
+
+    /**
+     * @brief 注入引擎临时文件扩展名（激活时由引擎写入，供续传状态
+     * 定位临时文件；未注入时为 EngineConfigV2 的默认值）
+     */
+    void set_temp_extension(std::string ext) { temp_extension_ = std::move(ext); }
+
+    /**
+     * @brief 临时文件路径（<输出路径><temp_extension>；扩展名为空时
+     * 返回空串——无临时文件语义即无续传挂点）
+     */
+    std::string temp_file_path() const;
+
+    /// 控制文件路径（<输出路径>.falcon.ctrl，固定后缀）
+    std::string control_file_path() const;
+
+    /**
+     * @brief 是否持有有效的续传状态
+     *
+     * 两个来源：init() 从磁盘控制文件加载成功（跨会话恢复），或本次
+     * 下载调度成功后 begin_resume_tracking 建立（同进程连接级重试的
+     * 断点续传）。为真时 resume_plan() 可用
+     */
+    bool has_resume_state() const {
+        std::lock_guard<std::mutex> lock(segment_mutex_);
+        return resume_valid_;
+    }
+
+    /// 续传状态（仅 has_resume_state() 为真时有效）
+    ResumeControl resume_plan() const {
+        std::lock_guard<std::mutex> lock(segment_mutex_);
+        return resume_;
+    }
+
+    /// If-Range 请求头取值（ETag 优先，否则 Last-Modified；可空）
+    std::string resume_if_range() const {
+        std::lock_guard<std::mutex> lock(segment_mutex_);
+        return resume_if_range_value(resume_);
+    }
+
+    /**
+     * @brief 建立本次下载的续传追踪（全新下载调度成功后调用）
+     *
+     * 记录 URL/总长/验证头/分段计划（进度全 0）并立即写控制文件。
+     * 控制文件写失败只记录告警——续传是 best-effort，绝不影响下载
+     */
+    void begin_resume_tracking(std::string url,
+                               Bytes total,
+                               std::string etag,
+                               std::string last_modified,
+                               std::vector<ResumeSegment> segments);
+
+    /**
+     * @brief 上报分段已落盘进度（写缓冲冲刷成功后由下载命令调用）
+     *
+     * 单调不回退（取 max，防御乱序/重复上报）；距上次落盘控制文件
+     * 不足 1 秒时只更新内存，节流写盘
+     */
+    void report_segment_flushed(std::size_t segment_index, Bytes downloaded);
+
+    /**
+     * @brief 立即落盘控制文件（失败收口/暂停时调用，节流旁路）
+     */
+    void save_resume_now();
+
+    /**
+     * @brief 结束续传追踪并删除控制文件（下载完成发布成品后调用）
+     */
+    void clear_resume_tracking();
+
+    /**
+     * @brief 放弃续传（服务器对续传请求回了不兼容响应：内容已变更
+     * 或不再支持 Range）——删除控制文件、清空续传状态，后续全新下载
+     */
+    void abandon_resume();
+
+    /**
+     * @brief 恢复多分段下载的组级状态（幂等）
+     *
+     * 已处于多分段模式时不做任何事（同进程连接级重试不会走到这里：
+     * 多连接任务不参与连接级重试）；否则按续传计划重建分段跟踪——
+     * 已完成的段立即计入完成数，并把各段断点进度预置进组聚合值
+     *（此后下载命令只上报增量）
+     */
+    void prepare_resumed_multi_segment();
+
 private:
     TaskId id_;
     RequestGroupStatus status_ = RequestGroupStatus::WAITING;
@@ -285,6 +376,19 @@ private:
     std::size_t segment_total_ = 0;
     std::size_t segment_finished_ = 0;
     bool segment_failure_ = false;
+
+    // 断点续传状态（segment_mutex_ 保护；引擎单线程执行命令，pause
+    // 等控制入口来自其他线程）。resume_valid_ 为真时 resume_ 记录
+    // URL/验证头/分段计划与各段已落盘进度，last_ctrl_save_ 用于
+    // 控制文件写盘节流
+    std::string temp_extension_ = ".falcon.tmp";
+    ResumeControl resume_;
+    bool resume_valid_ = false;
+    std::chrono::steady_clock::time_point last_ctrl_save_{};
+
+    /// init() 阶段尝试从磁盘控制文件恢复续传状态（严格校验，失败即
+    /// 清理控制文件按全新下载处理）
+    void try_load_resume_state(const std::string& url);
 
     // 空文件引用（用于 files_ 为空的情况）
     static FileInfo empty_file_;
