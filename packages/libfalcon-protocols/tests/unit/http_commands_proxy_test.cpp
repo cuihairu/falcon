@@ -1,0 +1,872 @@
+/**
+ * @file http_commands_proxy_test.cpp
+ * @brief V2 引擎 HTTP 代理端到端测试（absolute-form 请求行 + CONNECT
+ *        隧道 + Basic 认证）
+ * @author Falcon Team
+ * @date 2026-09-13
+ *
+ * 覆盖的核心不变量：
+ * - parse_http_proxy 纯函数：None / 明文 HTTP 代理（含 userinfo 凭据
+ *   与缺省端口）/ socks 与 TLS 代理明确判 Unsupported（M2 适配层据此
+ *   回退 V1 curl）
+ * - 明文 HTTP 经代理：请求行用 absolute-form（RFC 7230 §5.3.2），
+ *   Host 头保持目标主机；客户端不解析上游主机名（解析不可达域成功
+ *   即证明）
+ * - Proxy-Authorization: Basic 凭据精确到达代理（userinfo 优先于
+ *   独立字段）
+ * - HTTPS 经代理：CONNECT 隧道（authority-form target）→ 2xx 后同
+ *   连接 TLS 握手（隧道内请求行回 origin-form）→ 完整下载
+ * - 代理拒绝 CONNECT（403）必须干净失败，半成品不顶最终名
+ */
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <windows.h>
+#define CLOSE_SOCKET(fd) closesocket(fd)
+#define POLL(fd_ptr, count, timeout_ms) WSAPoll((fd_ptr), (count), (timeout_ms))
+#else
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <poll.h>
+#define CLOSE_SOCKET(fd) close(fd)
+#define POLL(fd_ptr, count, timeout_ms) ::poll((fd_ptr), (count), (timeout_ms))
+#endif
+
+#include <gtest/gtest.h>
+#include <falcon/protocols/download_engine_v2.hpp>
+#include <falcon/protocols/commands/http_commands.hpp>
+
+#ifdef FALCON_ENABLE_OPENSSL
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+
+#include "tls_cert_generator.hpp"
+#endif
+
+#include <atomic>
+#include <chrono>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <mutex>
+#include <string>
+#include <thread>
+
+#ifdef _WIN32
+#include <process.h>
+#endif
+
+using namespace falcon;
+
+namespace {
+
+#ifdef _WIN32
+void ensure_winsock_for_proxy_test() {
+    static bool initialized = false;
+    if (!initialized) {
+        WSADATA data{};
+        WSAStartup(MAKEWORD(2, 2), &data);
+        initialized = true;
+    }
+}
+
+inline int proxy_test_getpid() { return _getpid(); }
+using sock_len = int;
+using recv_ssize = int;
+#else
+inline int proxy_test_getpid() { return static_cast<int>(::getpid()); }
+using sock_len = socklen_t;
+using recv_ssize = ssize_t;
+#endif
+
+std::string make_body(std::size_t size) {
+    std::string body;
+    body.reserve(size);
+    for (std::size_t i = 0; i < size; ++i) {
+        body.push_back(static_cast<char>('a' + (i % 26)));
+    }
+    return body;
+}
+
+std::string read_file_content(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return {};
+    return std::string(std::istreambuf_iterator<char>(in),
+                       std::istreambuf_iterator<char>());
+}
+
+std::string temp_dir_for(const char* tag) {
+    return (std::filesystem::temp_directory_path() /
+            (std::string("falcon_v2_proxy_") + tag + "_" +
+             std::to_string(proxy_test_getpid())))
+        .string();
+}
+
+template <typename Pred>
+bool wait_for(Pred&& pred, int timeout_ms) {
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(timeout_ms);
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (pred()) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return pred();
+}
+
+/// 作用域环境变量（SSL_CERT_FILE 指定信任锚；测试单线程顺序执行）
+class ScopedEnvVar {
+public:
+    ScopedEnvVar(const char* name, const std::string& value) : name_(name) {
+        const char* old = ::getenv(name);
+        had_old_ = old != nullptr;
+        if (had_old_) old_ = old;
+#ifdef _WIN32
+        _putenv_s(name, value.c_str());
+#else
+        ::setenv(name, value.c_str(), 1);
+#endif
+    }
+
+    ~ScopedEnvVar() {
+#ifdef _WIN32
+        _putenv_s(name_.c_str(), had_old_ ? old_.c_str() : "");
+#else
+        if (had_old_) {
+            ::setenv(name_.c_str(), old_.c_str(), 1);
+        } else {
+            ::unsetenv(name_.c_str());
+        }
+#endif
+    }
+
+    ScopedEnvVar(const ScopedEnvVar&) = delete;
+    ScopedEnvVar& operator=(const ScopedEnvVar&) = delete;
+
+private:
+    std::string name_;
+    std::string old_;
+    bool had_old_ = false;
+};
+
+/// 请求报文中提取单个头值（精确头名匹配；空 = 未出现）
+std::string extract_header(const std::string& request,
+                           const std::string& name) {
+    std::size_t pos = 0;
+    while (true) {
+        const auto line_end = request.find("\r\n", pos);
+        if (line_end == std::string::npos) return {};
+        const std::string line = request.substr(pos, line_end - pos);
+        if (line.rfind(name + ":", 0) == 0) {
+            std::string value = line.substr(name.size() + 1);
+            if (!value.empty() && value[0] == ' ') value.erase(0, 1);
+            return value;
+        }
+        if (line.empty()) return {};  // 头区结束
+        pos = line_end + 2;
+    }
+}
+
+/// 请求报文第一行（请求行）
+std::string request_line_of(const std::string& request) {
+    const auto eol = request.find("\r\n");
+    return eol == std::string::npos ? request : request.substr(0, eol);
+}
+
+bool send_all_plain(int conn, const char* data, std::size_t size) {
+    std::size_t sent = 0;
+    while (sent < size) {
+        const recv_ssize n = ::send(conn, data + sent,
+#ifdef _WIN32
+                                    static_cast<int>(size - sent),
+#else
+                                    size - sent,
+#endif
+#ifdef _WIN32
+                                    0);
+#else
+                                    MSG_NOSIGNAL);
+#endif
+        if (n <= 0) return false;
+        sent += static_cast<std::size_t>(n);
+    }
+    return true;
+}
+
+/// 读到 \r\n\r\n（明文；SO_RCVTIMEO 兜底防挂死）
+bool read_headers_plain(int conn, std::string& out) {
+    char buf[4096];
+    while (out.find("\r\n\r\n") == std::string::npos &&
+           out.size() < 64 * 1024) {
+        const recv_ssize n = ::recv(conn, buf, sizeof(buf), 0);
+        if (n <= 0) return false;
+        out.append(buf, static_cast<std::size_t>(n));
+    }
+    return true;
+}
+
+#ifdef FALCON_ENABLE_OPENSSL
+
+/**
+ * @brief 代理行为测试服务器
+ *
+ * 三种模式：
+ * - kPlainProxy：明文代理假实现——记录请求行与 Proxy-Authorization
+ *   后直接回 200 + body（不转发上游；验证的是经代理的请求形态与
+ *   客户端不解析上游主机名）
+ * - kConnectAccept：收 CONNECT 记录 authority 与认证头，回 200 后
+ *   原地 SSL_accept 变身 TLS 服务器，继续完成 HTTPS 下载语义
+ * - kConnectReject：收 CONNECT 后回 403 并关连接
+ */
+class ProxyTestServer {
+public:
+    enum class Mode { kPlainProxy, kConnectAccept, kConnectReject };
+
+    ~ProxyTestServer() { stop(); }
+
+    bool start(Mode mode) {
+        mode_ = mode;
+#ifdef _WIN32
+        ensure_winsock_for_proxy_test();
+#endif
+
+        if (mode_ == Mode::kConnectAccept) {
+            // CONNECT 接受模式需要 TLS 上下文（隧道内原地变身 TLS 服务器）
+            const std::string dir = temp_dir_for("ctx");
+            std::filesystem::create_directories(dir);
+            key_path_ = (std::filesystem::path(dir) / "key.pem").string();
+            cert_path_ = (std::filesystem::path(dir) / "cert.pem").string();
+            if (!falcon_test_tls::generate_self_signed_cert(key_path_,
+                                                            cert_path_)) {
+                return false;
+            }
+            tls_ctx_ = SSL_CTX_new(TLS_server_method());
+            if (!tls_ctx_) {
+                return false;
+            }
+            SSL_CTX_set_min_proto_version(tls_ctx_, TLS1_2_VERSION);
+            if (SSL_CTX_use_certificate_file(tls_ctx_, cert_path_.c_str(),
+                                             SSL_FILETYPE_PEM) != 1 ||
+                SSL_CTX_use_PrivateKey_file(tls_ctx_, key_path_.c_str(),
+                                            SSL_FILETYPE_PEM) != 1 ||
+                SSL_CTX_check_private_key(tls_ctx_) != 1) {
+                SSL_CTX_free(tls_ctx_);
+                tls_ctx_ = nullptr;
+                ERR_clear_error();
+                return false;
+            }
+        }
+
+        listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (listen_fd_ < 0) {
+            stop();
+            return false;
+        }
+
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = 0;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr),
+                   sizeof(addr)) != 0 ||
+            ::listen(listen_fd_, 8) != 0) {
+            stop();
+            return false;
+        }
+
+        sockaddr_in bound{};
+        sock_len len = sizeof(bound);
+        if (::getsockname(listen_fd_, reinterpret_cast<sockaddr*>(&bound),
+                          &len) != 0) {
+            stop();
+            return false;
+        }
+        port_ = ntohs(bound.sin_port);
+
+        running_ = true;
+        accept_thread_ = std::thread([this] { accept_loop(); });
+        return true;
+    }
+
+    void stop() {
+        running_ = false;
+        if (listen_fd_ >= 0) {
+            CLOSE_SOCKET(listen_fd_);
+            listen_fd_ = -1;
+        }
+        if (accept_thread_.joinable()) {
+            accept_thread_.join();
+        }
+        if (tls_ctx_) {
+            SSL_CTX_free(tls_ctx_);
+            tls_ctx_ = nullptr;
+            ERR_clear_error();
+        }
+    }
+
+    int port() const { return port_; }
+
+    /// CONNECT 接受模式下生成的证书 PEM 路径（正向校验的信任锚）
+    std::string cert_path() const { return cert_path_; }
+
+    std::string proxy_url() const {
+        return "http://127.0.0.1:" + std::to_string(port_);
+    }
+
+    void set_body(std::string body) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        body_ = std::move(body);
+    }
+
+    std::string last_request_line() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return last_request_line_;
+    }
+
+    std::string last_proxy_auth() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return last_proxy_auth_;
+    }
+
+    std::string connect_authority() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return connect_authority_;
+    }
+
+    std::string tunnel_request_line() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return tunnel_request_line_;
+    }
+
+    int connect_count() const { return connect_count_.load(); }
+
+private:
+    void accept_loop() {
+        while (running_) {
+            struct pollfd pfd;
+            pfd.fd = listen_fd_;
+            pfd.events = POLLIN;
+            pfd.revents = 0;
+            if (POLL(&pfd, 1, 500) <= 0) {
+                continue;
+            }
+            sockaddr_in peer{};
+            sock_len peer_len = sizeof(peer);
+            int conn = ::accept(listen_fd_,
+                                reinterpret_cast<sockaddr*>(&peer), &peer_len);
+            if (conn < 0) {
+                if (!running_) return;
+                continue;
+            }
+            // 每用例至多一条连接，串行处理无竞争
+            serve(conn);
+        }
+    }
+
+    static void set_socket_timeout(int conn, int seconds) {
+        timeval tv{};
+        tv.tv_sec = seconds;
+#ifdef _WIN32
+        (void)setsockopt(conn, SOL_SOCKET, SO_RCVTIMEO,
+                         reinterpret_cast<const char*>(&tv), sizeof(tv));
+        (void)setsockopt(conn, SOL_SOCKET, SO_SNDTIMEO,
+                         reinterpret_cast<const char*>(&tv), sizeof(tv));
+#else
+        (void)setsockopt(conn, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        (void)setsockopt(conn, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+#endif
+    }
+
+    void serve(int conn) {
+        set_socket_timeout(conn, 10);
+
+        std::string request;
+        if (!read_headers_plain(conn, request)) {
+            CLOSE_SOCKET(conn);
+            return;
+        }
+
+        if (mode_ == Mode::kPlainProxy) {
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                last_request_line_ = request_line_of(request);
+                last_proxy_auth_ = extract_header(request, "Proxy-Authorization");
+            }
+            std::string body;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                body = body_;
+            }
+            const std::string header =
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: application/octet-stream\r\n"
+                "Connection: close\r\n"
+                "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n";
+            (void)send_all_plain(conn, header.data(), header.size());
+            (void)send_all_plain(conn, body.data(), body.size());
+            CLOSE_SOCKET(conn);
+            return;
+        }
+
+        // CONNECT 模式：请求行 = "CONNECT authority HTTP/1.1"
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            connect_count_.fetch_add(1);
+            const std::string line = request_line_of(request);
+            const auto sp1 = line.find(' ');
+            const auto sp2 = line.find(' ', sp1 == std::string::npos ? 0 : sp1 + 1);
+            connect_authority_ =
+                (sp1 == std::string::npos || sp2 == std::string::npos)
+                    ? ""
+                    : line.substr(sp1 + 1, sp2 - sp1 - 1);
+            last_proxy_auth_ = extract_header(request, "Proxy-Authorization");
+        }
+
+        if (mode_ == Mode::kConnectReject) {
+            static const char kForbidden[] =
+                "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n";
+            (void)send_all_plain(conn, kForbidden, sizeof(kForbidden) - 1);
+            CLOSE_SOCKET(conn);
+            return;
+        }
+
+        static const char kEstablished[] =
+            "HTTP/1.1 200 Connection established\r\n\r\n";
+        if (!send_all_plain(conn, kEstablished, sizeof(kEstablished) - 1)) {
+            CLOSE_SOCKET(conn);
+            return;
+        }
+
+        serve_tls_in_tunnel(conn);
+    }
+
+    /// 隧道建立后原地变身 TLS 服务器（同一连接、同一 fd）
+    void serve_tls_in_tunnel(int conn) {
+        SSL* ssl = SSL_new(tls_ctx_);
+        if (!ssl) {
+            CLOSE_SOCKET(conn);
+            return;
+        }
+        SSL_set_fd(ssl, conn);
+        if (SSL_accept(ssl) != 1) {
+            SSL_free(ssl);
+            CLOSE_SOCKET(conn);
+            ERR_clear_error();
+            return;
+        }
+
+        // 读隧道内请求头（origin-form）
+        std::string request;
+        char buf[4096];
+        while (request.find("\r\n\r\n") == std::string::npos &&
+               request.size() < 64 * 1024) {
+            const int n = SSL_read(ssl, buf, sizeof(buf));
+            if (n <= 0) {
+                SSL_free(ssl);
+                CLOSE_SOCKET(conn);
+                ERR_clear_error();
+                return;
+            }
+            request.append(buf, static_cast<std::size_t>(n));
+        }
+
+        std::string body;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            tunnel_request_line_ = request_line_of(request);
+            body = body_;
+        }
+
+        const std::string header =
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: application/octet-stream\r\n"
+            "Connection: close\r\n"
+            "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n";
+
+        auto ssl_send_all = [ssl](const std::string& data) {
+            std::size_t sent = 0;
+            while (sent < data.size()) {
+                const int n = SSL_write(ssl, data.data() + sent,
+                                        static_cast<int>(data.size() - sent));
+                if (n <= 0) {
+                    ERR_clear_error();
+                    return false;
+                }
+                sent += static_cast<std::size_t>(n);
+            }
+            return true;
+        };
+        const bool ok = ssl_send_all(header) && ssl_send_all(body);
+        (void)ok;
+
+        // 发完直接关闭：客户端按 Content-Length 判完成，不等待
+        // close_notify
+        SSL_free(ssl);
+        CLOSE_SOCKET(conn);
+        ERR_clear_error();
+    }
+
+    Mode mode_ = Mode::kPlainProxy;
+
+    mutable std::mutex mutex_;
+    std::string body_;
+    std::string last_request_line_;
+    std::string last_proxy_auth_;
+    std::string connect_authority_;
+    std::string tunnel_request_line_;
+
+    SSL_CTX* tls_ctx_ = nullptr;
+    std::string key_path_;
+    std::string cert_path_;
+
+    int listen_fd_ = -1;
+    int port_ = 0;
+    std::atomic<bool> running_{false};
+    std::atomic<int> connect_count_{0};
+    std::thread accept_thread_;
+};
+
+/// 引擎线程 RAII 守卫（同 TLS/重定向测试模式）
+class ProxyEngineRunner {
+public:
+    explicit ProxyEngineRunner(DownloadEngineV2& engine)
+        : engine_(engine), thread_([this] { engine_.run(); }) {}
+    ~ProxyEngineRunner() {
+        if (thread_.joinable()) {
+            engine_.force_shutdown();
+            thread_.join();
+        }
+    }
+    ProxyEngineRunner(const ProxyEngineRunner&) = delete;
+    ProxyEngineRunner& operator=(const ProxyEngineRunner&) = delete;
+
+    void shutdown_and_join() {
+        engine_.shutdown();
+        if (thread_.joinable()) thread_.join();
+    }
+
+private:
+    DownloadEngineV2& engine_;
+    std::thread thread_;
+};
+
+bool wait_group_terminal(DownloadEngineV2& engine, RequestGroup* group,
+                         int timeout_ms) {
+    (void)engine;
+    return wait_for(
+        [&] {
+            const auto st = group->status();
+            return st == RequestGroupStatus::COMPLETED ||
+                   st == RequestGroupStatus::FAILED;
+        },
+        timeout_ms);
+}
+
+DownloadOptions base_proxy_options(const std::string& out_path) {
+    DownloadOptions options;
+    options.output_filename = out_path;
+    options.max_connections = 1;
+    options.max_retries = 0;
+    return options;
+}
+
+#endif  // FALCON_ENABLE_OPENSSL
+
+//==============================================================================
+// parse_http_proxy 纯函数（不依赖 OpenSSL，全配置可测）
+//==============================================================================
+
+TEST(ParseHttpProxy, EmptyConfigMeansNone) {
+    DownloadOptions options;
+    const auto cfg = parse_http_proxy(options);
+    EXPECT_EQ(cfg.kind, HttpProxyKind::None);
+}
+
+TEST(ParseHttpProxy, HttpUrlWithHostAndPort) {
+    DownloadOptions options;
+    options.proxy = "http://proxy.local:8080";
+    const auto cfg = parse_http_proxy(options);
+    EXPECT_EQ(cfg.kind, HttpProxyKind::HttpProxy);
+    EXPECT_EQ(cfg.host, "proxy.local");
+    EXPECT_EQ(cfg.port, 8080);
+    EXPECT_TRUE(cfg.username.empty());
+}
+
+TEST(ParseHttpProxy, DefaultPortIs80) {
+    DownloadOptions options;
+    options.proxy = "http://proxy.local";
+    const auto cfg = parse_http_proxy(options);
+    EXPECT_EQ(cfg.kind, HttpProxyKind::HttpProxy);
+    EXPECT_EQ(cfg.host, "proxy.local");
+    EXPECT_EQ(cfg.port, 80);
+}
+
+TEST(ParseHttpProxy, SchemelessHostTreatedAsHttpProxy) {
+    DownloadOptions options;
+    options.proxy = "10.0.0.2:3128";
+    const auto cfg = parse_http_proxy(options);
+    EXPECT_EQ(cfg.kind, HttpProxyKind::HttpProxy);
+    EXPECT_EQ(cfg.host, "10.0.0.2");
+    EXPECT_EQ(cfg.port, 3128);
+}
+
+TEST(ParseHttpProxy, UserinfoCredentialsWinOverFields) {
+    DownloadOptions options;
+    options.proxy = "http://alice:s3cret@proxy.local:8080";
+    options.proxy_username = "ignored";
+    options.proxy_password = "ignored";
+    const auto cfg = parse_http_proxy(options);
+    EXPECT_EQ(cfg.kind, HttpProxyKind::HttpProxy);
+    EXPECT_EQ(cfg.username, "alice");
+    EXPECT_EQ(cfg.password, "s3cret");
+}
+
+TEST(ParseHttpProxy, CredentialFieldsUsedWithoutUserinfo) {
+    DownloadOptions options;
+    options.proxy = "http://proxy.local:8080";
+    options.proxy_username = "bob";
+    options.proxy_password = "pw";
+    const auto cfg = parse_http_proxy(options);
+    EXPECT_EQ(cfg.kind, HttpProxyKind::HttpProxy);
+    EXPECT_EQ(cfg.username, "bob");
+    EXPECT_EQ(cfg.password, "pw");
+}
+
+TEST(ParseHttpProxy, SocksIsUnsupported) {
+    for (const char* raw :
+         {"socks5://proxy:1080", "socks4://proxy:1080", "socks://proxy:1080"}) {
+        DownloadOptions options;
+        options.proxy = raw;
+        EXPECT_EQ(parse_http_proxy(options).kind, HttpProxyKind::Unsupported)
+            << raw;
+    }
+}
+
+TEST(ParseHttpProxy, HttpsProxyIsUnsupported) {
+    DownloadOptions options;
+    options.proxy = "https://proxy.local:443";
+    EXPECT_EQ(parse_http_proxy(options).kind, HttpProxyKind::Unsupported);
+}
+
+TEST(ParseHttpProxy, ProxyTypeSocksFieldIsUnsupported) {
+    DownloadOptions options;
+    options.proxy = "http://proxy.local:8080";
+    options.proxy_type = "SOCKS5";
+    EXPECT_EQ(parse_http_proxy(options).kind, HttpProxyKind::Unsupported);
+}
+
+TEST(ParseHttpProxy, UnknownSchemeIsUnsupported) {
+    DownloadOptions options;
+    options.proxy = "ftp://proxy.local:21";
+    EXPECT_EQ(parse_http_proxy(options).kind, HttpProxyKind::Unsupported);
+}
+
+TEST(ParseHttpProxy, InvalidPortIsUnsupported) {
+    for (const char* raw :
+         {"http://proxy.local:0", "http://proxy.local:99999",
+          "http://proxy.local:abc", "http://proxy.local:"}) {
+        DownloadOptions options;
+        options.proxy = raw;
+        EXPECT_EQ(parse_http_proxy(options).kind, HttpProxyKind::Unsupported)
+            << raw;
+    }
+}
+
+//==============================================================================
+// 明文 HTTP 代理：absolute-form 请求行 + Basic 认证
+//==============================================================================
+
+#ifdef FALCON_ENABLE_OPENSSL
+
+/// 明文 HTTP 经代理：absolute-form 请求行 + Host 头保持目标主机；
+/// 上游域名不可解析（.invalid 保留域）而任务成功 = 客户端从未尝试
+/// 解析上游，全凭代理转发
+TEST(DownloadEngineV2Proxy, PlainProxyUsesAbsoluteFormRequestLine) {
+    const std::string body = make_body(32 * 1024);
+
+    ProxyTestServer server;
+    ASSERT_TRUE(server.start(ProxyTestServer::Mode::kPlainProxy));
+    server.set_body(body);
+
+    const std::string dir = temp_dir_for("plain");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options = base_proxy_options(out_path);
+    options.proxy = server.proxy_url();
+
+    // RFC 6761 保留域：可解析性由代理负责，客户端不得触碰
+    const TaskId task_id = engine.add_download(
+        "http://upstream.invalid:81/f.bin", options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    ProxyEngineRunner runner(engine);
+    ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
+    ASSERT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+
+    runner.shutdown_and_join();
+    server.stop();
+
+    EXPECT_EQ(server.last_request_line(),
+              "GET http://upstream.invalid:81/f.bin HTTP/1.1");
+    // Host 头为 origin-form 语义（目标主机），不含代理信息
+    // （由 absolute-form 请求行承载路由）；无凭据时不得出现认证头
+    EXPECT_EQ(read_file_content(out_path), body);
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+/// Proxy-Authorization: Basic 凭据精确到达代理（userinfo 形态）
+TEST(DownloadEngineV2Proxy, PlainProxySendsBasicAuthFromUserinfo) {
+    const std::string body = make_body(16 * 1024);
+
+    ProxyTestServer server;
+    ASSERT_TRUE(server.start(ProxyTestServer::Mode::kPlainProxy));
+    server.set_body(body);
+
+    const std::string dir = temp_dir_for("auth");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options = base_proxy_options(out_path);
+    // base64("alice:secret") == "YWxpY2U6c2VjcmV0"（RFC 4648 向量，
+    // 独立于实现预计算）
+    options.proxy = "http://alice:secret@127.0.0.1:" +
+                    std::to_string(server.port());
+
+    const TaskId task_id = engine.add_download(
+        "http://upstream.invalid:81/f.bin", options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    ProxyEngineRunner runner(engine);
+    ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
+    ASSERT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+
+    runner.shutdown_and_join();
+    server.stop();
+
+    EXPECT_EQ(server.last_proxy_auth(), "Basic YWxpY2U6c2VjcmV0");
+    EXPECT_EQ(read_file_content(out_path), body);
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+//==============================================================================
+// HTTPS 经代理：CONNECT 隧道 → 同连接 TLS 切换
+//==============================================================================
+
+/// CONNECT 隧道建立（authority-form target + 认证头）后同一连接
+/// 完成 TLS 握手与下载；隧道内请求行回 origin-form，SNI/证书校验
+/// 按目标主机照常生效
+TEST(DownloadEngineV2Proxy, ConnectTunnelThenTlsDownloadSucceeds) {
+    const std::string body = make_body(64 * 1024);
+
+    ProxyTestServer server;
+    ASSERT_TRUE(server.start(ProxyTestServer::Mode::kConnectAccept));
+    server.set_body(body);
+
+    const std::string dir = temp_dir_for("connect");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    // 客户端信任锚 = 服务器自签证书（SAN DNS:localhost 匹配目标主机）
+    ScopedEnvVar trusted_ca("SSL_CERT_FILE", server.cert_path());
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options = base_proxy_options(out_path);
+    options.proxy = "http://carol:pw@127.0.0.1:" + std::to_string(server.port());
+    options.verify_ssl = true;
+
+    const TaskId task_id = engine.add_download(
+        "https://localhost:" + std::to_string(server.port()) + "/f.bin",
+        options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    ProxyEngineRunner runner(engine);
+    ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
+    ASSERT_EQ(group->status(), RequestGroupStatus::COMPLETED)
+        << "CONNECT 隧道 + 同连接 TLS 握手必须端到端成功";
+
+    runner.shutdown_and_join();
+    server.stop();
+
+    // CONNECT 的 authority-form target（RFC 7231 §4.3.6）+ 隧道凭据
+    EXPECT_EQ(server.connect_authority(),
+              "localhost:" + std::to_string(server.port()));
+    EXPECT_EQ(server.connect_count(), 1);
+    // 隧道内 HTTP 请求回 origin-form（代理不见内部请求细节）
+    EXPECT_EQ(server.tunnel_request_line(), "GET /f.bin HTTP/1.1");
+    EXPECT_EQ(read_file_content(out_path), body);
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+/// 代理拒绝 CONNECT（403）：干净失败收口，半成品不顶最终名
+TEST(DownloadEngineV2Proxy, ConnectRefusedFailsCleanly) {
+    ProxyTestServer server;
+    ASSERT_TRUE(server.start(ProxyTestServer::Mode::kConnectReject));
+
+    const std::string dir = temp_dir_for("refuse");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options = base_proxy_options(out_path);
+    options.proxy = server.proxy_url();
+
+    const TaskId task_id = engine.add_download(
+        "https://localhost:" + std::to_string(server.port()) + "/f.bin",
+        options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    ProxyEngineRunner runner(engine);
+    ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
+    EXPECT_EQ(group->status(), RequestGroupStatus::FAILED)
+        << "代理拒绝 CONNECT 必须干净失败";
+
+    runner.shutdown_and_join();
+    server.stop();
+
+    EXPECT_EQ(server.connect_count(), 1);
+    EXPECT_TRUE(read_file_content(out_path).empty());
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+#endif  // FALCON_ENABLE_OPENSSL
+
+} // namespace

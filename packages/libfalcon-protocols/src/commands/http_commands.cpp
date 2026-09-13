@@ -232,6 +232,148 @@ bool apply_group_resume_range(HttpInitiateConnectionCommand& cmd,
 // HttpInitiateConnectionCommand 实现
 //==============================================================================
 
+namespace {
+
+/// 标准 Base64（RFC 4648，带填充）——Proxy-Authorization: Basic 用
+std::string base64_encode(const std::string& in) {
+    static const char* kTable =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    std::string out;
+    out.reserve(((in.size() + 2) / 3) * 4);
+
+    std::size_t i = 0;
+    while (i + 2 < in.size()) {
+        const unsigned int v = (static_cast<unsigned char>(in[i]) << 16) |
+                               (static_cast<unsigned char>(in[i + 1]) << 8) |
+                               static_cast<unsigned char>(in[i + 2]);
+        out += kTable[(v >> 18) & 0x3f];
+        out += kTable[(v >> 12) & 0x3f];
+        out += kTable[(v >> 6) & 0x3f];
+        out += kTable[v & 0x3f];
+        i += 3;
+    }
+    if (i + 1 == in.size()) {
+        const unsigned int v = static_cast<unsigned char>(in[i]) << 16;
+        out += kTable[(v >> 18) & 0x3f];
+        out += kTable[(v >> 12) & 0x3f];
+        out += "==";
+    } else if (i + 2 == in.size()) {
+        const unsigned int v = (static_cast<unsigned char>(in[i]) << 16) |
+                               (static_cast<unsigned char>(in[i + 1]) << 8);
+        out += kTable[(v >> 18) & 0x3f];
+        out += kTable[(v >> 12) & 0x3f];
+        out += kTable[(v >> 6) & 0x3f];
+        out += '=';
+    }
+    return out;
+}
+
+/// 端口串严格解析（全数字且 1-65535；任何不合法都判 Unsupported）
+bool parse_proxy_port(const std::string& text, uint16_t& port) {
+    if (text.empty() || text.size() > 5) {
+        return false;
+    }
+    unsigned value = 0;
+    for (const char c : text) {
+        if (c < '0' || c > '9') {
+            return false;
+        }
+        value = value * 10 + static_cast<unsigned>(c - '0');
+    }
+    if (value == 0 || value > 65535) {
+        return false;
+    }
+    port = static_cast<uint16_t>(value);
+    return true;
+}
+
+std::string ascii_lower(std::string text) {
+    for (char& c : text) {
+        if (c >= 'A' && c <= 'Z') {
+            c = static_cast<char>(c - 'A' + 'a');
+        }
+    }
+    return text;
+}
+
+}  // namespace
+
+HttpProxyConfig parse_http_proxy(const DownloadOptions& options) {
+    const std::string& raw = options.proxy;
+    if (raw.empty()) {
+        return {};  // None
+    }
+
+    auto unsupported = [] {
+        HttpProxyConfig cfg;
+        cfg.kind = HttpProxyKind::Unsupported;
+        return cfg;
+    };
+
+    std::string rest = raw;
+    uint16_t default_port = 80;
+
+    if (rest.rfind("http://", 0) == 0) {
+        rest = rest.substr(7);
+    } else if (rest.rfind("https://", 0) == 0 || rest.rfind("socks", 0) == 0) {
+        // TLS 代理与 socks 系列不支持——适配层回退 V1 curl
+        return unsupported();
+    } else if (rest.find("://") != std::string::npos) {
+        return unsupported();  // 未知 scheme
+    }  // 无 scheme：按明文 HTTP 代理（curl 对无 scheme 代理同语义）
+
+    // proxy_type 显式声明 socks 的兜底（字段语义：覆盖 URL scheme）
+    if (ascii_lower(options.proxy_type).find("socks") != std::string::npos) {
+        return unsupported();
+    }
+
+    // userinfo：user:pass@ 优先于独立凭据字段
+    std::string username;
+    std::string password;
+    const auto at = rest.find('@');
+    if (at != std::string::npos) {
+        const std::string userinfo = rest.substr(0, at);
+        rest = rest.substr(at + 1);
+        const auto colon = userinfo.find(':');
+        username = colon == std::string::npos ? userinfo
+                                              : userinfo.substr(0, colon);
+        if (colon != std::string::npos) {
+            password = userinfo.substr(colon + 1);
+        }
+    }
+
+    // authority：host[:port]（剥路径；V2 数据面为 AF_INET，IPv6 字面量
+    // 代理明确判 Unsupported）
+    if (!rest.empty() && rest[0] == '/') {
+        return unsupported();
+    }
+    const auto slash = rest.find('/');
+    const std::string authority =
+        slash == std::string::npos ? rest : rest.substr(0, slash);
+    if (authority.empty() || authority.find('[') != std::string::npos) {
+        return unsupported();
+    }
+
+    std::string host = authority;
+    uint16_t port = default_port;
+    const auto colon = authority.rfind(':');
+    if (colon != std::string::npos) {
+        host = authority.substr(0, colon);
+        if (!parse_proxy_port(authority.substr(colon + 1), port)) {
+            return unsupported();
+        }
+    }
+
+    HttpProxyConfig cfg;
+    cfg.kind = HttpProxyKind::HttpProxy;
+    cfg.host = host;
+    cfg.port = port;
+    cfg.username = username.empty() ? options.proxy_username : username;
+    cfg.password = password.empty() ? options.proxy_password : password;
+    return cfg;
+}
+
 HttpInitiateConnectionCommand::HttpInitiateConnectionCommand(
     TaskId task_id,
     std::string url,
@@ -276,6 +418,14 @@ HttpInitiateConnectionCommand::HttpInitiateConnectionCommand(
     }
 
     connection_state_ = HttpConnectionState::DISCONNECTED;
+
+    // 代理配置 parse 一次（Unsupported 的拒绝收口在 request_group 门禁；
+    // 此处 None 之外均为已验证的 HttpProxy）
+    proxy_cfg_ = parse_http_proxy(options);
+    if (proxy_cfg_.kind == HttpProxyKind::HttpProxy) {
+        FALCON_LOG_INFO_STREAM("使用 HTTP 代理: " << proxy_cfg_.host << ":"
+                                                  << proxy_cfg_.port);
+    }
 }
 
 HttpInitiateConnectionCommand::~HttpInitiateConnectionCommand() {
@@ -362,7 +512,37 @@ bool HttpInitiateConnectionCommand::execute(DownloadEngineV2* engine) {
 
                 connection_state_ = HttpConnectionState::CONNECTED;
                 if (use_https_) {
-                    connection_state_ = HttpConnectionState::TLS_HANDSHAKING;
+                    // HTTPS 经代理：先建 CONNECT 隧道再握手（隧道内字节
+                    // 端到端加密，代理只见 host:port）；明文代理与直连
+                    // 均直接发请求
+                    if (proxy_cfg_.kind == HttpProxyKind::HttpProxy) {
+                        connection_state_ =
+                            HttpConnectionState::PROXY_TUNNEL_SEND;
+                    } else {
+                        connection_state_ =
+                            HttpConnectionState::TLS_HANDSHAKING;
+                    }
+                }
+                [[fallthrough]];
+
+            case HttpConnectionState::PROXY_TUNNEL_SEND:
+                if (connection_state_ == HttpConnectionState::PROXY_TUNNEL_SEND) {
+                    // 发送 CONNECT：未发完注册 WRITE 挂起，发完置
+                    // PROXY_TUNNEL_RECV 注册 READ 挂起等代理应答——两个
+                    // 挂起均直接返回，不同轮误落到请求发送
+                    return handle_result(send_proxy_connect(engine));
+                }
+                [[fallthrough]];
+
+            case HttpConnectionState::PROXY_TUNNEL_RECV:
+                if (connection_state_ == HttpConnectionState::PROXY_TUNNEL_RECV) {
+                    // 代理应答未到齐：注册 READ 挂起；到齐且 2xx：置
+                    // TLS_HANDSHAKING 落下方 TLS case 同轮推进；非 2xx
+                    // 失败收口
+                    const auto tunnel_res = receive_proxy_connect_response(engine);
+                    if (tunnel_res != ExecutionResult::OK) {
+                        return handle_result(tunnel_res);
+                    }
                 }
                 [[fallthrough]];
 
@@ -468,19 +648,26 @@ bool HttpInitiateConnectionCommand::create_socket() {
 }
 
 bool HttpInitiateConnectionCommand::connect_socket() {
+    // 代理生效时连接代理服务器（absolute-form 请求与 CONNECT 隧道均在
+    // 代理连接上承载）；目标主机名的解析延迟到隧道建立之后（TLS 握手
+    // 也只与目标主机相关）
+    const bool use_proxy = proxy_cfg_.kind == HttpProxyKind::HttpProxy;
+    const std::string& connect_host = use_proxy ? proxy_cfg_.host : host_;
+    const uint16_t connect_port = use_proxy ? proxy_cfg_.port : port_;
+
     struct sockaddr_in addr = {};
     addr.sin_family = AF_INET;
-    addr.sin_port = htons(port_);
+    addr.sin_port = htons(connect_port);
 
     connect_in_progress_ = false;
 
-    std::string ip = host_;
-    if (inet_pton(AF_INET, host_.c_str(), &addr.sin_addr) <= 0) {
+    std::string ip = connect_host;
+    if (inet_pton(AF_INET, connect_host.c_str(), &addr.sin_addr) <= 0) {
         if (!resolved_ip_.empty()) {
             ip = resolved_ip_;
         } else {
-            if (!resolve_host(host_, ip)) {
-                FALCON_LOG_ERROR_STREAM("解析主机失败: " << host_);
+            if (!resolve_host(connect_host, ip)) {
+                FALCON_LOG_ERROR_STREAM("解析主机失败: " << connect_host);
                 return false;
             }
             resolved_ip_ = ip;
@@ -511,7 +698,8 @@ bool HttpInitiateConnectionCommand::connect_socket() {
     }
 
     connect_in_progress_ = (ret < 0);
-    FALCON_LOG_INFO_STREAM("正在连接 " << host_ << ":" << port_
+    FALCON_LOG_INFO_STREAM((use_proxy ? "正在连接代理 " : "正在连接 ")
+                                 << connect_host << ":" << connect_port
                                  << (connect_in_progress_ ? " (in progress)" : " (connected)"));
     return true;
 }
@@ -677,15 +865,152 @@ HttpInitiateConnectionCommand::advance_tls_handshake(
 #endif
 }
 
+AbstractCommand::ExecutionResult
+HttpInitiateConnectionCommand::send_proxy_connect(
+    DownloadEngineV2* engine) {
+    if (proxy_request_.empty()) {
+        // RFC 7231 §4.3.6：CONNECT 的 target 是 authority-form
+        proxy_request_ = "CONNECT " + host_ + ":" + std::to_string(port_) +
+                         " HTTP/1.1\r\n"
+                         "Host: " + host_ + ":" + std::to_string(port_) + "\r\n";
+        if (!options_.user_agent.empty()) {
+            proxy_request_ += "User-Agent: " + options_.user_agent + "\r\n";
+        }
+        if (!proxy_cfg_.username.empty()) {
+            proxy_request_ +=
+                "Proxy-Authorization: Basic " +
+                base64_encode(proxy_cfg_.username + ":" + proxy_cfg_.password) +
+                "\r\n";
+        }
+        proxy_request_ += "\r\n";
+        proxy_sent_ = 0;
+    }
+
+    while (proxy_sent_ < proxy_request_.size()) {
+        const char* data = proxy_request_.data() + proxy_sent_;
+        const std::size_t remaining = proxy_request_.size() - proxy_sent_;
+#ifdef _WIN32
+        const ssize_t n = send(socket_fd_, data,
+                               static_cast<int>(remaining), 0);
+#else
+        const ssize_t n = send(socket_fd_, data, remaining, 0);
+#endif
+        if (n < 0) {
+            if (sock_would_block(sock_errno())) {
+                engine->register_socket_event(
+                    socket_fd_, static_cast<int>(net::IOEvent::WRITE), id());
+                return ExecutionResult::WAIT_FOR_SOCKET;
+            }
+            FALCON_LOG_ERROR_STREAM("发送 CONNECT 失败: "
+                                    << sock_err_str(sock_errno()));
+            notify_segment_failure(engine, "Failed to send CONNECT to proxy");
+            close_socket_fd(socket_fd_);
+            socket_fd_ = -1;
+            return ExecutionResult::ERROR_OCCURRED;
+        }
+        proxy_sent_ += static_cast<std::size_t>(n);
+    }
+
+    // CONNECT 已完整发出：等代理最终应答（非阻塞 socket 上应答不可
+    // 能已在缓冲——请求刚写出）
+    connection_state_ = HttpConnectionState::PROXY_TUNNEL_RECV;
+    engine->register_socket_event(
+        socket_fd_, static_cast<int>(net::IOEvent::READ), id());
+    return ExecutionResult::WAIT_FOR_SOCKET;
+}
+
+AbstractCommand::ExecutionResult
+HttpInitiateConnectionCommand::receive_proxy_connect_response(
+    DownloadEngineV2* engine) {
+    char buf[4096];
+    while (proxy_response_.find("\r\n\r\n") == std::string::npos &&
+           proxy_response_.size() < 64 * 1024) {
+#ifdef _WIN32
+        const ssize_t n = recv(socket_fd_, buf, static_cast<int>(sizeof(buf)), 0);
+#else
+        const ssize_t n = recv(socket_fd_, buf, sizeof(buf), 0);
+#endif
+        if (n < 0) {
+            if (sock_would_block(sock_errno())) {
+                engine->register_socket_event(
+                    socket_fd_, static_cast<int>(net::IOEvent::READ), id());
+                return ExecutionResult::WAIT_FOR_SOCKET;
+            }
+            FALCON_LOG_ERROR_STREAM("接收代理应答失败: "
+                                    << sock_err_str(sock_errno()));
+            notify_segment_failure(engine, "Failed to receive proxy response");
+            close_socket_fd(socket_fd_);
+            socket_fd_ = -1;
+            return ExecutionResult::ERROR_OCCURRED;
+        }
+        if (n == 0) {
+            FALCON_LOG_ERROR_STREAM("代理在应答完成前关闭连接");
+            notify_segment_failure(engine, "Proxy closed connection before response");
+            close_socket_fd(socket_fd_);
+            socket_fd_ = -1;
+            return ExecutionResult::ERROR_OCCURRED;
+        }
+        proxy_response_.append(buf, static_cast<std::size_t>(n));
+    }
+
+    // 状态行判定：HTTP/1.x 2xx 即隧道建立（RFC 7231：1xx 中间应答不在
+    // 最终应答之列，代理必须以 2xx 收尾）
+    const auto eol = proxy_response_.find("\r\n");
+    const std::string status_line =
+        eol == std::string::npos ? proxy_response_
+                                 : proxy_response_.substr(0, eol);
+    unsigned code = 0;
+    const auto sp1 = status_line.find(' ');
+    if (sp1 != std::string::npos) {
+        const auto sp2 = status_line.find(' ', sp1 + 1);
+        const std::string code_text = status_line.substr(
+            sp1 + 1,
+            sp2 == std::string::npos ? std::string::npos : sp2 - sp1 - 1);
+        if (code_text.size() == 3 && code_text.find_first_not_of("0123456789") ==
+                                         std::string::npos) {
+            code = static_cast<unsigned>((code_text[0] - '0') * 100) +
+                   static_cast<unsigned>((code_text[1] - '0') * 10) +
+                   static_cast<unsigned>(code_text[2] - '0');
+        }
+    }
+
+    if (code < 200 || code > 299) {
+        FALCON_LOG_ERROR_STREAM("代理拒绝 CONNECT 隧道: " << status_line);
+        notify_segment_failure(engine, "Proxy refused CONNECT: " + status_line);
+        close_socket_fd(socket_fd_);
+        socket_fd_ = -1;
+        return ExecutionResult::ERROR_OCCURRED;
+    }
+
+    FALCON_LOG_INFO_STREAM("代理隧道已建立: " << host_ << ":" << port_);
+    connection_state_ = HttpConnectionState::TLS_HANDSHAKING;
+    return ExecutionResult::OK;
+}
+
 bool HttpInitiateConnectionCommand::prepare_http_request() {
     http_request_ = std::make_shared<HttpRequest>();
     http_request_->set_method("GET");
-    http_request_->set_url(path_);
+    // 明文 HTTP 经代理：请求行用 absolute-form（RFC 7230 §5.3.2），代理
+    // 据此转发；HTTPS 经代理已由 CONNECT 隧道承载，隧道内回 origin-form
+    // （代理不见内部请求，目标服务器也不认 absolute-form）；直连为
+    // origin-form
+    const bool plain_via_proxy =
+        proxy_cfg_.kind == HttpProxyKind::HttpProxy && !use_https_;
+    http_request_->set_url(plain_via_proxy ? url_ : path_);
 
     http_request_->set_header("Host", host_);
     http_request_->set_header("User-Agent", options_.user_agent);
     http_request_->set_header("Accept", "*/*");
     http_request_->set_header("Connection", "close");
+
+    // 代理认证只随明文代理请求发出（CONNECT 隧道的凭据已在 CONNECT
+    // 请求里交给代理，隧道内再发既无意义也向目标泄漏代理凭据）
+    if (plain_via_proxy && !proxy_cfg_.username.empty()) {
+        http_request_->set_header(
+            "Proxy-Authorization",
+            "Basic " +
+                base64_encode(proxy_cfg_.username + ":" + proxy_cfg_.password));
+    }
 
     // 多连接分段：非首段连接携带 Range 请求头；断点续传时初始连接也
     // 可承载带 Range 的续传段（set_range 对段 0 同样合法）

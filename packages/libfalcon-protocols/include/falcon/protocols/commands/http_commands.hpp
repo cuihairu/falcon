@@ -45,10 +45,44 @@ enum class HttpConnectionState {
     CONNECTING,
     CONNECTED,
     TLS_HANDSHAKING,  ///< TLS 握手进行中（WANT_* 挂起等 socket 事件重入续推）
+    /// 向 HTTP 代理发送 CONNECT 请求中（非阻塞 send 挂起等重入续推）
+    PROXY_TUNNEL_SEND,
+    /// 等待/接收代理对 CONNECT 的最终应答（收满 \r\n\r\n 判定）
+    PROXY_TUNNEL_RECV,
     REQUEST_SENT,
     RECEIVING,
     COMPLETE
 };
+
+/**
+ * @brief 代理配置解析结论
+ *
+ * V2 数据面仅支持明文 HTTP 代理（absolute-form 请求行 + CONNECT
+ * 隧道）；socks 系列与 TLS 代理明确判 Unsupported——M2 适配层据此
+ * 回退 V1 curl（libcurl 自带 socks 支持）
+ */
+enum class HttpProxyKind {
+    None,         ///< 无代理（proxy 配置为空）
+    HttpProxy,    ///< 明文 HTTP 代理
+    Unsupported   ///< socks / https 代理 / 未知 scheme / 无法解析
+};
+
+struct HttpProxyConfig {
+    HttpProxyKind kind = HttpProxyKind::None;
+    std::string host;
+    uint16_t port = 0;
+    std::string username;  ///< 空 = 无认证
+    std::string password;
+};
+
+/**
+ * @brief 解析 DownloadOptions 代理配置（纯函数，便于单测）
+ *
+ * 接受 `http://[user:pass@]host[:port]` 与无 scheme 的
+ * `[user:pass@]host[:port]`（按明文 HTTP 代理，默认端口 80）；
+ * userinfo 凭据优先，缺省回落 proxy_username/proxy_password 字段。
+ */
+HttpProxyConfig parse_http_proxy(const DownloadOptions& options);
 
 /**
  * @brief TLS 握手推进结果
@@ -265,6 +299,8 @@ private:
     bool connect_socket();
     TlsHandshakeResult setup_tls();  // 始终声明，实现根据 FALCON_ENABLE_OPENSSL 条件编译
     ExecutionResult advance_tls_handshake(DownloadEngineV2* engine);
+    ExecutionResult send_proxy_connect(DownloadEngineV2* engine);
+    ExecutionResult receive_proxy_connect_response(DownloadEngineV2* engine);
     bool prepare_http_request();
     ExecutionResult send_http_request(DownloadEngineV2* engine);
     void notify_segment_failure(DownloadEngineV2* engine, const std::string& reason);
@@ -298,6 +334,14 @@ private:
 
     std::string resolved_ip_;
     bool connect_in_progress_ = false;
+
+    // 代理配置（构造时 parse 一次；None = 直连，语义零变化）
+    HttpProxyConfig proxy_cfg_;
+
+    // CONNECT 隧道状态（仅 HTTPS + 代理使用）
+    std::string proxy_request_;   ///< 待发 CONNECT 报文
+    std::size_t proxy_sent_ = 0;  ///< 已发送字节数
+    std::string proxy_response_;  ///< 累积的代理应答（收满 \r\n\r\n 判定）
 
     std::string request_data_;
     std::size_t request_sent_ = 0;

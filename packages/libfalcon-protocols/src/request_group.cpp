@@ -150,6 +150,21 @@ bool RequestGroup::init() {
         }
     }
 
+    // 代理配置 V2 数据面不支持（socks 系列 / TLS 代理 / 未知 scheme）：
+    // 明确失败而非静默直连——M2 适配层据此回退 V1 curl（libcurl 自带
+    // socks 支持）；命令层只承接 None / HttpProxy 两种形态
+    if (parse_http_proxy(options_).kind == HttpProxyKind::Unsupported) {
+        const std::string reason =
+            "V2 引擎暂不支持该代理类型（仅明文 HTTP 代理，socks/HTTPS 代理请回退 V1）: " +
+            options_.proxy;
+        FALCON_LOG_WARN_STREAM("任务组失败: id=" << id_ << ", " << reason);
+        set_error_message(reason);
+        download_task_->set_error(reason);
+        download_task_->set_status(TaskStatus::Failed);
+        status_ = RequestGroupStatus::FAILED;
+        return false;
+    }
+
     try_load_resume_state(url);
 
     if (starts_with(url, "http://")) {

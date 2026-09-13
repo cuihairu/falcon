@@ -2,6 +2,42 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-13 - V2 引擎 HTTP 代理支持（absolute-form 请求行 + CONNECT 隧道）
+- V2 数据面此前无法穿透代理（aria2 生产部署的常见网络形态）；补齐
+  明文 HTTP 代理全路径，socks/TLS 代理明确判 Unsupported（M2 适配层
+  据此回退 V1 curl，libcurl 自带 socks 支持）——不静默直连
+- `parse_http_proxy(options)` 纯函数（暴露便于单测）：`http://[
+  user:pass@]host[:port]` 与无 scheme 的 authority（按明文代理，缺省
+  端口 80，curl 同语义）；userinfo 凭据优先、缺省回落
+  proxy_username/proxy_password 字段；socks4/5/https/未知 scheme/
+  proxy_type 含 socks/非法端口一律 Unsupported；IPv6 字面量代理随
+  V2 的 AF_INET 数据面一并判 Unsupported
+- 代理分叉在 connect_socket：代理生效时连接代理服务器（目标主机名
+  解析延迟到隧道建立之后——absolute-form/CONNECT 语义下目标解析
+  本就归代理）；分段的续传/重试/跨段连接经 options_ 值拷贝自然贯通
+- 明文 HTTP 经代理：请求行 absolute-form（RFC 7230 §5.3.2）+ 
+  Proxy-Authorization: Basic（本地 15 行 RFC 4648 base64）；
+  `HttpRequest::to_string` 仅在 target 无 `"://"` 时补前导 `/`，
+  absolute-form 原样透传
+- HTTPS 经代理：CONNECT 隧道（RFC 7231 §4.3.6 authority-form target，
+  认证同源）——新 `PROXY_TUNNEL_SEND/RECV` 状态非阻塞推进（发完
+  CONNECT 注册 READ 等代理最终应答，收满 `\r\n\r\n` 判 2xx），隧道
+  建立后同连接切 TLS_HANDSHAKING——既有异步握手/证书校验/SNI 零
+  改动照常生效；隧道内请求回 origin-form 且不再发 Proxy-
+  Authorization（凭据只交代理，不向目标泄漏）；非 2xx/代理提前断连
+  走初始连接失败收口（make_connection_retry → 终态）
+- request_group 门禁：Unsupported 代理组 FAILED + 明确错误消息
+  （语义性失败不重试）
+- 新增 http_commands_proxy_test.cpp 15 用例（parse 表驱动 11 + 端到
+  端 4：ProxyTestServer 三模式——明文代理假实现记录请求形态后直接
+  应答、CONNECT 接受后原地 SSL_accept 变身 TLS 服务器、CONNECT 拒
+  绝 403）：absolute-form 请求行 + 上游 .invalid 保留域不可解析而
+  任务成功（客户端从未触碰上游解析）/ Basic 凭据精确到达（预计算
+  RFC 向量）/ CONNECT 隧道 + authority 断言 + 隧道内 origin-form +
+  正向证书校验 / 403 干净失败；证书生成函数平移至测试共享头
+  tls_cert_generator.hpp（TLS 与 proxy 测试共用）；全量 1524 ctest
+  通过，ASan 引擎相关 36 用例零告警
+
 ### 2026-09-13 - V2 引擎 HTTPS 放行与加固（异步 TLS 握手 + 证书校验硬断连）
 - 此前 V2 引擎 https:// 被 init 门禁直接拒绝，TLS 基建以半成品形态
   沉睡：非阻塞 socket 上 SSL_connect 的 WANT_* 直接判失败（生产连

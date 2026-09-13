@@ -38,7 +38,10 @@ public:
     std::string to_string() const {
         std::ostringstream oss;
         std::string target = url_.empty() ? "/" : url_;
-        if (!target.empty() && target[0] != '/') {
+        // origin-form 补前导 '/'；absolute-form（HTTP 代理转发，
+        // RFC 7230 §5.3.2）含 "://"，原样透传
+        if (!target.empty() && target[0] != '/' &&
+            target.find("://") == std::string::npos) {
             target = "/" + target;
         }
 
