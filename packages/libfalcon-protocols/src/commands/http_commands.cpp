@@ -42,6 +42,7 @@ typedef SSIZE_T ssize_t;
 #include <filesystem>
 #include <system_error>
 #include <thread>
+#include <vector>
 #include <cstring>
 #include <sstream>
 #include <iostream>
@@ -773,6 +774,7 @@ AbstractCommand::ExecutionResult HttpInitiateConnectionCommand::send_http_reques
                                                              range_offset_,
                                                              range_length_);
     response_cmd->set_retry_count(retry_count_);
+    response_cmd->set_redirect_depth(redirect_depth_);
     schedule_next(engine, std::move(response_cmd));
     return ExecutionResult::OK;
 }
@@ -924,7 +926,13 @@ bool HttpResponseCommand::execute(DownloadEngineV2* engine) {
     }
 
     if (is_redirect_) {
-        return fail("HTTP redirect not supported in V2 socket pipeline");
+        // 跟随重定向：解析 Location 重新发起连接（深度沿命令链传递，
+        // 超链/无法解析/https 目标在此按失败收口）
+        if (!handle_redirect(engine)) {
+            return fail("Failed to follow redirect to \"" + redirect_url_ +
+                        "\" (status " + std::to_string(status_code_) + ")");
+        }
+        return handle_result(ExecutionResult::OK);  // 本命令完成，新命令接管
     }
 
     if (status_code_ < 200 || status_code_ >= 300) {
@@ -1064,43 +1072,159 @@ bool HttpResponseCommand::parse_header_line(const std::string& line) {
     return true;
 }
 
-bool HttpResponseCommand::handle_redirect() {
-    FALCON_LOG_INFO_STREAM("重定向到: " << redirect_url_);
+namespace {
 
-    // 解析重定向 URL
-    std::string redirect_url = redirect_url_;
+/// 重定向跟随上限（含非重定向的原始请求不算，纯跳数）
+constexpr int kMaxRedirects = 5;
 
-    // 处理相对路径重定向
-    if (redirect_url.find("http://") != 0 && redirect_url.find("https://") != 0) {
-        // 相对路径，基于当前 URL 构建
-        std::string base_url = http_request_->url();
-        size_t path_pos = base_url.find('/', base_url.find("://") + 3);
-        if (path_pos != std::string::npos) {
-            redirect_url = base_url.substr(0, path_pos);
-            if (redirect_url_[0] != '/') {
-                redirect_url += '/';
+/// RFC 7231 §6.4 规定应跟随的重定向状态码
+bool is_redirect_status(int code) {
+    return code == 301 || code == 302 || code == 303 ||
+           code == 307 || code == 308;
+}
+
+/// 去掉 URL 的 query/fragment（相对路径解析基于纯 path）
+std::string strip_query(std::string path) {
+    const auto cut = path.find_first_of("?#");
+    if (cut != std::string::npos) {
+        path.resize(cut);
+    }
+    return path;
+}
+
+/// 按 RFC 3986 §5.2 归一化 path 中的 "." / ".." 段
+std::string normalize_dots(std::string path) {
+    std::vector<std::string> segs;
+    std::size_t pos = 0;
+    while (pos < path.size()) {
+        auto next = path.find('/', pos);
+        if (next == std::string::npos) {
+            next = path.size();
+        }
+        const std::string seg = path.substr(pos, next - pos);
+        pos = next + 1;
+        if (seg == "..") {
+            if (!segs.empty()) {
+                segs.pop_back();
             }
-            redirect_url += redirect_url_;
+        } else if (seg != "." && !seg.empty()) {
+            segs.push_back(seg);
         }
     }
+    std::string out;
+    for (const auto& seg : segs) {
+        out += '/';
+        out += seg;
+    }
+    if (out.empty()) {
+        out = "/";
+    }
+    return out;
+}
 
-    // 关闭当前连接
+/**
+ * @brief 解析 Location 头为绝对 URL（RFC 3986 §5 引用解析）
+ *
+ * 四种形态：
+ * - 绝对 URL（http:// / https://）→ 原样
+ * - 协议相对（//host/path）→ 沿用当前 scheme
+ * - 绝对路径（/path）→ scheme://authority + path
+ * - 相对路径（rel、../up）→ 基于当前请求 path 的目录解析并归一化
+ *
+ * @return 空串表示无法解析（无效 Location）
+ */
+std::string resolve_redirect_location(const std::string& location,
+                                      const std::string& request_url) {
+    if (location.empty()) {
+        return {};
+    }
+    if (location.rfind("http://", 0) == 0 ||
+        location.rfind("https://", 0) == 0) {
+        return location;
+    }
+
+    // 当前 URL：scheme://authority/path?query
+    const auto scheme_end = request_url.find("://");
+    if (scheme_end == std::string::npos) {
+        return {};
+    }
+    const std::string scheme = request_url.substr(0, scheme_end);
+    const auto authority_begin = scheme_end + 3;
+    auto path_pos = request_url.find('/', authority_begin);
+    const std::string authority =
+        request_url.substr(authority_begin,
+                           path_pos == std::string::npos
+                               ? std::string::npos
+                               : path_pos - authority_begin);
+    if (authority.empty()) {
+        return {};
+    }
+
+    // 协议相对：//host/path
+    if (location.rfind("//", 0) == 0) {
+        return scheme + ":" + location;
+    }
+
+    // 当前请求的目录（相对路径的基准）；无 path 的 URL 视为 "/"
+    std::string base_path =
+        path_pos == std::string::npos ? "/" : strip_query(request_url.substr(path_pos));
+    const auto last_slash = base_path.rfind('/');
+    const std::string base_dir =
+        last_slash == std::string::npos ? "/" : base_path.substr(0, last_slash + 1);
+
+    if (location[0] == '/') {
+        // 绝对路径
+        return scheme + "://" + authority + strip_query(location);
+    }
+
+    // 相对路径：基于当前目录拼接后归一化
+    return scheme + "://" + authority +
+           normalize_dots(base_dir + strip_query(location));
+}
+
+} // namespace
+
+bool HttpResponseCommand::handle_redirect(DownloadEngineV2* engine) {
+    if (!engine) {
+        return false;
+    }
+    if (!is_redirect_status(status_code_)) {
+        // 304 等其他 3xx：无跟随语义，按失败收口
+        FALCON_LOG_WARN_STREAM("收到非跟随语义的 3xx 响应: " << status_code_);
+        return false;
+    }
+    if (redirect_depth_ >= kMaxRedirects) {
+        FALCON_LOG_WARN_STREAM("重定向链超过上限 " << kMaxRedirects
+                              << "，停止跟随: task=" << get_task_id());
+        return false;
+    }
+
+    const std::string redirect_url =
+        resolve_redirect_location(redirect_url_, source_url_);
+    if (redirect_url.empty()) {
+        FALCON_LOG_WARN_STREAM("Location 无法解析: \"" << redirect_url_
+                              << "\"，按失败收口: task=" << get_task_id());
+        return false;
+    }
+    if (redirect_url.rfind("https://", 0) == 0) {
+        // V2 socket 链路尚未放行 TLS（M1.1），明确报错而非静默失败
+        FALCON_LOG_WARN_STREAM("重定向目标为 https（V2 暂不支持），"
+                              "按失败收口: " << redirect_url);
+        return false;
+    }
+
+    FALCON_LOG_INFO_STREAM("跟随重定向(" << redirect_depth_ + 1 << "/"
+                          << kMaxRedirects << "): " << redirect_url);
+
+    // 关闭当前连接——重定向目标通常是另一台服务器/另一条路径，
+    // 本连接的响应已完成使命
     close_socket_fd(socket_fd_);
     socket_fd_ = -1;
 
-    // 创建新的下载选项（保持原有选项）
-    DownloadOptions new_options = options_;
-
-    // 创建新的连接命令跟随重定向
-    auto new_command = std::make_unique<HttpInitiateConnectionCommand>(
-        get_task_id(), redirect_url, new_options);
-
-    // 计划执行新命令
-    // 注意：这里需要通过某种方式将新命令添加到引擎的命令队列
-    // 在当前的实现中，我们可以通过 schedule_next 来实现
-    // 但需要确保引擎能够正确处理重定向链
-
-    FALCON_LOG_INFO_STREAM("已创建重定向命令: " << redirect_url);
+    auto follow = std::make_unique<HttpInitiateConnectionCommand>(
+        get_task_id(), redirect_url, options_);
+    follow->set_redirect_depth(redirect_depth_ + 1);
+    schedule_next(engine, std::move(follow));
     return true;
 }
 

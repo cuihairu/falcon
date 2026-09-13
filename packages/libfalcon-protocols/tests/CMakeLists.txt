@@ -63,6 +63,7 @@ add_executable(falcon_protocols_tests
     unit/download_engine_v2_resume_test.cpp
     unit/download_engine_v2_pause_test.cpp
     unit/http_commands_chunked_test.cpp
+    unit/http_commands_redirect_test.cpp
     unit/coverage_supplement_test.cpp
 )
 

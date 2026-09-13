@@ -213,6 +213,19 @@ public:
      */
     int retry_count() const noexcept { return retry_count_; }
 
+    /**
+     * @brief 设置重定向深度
+     *
+     * 跟随重定向重新发起连接时携带（响应命令调度时传入），用于
+     * 重定向链上限判定；0 = 非重定向的原始请求
+     */
+    void set_redirect_depth(int depth) noexcept { redirect_depth_ = depth; }
+
+    /**
+     * @brief 获取重定向深度
+     */
+    int redirect_depth() const noexcept { return redirect_depth_; }
+
 private:
     bool resolve_host(const std::string& host, std::string& ip);
     bool create_socket();
@@ -235,6 +248,9 @@ private:
 
     // 连接级重试计数（max_retries 语义：首连 + max_retries 次重试）
     int retry_count_ = 0;
+
+    // 重定向深度（沿命令链传递，超链防护）
+    int redirect_depth_ = 0;
 
     // 多连接分段信息（初始连接无 Range；段 1..N-1 的连接带 Range；
     // 断点续传时初始连接也可承载带 Range 的续传段）
@@ -380,12 +396,25 @@ public:
      */
     int retry_count() const noexcept { return retry_count_; }
 
+    /**
+     * @brief 设置重定向深度（连接阶段携带而来）
+     *
+     * HttpInitiateConnectionCommand 把自己的深度带进响应命令，
+     * 超链判定基于此值
+     */
+    void set_redirect_depth(int depth) noexcept { redirect_depth_ = depth; }
+
+    /**
+     * @brief 获取重定向深度
+     */
+    int redirect_depth() const noexcept { return redirect_depth_; }
+
 private:
     ExecutionResult receive_response_headers(DownloadEngineV2* engine);
     bool parse_headers();
     bool parse_status_line(const std::string& line);
     bool parse_header_line(const std::string& line);
-    bool handle_redirect();
+    bool handle_redirect(DownloadEngineV2* engine);
     bool determine_download_strategy(DownloadEngineV2* engine);
     bool schedule_multi_segment_download(DownloadEngineV2* engine);
     bool validate_segment_response() const;
@@ -417,6 +446,9 @@ private:
     // 连接级重试计数（连接阶段携带而来，用于响应头阶段失败后的
     // max_retries 判定）
     int retry_count_ = 0;
+
+    // 重定向深度（连接阶段携带而来，超链防护）
+    int redirect_depth_ = 0;
 
     // TLS/HTTPS 支持
     bool use_https_ = false;

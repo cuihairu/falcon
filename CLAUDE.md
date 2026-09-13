@@ -2,6 +2,29 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-13 - V2 引擎重定向跟随（Location 解析 + 命令链接力 + 超链防护）
+- `HttpResponseCommand::handle_redirect` 是半成品：构造了跟随命令
+  却从不入队（孤儿），execute 遇 3xx 直接 fail——V2 无法下载任何
+  经重定向的 URL（CDN/短链/规范化跳转全挂）
+- 补全跟随链路：Location 经 RFC 3986 §5 引用解析为绝对 URL——
+  绝对 URL / 协议相对 `//host/path` / 绝对路径 `/path` / 相对路径
+  （基于当前请求目录 + `.`/`..` 段归一化，query/fragment 先剥除）
+  四形态全覆盖，解析失败（空 Location/无 authority）按失败收口；
+  仅 RFC 7231 明确可跟随的 301/302/303/307/308 跟随，304 等其他
+  3xx 按失败处理
+- 深度沿命令链传递：响应命令 → 跟随的连接命令 → 下一响应命令，
+  超过 kMaxRedirects=5 按失败收口（重定向环有界，绝不多打一次
+  连接）；https 目标在 V2 放行 TLS（M1.1）前明确报错，不静默
+  崩进 init 门禁
+- 旧实现两处隐患一并清除：相对 Location 拼接用 `redirect_url_[0]`
+  无空串防御（越界读）；基准 URL 取自 `http_request_->url()` 而
+  响应命令不保证持有请求对象——统一改用值持有的 `source_url_`
+- 新增 http_commands_redirect_test.cpp 4 用例（RedirectServer 路由
+  表 + 每 path 命中计数）：302→307 多跳链成品逐字节一致（绝对 +
+  绝对路径混合）/ 相对 `../up/rel.bin` 归一化命中 `/a/up/rel.bin` /
+  自引用环在 6 次连接内失败收口（有界断言）/ https 目标干净失败；
+  全量 1505 ctest 通过，ASan 引擎相关 163 用例零告警
+
 ### 2026-09-13 - V2 引擎 chunked 响应激活（Transfer-Encoding 端到端生效）
 - 完整的分块解码状态机（READ_SIZE → READ_DATA → READ_CR → READ_LF
   → READ_TRAILER）自 2026-05 起就存在，但 `chunked_encoding_` 全库
