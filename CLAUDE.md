@@ -2,6 +2,32 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-13 - V2 引擎 chunked 响应激活（Transfer-Encoding 端到端生效）
+- 完整的分块解码状态机（READ_SIZE → READ_DATA → READ_CR → READ_LF
+  → READ_TRAILER）自 2026-05 起就存在，但 `chunked_encoding_` 全库
+  无置位点——响应头解析不认 transfer-encoding，chunked 响应按
+  Content-Length=0 + EOF=完成处理，净载荷混着块协议杂质落盘且
+  截断被当完成（死代码激活缺口）
+- 激活链路：parse_header_line 解析 `transfer-encoding` 置
+  is_chunked_response_（值可能携带逗号分隔编码链，含 chunked 即
+  命中）；headers 循环**结束后**统一置零 content_length_ /
+  accepts_range_ / supports_resume_——头序不定逐行置零会被后续
+  content-length 覆盖；总长未知同时让分段/续传门禁自然失活
+  （无 Range 请求、不建续传追踪）
+- HttpDownloadCommand 构造尾参 `bool chunked`，仅单连接全新下载
+  调度点传入（多段段 0 / 续传 / 跨段连接路径 chunked 到不了——
+  门禁已挡）；捎带的首批 body 字节（initial_data_）在 chunked 时
+  同样过状态机解帧，直写会把块大小行写进文件
+- 截断语义收紧：分块响应终止块未到先断连即 FAILED——总长未知下
+  EOF 不构成完成证据（旧行为 n==0 且 length==0 直接 download_
+  complete=true，半截数据假报完成）；正常完成仍由状态机的终止块
+  判定驱动，服务器发完即关连接不受影响
+- 新增 http_commands_chunked_test.cpp 3 用例（ChunkedServer 自行
+  编码块行、5KB 非整块边界压粘包/半包）：96KB 净载荷逐字节一致
+  且无控制文件残留 / RFC 7230 冲突场景（伪造 Content-Length=1KB
+  实发 48KB 不截断不判败）/ 发 8 块后断连必 FAILED 且半成品不顶
+  最终名；全量 1501 ctest 通过，ASan 引擎相关 37 用例零告警
+
 ### 2026-09-13 - V2 引擎真暂停（入口守卫 + 暂停清扫 + 状态守卫三位一体）
 - 此前 pause_group 只改组状态，命令照常执行/挂起——数据流继续走、
   连接保持到自然结束，"暂停"名不副实；且存在既有死代码缺陷：

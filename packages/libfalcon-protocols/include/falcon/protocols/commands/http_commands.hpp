@@ -437,6 +437,9 @@ private:
     bool supports_resume_ = false;
     Bytes content_length_ = 0;
     bool accepts_range_ = false;
+    /// Transfer-Encoding: chunked（RFC 7230：优先于 Content-Length，
+    /// 总长未知——headers 解析完成后统一置零长度与 Range 标志）
+    bool is_chunked_response_ = false;
 };
 
 /**
@@ -480,7 +483,8 @@ public:
                         Bytes length = 0,
                         std::string initial_data = {},
                         Bytes resumed_bytes = 0,
-                        bool truncate_output = true);
+                        bool truncate_output = true,
+                        bool chunked = false);
 
     ~HttpDownloadCommand() override;
 

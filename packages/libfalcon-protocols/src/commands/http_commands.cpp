@@ -1048,6 +1048,11 @@ bool HttpResponseCommand::parse_header_line(const std::string& line) {
     // 解析关键头部
     if (key == "content-length") {
         content_length_ = std::stoull(value);
+    } else if (key == "transfer-encoding") {
+        // chunked 编码（值可能携带逗号分隔的编码链，含 chunked 即按
+        // 分块解析；实际置零在 headers 解析完成后统一做——头序不定）
+        is_chunked_response_ =
+            value.find("chunked") != std::string::npos;
     } else if (key == "location") {
         redirect_url_ = value;
         is_redirect_ = (status_code_ >= 300 && status_code_ < 400);
@@ -1336,7 +1341,11 @@ bool HttpResponseCommand::determine_download_strategy(DownloadEngineV2* engine) 
                                                         /*segment_id=*/0,
                                                         /*offset=*/0,
                                                         content_length_,
-                                                        initial_body_));
+                                                        initial_body_,
+                                                        /*resumed_bytes=*/0,
+                                                        /*truncate_output=*/true,
+                                                        /*chunked=*/
+                                                        is_chunked_response_));
     // 建立续传追踪（总长未知/chunked 下载无从续传，begin 内部自行忽略）
     if (group) {
         const auto hdr = [this](const char* key) -> std::string {
@@ -1369,6 +1378,16 @@ bool HttpResponseCommand::parse_headers() {
         if (!parse_header_line(line)) return false;
     }
 
+    // chunked 响应：总长未知（RFC 7230 Transfer-Encoding 优先于
+    // Content-Length）。统一在头循环后置零——头序不定，逐行置零
+    // 会被后续 content-length 覆盖；总长未知同时让分段/续传门禁
+    // 自然失活（无 Range 请求、不建续传追踪）
+    if (is_chunked_response_) {
+        content_length_ = 0;
+        accepts_range_ = false;
+        supports_resume_ = false;
+    }
+
     http_response_ = std::make_shared<HttpResponse>();
     http_response_->set_status_code(status_code_);
     for (const auto& [k, v] : headers_) {
@@ -1391,7 +1410,8 @@ HttpDownloadCommand::HttpDownloadCommand(
     Bytes length,
     std::string initial_data,
     Bytes resumed_bytes,
-    bool truncate_output)
+    bool truncate_output,
+    bool chunked)
     : AbstractCommand(task_id)
     , socket_fd_(socket_fd)
     , http_response_(std::move(response))
@@ -1402,6 +1422,7 @@ HttpDownloadCommand::HttpDownloadCommand(
     , downloaded_bytes_(resumed_bytes)
     , initial_data_(std::move(initial_data))
     , truncate_output_(truncate_output)
+    , chunked_encoding_(chunked)
     , last_update_(std::chrono::steady_clock::now())
 {
 }
@@ -1496,7 +1517,15 @@ bool HttpDownloadCommand::execute(DownloadEngineV2* engine) {
     }
 
     if (!initial_written_ && !initial_data_.empty()) {
-        if (!write_to_segment(initial_data_.data(), initial_data_.size(), engine)) {
+        // chunked 响应捎带的首批字节仍是分块协议数据（块大小行开头），
+        // 必须过状态机解帧，直写会把协议杂质写进文件
+        const bool initial_ok =
+            chunked_encoding_
+                ? handle_chunked_encoding(initial_data_.data(),
+                                          initial_data_.size(), engine)
+                : write_to_segment(initial_data_.data(), initial_data_.size(),
+                                   engine);
+        if (!initial_ok) {
             task->set_error("Failed to write initial body bytes");
             fail_group_on_segment_error(*group, task);
             close_socket_fd(socket_fd_);
@@ -1667,6 +1696,13 @@ AbstractCommand::ExecutionResult HttpDownloadCommand::receive_data(DownloadEngin
 
         if (n == 0) {
             // 对端关闭连接
+            if (chunked_encoding_) {
+                // 分块响应必须见到终止块才算完成（状态机已置位）；
+                // 终止块未到先断连即截断——总长未知，EOF 本身不构成
+                // 完成证据，按失败收尾防半截数据假报完成
+                return download_complete_ ? ExecutionResult::OK
+                                          : ExecutionResult::ERROR_OCCURRED;
+            }
             if (length_ == 0 || downloaded_bytes_ >= length_) {
                 download_complete_ = true;
                 return ExecutionResult::OK;
