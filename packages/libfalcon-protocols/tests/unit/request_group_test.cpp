@@ -858,5 +858,54 @@ TEST(RequestGroupUris, UrisAccess) {
 }
 
 //==============================================================================
+// 终态组回收测试（宿主化常驻引擎依赖）
+//==============================================================================
+
+/// purge_finished_groups 回收 COMPLETED/FAILED/REMOVED 组并释放
+/// all_groups_ 持有的对象；WAITING/PAUSED 组必须保留——PAUSED 组是
+/// 停机恢复的挂点，绝不可被回收
+TEST(RequestGroupManTest, PurgeFinishedGroupsReclaimsAndKeepsPaused) {
+    RequestGroupMan manager(5);
+    DownloadOptions options;
+
+    auto make_group = [&options](TaskId id) {
+        return std::make_unique<RequestGroup>(
+            id, std::vector<std::string>{
+                    "http://example.com/purge-" + std::to_string(id) + ".bin"},
+            options);
+    };
+
+    manager.add_request_group(make_group(1));  // 将标 COMPLETED
+    manager.add_request_group(make_group(2));  // 将标 FAILED
+    manager.add_request_group(make_group(3));  // 将经 remove_group 标 REMOVED
+    manager.add_request_group(make_group(4));  // 保持 WAITING
+    manager.add_request_group(make_group(5));  // 将标 PAUSED
+
+    ASSERT_NE(manager.find_group(1), nullptr);
+    manager.find_group(1)->set_status(RequestGroupStatus::COMPLETED);
+    ASSERT_NE(manager.find_group(2), nullptr);
+    manager.find_group(2)->set_status(RequestGroupStatus::FAILED);
+    ASSERT_TRUE(manager.remove_group(3));
+    ASSERT_NE(manager.find_group(5), nullptr);
+    manager.find_group(5)->set_status(RequestGroupStatus::PAUSED);
+
+    manager.purge_finished_groups();
+
+    // 终态组全部回收：find_group 返回 nullptr 且对象已析构
+    EXPECT_EQ(manager.find_group(1), nullptr);
+    EXPECT_EQ(manager.find_group(2), nullptr);
+    EXPECT_EQ(manager.find_group(3), nullptr);
+
+    // 非终态组保留原状态
+    ASSERT_NE(manager.find_group(4), nullptr);
+    EXPECT_EQ(manager.find_group(4)->status(), RequestGroupStatus::WAITING);
+    ASSERT_NE(manager.find_group(5), nullptr);
+    EXPECT_EQ(manager.find_group(5)->status(), RequestGroupStatus::PAUSED);
+
+    // 回收后调度队列不含悬垂指针：WAITING 组仍可被激活计数看到
+    EXPECT_EQ(manager.waiting_count(), 2);  // 组 4（WAITING）+ 组 5（PAUSED）
+}
+
+//==============================================================================
 // 主函数
 //==============================================================================

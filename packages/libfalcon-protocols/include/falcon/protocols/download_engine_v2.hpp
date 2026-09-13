@@ -51,6 +51,11 @@ struct EngineConfigV2 {
     /// 顶着最终名出现；置空则直接写最终名。失败/中断的临时文件保留
     /// 在磁盘（未来断点续传的挂点），最终名文件不受影响
     std::string temp_extension = ".falcon.tmp";
+    /// 宿主化常驻开关：默认 false 时 run() 在所有任务终态后照旧退出
+    /// （测试语义不变）；置 true 后 run() 持续轮询直到显式 shutdown——
+    /// V1 契约下的共享数据面（V2EngineHost）以专用线程驱动 run()，
+    /// 引擎必须跨任务存活
+    bool wait_when_idle = false;
 };
 
 /**
@@ -98,6 +103,25 @@ public:
      */
     TaskId add_download(const std::string& url, const DownloadOptions& options = {});
     TaskId add_download(const std::vector<std::string>& urls, const DownloadOptions& options = {});
+
+    /**
+     * @brief 以显式任务 ID 注入下载（宿主化桥接用）
+     *
+     * V1 契约适配层注入 V1 引擎分配的任务 ID，使两侧任务可对齐寻址。
+     * ID 与既有组冲突时返回 INVALID_TASK_ID（不创建组），并把自动
+     * ID 计数器推到该 ID 之上，保证后续自动分配不再撞上外部注入的 ID。
+     *
+     * @param id 显式任务 ID
+     * @param urls URL 列表
+     * @param options 下载选项
+     * @param output_path_override 非空时覆盖自推导的输出路径
+     *       （V1 任务已确定 output_path，两侧必须一致）
+     * @return 注入的 ID；冲突或 URL 列表为空返回 INVALID_TASK_ID
+     */
+    TaskId add_download_as(TaskId id,
+                           const std::vector<std::string>& urls,
+                           const DownloadOptions& options,
+                           const std::string& output_path_override = {});
 
     /**
      * @brief 暂停任务
@@ -349,6 +373,10 @@ private:
     /// 任务级节流：本轮 poll 最长等到该时间点（最早的任务预算恢复点），
     /// 仅拉长等待、不跳过 execute_commands（其他任务照常执行）
     std::chrono::steady_clock::time_point task_throttle_until_{};
+
+    /// 上次终态组回收时间（run() 循环每 10s 周期回收一次）
+    std::chrono::steady_clock::time_point last_group_purge_{};
+
 
     // 配置
     EngineConfigV2 config_;

@@ -1440,3 +1440,95 @@ TEST(DownloadEngineV2RunTest, TempExtensionEmptyWritesDirectly) {
     std::filesystem::remove_all(dir);
     server.stop();
 }
+
+//==============================================================================
+// 宿主化前置测试：wait_when_idle 与显式 ID 注入
+//==============================================================================
+
+/// wait_when_idle=true：无任务时 run() 不得自行退出（默认配置的对照
+/// 行为是 RunWithNoTasksExitsImmediately 立即返回），直到显式 shutdown
+/// ——V1 契约下的共享数据面以专用线程驱动 run()，引擎必须跨任务存活
+TEST(DownloadEngineV2RunTest, RunWithWaitWhenIdleKeepsLoopingUntilShutdown) {
+    EngineConfigV2 config = fast_poll_config();
+    config.wait_when_idle = true;
+    DownloadEngineV2 engine(config);
+
+    auto done = std::make_shared<std::atomic<bool>>(false);
+    std::thread loop([&engine, done]() {
+        engine.run();
+        done->store(true);
+    });
+
+    // 默认 poll 超时 10ms：若误入退出分支此刻必然已返回
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    EXPECT_FALSE(done->load()) << "wait_when_idle 引擎在无任务时不应退出";
+
+    engine.shutdown();
+    loop.join();
+    EXPECT_TRUE(done->load());
+}
+
+/// add_download_as：显式 ID 注入 + 冲突拒绝 + 共享 ID 计数器让路
+TEST(DownloadEngineV2RunTest, AddDownloadAsUsesExplicitId) {
+    DownloadEngineV2 engine(fast_poll_config());
+
+    DownloadOptions options = keepalive_options();
+    const std::vector<std::string> urls = {"http://127.0.0.1:1/injected.bin"};
+
+    const TaskId injected = 5000;
+    EXPECT_EQ(engine.add_download_as(injected, urls, options), injected);
+    auto* group = engine.request_group_man()->find_group(injected);
+    ASSERT_NE(group, nullptr);
+    EXPECT_EQ(group->status(), RequestGroupStatus::WAITING);
+
+    // 同 ID 再次注入：冲突拒绝，不创建第二个组
+    EXPECT_EQ(engine.add_download_as(injected, urls, options), INVALID_TASK_ID);
+    EXPECT_EQ(engine.request_group_man()->find_group(injected), group);
+
+    // 自动分配让路：注入 ID 之后，自动计数器不得再落回已占用区间
+    const TaskId auto_id = engine.add_download("http://127.0.0.1:1/auto.bin",
+                                               options);
+    EXPECT_GT(auto_id, injected);
+    EXPECT_NE(engine.request_group_man()->find_group(auto_id), nullptr);
+
+    // 空 URL 列表：拒绝
+    EXPECT_EQ(engine.add_download_as(6000, {}, options), INVALID_TASK_ID);
+    EXPECT_EQ(engine.request_group_man()->find_group(6000), nullptr);
+}
+
+/// add_download_as 的 output_path_override：V1 任务已确定 output_path，
+/// 注入后组必须写该路径而非按 URL 自推导（M2 适配层的核心契约）
+TEST(DownloadEngineV2RunTest, AddDownloadAsHonorsOutputPathOverride) {
+    const std::string body = make_body(16 * 1024);
+    MinimalHttpServer server;
+    ASSERT_TRUE(server.start(body));
+
+    EngineConfigV2 config = fast_poll_config();
+    DownloadEngineV2 engine(config);
+
+    const std::string dir = run_test_temp_dir("inject_path");
+    std::filesystem::create_directories(dir);
+    const std::string override_path = dir + "/explicit-name.bin";
+
+    DownloadOptions options;
+    options.max_connections = 1;
+
+    const TaskId task_id = engine.add_download_as(
+        77, {server.url("/override-target.bin")}, options, override_path);
+    ASSERT_EQ(task_id, 77u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    long long elapsed_ms = 0;
+    ASSERT_TRUE(wait_group_terminal(engine, group, 20, elapsed_ms));
+
+    EXPECT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+    auto task = group->download_task();
+    ASSERT_NE(task, nullptr);
+    EXPECT_EQ(task->output_path(), override_path)
+        << "注入的显式路径必须覆盖按 URL 自推导的路径";
+    EXPECT_EQ(read_file_content(override_path), body);
+
+    std::filesystem::remove_all(dir);
+    server.stop();
+}

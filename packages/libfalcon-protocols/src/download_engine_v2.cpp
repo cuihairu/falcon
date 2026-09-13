@@ -34,6 +34,12 @@ void close_socket_fd(int fd) {
 
 } // namespace
 
+namespace {
+// 自动分配与显式注入（add_download_as）共用一个 ID 计数器：注入侧
+// 把计数器推到注入 ID 之上，自动分配不再撞上外部（V1 契约）占用的 ID
+std::atomic<TaskId> g_task_id_counter{1};
+} // namespace
+
 //==============================================================================
 // DownloadEngineV2 实现
 //==============================================================================
@@ -71,8 +77,7 @@ TaskId DownloadEngineV2::add_download(const std::vector<std::string>& urls,
     }
 
     // 生成新的任务 ID
-    static std::atomic<TaskId> id_counter{1};
-    TaskId id = id_counter.fetch_add(1, std::memory_order_relaxed);
+    TaskId id = g_task_id_counter.fetch_add(1, std::memory_order_relaxed);
 
     FALCON_LOG_INFO_STREAM("添加下载任务: id=" << id << ", url=" << urls[0]);
 
@@ -83,6 +88,45 @@ TaskId DownloadEngineV2::add_download(const std::vector<std::string>& urls,
     request_group_man_->add_request_group(std::move(group));
 
     // 如果引擎正在运行，尝试从等待队列激活任务
+    if (running_) {
+        request_group_man_->fill_request_group_from_reserver(this);
+    }
+
+    return id;
+}
+
+TaskId DownloadEngineV2::add_download_as(TaskId id,
+                                          const std::vector<std::string>& urls,
+                                          const DownloadOptions& options,
+                                          const std::string& output_path_override) {
+    if (urls.empty()) {
+        FALCON_LOG_WARN_STREAM("尝试注入空下载 URL 列表: id=" << id);
+        return INVALID_TASK_ID;
+    }
+
+    // 把共享 ID 计数器推到 bound 之上：该 ID 已被外部占用（即将归属
+    // 本组），自动分配必须跳过它，不再撞上外部注入的 ID
+    auto push_counter_above = [](TaskId bound) {
+        TaskId current = g_task_id_counter.load(std::memory_order_relaxed);
+        while (current <= bound &&
+               !g_task_id_counter.compare_exchange_weak(current, bound + 1,
+                                                        std::memory_order_relaxed)) {
+        }
+    };
+
+    // ID 冲突：不创建组
+    if (request_group_man_->find_group(id) != nullptr) {
+        FALCON_LOG_WARN_STREAM("注入下载任务 ID 冲突: id=" << id);
+        push_counter_above(id);
+        return INVALID_TASK_ID;
+    }
+    push_counter_above(id);
+
+    FALCON_LOG_INFO_STREAM("注入下载任务: id=" << id << ", url=" << urls[0]);
+
+    auto group = std::make_unique<RequestGroup>(id, urls, options, output_path_override);
+    request_group_man_->add_request_group(std::move(group));
+
     if (running_) {
         request_group_man_->fill_request_group_from_reserver(this);
     }
@@ -343,6 +387,9 @@ void DownloadEngineV2::run() {
 
     running_ = true;
     halt_requested_ = 0;
+    // 周期回收从本轮 run() 起算（成员默认值为时钟纪元，直接用会让
+    // 首轮循环立即触发 purge）
+    last_group_purge_ = std::chrono::steady_clock::now();
 
     // 初始化：从等待队列激活初始任务
     request_group_man_->fill_request_group_from_reserver(this);
@@ -350,8 +397,9 @@ void DownloadEngineV2::run() {
     // 主事件循环
     while (!is_shutdown_requested()) {
         try {
-            // 检查是否所有任务完成
-            if (request_group_man_->all_completed()) {
+            // 检查是否所有任务完成（wait_when_idle 时引擎常驻，
+            // 只随显式 shutdown 退出）
+            if (!config_.wait_when_idle && request_group_man_->all_completed()) {
                 FALCON_LOG_INFO_STREAM("所有任务已完成");
                 break;
             }
@@ -418,6 +466,14 @@ void DownloadEngineV2::run() {
 
             // 清理终态任务的限速窗口条目
             prune_finished_task_windows();
+
+            // 周期回收终态组：引擎常驻（wait_when_idle）后终态组
+            // 不再随 run() 退出销毁，不回收则组表无界增长
+            const auto now_for_purge = std::chrono::steady_clock::now();
+            if (now_for_purge - last_group_purge_ >= std::chrono::seconds(10)) {
+                last_group_purge_ = now_for_purge;
+                request_group_man_->purge_finished_groups();
+            }
 
             // 从等待队列激活新任务
             request_group_man_->fill_request_group_from_reserver(this);

@@ -79,12 +79,14 @@ bool starts_with(std::string_view s, std::string_view prefix) {
 
 RequestGroup::RequestGroup(TaskId id,
                              const std::vector<std::string>& uris,
-                             const DownloadOptions& options)
+                             const DownloadOptions& options,
+                             const std::string& output_path_override)
     : id_(id)
     , status_(RequestGroupStatus::WAITING)
     , uris_(uris)
     , current_uri_index_(0)
     , options_(options)
+    , output_path_override_(output_path_override)
     , segment_downloader_(nullptr)
     , downloaded_bytes_(0)
 {
@@ -122,6 +124,11 @@ bool RequestGroup::init() {
     // Build output path and initialize internal DownloadTask for reuse.
     download_task_ = std::make_shared<DownloadTask>(id_, url, options_);
     download_task_->set_output_path(build_output_path_for_options(url, options_));
+    // 宿主化桥接注入的显式路径优先于自推导（V1 任务的 output_path
+    // 已确定，两侧必须写同一文件）；覆盖门禁在下方按最终路径检查
+    if (!output_path_override_.empty()) {
+        download_task_->set_output_path(output_path_override_);
+    }
 
     // 输出文件已存在且未显式允许覆盖 → 直接失败（aria2 allow-overwrite=false
     // 同语义）。此前 HttpDownloadCommand 首段无条件 trunc，默认配置
@@ -634,6 +641,38 @@ void RequestGroupMan::cleanup_finished_active() {
                                   st == RequestGroupStatus::REMOVED;
                        }),
         request_groups_.end());
+}
+
+void RequestGroupMan::purge_finished_groups() {
+    std::vector<std::unique_ptr<RequestGroup>> retired;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (auto it = all_groups_.begin(); it != all_groups_.end();) {
+            RequestGroup* group = it->get();
+            const auto st = group->status();
+            if (st != RequestGroupStatus::COMPLETED &&
+                st != RequestGroupStatus::FAILED &&
+                st != RequestGroupStatus::REMOVED) {
+                ++it;
+                continue;
+            }
+
+            group_map_.erase(group->id());
+            // 终态组本不应留在调度队列（remove_group/
+            // cleanup_finished_active 已清），防御性移除防悬垂指针
+            request_groups_.erase(
+                std::remove(request_groups_.begin(), request_groups_.end(), group),
+                request_groups_.end());
+            reserved_groups_.erase(
+                std::remove(reserved_groups_.begin(), reserved_groups_.end(), group),
+                reserved_groups_.end());
+
+            retired.push_back(std::move(*it));
+            it = all_groups_.erase(it);
+        }
+    }
+    // 锁外析构（析构仅打日志，与 add_request_group 的锁纪律一致；
+    // PAUSED 组是停机恢复的挂点，不在回收之列）
 }
 
 } // namespace falcon

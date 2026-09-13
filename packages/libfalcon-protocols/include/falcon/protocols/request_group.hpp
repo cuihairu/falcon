@@ -85,10 +85,13 @@ public:
      * @param id 任务 ID
      * @param uris URI 列表（支持镜像/备用地址）
      * @param options 下载选项
+     * @param output_path_override 非空时 init() 用它覆盖自推导的
+     *        输出路径（宿主化桥接注入 V1 已确定的路径）
      */
     RequestGroup(TaskId id,
                  const std::vector<std::string>& uris,
-                 const DownloadOptions& options);
+                 const DownloadOptions& options,
+                 const std::string& output_path_override = {});
 
     ~RequestGroup();
 
@@ -363,6 +366,8 @@ private:
     std::vector<std::string> uris_;
     std::size_t current_uri_index_ = 0;
     DownloadOptions options_;
+    /// 非空时 init() 以此覆盖自推导输出路径（宿主化桥接注入）
+    std::string output_path_override_;
     std::vector<FileInfo> files_;
     std::unique_ptr<SegmentDownloader> segment_downloader_;
     DownloadTask::Ptr download_task_;
@@ -524,6 +529,17 @@ public:
      * @brief 清理活动队列中的已完成任务，释放并发槽位
      */
     void cleanup_finished_active();
+
+    /**
+     * @brief 回收终态组（COMPLETED/FAILED/REMOVED），释放 all_groups_
+     *        持有的对象
+     *
+     * 宿主化后引擎常驻（wait_when_idle），终态组不再随 run() 退出
+     * 而销毁，不回收则 all_groups_/group_map_ 无界增长。PAUSED 与
+     * 调度中的组不受影响。被回收组在锁外析构，find_group 随之返回
+     * nullptr
+     */
+    void purge_finished_groups();
 
 private:
     std::size_t max_concurrent_;

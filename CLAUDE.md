@@ -2,6 +2,31 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-13 - V2 引擎宿主化前置（wait_when_idle 常驻 + 显式 ID 注入 + 终态组回收）
+- V2 接入生产（作 V1 契约下的 HTTP 数据面）的三块地基，默认行为零变化：
+  ① `EngineConfigV2::wait_when_idle`（默认 false 完全保留测试语义）：
+  true 时 `run()` 在全部任务终态后不再退出、持续轮询直到显式
+  shutdown——共享常驻引擎以专用线程驱动 run()，必须跨任务存活
+  ② `add_download_as(id, urls, options, output_path_override = {})`：
+  桥接层注入 V1 引擎已分配的任务 ID（两侧任务对齐寻址）；ID 冲突
+  返回 INVALID_TASK_ID 不创建组；`output_path_override` 非空时
+  init() 覆盖按 URL 自推导的输出路径（覆盖门禁按最终路径检查）——
+  V1 任务的 output_path 已确定，两侧必须写同一文件
+  ③ `RequestGroupMan::purge_finished_groups()`：回收终态组
+  （COMPLETED/FAILED/REMOVED 从 all_groups_/group_map_ erase，调度
+  队列防御性清理，对象锁外析构）；run() 循环每 10s 周期调用（周期
+  从 run() 起算，防时钟纪元默认值导致首轮立即触发）——常驻引擎的
+  终态组不再随 run() 退出销毁，不回收则组表无界增长；PAUSED 组是
+  停机恢复挂点，明确不在回收之列
+- ID 计数器从函数局部 static 提升为文件级共享：注入侧把计数器推到
+  注入 ID 之上（含冲突路径），自动分配不再撞上外部占用的 ID（两处
+  函数局部 static 本互不相干，仅改注入侧无法约束自动分配）
+- 新增 5 用例：purge 回收终态/保留 WAITING+PAUSED（waiting_count
+  复核队列无悬垂）、wait_when_idle 无任务不退 + shutdown 退、显式
+  ID 注入/同 ID 冲突拒绝/自动分配让路/空列表拒绝、override 路径
+  端到端落盘（组写注入路径且成品字节一致）；全量 1496 ctest 通过，
+  ASan 引擎相关 41 用例零告警
+
 ### 2026-09-13 - Windows 桌面包 Qt 插件搜索修复（qt.conf 缺失 + CI 产物裸 exe）
 - 用户实测解压 nightly Windows zip 运行报 `Could not find the Qt
   platform plugin "windows"`：Qt6Core/Gui DLL 都加载成功才走到平台
