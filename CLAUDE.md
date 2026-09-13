@@ -26,6 +26,9 @@
 - 第三层：qtbase 的 xcb 强制拉起 `system_xcb_xinput`，Ubuntu apt
   清单独缺 `libxcb-xinput-dev`（其余 xcb 系列全齐），补装后 configure
   通过（icu.h/sctp.h/tzdb 等 try-compile 报错是可选特性探测，非致命）
+- 第四层（预审发现）：Create Nightly Release job 此前从未真正执行
+  （总挂在 Package 层），默认只读 GITHUB_TOKEN 对 delete-asset 与
+  release 发布必然 403——workflow 顶层补 `permissions: contents: write`
 - 同日早前修复已验证生效：Linux qmake 定位（vcpkg_installed 树内
   find）、Windows 150min 步骤超时放宽、macOS macdeployqt 绝对路径
 
