@@ -51,6 +51,71 @@ inline int clzByte(uint8_t byte) {
 namespace falcon {
 namespace protocols {
 
+namespace {
+
+// 每轮并发查询的节点数（Kademlia alpha）
+constexpr size_t kLookupAlpha = 3;
+// 查找维护的最接近候选数（Kademlia k）
+constexpr size_t kLookupK = 8;
+// 候选集上限（防御响应中的超量 nodes 条目把候选表撑爆）
+constexpr size_t kMaxCandidates = 64;
+
+// 解析 compact node info（BEP-005：26 字节 = 20 id + 2 port + 4 ip，大端序）
+std::vector<DhtNode> parseCompactNodes(const std::string& nodes) {
+    std::vector<DhtNode> result;
+    size_t nodeCount = nodes.size() / 26;
+    result.reserve(nodeCount);
+
+    for (size_t i = 0; i < nodeCount; ++i) {
+        size_t offset = i * 26;
+
+        DhtNode node;
+        std::memcpy(node.id.data(), nodes.data() + offset, 20);
+
+        // IP 和端口（大端序）
+        uint32_t ipBigEndian;
+        std::memcpy(&ipBigEndian, nodes.data() + offset + 20, 4);
+        node.ip = std::to_string(ipBigEndian & 0xFF) + "." +
+                  std::to_string((ipBigEndian >> 8) & 0xFF) + "." +
+                  std::to_string((ipBigEndian >> 16) & 0xFF) + "." +
+                  std::to_string((ipBigEndian >> 24) & 0xFF);
+
+        uint16_t portBigEndian;
+        std::memcpy(&portBigEndian, nodes.data() + offset + 24, 2);
+        node.port = ntohs(portBigEndian);
+
+        node.lastSeen = std::chrono::steady_clock::now();
+        result.push_back(std::move(node));
+    }
+    return result;
+}
+
+// 解析 compact peer info（BEP-005：6 字节 = 4 ip + 2 port）
+std::vector<std::pair<std::string, uint16_t>> parseCompactPeers(const std::string& values) {
+    std::vector<std::pair<std::string, uint16_t>> peers;
+    size_t peerCount = values.size() / 6;
+    peers.reserve(peerCount);
+
+    for (size_t i = 0; i < peerCount; ++i) {
+        size_t offset = i * 6;
+
+        // IP 地址
+        std::string ip = std::to_string(static_cast<uint8_t>(values[offset])) + "." +
+                         std::to_string(static_cast<uint8_t>(values[offset + 1])) + "." +
+                         std::to_string(static_cast<uint8_t>(values[offset + 2])) + "." +
+                         std::to_string(static_cast<uint8_t>(values[offset + 3]));
+
+        // 端口（大端序）
+        uint16_t port = (static_cast<uint8_t>(values[offset + 4]) << 8) |
+                        static_cast<uint8_t>(values[offset + 5]);
+
+        peers.emplace_back(std::move(ip), port);
+    }
+    return peers;
+}
+
+} // anonymous namespace
+
 namespace DhtUtils {
 
 DhtNodeId generateRandomNodeId() {
@@ -66,13 +131,34 @@ DhtNodeId generateRandomNodeId() {
 }
 
 DhtNodeId nodeIdFromString(const std::string& str) {
-    DhtNodeId id;
-    // (std::min)：加括号防止 Windows.h 的 min 宏展开（未定义 NOMINMAX 时）
+    DhtNodeId id{};
+    // 40 位合法 hex → 20 字节解码（info_hash / 消息 id 字段的文本编码形式），
+    // 与 nodeIdToString 构成往返
+    auto hexVal = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    };
+    if (str.size() == id.size() * 2) {
+        bool valid = true;
+        for (size_t i = 0; i < id.size(); ++i) {
+            int hi = hexVal(str[i * 2]);
+            int lo = hexVal(str[i * 2 + 1]);
+            if (hi < 0 || lo < 0) {
+                valid = false;
+                break;
+            }
+            id[i] = static_cast<uint8_t>((hi << 4) | lo);
+        }
+        if (valid) {
+            return id;
+        }
+    }
+    // 非 hex 形态回退：按原始字节截断/补零
+    // （(std::min)：加括号防止 Windows.h 的 min 宏展开）
     size_t len = (std::min)(str.size(), id.size());
     std::memcpy(id.data(), str.data(), len);
-    if (len < id.size()) {
-        std::memset(id.data() + len, 0, id.size() - len);
-    }
     return id;
 }
 
@@ -452,9 +538,9 @@ void DhtClient::start() {
                 break;
             }
 
-            // 定期刷新路由表
+            // 定期刷新路由表（无回调的后台查找）
             auto targetId = DhtUtils::generateRandomNodeId();
-            performLookup(targetId, false);
+            startLookup(targetId, false, "", nullptr, nullptr);
         }
     });
 
@@ -497,28 +583,31 @@ void DhtClient::addBootstrapNode(const std::string& ip, uint16_t port) {
     bootstrapNodes_.push_back(node);
 }
 
-void DhtClient::findPeers(const std::string& infoHash,
-                          [[maybe_unused]] FoundPeersCallback callback) {
-    // 解析 info_hash 为节点 ID
-    auto targetId = DhtUtils::nodeIdFromString(infoHash);
-
-    // TODO: 异步查找未实现——当前为同步单轮查询；完整实现需在
-    // receiveLoop 收到 get_peers 响应后调用 callback 上报发现的 peers
-    performLookup(targetId, true, infoHash);
+void DhtClient::findPeers(const std::string& infoHash, FoundPeersCallback callback) {
+    // 异步 Kademlia 查找：响应在 receiveLoop 线程驱动迭代，
+    // 收敛/超时后回调一次性上报全部发现的 peers（可能为空）
+    startLookup(DhtUtils::nodeIdFromString(infoHash), true, infoHash,
+                std::move(callback), nullptr);
 }
 
-void DhtClient::findNode(const DhtNodeId& targetId,
-                         [[maybe_unused]] NodeFoundCallback callback) {
-    // TODO: 同上，find_node 响应到达后应调用 callback 上报发现的节点
-    performLookup(targetId, false);
+void DhtClient::findNode(const DhtNodeId& targetId, NodeFoundCallback callback) {
+    startLookup(targetId, false, "", nullptr, std::move(callback));
 }
 
 void DhtClient::receiveLoop() {
     uint8_t buffer[4096];
     sockaddr_in senderAddr{};
     socklen_t senderAddrLen = sizeof(senderAddr);
+    auto lastExpireCheck = std::chrono::steady_clock::now();
 
     while (running_.load()) {
+        // 查找超时检查（节流至每秒一次）
+        auto now = std::chrono::steady_clock::now();
+        if (now - lastExpireCheck >= std::chrono::seconds(1)) {
+            lastExpireCheck = now;
+            expireStaleLookups();
+        }
+
         // Windows（Winsock）recvfrom 返回 int，POSIX 返回 ssize_t
 #ifdef _WIN32
         int bytesRead = recvfrom(socket_, reinterpret_cast<char*>(buffer),
@@ -573,85 +662,57 @@ void DhtClient::handleMessage(const DhtMessage& message, const std::string& send
 
     // 处理响应
     if (message.type == DhtMessageType::Response) {
-        // 检查是否有待处理的请求
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto it = pendingRequests_.find(message.transactionId);
-        if (it != pendingRequests_.end() && it->second) {
-            it->second(message);
-            // 不删除，可能需要多次响应
+        // 锁内取出注册的响应回调并消费（一请求一响应），锁外调用——
+        // 回调内部会再获取 mutex_（handleLookupResponse），锁内调用即死锁
+        std::function<void(const DhtMessage&)> pending;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto it = pendingRequests_.find(message.transactionId);
+            if (it != pendingRequests_.end() && it->second) {
+                pending = it->second;
+                pendingRequests_.erase(it);
+                lookupTransactions_.erase(message.transactionId);
+            }
+        }
+        if (pending) {
+            pending(message);
         }
 
-        // 解析节点信息
-        if (message.response.find("nodes") != message.response.end()) {
-            // Compact node info format: [20 bytes id][2 bytes port][4 bytes ip]
-            const std::string& nodes = message.response.at("nodes");
-            size_t nodeCount = nodes.size() / 26; // 20 + 2 + 4
-
-            for (size_t i = 0; i < nodeCount; ++i) {
-                size_t offset = i * 26;
-
-                DhtNode newNode;
-                std::memcpy(newNode.id.data(), nodes.data() + offset, 20);
-
-                // IP 和端口（大端序）
-                uint32_t ipBigEndian;
-                std::memcpy(&ipBigEndian, nodes.data() + offset + 20, 4);
-                newNode.ip = std::to_string(ipBigEndian & 0xFF) + "." +
-                            std::to_string((ipBigEndian >> 8) & 0xFF) + "." +
-                            std::to_string((ipBigEndian >> 16) & 0xFF) + "." +
-                            std::to_string((ipBigEndian >> 24) & 0xFF);
-
-                uint16_t portBigEndian;
-                std::memcpy(&portBigEndian, nodes.data() + offset + 24, 2);
-                newNode.port = ntohs(portBigEndian);
-
-                newNode.lastSeen = std::chrono::steady_clock::now();
+        // 解析节点信息并入路由表（compact node info）
+        auto nodesIt = message.response.find("nodes");
+        if (nodesIt != message.response.end()) {
+            for (const auto& newNode : parseCompactNodes(nodesIt->second)) {
                 routingTable_.addNode(newNode);
             }
         }
 
-        // 解析 peer 信息
-        if (message.response.find("values") != message.response.end()) {
-            const std::string& values = message.response.at("values");
-            // Compact peer info format: [4 bytes ip][2 bytes port] per peer
-            size_t peerCount = values.size() / 6;
-
-            std::vector<std::pair<std::string, uint16_t>> peers;
-            for (size_t i = 0; i < peerCount; ++i) {
-                size_t offset = i * 6;
-
-                // IP 地址
-                std::string ip = std::to_string(static_cast<uint8_t>(values[offset])) + "." +
-                                 std::to_string(static_cast<uint8_t>(values[offset + 1])) + "." +
-                                 std::to_string(static_cast<uint8_t>(values[offset + 2])) + "." +
-                                 std::to_string(static_cast<uint8_t>(values[offset + 3]));
-
-                // 端口（大端序）
-                uint16_t port = (static_cast<uint8_t>(values[offset + 4]) << 8) |
-                               static_cast<uint8_t>(values[offset + 5]);
-
-                peers.emplace_back(ip, port);
-            }
-
-            // 触发回调（如果有）
-            if (!peers.empty()) {
-                // 这里需要 infoHash 来触发回调，暂时跳过
-                // 在实际使用中，需要在 pendingRequests_ 中保存回调上下文
-            }
+        // peer 信息（compact peer info）：查找路径的回调上报由
+        // handleLookupResponse 处理，此处仅解析、无副作用
+        auto valuesIt = message.response.find("values");
+        if (valuesIt != message.response.end()) {
+            (void)parseCompactPeers(valuesIt->second);
         }
     }
 }
 
-void DhtClient::sendMessage(const DhtMessage& message, const std::string& ip, uint16_t port) {
+bool DhtClient::sendMessage(const DhtMessage& message, const std::string& ip, uint16_t port) {
+    if (socket_ < 0) {
+        return false;
+    }
+
     std::string data = message.encode();
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
-    inet_pton(AF_INET, ip.c_str(), &addr.sin_addr);
+    if (inet_pton(AF_INET, ip.c_str(), &addr.sin_addr) != 1) {
+        // 非数字 IP（如默认引导节点的域名）当前不做 DNS 解析，
+        // 按发送失败处理——查找不悬挂，等待真正的可联系节点
+        return false;
+    }
 
-    sendto(socket_, data.data(), data.size(), 0,
-           reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+    return sendto(socket_, data.data(), data.size(), 0,
+                  reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) >= 0;
 }
 
 std::string DhtClient::generateTransactionId() {
@@ -662,36 +723,280 @@ std::string DhtClient::generateTransactionId() {
     return tid;
 }
 
-void DhtClient::performLookup(const DhtNodeId& target, bool isFindPeers, const std::string& infoHash) {
-    // 获取初始候选节点
-    std::vector<DhtNode> candidates;
+//==============================================================================
+// DhtClient — Kademlia 迭代查找
+//==============================================================================
 
-    // 从引导节点开始
+void DhtClient::startLookup(const DhtNodeId& target, bool isFindPeers, const std::string& infoHash,
+                            FoundPeersCallback peersCallback, NodeFoundCallback nodeCallback) {
+    LookupContext ctx;
+    ctx.target = target;
+    ctx.isFindPeers = isFindPeers;
+    ctx.infoHash = infoHash;
+    ctx.peersCallback = std::move(peersCallback);
+    ctx.nodeCallback = std::move(nodeCallback);
+    ctx.startTime = std::chrono::steady_clock::now();
+
+    // 种子候选：路由表最近 k 个；表空时退回引导节点
     if (routingTable_.getTotalNodeCount() == 0 && !bootstrapNodes_.empty()) {
-        candidates = bootstrapNodes_;
+        ctx.candidates = bootstrapNodes_;
     } else {
-        candidates = routingTable_.findClosestNodes(target, 8);
+        ctx.candidates = routingTable_.findClosestNodes(target, kLookupK);
     }
 
-    // TODO: 完整迭代查找未实现——当前仅对最接近的 8 个节点做单轮
-    // get_peers/find_node 查询；完整实现应按 Kademlia 迭代逼近，
-    // 用响应中发现的更近节点继续查询，直至候选耗尽
-    for (const auto& node : candidates) {
-        // 发送 find_node 或 get_peers 请求
-        DhtMessage msg;
-        msg.type = DhtMessageType::Query;
-        msg.nodeId = nodeId_;
-        msg.transactionId = generateTransactionId();
+    uint64_t lookupId;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        lookupId = nextLookupId_++;
+        lookups_.emplace(lookupId, std::move(ctx));
+    }
 
-        if (isFindPeers) {
-            msg.queryType = DhtQueryType::GetPeers;
-            msg.arguments["info_hash"] = infoHash;
-        } else {
-            msg.queryType = DhtQueryType::FindNode;
-            msg.arguments["target"] = DhtUtils::nodeIdToString(target);
+    continueLookup(lookupId);
+}
+
+void DhtClient::continueLookup(uint64_t lookupId) {
+    struct PendingSend {
+        std::string ip;
+        uint16_t port;
+        std::string endpoint;
+        DhtMessage msg;
+    };
+    std::vector<PendingSend> sends;
+    bool finalizeNow = false;
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = lookups_.find(lookupId);
+        if (it == lookups_.end()) {
+            return;
+        }
+        auto& ctx = it->second;
+
+        // 候选按 XOR 距离排序，取最近的未查询节点
+        std::sort(ctx.candidates.begin(), ctx.candidates.end(),
+                  [&ctx](const DhtNode& a, const DhtNode& b) {
+                      return a.closerThan(b, ctx.target);
+                  });
+
+        for (const auto& node : ctx.candidates) {
+            if (sends.size() >= kLookupAlpha) {
+                break;
+            }
+            const auto endpoint = ctx.endpointKey(node);
+            if (ctx.queriedEndpoints.count(endpoint) > 0) {
+                continue;
+            }
+            if (node.ip.empty() || node.port == 0) {
+                // 无效条目直接标记已处理，避免死循环
+                ctx.queriedEndpoints.insert(endpoint);
+                continue;
+            }
+
+            DhtMessage msg;
+            msg.type = DhtMessageType::Query;
+            msg.nodeId = nodeId_;
+            msg.transactionId = generateTransactionId();
+
+            if (ctx.isFindPeers) {
+                msg.queryType = DhtQueryType::GetPeers;
+                // BEP-005：info_hash 为 20 字节原始值（ctx.infoHash 的 hex
+                // 形态仅用于回调上报）
+                msg.arguments["info_hash"] =
+                    std::string(reinterpret_cast<const char*>(ctx.target.data()),
+                                ctx.target.size());
+            } else {
+                msg.queryType = DhtQueryType::FindNode;
+                msg.arguments["target"] = DhtUtils::nodeIdToString(ctx.target);
+            }
+
+            ctx.queriedEndpoints.insert(endpoint);
+            ctx.outstandingEndpoints.insert(endpoint);
+            DhtNode queried = node;
+
+            // 注册响应回调：响应到达时驱动该查找继续迭代
+            pendingRequests_[msg.transactionId] =
+                [this, lookupId, queried](const DhtMessage& response) {
+                    handleLookupResponse(lookupId, queried, response);
+                };
+            lookupTransactions_[msg.transactionId] = {lookupId, queried.id};
+
+            sends.push_back({node.ip, node.port, endpoint, std::move(msg)});
         }
 
-        sendMessage(msg, node.ip, node.port);
+        // 无未查询候选且全部响应已收齐 → 收敛终结
+        finalizeNow = sends.empty() && ctx.outstandingEndpoints.empty();
+    }
+
+    // 网络发送在锁外（sendto 系统调用不持锁）；发送失败（域名无法解析、
+    // 网络不可达等）的节点按已终结处理，不悬挂到超时
+    for (auto& send : sends) {
+        if (!sendMessage(send.msg, send.ip, send.port)) {
+            noteUnreachable(lookupId, send.endpoint);
+        }
+    }
+
+    if (finalizeNow) {
+        finalizeLookup(lookupId);
+    }
+}
+
+void DhtClient::noteUnreachable(uint64_t lookupId, const std::string& endpoint) {
+    bool finalizeNow = false;
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = lookups_.find(lookupId);
+        if (it == lookups_.end()) {
+            return;  // 查找已终结
+        }
+        auto& ctx = it->second;
+        ctx.outstandingEndpoints.erase(endpoint);
+
+        bool noUnqueried = std::none_of(ctx.candidates.begin(), ctx.candidates.end(),
+                                        [&ctx](const DhtNode& n) {
+                                            return ctx.queriedEndpoints.count(
+                                                       ctx.endpointKey(n)) == 0;
+                                        });
+        finalizeNow = noUnqueried && ctx.outstandingEndpoints.empty();
+    }
+
+    if (finalizeNow) {
+        finalizeLookup(lookupId);
+    }
+}
+
+void DhtClient::handleLookupResponse(uint64_t lookupId, const DhtNode& queriedNode,
+                                     const DhtMessage& message) {
+    bool finalizeNow = false;
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = lookups_.find(lookupId);
+        if (it == lookups_.end()) {
+            return;  // 查找已被终结（超时/收敛），迟到的响应直接丢弃
+        }
+        auto& ctx = it->second;
+
+        ctx.outstandingEndpoints.erase(ctx.endpointKey(queriedNode));
+
+        // 记录响应者（节点 ID 以响应声明的为准）
+        DhtNode responder = queriedNode;
+        if (message.nodeId != DhtNodeId{}) {
+            responder.id = message.nodeId;
+        }
+        responder.lastSeen = std::chrono::steady_clock::now();
+        responder.active = true;
+        ctx.respondedNodes.push_back(std::move(responder));
+
+        // 吸收响应中的节点作为新候选（BEP-005 compact 格式）
+        auto nodesIt = message.response.find("nodes");
+        if (nodesIt != message.response.end()) {
+            for (auto& node : parseCompactNodes(nodesIt->second)) {
+                if (ctx.candidates.size() >= kMaxCandidates) {
+                    break;
+                }
+                if (ctx.queriedEndpoints.count(ctx.endpointKey(node)) > 0) {
+                    continue;  // 已查询过的不重复入队
+                }
+                ctx.candidates.push_back(std::move(node));
+            }
+        }
+
+        // 吸收响应中的 peers（get_peers 命中时返回 values）
+        auto valuesIt = message.response.find("values");
+        if (valuesIt != message.response.end()) {
+            auto peers = parseCompactPeers(valuesIt->second);
+            ctx.foundPeers.insert(ctx.foundPeers.end(),
+                                  std::make_move_iterator(peers.begin()),
+                                  std::make_move_iterator(peers.end()));
+        }
+
+        // 收敛判定：无未查询候选且全部响应已收齐
+        bool noUnqueried = std::none_of(ctx.candidates.begin(), ctx.candidates.end(),
+                                        [&ctx](const DhtNode& n) {
+                                            return ctx.queriedEndpoints.count(
+                                                       ctx.endpointKey(n)) == 0;
+                                        });
+        finalizeNow = noUnqueried && ctx.outstandingEndpoints.empty();
+    }
+
+    // 响应中发现新候选 → 继续下一轮迭代（Kademlia 迭代逼近）
+    if (finalizeNow) {
+        finalizeLookup(lookupId);
+    } else {
+        continueLookup(lookupId);
+    }
+}
+
+void DhtClient::finalizeLookup(uint64_t lookupId) {
+    LookupContext ctx;
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = lookups_.find(lookupId);
+        if (it == lookups_.end()) {
+            return;
+        }
+        ctx = std::move(it->second);
+        lookups_.erase(it);
+
+        // 清理该查找尚未收到响应的事务注册
+        for (auto iter = lookupTransactions_.begin();
+             iter != lookupTransactions_.end();) {
+            if (iter->second.first == lookupId) {
+                pendingRequests_.erase(iter->first);
+                iter = lookupTransactions_.erase(iter);
+            } else {
+                ++iter;
+            }
+        }
+    }
+
+    // 候选按距离排序取最近的已响应节点去重上报
+    if (ctx.nodeCallback) {
+        std::sort(ctx.respondedNodes.begin(), ctx.respondedNodes.end(),
+                  [&ctx](const DhtNode& a, const DhtNode& b) {
+                      return a.closerThan(b, ctx.target);
+                  });
+        std::set<DhtNodeId> reported;
+        size_t reportedCount = 0;
+        for (const auto& node : ctx.respondedNodes) {
+            if (reportedCount >= kLookupK) {
+                break;
+            }
+            if (!reported.insert(node.id).second) {
+                continue;
+            }
+            ++reportedCount;
+            ctx.nodeCallback(node);
+        }
+    }
+
+    // peers 查找：一次性上报全部发现的 peers（空列表同样上报，表示查找结束）
+    if (ctx.peersCallback) {
+        ctx.peersCallback(ctx.infoHash, ctx.foundPeers);
+    }
+}
+
+void DhtClient::expireStaleLookups() {
+    std::vector<uint64_t> expired;
+    auto now = std::chrono::steady_clock::now();
+    auto timeout = std::chrono::seconds(lookupTimeoutSeconds_.load());
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (const auto& entry : lookups_) {
+            if (now - entry.second.startTime > timeout) {
+                expired.push_back(entry.first);
+            }
+        }
+    }
+
+    // 终结在锁外：回调（用户代码）不得在持锁状态下执行
+    for (uint64_t lookupId : expired) {
+        falcon::detail::log_warnf("DHT lookup {} timed out, finalizing with partial results",
+                                  lookupId);
+        finalizeLookup(lookupId);
     }
 }
 

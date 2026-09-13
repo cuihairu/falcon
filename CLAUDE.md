@@ -2,6 +2,38 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-13 - DHT Kademlia 迭代查找（异步回调接线 + 三个既有缺陷修复）
+- 完成 todo 未完成事项 #2/#3：`findPeers/findNode` 此前的回调参数从未
+  接线（`pendingRequests_` 只读不写、永远为空），`performLookup` 仅对
+  最接近的 8 个节点单轮 fire-and-forget——DHT 查找自集成以来从未真正
+  返回过结果
+- `LookupContext` 替代从未使用的死结构 `DhtLookupRequest`：候选集/
+  已查询/待响应/已发现 peers/已响应节点 + 回调，按 lookupId 管理，
+  并发查找互不干扰；已查询/待响应以端点（ip:port）为键而非节点 ID
+  （引导节点 ID 未知，响应带回真实 ID 不得导致重复查询）
+- 迭代驱动闭环：`continueLookup` 每轮向最近未查询候选（α=3）发查询
+  并注册事务回调；响应吸收 compact nodes/values 后继续下一轮；候选
+  耗尽且全部响应收齐 → `finalizeLookup` 收敛（peers 一次性上报、
+  node 回调对最近已响应节点 ≤k 逐个触发）；超时（默认 30s，可配）
+  上报部分结果；回调一律锁外执行（回调内再取 mutex_ 会死锁）
+- **修复公网引导节点黑洞**（异步查找从未工作的深层原因之一）：预置的
+  router.bittorrent.com 等域名从不做 DNS 解析，`inet_pton` 失败后
+  `sin_addr=0` 静默发往 0.0.0.0，查询永远挂 outstanding → 查找永不
+  收敛。`sendMessage` 返回 bool + `noteUnreachable`（发送失败按已
+  终结处理，查找立即收敛而非悬挂到超时）；新增
+  `clear_bootstrap_nodes()`（纯私有网络/测试场景）
+- **修复 `nodeIdFromString` hex 解码**：原为 memcpy 截断而非 hex 解码
+  ——40 位 hex info_hash 与消息 decode 的 id 字段全部解析错误
+  （encode/decode 不对称）；合法 40 位 hex 才解码否则回退字节截断，
+  与 `nodeIdToString` 构成往返
+- **修复 get_peers 协议格式**：`info_hash` 参数从 40 字符 hex 文本改
+  为 20 字节原始值（BEP-005）；compact nodes/values 解析提取为共享
+  辅助函数（原两处重复实现合一）
+- 新增 `dht_node_test.cpp` 9 用例（本地 UDP mock DHT 网络）：两跳迭代
+  逼近、find_node 距离序上报且收敛后无多余查询、空网络空结果、超时
+  终结不悬挂、并发查找独立、无效端点/不可解析引导快速终结；DHT 9
+  用例全绿，全量 ctest 零回归
+
 ### 2026-09-13 - V2 引擎接入生产接线（M3：daemon/CLI 配置面 + 停机与恢复缺陷三连修）
 - 三生产二进制接线完成，默认 `v1` 全关（灰度开关逐任务可回退 curl）：
   - daemon：daemon.json `download.http_engine: "v1"|"v2"`（非法值告警

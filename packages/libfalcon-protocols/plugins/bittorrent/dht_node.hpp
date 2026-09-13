@@ -118,16 +118,6 @@ private:
 };
 
 /**
- * @brief DHT 查找请求
- */
-struct DhtLookupRequest {
-    DhtNodeId target;
-    std::vector<DhtNodeId> contacted;  // 已联系过的节点
-    std::vector<DhtNode> candidates;   // 候选节点
-    std::chrono::steady_clock::time_point startTime;
-};
-
-/**
  * @brief DHT 消息类型
  */
 enum class DhtMessageType : uint8_t {
@@ -237,6 +227,12 @@ public:
     void addBootstrapNode(const std::string& ip, uint16_t port);
 
     /**
+     * @brief 清空引导节点列表（构造时预置的公网引导节点一并清除，
+     * 供纯私有网络/测试场景使用；须在 start() 之前调用）
+     */
+    void clear_bootstrap_nodes() { bootstrapNodes_.clear(); }
+
+    /**
      * @brief 查找 peers (通过 info_hash)
      */
     void findPeers(const std::string& infoHash, FoundPeersCallback callback);
@@ -245,6 +241,16 @@ public:
      * @brief 查找节点 (通过 node_id)
      */
     void findNode(const DhtNodeId& targetId, NodeFoundCallback callback);
+
+    /**
+     * @brief 设置单次查找的超时时间（默认 30 秒）
+     *
+     * 超时的查找会提前终结：已收集到的 peers/节点仍上报给回调。
+     * 须在 start() 之前调用（无内部同步）。
+     */
+    void set_lookup_timeout(std::chrono::seconds timeout) {
+        lookupTimeoutSeconds_.store(timeout.count());
+    }
 
     /**
      * @brief 获取本地节点 ID
@@ -258,6 +264,69 @@ public:
 
 private:
     /**
+     * @brief 单次 Kademlia 迭代查找的上下文
+     *
+     * 生命周期：findPeers/findNode 创建 → continueLookup 驱动迭代 →
+     * 候选耗尽（收敛）或超时后 finalizeLookup 终结并触发回调。
+     */
+    struct LookupContext {
+        DhtNodeId target;
+        std::string infoHash;                // get_peers 查找时非空
+        bool isFindPeers = false;
+        FoundPeersCallback peersCallback;
+        NodeFoundCallback nodeCallback;
+        std::vector<DhtNode> candidates;     // 候选节点（含已查询）
+        // 已查询/待响应以端点（ip:port）为键而非节点 ID——引导节点的 ID
+        // 未知（随机占位），响应中带回的真实 ID 不得导致同一节点重复查询
+        std::set<std::string> queriedEndpoints;
+        std::set<std::string> outstandingEndpoints;
+        std::vector<std::pair<std::string, uint16_t>> foundPeers;  // 已发现的 peers
+        std::vector<DhtNode> respondedNodes; // 已响应的节点
+        std::chrono::steady_clock::time_point startTime;
+
+        static std::string endpointKey(const std::string& ip, uint16_t port) {
+            return ip + ":" + std::to_string(port);
+        }
+        static std::string endpointKey(const DhtNode& node) {
+            return endpointKey(node.ip, node.port);
+        }
+    };
+
+    /**
+     * @brief 创建查找上下文并启动首轮查询
+     */
+    void startLookup(const DhtNodeId& target, bool isFindPeers, const std::string& infoHash,
+                     FoundPeersCallback peersCallback, NodeFoundCallback nodeCallback);
+
+    /**
+     * @brief 推进一轮迭代：向最近的未查询候选（至多 alpha 个）发查询；
+     * 无候选且无待响应时终结查找
+     */
+    void continueLookup(uint64_t lookupId);
+
+    /**
+     * @brief 处理查找请求的响应：吸收响应中的节点/peers，继续迭代
+     */
+    void handleLookupResponse(uint64_t lookupId, const DhtNode& queriedNode,
+                              const DhtMessage& message);
+
+    /**
+     * @brief 将发送失败的节点从待响应集合移除（查找因此可能立即收敛，
+     * 而不必等到超时）
+     */
+    void noteUnreachable(uint64_t lookupId, const std::string& endpoint);
+
+    /**
+     * @brief 终结查找：清理事务映射并触发回调（收敛或超时共用）
+     */
+    void finalizeLookup(uint64_t lookupId);
+
+    /**
+     * @brief 将超过超时的查找终结（receiveLoop 周期调用）
+     */
+    void expireStaleLookups();
+
+    /**
      * @brief UDP 接收循环
      */
     void receiveLoop();
@@ -268,19 +337,15 @@ private:
     void handleMessage(const DhtMessage& message, const std::string& senderIp, uint16_t senderPort);
 
     /**
-     * @brief 发送消息
+     * @brief 发送消息（返回 false 表示发送失败：socket 无效、
+     * 目标非数字 IP 或系统调用失败）
      */
-    void sendMessage(const DhtMessage& message, const std::string& ip, uint16_t port);
+    bool sendMessage(const DhtMessage& message, const std::string& ip, uint16_t port);
 
     /**
      * @brief 生成事务 ID
      */
     std::string generateTransactionId();
-
-    /**
-     * @brief 执行查找操作
-     */
-    void performLookup(const DhtNodeId& target, bool isFindPeers, const std::string& infoHash = "");
 
     uint16_t port_;
     DhtNodeId nodeId_;
@@ -293,7 +358,13 @@ private:
     std::thread maintenanceThread_;
 
     mutable std::mutex mutex_;
+    // 事务 ID → 响应回调（查找请求注册；一请求一响应，消费即删）
     std::map<std::string, std::function<void(const DhtMessage&)>> pendingRequests_;
+    // 事务 ID → (查找 ID, 被查询节点)，用于终结时清理未响应的注册
+    std::map<std::string, std::pair<uint64_t, DhtNodeId>> lookupTransactions_;
+    std::map<uint64_t, LookupContext> lookups_;
+    uint64_t nextLookupId_ = 0;
+    std::atomic<int64_t> lookupTimeoutSeconds_{30};
 
     static constexpr size_t TRANSACTION_ID_SIZE = 4;
     std::atomic<uint32_t> transactionCounter_{0};

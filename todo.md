@@ -1326,11 +1326,59 @@ feature 候选：
 1. ~~**日志库迁移**~~ ✅ 已完成（2026-09-07，见上方条目；
    后续可选：FMT 风格调用点逐个迁移到 spdlog 原生 fmt 语法、
    异步 sink / 文件轮转 sink 配置化）
-2. **DHT 异步查找**（`dht_node.cpp:findPeers/findNode`）：回调参数未接线，
-   需在 receiveLoop 收到响应后上报；当前为同步单轮查询
-3. **DHT 迭代查找**（`dht_node.cpp:performLookup`）：应按 Kademlia 迭代逼近
-   （用响应中更近节点继续查询），当前仅查最接近的 8 个节点一轮
+2. ~~**DHT 异步查找**~~ ✅ 已完成（2026-09-13，见下方条目）
+3. ~~**DHT 迭代查找**~~ ✅ 已完成（2026-09-13，见下方条目）
 4. ~~**V2 引擎多连接分段下载**~~ ✅ 已完成（2026-09-07，见上方条目）
 5. ~~**增量下载远程哈希列表/Range 下载**~~ ✅ 已完成（2026-09-07，见上方条目；
    剩余可选增强：rsync rolling-hash 算法、增量结果端到端哈希校验）
+
+### 2026-09-13 - DHT Kademlia 迭代查找与异步回调接线
+
+**目标（原未完成事项 #2/#3）：**
+- `findPeers/findNode` 的回调参数从未接线（`pendingRequests_` 只读不写，
+  永远为空）；`performLookup` 只对最接近的 8 个节点做单轮 fire-and-forget
+  查询。实现完整的异步 Kademlia 迭代查找
+
+**实现：**
+- ✅ `LookupContext`（替代从未使用的死结构 `DhtLookupRequest`）：
+  候选集/已查询/待响应/已发现 peers/已响应节点 + 回调，按查找
+  （lookupId）管理，支持并发查找互不干扰
+- ✅ 迭代驱动：`continueLookup` 每轮向最近的未查询候选（α=3）发查询并
+  注册事务回调；响应（`handleLookupResponse`）吸收 compact nodes/values
+  后继续下一轮；候选耗尽且全部响应收齐 → `finalizeLookup` 收敛终结
+- ✅ 回调语义：收敛/超时时一次性上报——peers 回调收到全部发现的
+  peers（空列表同样触发，表示查找结束）；node 回调对最近的已响应
+  节点（≤k）逐个触发
+- ✅ 已查询/待响应以端点（ip:port）为键而非节点 ID——引导节点的 ID
+  未知（随机占位），响应中带回的真实 ID 不得导致同一节点重复查询
+- ✅ 超时终结（默认 30s，`set_lookup_timeout` 可配）：receiveLoop 每秒
+  扫描，超时查找上报已收集的部分结果；回调一律在锁外执行
+- ✅ 发送失败快速终结：`sendMessage` 返回 false（域名无法解析/socket
+  无效/sendto 失败）→ `noteUnreachable` 将节点移出待响应集，查找立即
+  收敛而不悬挂到超时。**修复真实缺陷**：构造时预置的公网域名引导节点
+  （router.bittorrent.com 等）此前从不做 DNS 解析、`inet_pton` 失败后
+  `sin_addr=0` 静默发往 0.0.0.0——公网 bootstrap 自始从未工作过且拖住
+  查找永不收敛
+- ✅ `clear_bootstrap_nodes()`：清空预置公网引导节点（纯私有网络/
+  测试场景）；α=3/k=8/候选上限 64 常量化
+- ✅ 协议正确性顺带修复：`nodeIdFromString` 原为 memcpy 截断而非 hex
+  解码——`findPeers` 的 40 位 hex info_hash 与消息 decode 的 id 字段
+  全部解析错误（encode/decode 不对称）；改为 hex 解码（合法 40 位 hex
+  才解码，否则回退字节截断），与 `nodeIdToString` 构成往返；
+  get_peers 的 `info_hash` 参数从 40 字符 hex 文本改为 20 字节原始值
+  （BEP-005）
+- ✅ `handleMessage` 响应分支重构：`pendingRequests_` 锁内取出并消费
+  （一请求一响应），回调锁外调用——回调内部会再获取 mutex_，锁内
+  调用即死锁；compact nodes/values 解析提取为共享辅助函数（原两处
+  重复实现合一）
+- ✅ 新增 `dht_node_test.cpp` 9 用例（本地 UDP mock DHT 网络）：
+  DhtUtils 往返/XOR 距离序、两跳迭代逼近（新节点驱动下一轮）、
+  find_node 距离序上报且收敛后无多余查询、空网络空结果、超时终结
+  不悬挂、并发查找独立、无效端点立即终结、公网域名引导快速终结；
+  mock 节点记录收到的查询并按编程构造器响应
+
+**验证：**
+- ✅ DHT 9 用例全绿；全量 ctest 1548/1548 通过（2 项 CLI NOT_BUILT
+  为 build-ci 未编 CLI 的残留注册）
+
 
