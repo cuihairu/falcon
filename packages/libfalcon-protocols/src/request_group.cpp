@@ -156,11 +156,19 @@ bool RequestGroup::init() {
         return true;
     }
 
+#ifdef FALCON_ENABLE_OPENSSL
+    // TLS 支持在连接命令层（异步握手 + 证书校验硬断连），此处放行
     if (starts_with(url, "https://")) {
-        set_error_message("V2 socket 命令链路暂不支持 https://");
+        return true;
+    }
+    set_error_message("V2 当前仅支持 http:// 与 https://");
+#else
+    if (starts_with(url, "https://")) {
+        set_error_message("V2 HTTPS 支持需要启用 OpenSSL");
     } else {
         set_error_message("V2 当前仅支持 http://");
     }
+#endif
     // URL 协议不受支持：组 FAILED 的同时同步任务终态（任务此前会永久
     // 停留在初始 Pending 态，与组状态脱节）
     download_task_->set_error(error_message());

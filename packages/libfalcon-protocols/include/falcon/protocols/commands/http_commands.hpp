@@ -44,10 +44,43 @@ enum class HttpConnectionState {
     DISCONNECTED,
     CONNECTING,
     CONNECTED,
+    TLS_HANDSHAKING,  ///< TLS 握手进行中（WANT_* 挂起等 socket 事件重入续推）
     REQUEST_SENT,
     RECEIVING,
     COMPLETE
 };
+
+/**
+ * @brief TLS 握手推进结果
+ *
+ * 非阻塞 socket 上 WANT_READ/WANT_WRITE 属握手进行中而非失败——
+ * 调用方应置 TLS_HANDSHAKING 状态注册对应 socket 事件等待重入
+ */
+enum class TlsHandshakeResult {
+    OK,          ///< 握手完成（证书校验通过或未启用校验）
+    WANT_READ,   ///< 握手挂起，等待 socket 可读后续推
+    WANT_WRITE,  ///< 握手挂起，等待 socket 可写后续推
+    FAILED       ///< 握手失败（含证书校验失败，必须断连）
+};
+
+#ifdef FALCON_ENABLE_OPENSSL
+/**
+ * @brief TLS 会话共享句柄（SSL_free 删除器）
+ *
+ * 初始连接完成握手后持有，沿命令链（响应 → 下载）共享：下载命令
+ * 必须经 SSL_read 解密收响应体，对 TLS 连接做明文 recv 只能读到
+ * 密文。共享所有权取代裸指针传递——初始连接命令在调度响应命令后
+ * 随即出队销毁，裸指针传递即悬垂
+ */
+struct HttpTlsSessionDeleter {
+    void operator()(SSL* ssl) const noexcept {
+        if (ssl) {
+            SSL_free(ssl);
+        }
+    }
+};
+using HttpTlsSessionPtr = std::shared_ptr<SSL>;
+#endif
 
 class RequestGroup;
 class HttpInitiateConnectionCommand;
@@ -230,7 +263,8 @@ private:
     bool resolve_host(const std::string& host, std::string& ip);
     bool create_socket();
     bool connect_socket();
-    bool setup_tls();  // 始终声明，实现根据 FALCON_ENABLE_OPENSSL 条件编译
+    TlsHandshakeResult setup_tls();  // 始终声明，实现根据 FALCON_ENABLE_OPENSSL 条件编译
+    ExecutionResult advance_tls_handshake(DownloadEngineV2* engine);
     bool prepare_http_request();
     ExecutionResult send_http_request(DownloadEngineV2* engine);
     void notify_segment_failure(DownloadEngineV2* engine, const std::string& reason);
@@ -270,7 +304,8 @@ private:
 
 #ifdef FALCON_ENABLE_OPENSSL
     SSL_CTX* ssl_ctx_ = nullptr;
-    SSL* ssl_conn_ = nullptr;
+    HttpTlsSessionPtr ssl_conn_;  // 握手完成后沿命令链（响应 → 下载）共享
+    bool tls_started_ = false;    // SSL 对象只建一次，重入在其上续握手
 #endif
 };
 
@@ -296,7 +331,8 @@ public:
      * @param socket_fd Socket 文件描述符
      * @param request HTTP 请求对象
      * @param options 下载选项
-     * @param ssl_conn SSL 连接（HTTPS 时使用）
+     * @param tls_session TLS 会话（HTTPS 时使用；调度下载命令时继续
+     *        传递——响应体必须经 SSL_read 解密）
      * @param use_https 是否使用 HTTPS
      * @param source_url 原始完整 URL（多连接分段时为段 1..N-1 创建新连接用；
      *                   空串表示不启用多连接）
@@ -309,7 +345,7 @@ public:
                         std::shared_ptr<HttpRequest> request,
                         const DownloadOptions& options,
 #ifdef FALCON_ENABLE_OPENSSL
-                        void* ssl_conn = nullptr,
+                        HttpTlsSessionPtr tls_session = {},
 #endif
                         bool use_https = false,
                         std::string source_url = {},
@@ -453,7 +489,7 @@ private:
     // TLS/HTTPS 支持
     bool use_https_ = false;
 #ifdef FALCON_ENABLE_OPENSSL
-    void* ssl_conn_ = nullptr;  // SSL* 指针
+    HttpTlsSessionPtr tls_session_;  ///< 与初始连接共享的 TLS 会话
 #endif
 
     // 响应解析状态
@@ -506,6 +542,8 @@ public:
      * @param truncate_output 打开输出文件时是否截断（全新下载的段 0 用
      *        默认 true 创建/重置文件；断点续传的段 0 必须传 false——
      *        临时文件里存着本段与其他段的已落盘数据，截断即销毁断点）
+     * @param tls_session TLS 会话（HTTPS 时必传——响应体必须经
+     *        SSL_read 解密，对 TLS 连接做明文 recv 只能读到密文）
      */
     HttpDownloadCommand(TaskId task_id,
                         int socket_fd,
@@ -516,7 +554,12 @@ public:
                         std::string initial_data = {},
                         Bytes resumed_bytes = 0,
                         bool truncate_output = true,
-                        bool chunked = false);
+                        bool chunked = false
+#ifdef FALCON_ENABLE_OPENSSL
+                        ,
+                        HttpTlsSessionPtr tls_session = {}
+#endif
+                        );
 
     ~HttpDownloadCommand() override;
 
@@ -638,6 +681,11 @@ private:
     std::size_t chunk_remaining_ = 0;  // 当前块剩余字节数
     bool chunk_end_ = false;           // 是否到达块结束标记
     std::string chunk_buffer_;         // 分块编码解析缓冲区
+
+#ifdef FALCON_ENABLE_OPENSSL
+    // TLS 会话（HTTPS 下载体必须经 SSL_read 解密；与初始连接共享）
+    HttpTlsSessionPtr tls_session_;
+#endif
     enum class ChunkParseState {
         READ_SIZE,      // 读取块大小
         READ_DATA,      // 读取块数据

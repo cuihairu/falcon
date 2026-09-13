@@ -10,7 +10,8 @@
  * - RFC 3986 引用解析四形态：绝对 URL / 协议相对 //host/path /
  *   绝对路径 /path / 相对路径（含 ../ 上跳归一化）
  * - 防护：重定向环在 kMaxRedirects 内截断按失败收口（有界连接数）；
- *   https 目标（V2 暂不支持 TLS）明确失败而非静默
+ *   重定向到 https 目标暂不支持（直接 https:// 请求已放行），明确
+ *   失败而非静默
  */
 
 #ifdef _WIN32
@@ -446,7 +447,7 @@ TEST(DownloadEngineV2Redirect, RedirectLoopFailsBounded) {
     std::filesystem::remove_all(dir, rm_ec);
 }
 
-/// https 目标：V2 未放行 TLS，明确失败而非静默或崩溃
+/// 重定向到 https 目标：暂不支持，明确失败而非静默或崩溃
 TEST(DownloadEngineV2Redirect, HttpsTargetFailsCleanly) {
     RedirectServer server;
     ASSERT_TRUE(server.start());
@@ -469,7 +470,7 @@ TEST(DownloadEngineV2Redirect, HttpsTargetFailsCleanly) {
     RedirectEngineRunner runner(engine);
     ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
     EXPECT_EQ(group->status(), RequestGroupStatus::FAILED)
-        << "https 重定向目标必须干净失败";
+        << "重定向到 https 目标必须干净失败";
 
     runner.shutdown_and_join();
     server.stop();

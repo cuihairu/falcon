@@ -280,12 +280,8 @@ HttpInitiateConnectionCommand::HttpInitiateConnectionCommand(
 
 HttpInitiateConnectionCommand::~HttpInitiateConnectionCommand() {
 #ifdef FALCON_ENABLE_OPENSSL
-    // 清理 SSL 连接
-    if (ssl_conn_) {
-        SSL_shutdown(ssl_conn_);
-        SSL_free(ssl_conn_);
-        ssl_conn_ = nullptr;
-    }
+    // SSL 连接由 ssl_conn_（共享句柄）自动释放：命令链上的响应/下载
+    // 命令可能仍在使用会话，此处不能抢先 SSL_free
     if (ssl_ctx_) {
         SSL_CTX_free(ssl_ctx_);
         ssl_ctx_ = nullptr;
@@ -338,39 +334,11 @@ bool HttpInitiateConnectionCommand::execute(DownloadEngineV2* engine) {
                 }
 
                 connection_state_ = HttpConnectionState::CONNECTED;
-
-#ifdef FALCON_ENABLE_OPENSSL
-                // 如果是 HTTPS，执行 TLS 握手
-                if (use_https_) {
-                    if (!setup_tls()) {
-                        FALCON_LOG_ERROR_STREAM("TLS 握手失败: " << host_);
-                        notify_segment_failure(engine, "TLS handshake failed: " + host_);
-                        close_socket_fd(socket_fd_);
-                        socket_fd_ = -1;
-                        return handle_result(ExecutionResult::ERROR_OCCURRED);
-                    }
-                }
-#else
-                // 如果没有 OpenSSL，HTTPS 不可用
-                if (use_https_) {
-                    FALCON_LOG_ERROR_STREAM("HTTPS 支持需要启用 OpenSSL");
-                    notify_segment_failure(engine, "HTTPS support requires OpenSSL");
-                    close_socket_fd(socket_fd_);
-                    socket_fd_ = -1;
-                    return handle_result(ExecutionResult::ERROR_OCCURRED);
-                }
-#endif
-
-                {
-                    auto res = send_http_request(engine);
-                    if (res == ExecutionResult::ERROR_OCCURRED) {
-                        notify_segment_failure(engine, "Failed to send HTTP request");
-                    }
-                    return handle_result(res);
-                }
+                [[fallthrough]];
 
             case HttpConnectionState::CONNECTING:
-                // 检查连接是否完成（使用 getsockopt SO_ERROR）
+                // 检查连接是否完成（使用 getsockopt SO_ERROR）；同步
+                // 连接路径刚连上，复核恒为 0
                 {
                     int error = 0;
 #ifdef _WIN32
@@ -393,28 +361,21 @@ bool HttpInitiateConnectionCommand::execute(DownloadEngineV2* engine) {
                 }
 
                 connection_state_ = HttpConnectionState::CONNECTED;
-
-#ifdef FALCON_ENABLE_OPENSSL
-                // 如果是 HTTPS，执行 TLS 握手
                 if (use_https_) {
-                    if (!setup_tls()) {
-                        FALCON_LOG_ERROR_STREAM("TLS 握手失败: " << host_);
-                        notify_segment_failure(engine, "TLS handshake failed: " + host_);
-                        close_socket_fd(socket_fd_);
-                        socket_fd_ = -1;
-                        return handle_result(ExecutionResult::ERROR_OCCURRED);
+                    connection_state_ = HttpConnectionState::TLS_HANDSHAKING;
+                }
+                [[fallthrough]];
+
+            case HttpConnectionState::TLS_HANDSHAKING:
+                if (connection_state_ == HttpConnectionState::TLS_HANDSHAKING) {
+                    // 推进/继续 TLS 握手：WANT_* 挂起等 socket 事件重入
+                    // （重入时在既有 SSL 对象上续推），完成后落请求发送；
+                    // 失败（含证书校验失败）断连收口
+                    const auto tls_res = advance_tls_handshake(engine);
+                    if (tls_res != ExecutionResult::OK) {
+                        return handle_result(tls_res);
                     }
                 }
-#else
-                // 如果没有 OpenSSL，HTTPS 不可用
-                if (use_https_) {
-                    FALCON_LOG_ERROR_STREAM("HTTPS 支持需要启用 OpenSSL");
-                    notify_segment_failure(engine, "HTTPS support requires OpenSSL");
-                    close_socket_fd(socket_fd_);
-                    socket_fd_ = -1;
-                    return handle_result(ExecutionResult::ERROR_OCCURRED);
-                }
-#endif
 
                 {
                     auto res = send_http_request(engine);
@@ -556,114 +517,165 @@ bool HttpInitiateConnectionCommand::connect_socket() {
 }
 
 #ifdef FALCON_ENABLE_OPENSSL
-bool HttpInitiateConnectionCommand::setup_tls() {
-    // 初始化 SSL 连接
-    if (!ssl_ctx_) {
-        // 创建 SSL_CTX
-        const SSL_METHOD* method = TLS_client_method();
-        if (!method) {
-            FALCON_LOG_ERROR_STREAM("无法获取 TLS 方法: " << ERR_error_string(ERR_get_error(), nullptr));
-            return false;
-        }
-
-        ssl_ctx_ = SSL_CTX_new(method);
+TlsHandshakeResult HttpInitiateConnectionCommand::setup_tls() {
+    // SSL 对象只创建一次：非阻塞握手的 WANT_* 重入在既有对象上续推
+    //（每次 SSL_new 会丢弃已完成的握手进度且泄漏旧对象）
+    if (!tls_started_) {
         if (!ssl_ctx_) {
-            FALCON_LOG_ERROR_STREAM("无法创建 SSL_CTX: " << ERR_error_string(ERR_get_error(), nullptr));
-            return false;
+            // 创建 SSL_CTX
+            const SSL_METHOD* method = TLS_client_method();
+            if (!method) {
+                FALCON_LOG_ERROR_STREAM("无法获取 TLS 方法: " << ERR_error_string(ERR_get_error(), nullptr));
+                return TlsHandshakeResult::FAILED;
+            }
+
+            ssl_ctx_ = SSL_CTX_new(method);
+            if (!ssl_ctx_) {
+                FALCON_LOG_ERROR_STREAM("无法创建 SSL_CTX: " << ERR_error_string(ERR_get_error(), nullptr));
+                return TlsHandshakeResult::FAILED;
+            }
+
+            // 设置最小 TLS 版本为 1.2
+            SSL_CTX_set_min_proto_version(ssl_ctx_, TLS1_2_VERSION);
+
+            // 配置 SSL 选项
+            SSL_CTX_set_options(ssl_ctx_, SSL_OP_ALL | SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_COMPRESSION);
+
+            // 设置验证模式
+            if (options_.verify_ssl) {
+                SSL_CTX_set_verify(ssl_ctx_, SSL_VERIFY_PEER, nullptr);
+            } else {
+                SSL_CTX_set_verify(ssl_ctx_, SSL_VERIFY_NONE, nullptr);
+            }
+
+            // 加载默认证书
+            if (!SSL_CTX_set_default_verify_paths(ssl_ctx_)) {
+                FALCON_LOG_WARN_STREAM("无法加载默认 CA 证书，继续使用系统证书");
+            }
         }
 
-        // 设置最小 TLS 版本为 1.2
-        SSL_CTX_set_min_proto_version(ssl_ctx_, TLS1_2_VERSION);
-
-        // 配置 SSL 选项
-        SSL_CTX_set_options(ssl_ctx_, SSL_OP_ALL | SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_COMPRESSION);
-
-        // 设置验证模式
-        if (options_.verify_ssl) {
-            SSL_CTX_set_verify(ssl_ctx_, SSL_VERIFY_PEER, nullptr);
-        } else {
-            SSL_CTX_set_verify(ssl_ctx_, SSL_VERIFY_NONE, nullptr);
+        // 创建 SSL 连接（共享句柄：命令链上的响应/下载命令继续使用）
+        ssl_conn_ = HttpTlsSessionPtr(SSL_new(ssl_ctx_), HttpTlsSessionDeleter{});
+        if (!ssl_conn_) {
+            FALCON_LOG_ERROR_STREAM("无法创建 SSL 连接: " << ERR_error_string(ERR_get_error(), nullptr));
+            return TlsHandshakeResult::FAILED;
         }
 
-        // 加载默认证书
-        if (!SSL_CTX_set_default_verify_paths(ssl_ctx_)) {
-            FALCON_LOG_WARN_STREAM("无法加载默认 CA 证书，继续使用系统证书");
+        // 绑定 Socket 到 SSL
+        if (SSL_set_fd(ssl_conn_.get(), static_cast<int>(socket_fd_)) != 1) {
+            FALCON_LOG_ERROR_STREAM("无法绑定 Socket 到 SSL: " << ERR_error_string(ERR_get_error(), nullptr));
+            return TlsHandshakeResult::FAILED;
         }
+
+        // 设置 SNI 主机名
+        SSL_set_tlsext_host_name(ssl_conn_.get(), host_.c_str());
+
+        // 证书校验绑定期望主机名：verify 开启时 SSL_get_verify_result
+        // 的结论因此同时覆盖证书链与主机名——替代此前的 WARN-only
+        // 主机名检查（告警后照常收数据，校验形同虚设）
+        if (options_.verify_ssl && SSL_set1_host(ssl_conn_.get(), host_.c_str()) != 1) {
+            FALCON_LOG_ERROR_STREAM("无法设置证书主机名校验: " << host_);
+            return TlsHandshakeResult::FAILED;
+        }
+
+        FALCON_LOG_INFO_STREAM("开始 TLS 握手: " << host_);
+        tls_started_ = true;
     }
 
-    // 创建 SSL 连接
-    ssl_conn_ = SSL_new(ssl_ctx_);
-    if (!ssl_conn_) {
-        FALCON_LOG_ERROR_STREAM("无法创建 SSL 连接: " << ERR_error_string(ERR_get_error(), nullptr));
-        return false;
-    }
-
-    // 绑定 Socket 到 SSL
-    if (SSL_set_fd(ssl_conn_, static_cast<int>(socket_fd_)) != 1) {
-        FALCON_LOG_ERROR_STREAM("无法绑定 Socket 到 SSL: " << ERR_error_string(ERR_get_error(), nullptr));
-        return false;
-    }
-
-    // 设置 SNI 主机名
-    SSL_set_tlsext_host_name(ssl_conn_, host_.c_str());
-
-    // 执行 TLS 握手
-    FALCON_LOG_INFO_STREAM("开始 TLS 握手: " << host_);
-
-    int ret = SSL_connect(ssl_conn_);
+    // 执行/继续 TLS 握手（非阻塞 socket：WANT_* 属进行中而非失败）
+    const int ret = SSL_connect(ssl_conn_.get());
     if (ret != 1) {
-        int error = SSL_get_error(ssl_conn_, ret);
+        const int error = SSL_get_error(ssl_conn_.get(), ret);
 
-        if (error == SSL_ERROR_WANT_READ || error == SSL_ERROR_WANT_WRITE) {
-            // 非阻塞模式下的情况，需要等待
-            FALCON_LOG_DEBUG_STREAM("TLS 握手需要等待 I/O");
-            // 在实际异步实现中，应该返回并等待 I/O 事件
-            // 这里简化处理，稍后重试
-            return false;
+        if (error == SSL_ERROR_WANT_READ) {
+            FALCON_LOG_DEBUG_STREAM("TLS 握手等待可读: " << host_);
+            return TlsHandshakeResult::WANT_READ;
+        }
+        if (error == SSL_ERROR_WANT_WRITE) {
+            FALCON_LOG_DEBUG_STREAM("TLS 握手等待可写: " << host_);
+            return TlsHandshakeResult::WANT_WRITE;
         }
 
-        // 打印错误信息
+        // SSL_VERIFY_PEER 下证书校验失败在握手阶段即中止，优先给出
+        // 校验结论（通用错误串看不到原因）
+        if (options_.verify_ssl) {
+            const long verify_result = SSL_get_verify_result(ssl_conn_.get());
+            if (verify_result != X509_V_OK) {
+                FALCON_LOG_ERROR_STREAM("证书验证失败: "
+                                        << X509_verify_cert_error_string(verify_result));
+                return TlsHandshakeResult::FAILED;
+            }
+        }
+
         char error_buf[256];
         ERR_error_string_n(ERR_get_error(), error_buf, sizeof(error_buf));
         FALCON_LOG_ERROR_STREAM("TLS 握手失败: " << error_buf);
-
-        return false;
+        return TlsHandshakeResult::FAILED;
     }
 
-    // 验证证书
+    // 握手成功的最终校验兜底：VERIFY_PEER 下校验失败走不到这里，此
+    // 分支防验证模式与预期不符——校验失败即硬断连，绝不 WARN 后继续
+    // 收数据（TLS 形同虚设）
     if (options_.verify_ssl) {
-        X509* cert = SSL_get_peer_certificate(ssl_conn_);
-        if (cert) {
-            // 验证主机名
-            if (X509_check_host(cert, host_.c_str(), host_.length(), 0, nullptr) != 1) {
-                FALCON_LOG_WARN_STREAM("证书主机名验证失败: " << host_);
-            }
-            X509_free(cert);
-        } else {
-            FALCON_LOG_WARN_STREAM("未收到服务器证书");
-        }
-
-        long verify_result = SSL_get_verify_result(ssl_conn_);
+        const long verify_result = SSL_get_verify_result(ssl_conn_.get());
         if (verify_result != X509_V_OK) {
-            FALCON_LOG_WARN_STREAM("证书验证失败: " << X509_verify_cert_error_string(verify_result));
+            FALCON_LOG_ERROR_STREAM("证书验证失败: "
+                                    << X509_verify_cert_error_string(verify_result));
+            return TlsHandshakeResult::FAILED;
         }
+        X509* cert = SSL_get_peer_certificate(ssl_conn_.get());
+        if (!cert) {
+            FALCON_LOG_ERROR_STREAM("未收到服务器证书");
+            return TlsHandshakeResult::FAILED;
+        }
+        X509_free(cert);
     }
 
     // 获取使用的密码套件
-    const char* cipher = SSL_get_cipher(ssl_conn_);
+    const char* cipher = SSL_get_cipher(ssl_conn_.get());
     FALCON_LOG_INFO_STREAM("TLS 握手成功，使用加密套件: " << (cipher ? cipher : "unknown"));
 
-    return true;
+    return TlsHandshakeResult::OK;
 }
 #endif
 
-// 当未定义 FALCON_ENABLE_OPENSSL 时，提供存根实现
+AbstractCommand::ExecutionResult
+HttpInitiateConnectionCommand::advance_tls_handshake(
+    DownloadEngineV2* engine) {
 #ifndef FALCON_ENABLE_OPENSSL
-bool HttpInitiateConnectionCommand::setup_tls() {
-    FALCON_LOG_ERROR_STREAM("HTTPS 支持需要 OpenSSL");
-    return false;
-}
+    // 无 OpenSSL：HTTPS 不可用，明确失败
+    FALCON_LOG_ERROR_STREAM("HTTPS 支持需要启用 OpenSSL");
+    notify_segment_failure(engine, "HTTPS support requires OpenSSL");
+    close_socket_fd(socket_fd_);
+    socket_fd_ = -1;
+    return ExecutionResult::ERROR_OCCURRED;
+#else
+    switch (setup_tls()) {
+    case TlsHandshakeResult::OK:
+        connection_state_ = HttpConnectionState::CONNECTED;
+        return ExecutionResult::OK;
+    case TlsHandshakeResult::WANT_READ:
+        connection_state_ = HttpConnectionState::TLS_HANDSHAKING;
+        engine->register_socket_event(
+            socket_fd_, static_cast<int>(net::IOEvent::READ), id());
+        return ExecutionResult::WAIT_FOR_SOCKET;
+    case TlsHandshakeResult::WANT_WRITE:
+        connection_state_ = HttpConnectionState::TLS_HANDSHAKING;
+        engine->register_socket_event(
+            socket_fd_, static_cast<int>(net::IOEvent::WRITE), id());
+        return ExecutionResult::WAIT_FOR_SOCKET;
+    case TlsHandshakeResult::FAILED:
+    default:
+        break;
+    }
+
+    FALCON_LOG_ERROR_STREAM("TLS 握手失败: " << host_);
+    notify_segment_failure(engine, "TLS handshake failed: " + host_);
+    close_socket_fd(socket_fd_);
+    socket_fd_ = -1;
+    return ExecutionResult::ERROR_OCCURRED;
 #endif
+}
 
 bool HttpInitiateConnectionCommand::prepare_http_request() {
     http_request_ = std::make_shared<HttpRequest>();
@@ -725,9 +737,9 @@ AbstractCommand::ExecutionResult HttpInitiateConnectionCommand::send_http_reques
 #ifdef FALCON_ENABLE_OPENSSL
         if (use_https_ && ssl_conn_) {
             // 使用 SSL_write 发送 HTTPS 数据
-            n = SSL_write(ssl_conn_, data, static_cast<int>(remaining));
+            n = SSL_write(ssl_conn_.get(), data, static_cast<int>(remaining));
             if (n <= 0) {
-                int ssl_error = SSL_get_error(ssl_conn_, static_cast<int>(n));
+                int ssl_error = SSL_get_error(ssl_conn_.get(), static_cast<int>(n));
                 if (ssl_error == SSL_ERROR_WANT_WRITE || ssl_error == SSL_ERROR_WANT_READ) {
                     engine->register_socket_event(
                         socket_fd_, static_cast<int>(net::IOEvent::WRITE), id());
@@ -759,7 +771,7 @@ AbstractCommand::ExecutionResult HttpInitiateConnectionCommand::send_http_reques
     connection_state_ = HttpConnectionState::REQUEST_SENT;
 
     // 发送完成，进入响应阶段
-    // 注意：如果是 HTTPS，需要传递 SSL 连接对象；
+    // 注意：HTTPS 时传递 TLS 会话共享句柄（响应/下载命令经 SSL_read 解密）；
     // 分段连接需携带 URL 与分段信息，供响应命令按该段范围调度下载命令
     auto response_cmd = std::make_unique<HttpResponseCommand>(get_task_id(),
                                                              socket_fd_,
@@ -838,7 +850,7 @@ HttpResponseCommand::HttpResponseCommand(
     std::shared_ptr<HttpRequest> request,
     const DownloadOptions& options
 #ifdef FALCON_ENABLE_OPENSSL
-    , void* ssl_conn
+    , HttpTlsSessionPtr tls_session
 #endif
     , bool use_https,
     std::string source_url,
@@ -855,7 +867,7 @@ HttpResponseCommand::HttpResponseCommand(
     , range_length_(range_length)
     , use_https_(use_https)
 #ifdef FALCON_ENABLE_OPENSSL
-    , ssl_conn_(ssl_conn)
+    , tls_session_(std::move(tls_session))
 #endif
 {
 }
@@ -965,11 +977,11 @@ AbstractCommand::ExecutionResult HttpResponseCommand::receive_response_headers(D
     for (;;) {
         ssize_t n = 0;
 #ifdef FALCON_ENABLE_OPENSSL
-        if (use_https_ && ssl_conn_) {
+        if (use_https_ && tls_session_) {
             // 使用 SSL_read 接收 HTTPS 数据
-            n = SSL_read(static_cast<SSL*>(ssl_conn_), buffer, sizeof(buffer));
+            n = SSL_read(tls_session_.get(), buffer, sizeof(buffer));
             if (n <= 0) {
-                int ssl_error = SSL_get_error(static_cast<SSL*>(ssl_conn_), static_cast<int>(n));
+                int ssl_error = SSL_get_error(tls_session_.get(), static_cast<int>(n));
                 if (ssl_error == SSL_ERROR_WANT_READ || ssl_error == SSL_ERROR_WANT_WRITE) {
                     if (engine) {
                         engine->register_socket_event(
@@ -1283,7 +1295,15 @@ bool HttpResponseCommand::schedule_multi_segment_download(DownloadEngineV2* engi
                                                         /*segment_id=*/0,
                                                         /*offset=*/0,
                                                         plan[0].length,
-                                                        initial_body_));
+                                                        initial_body_,
+                                                        /*resumed_bytes=*/0,
+                                                        /*truncate_output=*/true,
+                                                        /*chunked=*/false
+#ifdef FALCON_ENABLE_OPENSSL
+                                                        ,
+                                                        /*tls_session=*/tls_session_
+#endif
+                                                        ));
 
     // 段 1..N-1：每段独立连接 + Range 请求
     for (std::size_t i = 1; i < plan.size(); ++i) {
@@ -1375,7 +1395,13 @@ bool HttpResponseCommand::schedule_resume_download(DownloadEngineV2* engine,
                                                             seg0.length,
                                                             initial_body_,
                                                             /*resumed_bytes=*/seg0.downloaded,
-                                                            /*truncate_output=*/false));
+                                                            /*truncate_output=*/false,
+                                                            /*chunked=*/false
+#ifdef FALCON_ENABLE_OPENSSL
+                                                            ,
+                                                            /*tls_session=*/tls_session_
+#endif
+                                                            ));
     } else {
         // 段 0 已完成（初始连接承载的是其他未完成段，由 segment 分支
         // 调度）：本连接不再承载下载，直接释放
@@ -1433,7 +1459,16 @@ bool HttpResponseCommand::determine_download_strategy(DownloadEngineV2* engine) 
                                                             segment_id_,
                                                             range_offset_,
                                                             range_length_,
-                                                            initial_body_));
+                                                            initial_body_,
+                                                            /*resumed_bytes=*/0,
+                                                            /*truncate_output=*/
+                                                            false,
+                                                            /*chunked=*/false
+#ifdef FALCON_ENABLE_OPENSSL
+                                                            ,
+                                                            /*tls_session=*/tls_session_
+#endif
+                                                            ));
         return true;
     }
 
@@ -1469,7 +1504,12 @@ bool HttpResponseCommand::determine_download_strategy(DownloadEngineV2* engine) 
                                                         /*resumed_bytes=*/0,
                                                         /*truncate_output=*/true,
                                                         /*chunked=*/
-                                                        is_chunked_response_));
+                                                        is_chunked_response_
+#ifdef FALCON_ENABLE_OPENSSL
+                                                        ,
+                                                        /*tls_session=*/tls_session_
+#endif
+                                                        ));
     // 建立续传追踪（总长未知/chunked 下载无从续传，begin 内部自行忽略）
     if (group) {
         const auto hdr = [this](const char* key) -> std::string {
@@ -1535,7 +1575,11 @@ HttpDownloadCommand::HttpDownloadCommand(
     std::string initial_data,
     Bytes resumed_bytes,
     bool truncate_output,
-    bool chunked)
+    bool chunked
+#ifdef FALCON_ENABLE_OPENSSL
+    , HttpTlsSessionPtr tls_session
+#endif
+    )
     : AbstractCommand(task_id)
     , socket_fd_(socket_fd)
     , http_response_(std::move(response))
@@ -1547,6 +1591,9 @@ HttpDownloadCommand::HttpDownloadCommand(
     , initial_data_(std::move(initial_data))
     , truncate_output_(truncate_output)
     , chunked_encoding_(chunked)
+#ifdef FALCON_ENABLE_OPENSSL
+    , tls_session_(std::move(tls_session))
+#endif
     , last_update_(std::chrono::steady_clock::now())
 {
 }
@@ -1805,7 +1852,44 @@ AbstractCommand::ExecutionResult HttpDownloadCommand::receive_data(DownloadEngin
             // 否则窗口瞬间超额、长期均速可到限值的 2 倍
             chunk = std::min<std::uint64_t>(sizeof(buffer), budget);
         }
-        ssize_t n = recv(socket_fd_, buffer, static_cast<int>(chunk), 0);
+        ssize_t n = 0;
+#ifdef FALCON_ENABLE_OPENSSL
+        if (tls_session_) {
+            // TLS 连接必须经 SSL_read 解密（明文 recv 只能读到密文）
+            n = SSL_read(tls_session_.get(), buffer, static_cast<int>(chunk));
+            if (n <= 0) {
+                const int ssl_error =
+                    SSL_get_error(tls_session_.get(), static_cast<int>(n));
+                if (ssl_error == SSL_ERROR_WANT_READ ||
+                    ssl_error == SSL_ERROR_WANT_WRITE) {
+                    // WANT_WRITE（写入响应/重协商被阻塞）同样可能出现在
+                    // 读路径上，按所需方向注册事件，避免注册错方向挂死
+                    if (engine) {
+                        engine->register_socket_event(
+                            socket_fd_,
+                            static_cast<int>(ssl_error == SSL_ERROR_WANT_WRITE
+                                                 ? net::IOEvent::WRITE
+                                                 : net::IOEvent::READ),
+                            id());
+                    }
+                    return ExecutionResult::WAIT_FOR_SOCKET;
+                }
+                if (ssl_error == SSL_ERROR_ZERO_RETURN ||
+                    ssl_error == SSL_ERROR_SYSCALL) {
+                    // TLS 层干净关闭（close_notify）或底层连接断开——
+                    // 均按 EOF 交给下方完成判定（chunked 必须见到终止
+                    // 块、Content-Length 必须收满，截断不会假报完成）
+                    n = 0;
+                } else {
+                    FALCON_LOG_ERROR_STREAM("SSL_read() 失败: " << ssl_error);
+                    return ExecutionResult::ERROR_OCCURRED;
+                }
+            }
+        } else
+#endif
+        {
+            n = recv(socket_fd_, buffer, static_cast<int>(chunk), 0);
+        }
         if (n < 0) {
             if (sock_would_block(sock_errno())) {
                 if (engine) {

@@ -307,10 +307,16 @@ TEST(RequestGroupInit, InitWithHttpsUrl) {
 
     RequestGroup group(id, urls, options);
 
-    // HTTPS 在 V2 中暂不支持
+#ifdef FALCON_ENABLE_OPENSSL
+    // HTTPS 协议门禁放行（TLS 支持在连接命令层，init 只做协议检查）
+    EXPECT_TRUE(group.init());
+    EXPECT_EQ(group.status(), RequestGroupStatus::WAITING);
+#else
+    // 无 OpenSSL：HTTPS 明确拒绝
     EXPECT_FALSE(group.init());
     EXPECT_EQ(group.status(), RequestGroupStatus::FAILED);
     EXPECT_FALSE(group.error_message().empty());
+#endif
 }
 
 TEST(RequestGroupInit, InitWithUnsupportedProtocol) {
@@ -382,7 +388,9 @@ TEST(RequestGroupCommand, CreateInitialCommandWithoutInit) {
 
 TEST(RequestGroupCommand, CreateInitialCommandWithInvalidProtocol) {
     TaskId id = 1;
-    std::vector<std::string> urls = {"https://example.com/file.zip"};
+    // 不受支持协议（HTTPS 在启用 OpenSSL 的构建中已放行，不能再用作
+    // 无效协议样本）
+    std::vector<std::string> urls = {"ftp://example.com/file.zip"};
     DownloadOptions options;
 
     RequestGroup group(id, urls, options);

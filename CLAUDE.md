@@ -2,6 +2,43 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-13 - V2 引擎 HTTPS 放行与加固（异步 TLS 握手 + 证书校验硬断连）
+- 此前 V2 引擎 https:// 被 init 门禁直接拒绝，TLS 基建以半成品形态
+  沉睡：非阻塞 socket 上 SSL_connect 的 WANT_* 直接判失败（生产连
+  接几乎必然非阻塞即挂）、证书校验失败仅 WARN 后照常收数据（TLS
+  形同虚设）、响应命令以 `void* ssl_conn_` 裸指针跨命令持有会话
+  （初始连接命令调度响应后随即出队销毁并 SSL_free——悬垂）
+- 异步握手闭环：`setup_tls()` 返回 `TlsHandshakeResult{OK, WANT_READ,
+  WANT_WRITE, FAILED}`；WANT_* 置新 `HttpConnectionState::TLS_
+  HANDSHAKING` 并按所需方向注册 socket 事件重入续推（SSL_connect
+  首调必然 WANT_READ——ClientHello 刚写出，重入路径天然覆盖）；
+  SSL 对象经 `tls_started_` 守卫只建一次；execute 以 DISCONNECTED
+  →CONNECTING→TLS_HANDSHAKING 三 case fallthrough 统一收口，请求
+  发送单一出口（消除同步/异步两份重复块）
+- TLS 会话共享所有权贯通命令链（`HttpTlsSessionPtr = shared_ptr
+  <SSL>`，Initiate→Response→Download 构造链传递，四个下载命令创建
+  点全部接线）：修复下载体阶段原为明文 recv() 读到密文的缺陷（SSL
+  对象必须沿命令链到达下载命令），并消除裸指针悬垂；初始连接析构
+  不再抢先 SSL_free
+- verify_ssl 硬化：`SSL_set1_host` 绑定期望主机名（SSL_get_verify_
+  result 结论同时覆盖证书链与主机名）；校验失败握手即中止硬断连，
+  错误路径优先给出 X509 verify 结论
+- SSL_read EOF 语义映射：ZERO_RETURN（close_notify 干净关闭）/
+  SYSCALL（底层断连）→ n=0 交给既有截断判定（chunked 必须见终止
+  块、Content-Length 必须收满）；读路径 WANT_WRITE 同样按写方向
+  注册事件（注册错方向会挂死）
+- request_group https:// 门禁在 OpenSSL 构建下放行（无 OpenSSL 保持
+  明确报错）；重定向到 https 目标仍明确拒绝（直接 https 已可达，
+  跟随跳转后续放开）
+- 新增 http_commands_tls_test.cpp 3 用例（运行时自签证书：EVP_PKEY_
+  keygen 便携 API 零弃用告警、CA:TRUE + SAN DNS:localhost/IP:127.0.0.1
+  ；TlsTestServer 阻塞 SSL_accept + 发完即关不等待 close_notify，
+  客户端按 Content-Length 判完成）：异步握手下载成品逐字节一致 /
+  verify_ssl=true 自签必 FAILED（回归 WARN-only）/ SNI 服务器侧
+  观测 + SSL_CERT_FILE 信任自签的正向校验成功；全量 1509 ctest
+  通过，ASan 引擎相关 26 用例零告警；CI run 34767471583（M1.6
+  宿主化前置 + Windows CRT 兜底）8 job 全绿
+
 ### 2026-09-13 - V2 引擎重定向跟随（Location 解析 + 命令链接力 + 超链防护）
 - `HttpResponseCommand::handle_redirect` 是半成品：构造了跟随命令
   却从不入队（孤儿），execute 遇 3xx 直接 fail——V2 无法下载任何
