@@ -10,7 +10,9 @@ jobs:
   build-nightly:
     name: Nightly ${{ matrix.os_name }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    # vcpkg 从源码构建 qtbase（Windows 可达 1.5h+）：job 级超时必须
+    # 覆盖 manifest 安装，否则 Configure 阶段被掐死（此前 45min 恒挂）
+    timeout-minutes: 180
 
     strategy:
       fail-fast: false
@@ -169,7 +171,7 @@ jobs:
 
       - name: Configure CMake (Windows)
         if: runner.os == 'Windows'
-        timeout-minutes: 60
+        timeout-minutes: 150
         run: >
           cmake -B build-desktop
           -DCMAKE_BUILD_TYPE=Release
@@ -188,7 +190,7 @@ jobs:
           -DFALCON_ENABLE_RESOURCE_BROWSER=ON
 
       - name: Build
-        timeout-minutes: 30
+        timeout-minutes: 60
         run: cmake --build build-desktop --config Release --parallel
 
       - name: Package (Linux)
@@ -233,6 +235,20 @@ jobs:
           touch FalconDesktop/AppDir/usr/share/icons/hicolor/256x256/apps/falcon-desktop.png
           ln -sf usr/share/icons/hicolor/256x256/apps/falcon-desktop.png FalconDesktop/AppDir/.DirIcon
           ln -sf usr/share/icons/hicolor/256x256/apps/falcon-desktop.png FalconDesktop/AppDir/falcon-desktop.png
+
+          # linuxdeploy-plugin-qt 需要 qmake 查询 Qt 安装布局；Qt 经
+          # vcpkg manifest 装在 build-desktop/vcpkg_installed/<triplet>/
+          # tools/Qt6/bin，不在 PATH（此前 nightly 连续失败于此）
+          QMAKE_BIN="$(find "${GITHUB_WORKSPACE}/build-desktop/vcpkg_installed" \
+            -type f \( -name qmake -o -name qmake6 \) 2>/dev/null | head -n1)"
+          if [ -z "$QMAKE_BIN" ]; then
+            echo "ERROR: qmake not found in vcpkg_installed tree"
+            find "${GITHUB_WORKSPACE}/build-desktop/vcpkg_installed" -maxdepth 4 -type d | head -40
+            exit 1
+          fi
+          export QMAKE="$QMAKE_BIN"
+          export PATH="$(dirname "$QMAKE_BIN"):$PATH"
+          echo "Using qmake: $QMAKE_BIN"
 
           # 使用 linuxdeploy 打包（使用全局安装的版本）
           /usr/local/bin/linuxdeploy-x86_64.AppImage \
@@ -317,8 +333,18 @@ jobs:
             exit 1
           fi
 
-          # 复制 Qt 框架
-          macdeployqt "$APP_BUNDLE" -always-overwrite
+          # 复制 Qt 框架。macdeployqt 经 vcpkg 安装，不在 PATH
+          # （此前 nightly 连续失败于此：command not found）
+          MACDEPLOYQT_BIN="$(find "${GITHUB_WORKSPACE}/build-desktop/vcpkg_installed" \
+            -type f -name macdeployqt 2>/dev/null | head -n1)"
+          if [ -z "$MACDEPLOYQT_BIN" ]; then
+            echo "ERROR: macdeployqt not found in vcpkg_installed tree"
+            find "${GITHUB_WORKSPACE}/build-desktop/vcpkg_installed" -maxdepth 4 -type d | head -40
+            exit 1
+          fi
+          export PATH="$(dirname "$MACDEPLOYQT_BIN"):$PATH"
+          echo "Using macdeployqt: $MACDEPLOYQT_BIN"
+          "$MACDEPLOYQT_BIN" "$APP_BUNDLE" -always-overwrite
 
           # 修复库路径权限
           chmod -R 755 "$APP_BUNDLE"
@@ -335,7 +361,8 @@ jobs:
           # 验证签名
           codesign -vvv "$APP_BUNDLE" 2>&1 | head -10 || true
 
-          # 创建 DMG
+          # 创建 DMG（create-dmg 以非零码退出但 DMG 已产出的抖动常见，
+          # 以产物存在为准）
           DMG_NAME="falcon-desktop-macos-arm64-nightly.dmg"
           create-dmg \
             --volname "Falcon Desktop" \
@@ -345,7 +372,11 @@ jobs:
             --app-drop-link 450 185 \
             --icon "$APP_BUNDLE" 150 185 \
             "$DMG_NAME" \
-            "$APP_BUNDLE"
+            "$APP_BUNDLE" || true
+          if [ ! -f "$DMG_NAME" ]; then
+            echo "ERROR: create-dmg did not produce $DMG_NAME"
+            exit 1
+          fi
 
           # 移动 DMG 到根目录以便上传
           mv "$DMG_NAME" ../../
