@@ -29,6 +29,12 @@
 - 第四层（预审发现）：Create Nightly Release job 此前从未真正执行
   （总挂在 Package 层），默认只读 GITHUB_TOKEN 对 delete-asset 与
   release 发布必然 403——workflow 顶层补 `permissions: contents: write`
+- 第五层：qtbase[xcb] 构建成功后 linuxdeploy-plugin-qt 仍在
+  QT_INSTALL_PLUGINS/platforms 下报 libqxcb.so 不存在——但插件日志里
+  出现了 libqxcb.so 的 ldd 依赖列表（libxcb-cursor 为 qxcb 特有），
+  说明文件实际存在、只是 vcpkg 安装布局与 qmake 报告的插件目录不一致。
+  Package 步骤加自适应：找到实际 libqxcb.so，目录不一致则镜像到
+  QT_INSTALL_PLUGINS；找不到则 dump 诊断并 fail fast
 - 同日早前修复已验证生效：Linux qmake 定位（vcpkg_installed 树内
   find）、Windows 150min 步骤超时放宽、macOS macdeployqt 绝对路径
 
