@@ -9,17 +9,8 @@
 #include <falcon/logger.hpp>
 #include <falcon/exceptions.hpp>
 #include <fstream>
-#include <sstream>
-#include <iomanip>
 #include <cctype>
-#include <cstring>
-#include <random>
-#include <chrono>
-#include <regex>
-#include <openssl/sha.h>
 #include <algorithm>
-#include <thread>
-#include <map>
 
 namespace falcon {
 namespace protocols {
@@ -50,6 +41,54 @@ BitTorrentHandler::~BitTorrentHandler() {
 
 std::vector<std::string> BitTorrentHandler::supported_schemes() const {
     return {"magnet", "bittorrent"};
+}
+
+std::string BitTorrentHandler::extract_info_hash(const std::string& url) {
+    static const std::string kXtPrefix = "xt=urn:btih:";
+    const size_t pos = url.find(kXtPrefix);
+    if (pos == std::string::npos) {
+        return {};
+    }
+    const size_t start = pos + kXtPrefix.size();
+    const size_t end = url.find_first_of("&#", start);
+    return (end == std::string::npos) ? url.substr(start)
+                                      : url.substr(start, end - start);
+}
+
+std::string BitTorrentHandler::info_hash_to_hex(const std::string& hash) {
+    if (hash.size() == 40) {
+        // 十六进制（大小写不敏感）：校验并小写归一
+        std::string hex;
+        hex.reserve(40);
+        for (char c : hash) {
+            const auto u = static_cast<unsigned char>(
+                std::tolower(static_cast<unsigned char>(c)));
+            if (!std::isxdigit(u)) {
+                return {};
+            }
+            hex.push_back(static_cast<char>(u));
+        }
+        return hex;
+    }
+
+    if (hash.size() == 32) {
+        // Base32（RFC 4648）：解码为原始 20 字节再转小写 hex
+        const std::string raw = base32Decode(hash);
+        if (raw.size() != 20) {
+            return {};
+        }
+        static const char* kHexDigits = "0123456789abcdef";
+        std::string hex;
+        hex.reserve(40);
+        for (char byte : raw) {
+            const auto u = static_cast<unsigned char>(byte);
+            hex.push_back(kHexDigits[u >> 4]);
+            hex.push_back(kHexDigits[u & 0x0f]);
+        }
+        return hex;
+    }
+
+    return {};
 }
 
 namespace {
@@ -339,17 +378,11 @@ void BitTorrentHandler::download(DownloadTask::Ptr task, IEventListener* listene
         startDht(dhtPort_);
     }
 
-    // 解析 info_hash
+    // 解析 info_hash：hex 原样归一，Base32 解码为原始 20 字节的十六进制
+    // （DHT 查询按 40 位 hex 定位——Base32 文本直接下发会查询错误的 info_hash）
     std::string infoHash;
     if (task->url().find("magnet:") == 0) {
-        // 从 magnet 链接提取 xt=urn:btih:<info_hash>
-        size_t pos = task->url().find("xt=urn:btih:");
-        if (pos != std::string::npos) {
-            size_t start = pos + 11;
-            size_t end = task->url().find('&', start);
-            infoHash = (end == std::string::npos) ?
-                task->url().substr(start) : task->url().substr(start, end - start);
-        }
+        infoHash = info_hash_to_hex(extract_info_hash(task->url()));
     }
 
     // 使用 DHT 查找 peers
@@ -470,11 +503,30 @@ BitTorrentHandler::BValue BitTorrentHandler::parseBencode(const std::string& dat
         while (pos < data.length() && data[pos] != 'e') {
             num += data[pos++];
         }
+        if (pos >= data.length()) {
+            throw std::runtime_error("Unterminated integer");  // 截断，缺 'e'
+        }
         ++pos;  // 跳过 'e'
+
+        // bencode 整数仅允许可选 '-' 前缀 + 数字（stoll 会宽松接受空白/'+'）
+        bool valid = !num.empty();
+        for (size_t i = 0; i < num.size() && valid; ++i) {
+            if (i == 0 && num[0] == '-') continue;
+            if (!std::isdigit(static_cast<unsigned char>(num[i]))) {
+                valid = false;
+            }
+        }
+        if (!valid) {
+            throw std::runtime_error("Invalid integer format");
+        }
 
         BValue value;
         value.type = BValue::Integer;
-        value.intValue = std::stoll(num);
+        try {
+            value.intValue = std::stoll(num);
+        } catch (const std::exception&) {
+            throw std::runtime_error("Integer out of range");
+        }
         return value;
     } else if (c == 'l') {
         // 列表
@@ -483,6 +535,9 @@ BitTorrentHandler::BValue BitTorrentHandler::parseBencode(const std::string& dat
         value.type = BValue::List;
         while (pos < data.length() && data[pos] != 'e') {
             value.listValue.push_back(parseBencode(data, pos));
+        }
+        if (pos >= data.length()) {
+            throw std::runtime_error("Unterminated list");  // 截断，缺 'e'
         }
         ++pos;  // 跳过 'e'
         return value;
@@ -498,6 +553,9 @@ BitTorrentHandler::BValue BitTorrentHandler::parseBencode(const std::string& dat
             }
             BValue val = parseBencode(data, pos);
             value.dictValue[key.strValue] = val;
+        }
+        if (pos >= data.length()) {
+            throw std::runtime_error("Unterminated dictionary");  // 截断，缺 'e'
         }
         ++pos;  // 跳过 'e'
         return value;
@@ -527,52 +585,6 @@ BitTorrentHandler::BValue BitTorrentHandler::parseBencode(const std::string& dat
     throw std::runtime_error("Invalid bencode data");
 }
 
-std::string BitTorrentHandler::bencodeToString(const BValue& value) {
-    std::ostringstream ss;
-
-    switch (value.type) {
-        case BValue::String:
-            ss << value.strValue.length() << ":" << value.strValue;
-            break;
-        case BValue::Integer:
-            ss << "i" << value.intValue << "e";
-            break;
-        case BValue::List:
-            ss << "l";
-            for (const auto& item : value.listValue) {
-                ss << bencodeToString(item);
-            }
-            ss << "e";
-            break;
-        case BValue::Dict:
-            ss << "d";
-            for (const auto& pair : value.dictValue) {
-                BValue key;
-                key.type = BValue::String;
-                key.strValue = pair.first;
-                ss << bencodeToString(key);
-                ss << bencodeToString(pair.second);
-            }
-            ss << "e";
-            break;
-    }
-
-    return ss.str();
-}
-
-std::string BitTorrentHandler::sha1(const std::string& data) {
-    unsigned char hash[SHA_DIGEST_LENGTH];
-    ::SHA1(reinterpret_cast<const unsigned char*>(data.c_str()), data.length(), hash);
-
-    std::ostringstream ss;
-    ss << std::hex << std::setfill('0');
-    for (int i = 0; i < SHA_DIGEST_LENGTH; ++i) {
-        ss << std::setw(2) << static_cast<int>(hash[i]);
-    }
-
-    return ss.str();
-}
-
 std::string BitTorrentHandler::base32Decode(const std::string& input) {
     static const char* alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
     static int decode_table[256] = {};
@@ -600,7 +612,10 @@ std::string BitTorrentHandler::base32Decode(const std::string& input) {
     int bits = 0;
 
     for (char c : cleaned) {
-        int value = decode_table[static_cast<unsigned char>(c)];
+        // 大小写不敏感（magnet 中的 Base32 hash 允许小写，can_handle 同语义）
+        const auto index = static_cast<unsigned char>(
+            std::toupper(static_cast<unsigned char>(c)));
+        int value = decode_table[index];
         if (value < 0) continue;
 
         buffer = (buffer << 5) | static_cast<uint32_t>(value);
@@ -639,72 +654,6 @@ bool BitTorrentHandler::validateTorrent(const BValue& torrent) {
     return true;
 }
 
-std::vector<std::string> BitTorrentHandler::getTrackers(const BValue& torrent) {
-    std::vector<std::string> trackers;
-
-    if (torrent.type != BValue::Dict) {
-        return trackers;
-    }
-
-    const auto& dict = torrent.dictValue;
-
-    if (dict.find("announce") != dict.end()) {
-        const auto& announce = dict.at("announce");
-        if (announce.type == BValue::String) {
-            trackers.push_back(announce.strValue);
-        }
-    }
-
-    if (dict.find("announce-list") != dict.end()) {
-        const auto& announceList = dict.at("announce-list");
-        if (announceList.type == BValue::List) {
-            for (const auto& tier : announceList.listValue) {
-                if (tier.type == BValue::List) {
-                    for (const auto& tracker : tier.listValue) {
-                        if (tracker.type == BValue::String) {
-                            trackers.push_back(tracker.strValue);
-                        }
-                    }
-                } else if (tier.type == BValue::String) {
-                    trackers.push_back(tier.strValue);
-                }
-            }
-        }
-    }
-
-    return trackers;
-}
-
-std::string BitTorrentHandler::generateNodeId() {
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<int> dis(0, 255);
-
-    std::string nodeId(20, 0);
-    for (std::size_t i = 0; i < nodeId.size(); ++i) {
-        nodeId[i] = static_cast<char>(dis(gen));
-    }
-
-    return nodeId;
-}
-
-std::string BitTorrentHandler::urlDecode(const std::string& url) {
-    std::ostringstream decoded;
-    for (size_t i = 0; i < url.length(); ++i) {
-        if (url[i] == '%' && i + 2 < url.length()) {
-            char hex[3] = {url[i + 1], url[i + 2], '\0'};
-            int value = std::stoi(hex, nullptr, 16);
-            decoded << static_cast<char>(value);
-            i += 2;
-        } else if (url[i] == '+') {
-            decoded << ' ';
-        } else {
-            decoded << url[i];
-        }
-    }
-    return decoded.str();
-}
-
 // ============================================================================
 // DHT 集成
 // ============================================================================
@@ -718,11 +667,24 @@ void BitTorrentHandler::startDht(uint16_t port) {
     try {
         dhtClient_ = std::make_unique<DhtClient>(port);
         dhtClient_->start();
+        // start() 遇端口占用等失败只记日志不抛异常——留着一个没在运行的
+        // 客户端会让 isDhtRunning() 撒谎、findPeers 的查找无人驱动
+        if (!dhtClient_->isRunning()) {
+            FALCON_LOG_ERROR("Failed to start DHT client on port {}", port);
+            dhtClient_.reset();
+            return;
+        }
         dhtPort_ = port;
         FALCON_LOG_INFO("DHT client started on port {}", port);
     } catch (const std::exception& e) {
         FALCON_LOG_ERROR("Failed to start DHT client: {}", e.what());
         dhtClient_.reset();
+    }
+}
+
+void BitTorrentHandler::clearDhtBootstrapNodes() {
+    if (dhtClient_) {
+        dhtClient_->clear_bootstrap_nodes();
     }
 }
 

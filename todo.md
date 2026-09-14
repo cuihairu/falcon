@@ -1581,4 +1581,62 @@ send/recv/CONNECT 硬错误路径、resume 理论不可达防御、Windows 平�
 **后续批次（真实缺口）：** bittorrent_plugin 187 → ftp_plugin 135
 → http_handler 82 → task_manager 78。
 
+### 2026-09-14 覆盖率批次 E（bittorrent_plugin.cpp 187 → 7 miss + 四缺陷修复）
+
+**四个真实缺陷修复（gcov ##### 定位 + 写测试先行 trace 发现）：**
+- **magnet infoHash off-by-one**（D1）：`"xt=urn:btih:"` 是 12 字
+  符，旧代码 `pos + 11` 截取——magnet 任务的 infoHash 恒带前导冒
+  号（can_handle 用 kXtPrefix.size() 正确而 download() 错误，两处
+  不一致即证据）。提取/归一化收口为公开 static
+  `extract_info_hash`/`info_hash_to_hex`：hex 输入校验后小写归一，
+  32 位 Base32 解 20 字节转 hex，非法返回空串跳过查找
+- **Base32 magnet 不解码**（D2）：can_handle 接受 32 位 base32，
+  download() 却把 base32 文本原样传 findPeers——nodeIdFromString
+  只认合法 40 位 hex 否则回退字节截断，必然查询错误 info_hash；
+  base32Decode 辅助函数存在却从未被调用（死代码激活）。查表改大
+  小写不敏感（RFC 4648）
+- **parseBencode 宽松解析**（D3）：截断输入（"i42" 缺 'e'）静默
+  返回假值、stoll 宽松接受空白/'+'、越界抛裸 out_of_range——
+  get_file_info 纯模式 .torrent 路径真实使用这套内嵌解析器（与
+  公共 BencodeValue 是两套独立实现）。三处严格化：容器/整数截断
+  显式 throw、整数内容校验（可选负号+全数字）、stoll 包 try/catch
+- **DHT 僵尸客户端**（D5）：DhtClient::start() bind 失败只记日志
+  不抛异常（running_=false、socket_=-1），startDht 照常持有客户
+  端——isDhtRunning() 撒谎、findPeers 的查找无人驱动、回调永不
+  触发。startDht 检查 isRunning() 失败即 reset+错误日志；
+  dht_node.hpp 补 isRunning() 访问器；新增 clearDhtBootstrapNodes()
+
+**死代码删除：** bencodeToString/sha1/getTrackers/generateNodeId/
+urlDecode 全库零引用（沿用 resume_if_exists/http_plugin_v2 先例）。
+
+**测试（+32 用例，BT 过滤套件 86 → 118 全绿）：**
+- magnet 提取 6（含 off-by-one 回归的精确匹配断点）+ 归一化 7
+  （Base32 向量经 Python base64.b32encode 独立生成——批次 C 方法
+  论：手写编码数据必须用独立工具验证；大小写不敏感/非法字符/31 位
+  拒绝）
+- parse 严格化 8（截断整数/容器、ie/i5e/i+5e、越界、整数字典键误
+  解析；负整数不误伤对照）+ validateTorrent 3（非 dict 根/无
+  pieces/无 length+files——钉死既有不抛契约，解析错误才 throw）
+- DHT 生命周期 2（DhtClient(0) 随机端口绕开 6881 争用 + 清引导
+  节点空网络立即收敛；HeldUdpPort 占口测冲突无僵尸客户端）+ 下载
+  生命周期 6（hex/base32 magnet、pause/resume/cancel、无 hash
+  跳过查找、PEX 查询）
+
+**覆盖率（批次 E 收口）：行 78.3% / 函数 90.9% / 分支 42.6%**
+（批次 D 77.3/89.8/42.1；净涨 1.0/1.1/0.5 点——180 行缺口收敛
++ 死函数删除分母缩小）。文件级铁账：bittorrent_plugin.cpp gcov
+文本 miss 187 → **7**（行 95.72%）。剩余缺口定性：resume 路径
+DHT 重启组合分支、findPeers 回调推进 peers（需真实 P2P 网络返回
+peer，空网络不可达）、parseBencode 入口防御 throw（get_file_info
+层已先挡空数据）。ASan BT 套件 118 用例零告警。
+
+**测量教训（gcda checksum 覆盖陷阱）**：改源码后只重建测试二进制
+时，daemon/CLI 等未重建二进制仍内嵌旧 checksum 对象，全量 ctest
+中它们运行时对 gcda 执行 "overwriting with a different checksum"
+= 整体替换而非合并——已测行为的覆盖数据被清掉，表现为全绿测试但
+can_handle 等显示未覆盖。修复：全量重建 → 清全部 gcda → 重跑全量。
+
+**后续批次（真实缺口）：** ftp_plugin 135 → http_handler 82 →
+task_manager 78。
+
 

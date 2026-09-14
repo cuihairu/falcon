@@ -2,6 +2,32 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-14 - 覆盖率批次 E：bittorrent_plugin.cpp 187 → 7 miss + 四缺陷修复
+- **magnet infoHash off-by-one**：`"xt=urn:btih:"` 是 12 字符，旧
+  代码 `pos + 11` 截取——magnet 任务 infoHash 恒带前导冒号（
+  can_handle 与 download() 两处不一致即证据）。提取/归一化收口为
+  公开 static `extract_info_hash`/`info_hash_to_hex`
+- **Base32 magnet 不解码**：can_handle 接受 32 位 base32，
+  download() 却把 base32 文本原样传 findPeers——必然查询错误
+  info_hash；base32Decode 存在却从未被调用（死代码激活），查表改
+  大小写不敏感（RFC 4648）
+- **parseBencode 宽松解析**：截断输入静默返回假值、stoll 宽松接
+  受空白/'+'、越界抛裸 out_of_range——get_file_info 纯模式
+  .torrent 路径真实使用这套内嵌解析器。三处严格化
+- **DHT 僵尸客户端**：DhtClient::start() 失败只记日志不抛异常，
+  startDht 照常持有没在运行的客户端——isDhtRunning() 撒谎、查找
+  无人驱动。startDht 检查 isRunning() 失败即 reset；新增
+  clearDhtBootstrapNodes()
+- 死代码删除 5 个零引用函数；测试 +32 用例（Base32 向量经 Python
+  独立生成；DHT 随机端口 + 占口测冲突）；ASan BT 套件 118 用例零
+  告警
+- 覆盖率批次 E 收口：bittorrent_plugin.cpp gcov miss **187 → 7**
+  （行 95.72%）；全包（批次 C 同款 gcovr 口径）行 78.3% / 函数
+  90.9% / 分支 42.6%（77.3/89.8/42.1 → 涨幅 1.0/1.1/0.5 点）。
+  测量教训：改源码后必须全量重建——未重建二进制内嵌旧 checksum
+  对象会在全量 ctest 中整体替换 gcda（表现为全绿测试但覆盖数据
+  被清掉）
+
 ### 2026-09-14 - 覆盖率批次 D：http_commands.cpp 真实缺口收敛 + chunked 分片/SIGPIPE 缺陷修复
 - **chunked 分片错帧修复**：TCP 可把块大小行 CRLF 拆开送达，旧代码
   预消费 CR 进大小行——LF 与块数据被并进 size_str，stoul 在 '\r' 静

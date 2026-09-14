@@ -4,19 +4,43 @@
  * @author Falcon Team
  * @date 2025-12-21
  *
- * B 编码相关测试通过公共的 BencodeValue API（bencode.hpp）覆盖。
- * BitTorrentHandler 的 BValue/parseBencode/bencodeToString/sha1/base32Decode
- * 等辅助方法为私有实现细节，不直接测试（其行为由 BencodeValue 测试等价覆盖）。
+ * B 编码基础行为通过公共的 BencodeValue API（bencode.hpp）覆盖；
+ * 插件内嵌 parseBencode 是另一套独立实现（get_file_info 的 .torrent
+ * 路径真实在用），经 get_file_info 直接测试其严格性——截断输入、
+ * 非法整数、非字符串字典键都必须报错而非静默出假元数据。
+ *
+ * info-hash 提取/归一化以公开 static（extract_info_hash/info_hash_to_hex）
+ * 直接测试：曾修复 magnet 偏移 off-by-one（"xt=urn:btih:" 为 12 字符，
+ * 旧代码取 pos+11 使 hash 带前导冒号）与 Base32 hash 从不解码就下发
+ * DHT（按 40 位 hex 定位，Base32 文本会查询错误的 info_hash）两处缺陷，
+ * 精确匹配断言同时是回归挂点。
+ *
+ * 任务生命周期与 DHT 集成经本地随机端口 DHT（清空公网引导节点后
+ * 空网络立即收敛）端到端覆盖。
  */
 
 #include <gtest/gtest.h>
 #include <falcon/plugins/bittorrent/bittorrent_plugin.hpp>
 #include <falcon/plugins/bittorrent/bencode.hpp>
 #include <falcon/exceptions.hpp>
+#include <falcon/event_listener.hpp>
 
 #include <algorithm>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <unistd.h>
+#endif
 
 using namespace falcon;
 using namespace falcon::protocols;
@@ -324,4 +348,411 @@ TEST_F(BitTorrentHandlerTest, FactoryFunction) {
     auto h = create_bittorrent_handler();
     ASSERT_NE(h, nullptr);
     EXPECT_EQ(h->protocol_name(), "bittorrent");
+}
+
+//==============================================================================
+// info-hash 提取（extract_info_hash，公开 static）
+//==============================================================================
+
+namespace {
+
+constexpr const char* kHexHash = "1234567890abcdef1234567890abcdef12345678";
+
+// 写入临时 .torrent 文件并返回路径（析构自动清理）
+class TempTorrentFile {
+public:
+    explicit TempTorrentFile(const std::string& content) {
+        const auto stamp =
+            std::chrono::steady_clock::now().time_since_epoch().count();
+        path_ = std::filesystem::temp_directory_path() /
+                ("falcon_bt_plugin_test_" +
+                 std::to_string(stamp) + "_" +
+                 std::to_string(counter_++) + ".torrent");
+        std::ofstream file(path_, std::ios::binary);
+        file << content;
+    }
+    ~TempTorrentFile() {
+        std::error_code ec;
+        std::filesystem::remove(path_, ec);
+    }
+    const std::filesystem::path& path() const { return path_; }
+
+private:
+    inline static int counter_ = 0;
+    std::filesystem::path path_;
+};
+
+// 占住一个 UDP 端口直至析构（DHT 端口冲突用例）
+class HeldUdpPort {
+public:
+    HeldUdpPort() {
+        socket_ = static_cast<int>(::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP));
+        if (socket_ < 0) {
+            return;
+        }
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        // INADDR_ANY 与 DhtClient 的绑定一致（沙盒字节序怪癖见 dht_node_test）
+        addr.sin_addr.s_addr = INADDR_ANY;
+        addr.sin_port = 0;
+        if (bind(socket_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
+            closeSocket(socket_);
+            socket_ = -1;
+            return;
+        }
+        socklen_t len = sizeof(addr);
+        getsockname(socket_, reinterpret_cast<sockaddr*>(&addr), &len);
+        port_ = ntohs(addr.sin_port);
+    }
+    ~HeldUdpPort() {
+        if (socket_ >= 0) {
+            closeSocket(socket_);
+        }
+    }
+    bool valid() const { return socket_ >= 0; }
+    uint16_t port() const { return port_; }
+
+private:
+    static void closeSocket(int fd) {
+#ifdef _WIN32
+        closesocket(fd);
+#else
+        ::close(fd);
+#endif
+    }
+    int socket_ = -1;
+    uint16_t port_ = 0;
+};
+
+} // namespace
+
+TEST(BitTorrentInfoHashTest, ExtractHexHashPlain) {
+    // 精确匹配是 off-by-one 回归挂点：旧代码 pos+11 使结果带前导 ':'
+    EXPECT_EQ(BitTorrentHandler::extract_info_hash(
+                  std::string("magnet:?xt=urn:btih:") + kHexHash),
+              kHexHash);
+}
+
+TEST(BitTorrentInfoHashTest, ExtractHexHashWithParams) {
+    EXPECT_EQ(BitTorrentHandler::extract_info_hash(
+                  std::string("magnet:?xt=urn:btih:") + kHexHash +
+                  "&dn=file.zip&tr=udp%3A%2F%2Ft.example.com"),
+              kHexHash);
+}
+
+TEST(BitTorrentInfoHashTest, ExtractBase32HashStopsAtFragment) {
+    const std::string url =
+        "magnet:?xt=urn:btih:MFRGGZDFMZTWQ2LKMNWG23PJME4TQ45X#fragment";
+    EXPECT_EQ(BitTorrentHandler::extract_info_hash(url),
+              "MFRGGZDFMZTWQ2LKMNWG23PJME4TQ45X");
+}
+
+TEST(BitTorrentInfoHashTest, ExtractMissingXtReturnsEmpty) {
+    EXPECT_EQ(BitTorrentHandler::extract_info_hash("magnet:?dn=file.zip"), "");
+    EXPECT_EQ(BitTorrentHandler::extract_info_hash("magnet:"), "");
+    EXPECT_EQ(BitTorrentHandler::extract_info_hash(""), "");
+}
+
+TEST(BitTorrentInfoHashTest, ExtractIsParameterCaseSensitive) {
+    // 参数名大小写敏感（与 download() 的 magnet: 前缀判定同一语义层）
+    EXPECT_EQ(BitTorrentHandler::extract_info_hash(
+                  std::string("magnet:?XT=URN:BTIH:") + kHexHash),
+              "");
+}
+
+TEST(BitTorrentInfoHashTest, ExtractIsSchemeAgnostic) {
+    // 提取本身不管 scheme（download() 自行做 magnet: 前缀门禁）
+    EXPECT_EQ(BitTorrentHandler::extract_info_hash(
+                  std::string("http://x/?xt=urn:btih:") + kHexHash),
+              kHexHash);
+}
+
+//==============================================================================
+// info-hash 归一化（info_hash_to_hex，公开 static；Base32 向量经 Python
+// base64.b32encode 独立生成）
+//==============================================================================
+
+TEST(BitTorrentInfoHashTest, HexLowercased) {
+    EXPECT_EQ(BitTorrentHandler::info_hash_to_hex(
+                  "1234567890ABCDEF1234567890ABCDEF12345678"),
+              "1234567890abcdef1234567890abcdef12345678");
+}
+
+TEST(BitTorrentInfoHashTest, HexAlreadyLowercasePassesThrough) {
+    EXPECT_EQ(BitTorrentHandler::info_hash_to_hex(kHexHash), kHexHash);
+}
+
+TEST(BitTorrentInfoHashTest, HexWithInvalidDigitRejected) {
+    EXPECT_EQ(BitTorrentHandler::info_hash_to_hex(
+                  "1234567890zzcdef1234567890abcdef12345678"),
+              "");
+}
+
+TEST(BitTorrentInfoHashTest, Base32DecodesToRawHex) {
+    // base32(bytes[0..19]) → hex
+    EXPECT_EQ(BitTorrentHandler::info_hash_to_hex(
+                  "AAAQEAYEAUDAOCAJBIFQYDIOB4IBCEQT"),
+              "000102030405060708090a0b0c0d0e0f10111213");
+}
+
+TEST(BitTorrentInfoHashTest, Base32CaseInsensitive) {
+    EXPECT_EQ(BitTorrentHandler::info_hash_to_hex(
+                  "32w353ybencwpcnlzxx75xf2tb3fimqq"),
+              "deadbeef0123456789abcdeffedcba9876543210");
+}
+
+TEST(BitTorrentInfoHashTest, Base32InvalidCharacterRejected) {
+    // '1' 不是 Base32 字母表成员：被跳过解码后不足 20 字节 → 拒绝
+    EXPECT_EQ(BitTorrentHandler::info_hash_to_hex(
+                  "11AQEAYEAUDAOCAJBIFQYDIOB4IBCEQT"),
+              "");
+}
+
+TEST(BitTorrentInfoHashTest, WrongLengthRejected) {
+    EXPECT_EQ(BitTorrentHandler::info_hash_to_hex(
+                  "AAAQEAYEAUDAOCAJBIFQYDIOB4IBCEQ"),  // 31 位
+              "");
+    EXPECT_EQ(BitTorrentHandler::info_hash_to_hex(kHexHash), kHexHash);
+    EXPECT_EQ(BitTorrentHandler::info_hash_to_hex(""), "");
+}
+
+//==============================================================================
+// 内嵌 parseBencode 严格性（经 get_file_info 的 .torrent 路径；
+// 与公共 BencodeValue 是两套独立实现，此处是真实生产路径）
+//==============================================================================
+
+TEST_F(BitTorrentHandlerTest, TruncatedIntegerThrows) {
+    // 旧实现静默返回 42：截断的 "i42" 缺终止 'e' 必须报错
+    TempTorrentFile file("i42");
+    EXPECT_THROW(handler->get_file_info(
+                     file.path().string(), DownloadOptions{}),
+                 std::exception);
+}
+
+TEST_F(BitTorrentHandlerTest, InvalidIntegerContentThrows) {
+    // 空内容 / 空白填充：std::stoll 会宽松接受，bencode 不允许
+    for (const auto* data : {"ie", "i 5e", "i+5e"}) {
+        TempTorrentFile file(data);
+        EXPECT_THROW(handler->get_file_info(
+                         file.path().string(), DownloadOptions{}),
+                     std::exception)
+            << "input: " << data;
+    }
+}
+
+TEST_F(BitTorrentHandlerTest, IntegerOutOfRangeThrows) {
+    TempTorrentFile file("i99999999999999999999999e");
+    EXPECT_THROW(handler->get_file_info(
+                     file.path().string(), DownloadOptions{}),
+                 std::exception);
+}
+
+TEST_F(BitTorrentHandlerTest, NegativeIntegerStillParses) {
+    // 严格化不得误伤合法负整数（根非字典 → validateTorrent 失败 →
+    // 按既有契约不抛出、字段留空）
+    TempTorrentFile file("i-5e");
+    auto info = handler->get_file_info(file.path().string(),
+                                                DownloadOptions{});
+    EXPECT_TRUE(info.filename.empty());
+}
+
+TEST_F(BitTorrentHandlerTest, TruncatedContainerThrows) {
+    for (const auto* data : {"l4:spam", "d4:info4:name"}) {
+        TempTorrentFile file(data);
+        EXPECT_THROW(handler->get_file_info(
+                         file.path().string(), DownloadOptions{}),
+                     std::exception)
+            << "input: " << data;
+    }
+}
+
+TEST_F(BitTorrentHandlerTest, DictWithNonStringKeyThrows) {
+    TempTorrentFile file("di1e4:spame");
+    EXPECT_THROW(handler->get_file_info(
+                     file.path().string(), DownloadOptions{}),
+                 std::exception);
+}
+
+TEST_F(BitTorrentHandlerTest, StringLengthBeyondDataThrows) {
+    TempTorrentFile file("d4:info12:shorte");
+    EXPECT_THROW(handler->get_file_info(
+                     file.path().string(), DownloadOptions{}),
+                 std::exception);
+}
+
+TEST_F(BitTorrentHandlerTest, StringMissingColonThrows) {
+    // 长度前缀后缺 ':'（"4name"）
+    TempTorrentFile file("d4:info4name");
+    EXPECT_THROW(handler->get_file_info(
+                     file.path().string(), DownloadOptions{}),
+                 std::exception);
+}
+
+//==============================================================================
+// validateTorrent 结构校验分支（既有契约：不抛出、字段留空）
+//==============================================================================
+
+TEST_F(BitTorrentHandlerTest, NonDictRootRejected) {
+    TempTorrentFile file("l4:spame");
+    auto info = handler->get_file_info(file.path().string(),
+                                                DownloadOptions{});
+    EXPECT_TRUE(info.filename.empty());
+    EXPECT_EQ(info.total_size, size_t{0});
+}
+
+TEST_F(BitTorrentHandlerTest, InfoWithoutPiecesRejected) {
+    TempTorrentFile file("d4:infod4:name4:testee");
+    auto info = handler->get_file_info(file.path().string(),
+                                                DownloadOptions{});
+    EXPECT_TRUE(info.filename.empty());
+}
+
+TEST_F(BitTorrentHandlerTest, InfoWithoutLengthRejected) {
+    // 有 name + pieces 但既无单文件 length 也无多文件 files
+    TempTorrentFile file("d4:infod4:name4:test6:pieces3:abcee");
+    auto info = handler->get_file_info(file.path().string(),
+                                                DownloadOptions{});
+    EXPECT_TRUE(info.filename.empty());
+}
+
+//==============================================================================
+// DHT 生命周期（随机端口 + 端口冲突）
+//==============================================================================
+
+TEST_F(BitTorrentHandlerTest, DhtStartStopOnEphemeralPort) {
+    handler->stopDht();
+    EXPECT_FALSE(handler->isDhtRunning());
+
+    handler->startDht(0);  // 端口 0 → OS 分配，绕开 6881 争用
+    ASSERT_TRUE(handler->isDhtRunning());
+
+    // 重复 startDht：已运行直接返回（不重建客户端）
+    handler->startDht(0);
+    EXPECT_TRUE(handler->isDhtRunning());
+
+    handler->stopDht();
+    EXPECT_FALSE(handler->isDhtRunning());
+    handler->stopDht();  // 幂等
+    EXPECT_FALSE(handler->isDhtRunning());
+}
+
+TEST_F(BitTorrentHandlerTest, DhtPortConflictLeavesNoZombieClient) {
+    HeldUdpPort held;
+    ASSERT_TRUE(held.valid());
+
+    handler->stopDht();
+    handler->startDht(held.port());
+    // start() 遇 bind 失败只记日志不抛异常——处理器必须清掉没在运行的
+    // 客户端，isDhtRunning() 才不撒谎（旧实现留僵尸客户端，
+    // 后续 findPeers 的查找无人驱动、回调永不触发）
+    EXPECT_FALSE(handler->isDhtRunning());
+}
+
+//==============================================================================
+// 任务生命周期（纯 C++ 路径；清空公网引导节点后空网络查找立即收敛）
+//==============================================================================
+
+namespace {
+
+// 生命周期测试夹具：DHT 起在随机端口且无引导节点
+class LifecycleHandler {
+public:
+    LifecycleHandler() {
+        handler_->stopDht();
+        handler_->startDht(0);
+        handler_->clearDhtBootstrapNodes();
+    }
+
+    BitTorrentHandler* operator->() { return handler_.get(); }
+    BitTorrentHandler* get() { return handler_.get(); }
+
+private:
+    std::unique_ptr<BitTorrentHandler> handler_ =
+        std::make_unique<BitTorrentHandler>();
+};
+
+void waitALittle() {
+    // 给异步查找留出收敛窗口（空网络下毫秒级收敛，此处取宽裕值）
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+}
+
+DownloadTask::Ptr makeTask(TaskId id, const std::string& url) {
+    return std::make_shared<DownloadTask>(id, url, DownloadOptions{});
+}
+
+} // namespace
+
+TEST_F(BitTorrentHandlerTest, DownloadMagnetHexEndToEnd) {
+    LifecycleHandler lc;
+    ASSERT_TRUE(lc->isDhtRunning());
+
+    auto task = makeTask(7701, std::string("magnet:?xt=urn:btih:") + kHexHash);
+    lc->download(task, nullptr);
+
+    // 状态归调用方（TaskManager）管理，download 只标记启动时间戳
+    EXPECT_EQ(task->status(), TaskStatus::Pending);
+    EXPECT_NE(task->start_time(), TimePoint{});
+    waitALittle();  // 等查找收敛、回调把空 peer 集写回任务上下文
+    lc->cancel(task);
+}
+
+TEST_F(BitTorrentHandlerTest, DownloadMagnetBase32HashQueriesDecodedHex) {
+    LifecycleHandler lc;
+    ASSERT_TRUE(lc->isDhtRunning());
+
+    // Base32 magnet：修复前 Base32 文本原样下发（DHT 按 40 位 hex
+    // 定位 → 查询错误 info_hash），现解码为原始字节的十六进制
+    auto task = makeTask(7702, "magnet:?xt=urn:btih:32W353YBENCWPCNLZXX75XF2TB3FIMQQ");
+    lc->download(task, nullptr);
+
+    EXPECT_EQ(task->status(), TaskStatus::Pending);
+    EXPECT_NE(task->start_time(), TimePoint{});
+    waitALittle();
+    lc->cancel(task);
+}
+
+TEST_F(BitTorrentHandlerTest, DownloadPauseResumeCancelLifecycle) {
+    LifecycleHandler lc;
+    ASSERT_TRUE(lc->isDhtRunning());
+
+    auto task = makeTask(7703, std::string("magnet:?xt=urn:btih:") + kHexHash);
+    lc->download(task, nullptr);
+    EXPECT_EQ(task->status(), TaskStatus::Pending);
+
+    lc->pause(task);
+    lc->resume(task, nullptr);
+    waitALittle();
+    lc->cancel(task);
+    lc->cancel(task);  // 幂等
+}
+
+TEST_F(BitTorrentHandlerTest, PauseResumeCancelUnknownTaskIsNoOp) {
+    // 从未 download 的任务 id：查找落空即无操作，不崩溃
+    auto task = makeTask(7704, std::string("magnet:?xt=urn:btih:") + kHexHash);
+    handler->pause(task);
+    handler->resume(task, nullptr);
+    handler->cancel(task);
+    EXPECT_EQ(task->status(), TaskStatus::Pending);
+}
+
+TEST_F(BitTorrentHandlerTest, DownloadMagnetWithoutInfoHashSkipsDhtLookup) {
+    LifecycleHandler lc;
+
+    // can_handle 拒绝的 magnet（无 btih 参数）直接调 download：
+    // info-hash 为空 → 跳过 DHT 查找，任务仍标记启动
+    auto task = makeTask(7705, "magnet:?dn=file.zip");
+    lc->download(task, nullptr);
+    EXPECT_EQ(task->status(), TaskStatus::Pending);
+    waitALittle();
+    lc->cancel(task);
+}
+
+TEST_F(BitTorrentHandlerTest, PexHandlerLookupMissingReturnsNull) {
+    EXPECT_EQ(handler->getPexHandler("nonexistent-hash"), nullptr);
+    handler->removePexHandler("nonexistent-hash");  // 不存在：无操作不崩溃
+
+    handler->setPexEnabled(false);
+    EXPECT_FALSE(handler->isPexEnabled());
+    handler->setPexEnabled(true);
+    EXPECT_TRUE(handler->isPexEnabled());
 }

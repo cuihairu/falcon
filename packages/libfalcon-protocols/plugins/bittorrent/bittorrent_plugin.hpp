@@ -91,9 +91,28 @@ public:
     void stopDht();
 
     /**
-     * @brief 检查 DHT 是否已启动
+     * @brief 检查 DHT 是否已启动（仅当客户端真正绑定并运行时为 true）
      */
     bool isDhtRunning() const { return dhtClient_ != nullptr; }
+
+    /**
+     * @brief 清空 DHT 引导节点（预置的公网引导节点一并清除，
+     * 供纯私有网络/测试场景使用；须在 DHT 启动后调用）
+     */
+    void clearDhtBootstrapNodes();
+
+    /**
+     * @brief 从 URL 提取 xt=urn:btih: 携带的 info-hash 文本（原样大小写，
+     * 在 '&' 或 '#' 处截断）；无该参数返回空串
+     */
+    static std::string extract_info_hash(const std::string& url);
+
+    /**
+     * @brief info-hash 文本归一化为 40 位小写十六进制：hex 输入校验后
+     * 小写化；32 位 Base32（RFC 4648，大小写不敏感）解码为原始 20 字节
+     * 再转 hex。格式非法或长度不符返回空串
+     */
+    static std::string info_hash_to_hex(const std::string& hash);
 
     /**
      * @brief 启用/禁用 PEX
@@ -211,39 +230,15 @@ private:
     BValue parseBencode(const std::string& data, size_t& pos);
 
     /**
-     * @brief B 编码到字符串
+     * @base32 解码（大小写不敏感，忽略 '=' 填充；用于 Base32 info-hash）
      */
-    std::string bencodeToString(const BValue& value);
-
-    /**
-     * @brief 计算 SHA1 哈希
-     */
-    std::string sha1(const std::string& data);
-
-    /**
-     * @base32 解码（用于 magnet 链接中的 info_hash）
-     */
-    std::string base32Decode(const std::string& input);
+    static std::string base32Decode(const std::string& input);
 
     /**
      * @brief 验证 torrent 文件
      */
     bool validateTorrent(const BValue& torrent);
 
-    /**
-     * @brief 获取 tracker 列表
-     */
-    std::vector<std::string> getTrackers(const BValue& torrent);
-
-    /**
-     * @brief 创建 DHT 节点 ID
-     */
-    std::string generateNodeId();
-
-    /**
-     * @brief URL 解码
-     */
-    std::string urlDecode(const std::string& url);
 };
 
 /// Factory function to create BitTorrent handler

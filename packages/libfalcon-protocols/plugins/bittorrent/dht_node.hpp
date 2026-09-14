@@ -222,6 +222,12 @@ public:
     void stop();
 
     /**
+     * @brief 客户端是否处于运行状态（socket 已绑定、收发线程存活；
+     * start() 遇端口占用等失败时为 false——失败只记日志不抛异常）
+     */
+    bool isRunning() const { return running_.load(); }
+
+    /**
      * @brief 添加引导节点
      */
     void addBootstrapNode(const std::string& ip, uint16_t port);
