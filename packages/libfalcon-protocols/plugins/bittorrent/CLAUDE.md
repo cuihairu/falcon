@@ -20,6 +20,21 @@
 - 测试：`tests/unit/dht_node_test.cpp` 9 用例（本地 UDP mock 网络
   端到端：两跳迭代、距离序上报、超时/无效端点快速终结等）
 
+### 2026-09-13 - 覆盖率专项（PEX/bencode/BT 解析测试补全 + PEX 缺陷修复）
+- 修复 `pex_protocol.cpp` 既有缺陷：handlePexMessage Add 分支对
+  已存在 peer 重复触发发现回调——仅新插入候选集才触发
+- 新增 `tests/unit/pex_protocol_test.cpp` 25 用例：消息编解码
+  往返、Add/Drop 字节布局、握手/无握手分发、候选去重、回调触发、
+  异常输入
+- 新增 `tests/unit/bencode_edge_test.cpp` ~12 边界用例：深层嵌套、
+  空容器、键序校验、非最小整数编码、截断输入、大整数
+- `tests/unit/bittorrent_parse_test.cpp` 补全 ~10 用例（can_handle
+  /get_file_info 单多文件/错误路径）；手写 bencode 测试数据的
+  长度前缀错误（`3:aa` 声明 3 字符实际 2 字符）用 Python 迷你
+  解析器逐字符验证最可靠
+- ASan 构建 BT 86 用例零告警（`FALCON_ENABLE_BITTORRENT=ON` 下
+  纯 C++ 模式，无需 libtorrent）
+
 ### 2025-12-21 - 初始化插件架构
 - 创建 BitTorrent 插件目录结构
 

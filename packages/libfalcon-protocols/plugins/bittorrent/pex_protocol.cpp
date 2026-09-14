@@ -368,10 +368,13 @@ void PexManager::handlePexMessage(const PexMessage& message) {
                 {
                     std::lock_guard<std::mutex> lock(candidatePeersMutex_);
                     if (candidatePeers_.size() < MAX_CANDIDATE_PEERS) {
-                        candidatePeers_.insert({peer.ip, peer.port});
+                        // 仅新进入候选列表的 peer 触发发现回调
+                        // （重复 PEX 通知不重复上报）
+                        const bool inserted =
+                            candidatePeers_.insert({peer.ip, peer.port}).second;
 
                         // 触发回调
-                        if (onPeerDiscovered_) {
+                        if (inserted && onPeerDiscovered_) {
                             onPeerDiscovered_(peer);
                         }
                     }

@@ -75,10 +75,17 @@ target_sources(falcon_protocols_tests PRIVATE unit/download_engine_v2_test.cpp)
 # Conditional plugin tests
 if(FALCON_ENABLE_BITTORRENT)
     target_sources(falcon_protocols_tests PRIVATE unit/bittorrent_plugin_test.cpp)
+    target_sources(falcon_protocols_tests PRIVATE unit/bittorrent_parse_test.cpp)
+    target_sources(falcon_protocols_tests PRIVATE unit/dht_node_test.cpp)
+    target_sources(falcon_protocols_tests PRIVATE unit/pex_protocol_test.cpp)
+    target_sources(falcon_protocols_tests PRIVATE unit/bencode_edge_test.cpp)
     # 插件符号（BencodeValue、create_bittorrent_handler 等）在插件静态库中
     target_link_libraries(falcon_protocols_tests PRIVATE falcon_plugin_bittorrent)
     # 与库一致的编译定义，供配置相关的测试条件使用
     target_compile_definitions(falcon_protocols_tests PRIVATE FALCON_ENABLE_BT_PLUGIN)
+    # dht_node.hpp 是插件私有头（不在公共 include 目录），直接引用插件源目录
+    target_include_directories(falcon_protocols_tests
+                               PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../plugins/bittorrent)
 endif()
 
 if(FALCON_ENABLE_ED2K)
