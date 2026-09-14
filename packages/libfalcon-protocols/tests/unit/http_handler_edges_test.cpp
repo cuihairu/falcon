@@ -20,9 +20,25 @@
 
 #include <gtest/gtest.h>
 
-#include <netinet/in.h>
-#include <sys/socket.h>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+// Windows 缺少 POSIX socket 语义的符号，测试服务器代码统一走这些别名
+#include <cstddef>  // std::ptrdiff_t（MSVC 不经其他头传递提供）
+using ssize_t = std::ptrdiff_t;
+#define SHUT_RDWR SD_BOTH
+#define MSG_NOSIGNAL 0  // Windows 无 SIGPIPE，标志位无意义
+#define CLOSE_SOCKET(fd) closesocket(fd)
+#else
 #include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#define CLOSE_SOCKET(fd) close(fd)
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -32,6 +48,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -71,6 +88,13 @@ public:
     HttpTestServer& operator=(const HttpTestServer&) = delete;
 
     void start() {
+#ifdef _WIN32
+        static std::once_flag wsa_once;
+        std::call_once(wsa_once, [] {
+            WSADATA data{};
+            WSAStartup(MAKEWORD(2, 2), &data);
+        });
+#endif
         listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
@@ -92,7 +116,7 @@ public:
     void stop() {
         if (!running_.exchange(false)) return;
         ::shutdown(listen_fd_, SHUT_RDWR);  // Linux close() 不唤醒 accept
-        ::close(listen_fd_);
+        CLOSE_SOCKET(listen_fd_);
         if (accept_thread_.joinable()) accept_thread_.join();
     }
 
@@ -169,7 +193,8 @@ private:
                 continue;
             }
             timeval tv{15, 0};
-            ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+            ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO,
+                         reinterpret_cast<const char*>(&tv), sizeof(tv));
             std::thread([this, fd] { handle_connection(fd); }).detach();
         }
     }
@@ -183,7 +208,7 @@ private:
                 char chunk[4096];
                 ssize_t n = ::recv(fd, chunk, sizeof(chunk), 0);
                 if (n <= 0) {
-                    ::close(fd);
+                    CLOSE_SOCKET(fd);
                     return;
                 }
                 buffer.append(chunk, static_cast<size_t>(n));
@@ -350,7 +375,7 @@ private:
                 }
             }
         }
-        ::close(fd);
+        CLOSE_SOCKET(fd);
     }
 
     struct SlowSpec {
