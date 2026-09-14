@@ -375,3 +375,229 @@ TEST(KodoBrowserMockTest, GetQuotaInfoEmptyOnBadResponse) {
 
     EXPECT_TRUE(browser.get_quota_info().empty());
 }
+
+//==============================================================================
+// URL 解析 / 基本属性
+//==============================================================================
+
+TEST(KodoBrowserMockTest, UrlParserRejectsNonKodoProtocol) {
+    // 非 kodo/qiniu 协议必须抛异常（此前缺失协议是未定义行为路径）
+    EXPECT_THROW(KodoUrlParser::parse("https://bucket/key"), std::invalid_argument);
+    EXPECT_THROW(KodoUrlParser::parse("ftp://bucket"), std::invalid_argument);
+    EXPECT_THROW(KodoUrlParser::parse(""), std::invalid_argument);
+}
+
+TEST(KodoBrowserMockTest, UrlParserSplitsBucketAndKeyForBothProtocols) {
+    auto kodo = KodoUrlParser::parse("kodo://mybucket/path/to/file.txt");
+    EXPECT_EQ(kodo.bucket, "mybucket");
+    EXPECT_EQ(kodo.key, "path/to/file.txt");
+
+    auto qiniu = KodoUrlParser::parse("qiniu://otherbucket");
+    EXPECT_EQ(qiniu.bucket, "otherbucket");
+    EXPECT_TRUE(qiniu.key.empty());
+
+    // 只有协议前缀没有 bucket 同样抛异常
+    EXPECT_THROW(KodoUrlParser::parse("kodo://"), std::invalid_argument);
+}
+
+TEST(KodoBrowserMockTest, UrlParserAcceptsQnProtocol) {
+    // can_handle/get_supported_protocols 承诺 qn://，parse 拒绝会把
+    // std::invalid_argument 直接抛出 connect() 公共 API
+    auto qn = KodoUrlParser::parse("qn://qnbucket/dir/file.txt");
+    EXPECT_EQ(qn.bucket, "qnbucket");
+    EXPECT_EQ(qn.key, "dir/file.txt");
+
+    // 通过 connect() 公共 API 走通（此前 qn:// 在此抛出）
+    auto server = make_server(defaultReply);
+    ASSERT_NE(server, nullptr);
+
+    KodoBrowser browser;
+    EXPECT_TRUE(browser.connect("qn://" + std::string(kBucket),
+                                connect_options(server->base_url())));
+}
+
+TEST(KodoBrowserMockTest, BasicPropertiesAndProtocolHandling) {
+    KodoBrowser browser;
+    EXPECT_EQ(browser.get_name(), "七牛云Kodo");
+    EXPECT_EQ(browser.get_supported_protocols(),
+              (std::vector<std::string>{"kodo", "qiniu", "qn"}));
+
+    EXPECT_TRUE(browser.can_handle("kodo://bucket/key"));
+    EXPECT_TRUE(browser.can_handle("qiniu://bucket/key"));
+    EXPECT_TRUE(browser.can_handle("qn://bucket/key"));
+    EXPECT_FALSE(browser.can_handle("http://bucket/key"));
+    EXPECT_FALSE(browser.can_handle("s3://bucket/key"));
+}
+
+//==============================================================================
+// endpoint 边缘与连接选项
+//==============================================================================
+
+TEST(KodoBrowserMockTest, ConnectStripsEndpointTrailingSlash) {
+    // endpoint 带尾斜杠：剥离后不得产生 "//stat" 双斜杠路径
+    auto server = make_server(defaultReply);
+    ASSERT_NE(server, nullptr);
+
+    KodoBrowser browser;
+    EXPECT_TRUE(connect_kodo(browser, server->base_url() + "/"));
+
+    const auto reqs = server->requests();
+    ASSERT_EQ(reqs.size(), 1u);
+    EXPECT_EQ(reqs[0].second.rfind("/stat/", 0), 0);
+}
+
+TEST(KodoBrowserMockTest, ListWorksWithTrailingSlashEndpoint) {
+    // rsf 列举端点同样剥离尾斜杠（此前 endpoint 带 '/' 时列举必然 404）
+    auto server = make_server(listAwareReply);
+    ASSERT_NE(server, nullptr);
+
+    KodoBrowser browser;
+    ASSERT_TRUE(connect_kodo(browser, server->base_url() + "/"));
+
+    auto resources = browser.list_directory("docs/", ListOptions{});
+    ASSERT_EQ(resources.size(), 2u);
+    EXPECT_TRUE(has_request(server->requests(), "POST", "/list"));
+}
+
+TEST(KodoBrowserMockTest, ConnectHonorsDomainAndHttpsOptions) {
+    // domain / https 选项被消费（endpoint 优先生效，connect 仍走 mock）
+    auto server = make_server(defaultReply);
+    ASSERT_NE(server, nullptr);
+
+    KodoBrowser browser;
+    auto options = connect_options(server->base_url());
+    options.emplace("domain", "cdn.example.com");
+    options.emplace("https", "1");
+    EXPECT_TRUE(browser.connect("kodo://" + std::string(kBucket), options));
+}
+
+//==============================================================================
+// 排序 / 过滤
+//==============================================================================
+
+TEST(KodoBrowserMockTest, ListSortsByNameDescAndBySize) {
+    auto server = make_server([](const std::string& method, const std::string& path) {
+        if (method == "POST" && path == "/list") {
+            return MockServer::Response{200,
+                R"({"items":[)"
+                R"({"key":"c.bin","fsize":300},)"
+                R"({"key":"a.bin","fsize":100},)"
+                R"({"key":"b.bin","fsize":200}]})"};
+        }
+        return MockServer::Response{200, "{}"};
+    });
+    ASSERT_NE(server, nullptr);
+
+    KodoBrowser browser;
+    ASSERT_TRUE(connect_kodo(browser, server->base_url()));
+
+    ListOptions name_desc;
+    name_desc.sort_by = "name";
+    name_desc.sort_desc = true;
+    auto resources = browser.list_directory("/", name_desc);
+    ASSERT_EQ(resources.size(), 3u);
+    EXPECT_EQ(resources[0].name, "c.bin");
+    EXPECT_EQ(resources[2].name, "a.bin");
+
+    ListOptions size_asc;
+    size_asc.sort_by = "size";
+    resources = browser.list_directory("/", size_asc);
+    ASSERT_EQ(resources.size(), 3u);
+    EXPECT_EQ(resources[0].name, "a.bin");
+    EXPECT_EQ(resources[2].name, "c.bin");
+
+    ListOptions size_desc;
+    size_desc.sort_by = "size";
+    size_desc.sort_desc = true;
+    resources = browser.list_directory("/", size_desc);
+    ASSERT_EQ(resources.size(), 3u);
+    EXPECT_EQ(resources[0].name, "c.bin");
+    EXPECT_EQ(resources[2].name, "a.bin");
+}
+
+TEST(KodoBrowserMockTest, ListFilterWildcardPrefixSuffixExactAndStar) {
+    auto server = make_server([](const std::string& method, const std::string& path) {
+        if (method == "POST" && path == "/list") {
+            return MockServer::Response{200,
+                R"({"items":[)"
+                R"({"key":"a.txt","fsize":1},)"
+                R"({"key":"pre_x.txt","fsize":1},)"
+                R"({"key":"exact.log","fsize":1},)"
+                R"({"key":"other.bin","fsize":1}]})"};
+        }
+        return MockServer::Response{200, "{}"};
+    });
+    ASSERT_NE(server, nullptr);
+
+    KodoBrowser browser;
+    ASSERT_TRUE(connect_kodo(browser, server->base_url()));
+
+    // 后缀通配
+    ListOptions suffix;
+    suffix.filter = "*.txt";
+    auto resources = browser.list_directory("/", suffix);
+    ASSERT_EQ(resources.size(), 2u);
+    EXPECT_EQ(resources[0].name, "a.txt");
+    EXPECT_EQ(resources[1].name, "pre_x.txt");
+
+    // 前缀+后缀
+    ListOptions both;
+    both.filter = "pre_*.txt";
+    resources = browser.list_directory("/", both);
+    ASSERT_EQ(resources.size(), 1u);
+    EXPECT_EQ(resources[0].name, "pre_x.txt");
+
+    // 无通配符按精确名匹配
+    ListOptions exact;
+    exact.filter = "exact.log";
+    resources = browser.list_directory("/", exact);
+    ASSERT_EQ(resources.size(), 1u);
+    EXPECT_EQ(resources[0].name, "exact.log");
+
+    // 单独 "*" 匹配一切
+    ListOptions all;
+    all.filter = "*";
+    resources = browser.list_directory("/", all);
+    ASSERT_EQ(resources.size(), 4u);
+}
+
+TEST(KodoBrowserMockTest, ListWithMetadataOptionSucceeds) {
+    // include_metadata 走更高的 limit 分支，列举结果不受影响
+    auto server = make_server(listAwareReply);
+    ASSERT_NE(server, nullptr);
+
+    KodoBrowser browser;
+    ASSERT_TRUE(connect_kodo(browser, server->base_url()));
+
+    ListOptions options;
+    options.include_metadata = true;
+    auto resources = browser.list_directory("docs/", options);
+    ASSERT_EQ(resources.size(), 2u);
+    EXPECT_TRUE(has_request(server->requests(), "POST", "/list"));
+}
+
+//==============================================================================
+// 目录辅助 / 断开
+//==============================================================================
+
+TEST(KodoBrowserMockTest, DirectoryHelpersAreInMemory) {
+    KodoBrowser browser;
+    EXPECT_TRUE(browser.get_current_directory().empty());
+    EXPECT_TRUE(browser.change_directory("docs"));
+    EXPECT_EQ(browser.get_current_directory(), "docs");
+    EXPECT_EQ(browser.get_root_path(), "/");
+    browser.disconnect();  // Kodo 无状态，无副作用
+}
+
+//==============================================================================
+// endpoint 带 https:// scheme 的 path-style 前缀分支（92 行）。指向
+// 无人监听的端口连接立即被拒，URL 构造分支照样执行
+//==============================================================================
+
+TEST(KodoBrowserMockTest, ConnectHttpsEndpointPrefixStillPathStyle) {
+    KodoBrowser browser;
+    std::map<std::string, std::string> options = {
+        {"access_key", "ak"}, {"secret_key", "sk"},
+        {"endpoint", "https://127.0.0.1:1"}};
+    EXPECT_FALSE(browser.connect("kodo://" + std::string(kBucket), options));
+}

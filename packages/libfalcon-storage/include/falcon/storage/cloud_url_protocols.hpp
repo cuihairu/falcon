@@ -29,6 +29,7 @@ inline constexpr std::string_view PROTOCOL_OSS = "oss://";
 inline constexpr std::string_view PROTOCOL_COS = "cos://";
 inline constexpr std::string_view PROTOCOL_KODO = "kodo://";
 inline constexpr std::string_view PROTOCOL_QINIU = "qiniu://";
+inline constexpr std::string_view PROTOCOL_QN = "qn://";
 inline constexpr std::string_view PROTOCOL_UPYUN = "upyun://";
 
 //==============================================================================
@@ -114,6 +115,7 @@ inline std::string_view detect_protocol(std::string_view url) {
         PROTOCOL_OSS,     // 6
         PROTOCOL_COS,     // 6
         PROTOCOL_S3,      // 5
+        PROTOCOL_QN,      // 5
     };
 
     for (const auto& protocol : protocols) {

@@ -17,6 +17,7 @@
 #include "mock_http_server.hpp"
 
 #include <map>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -381,4 +382,200 @@ TEST(COSBrowserMockTest, GetQuotaInfoEmptyOnBadResponse) {
     ASSERT_TRUE(connect_cos(browser, server->base_url()));
 
     EXPECT_TRUE(browser.get_quota_info().empty());
+}
+
+//==============================================================================
+// URL 解析（纯逻辑）
+//==============================================================================
+
+TEST(COSBrowserMockTest, UrlParserRejectsNonCosUrl) {
+    // 缺少 cos:// 协议前缀
+    EXPECT_THROW(COSUrlParser::parse("https://example.com/bucket/key"),
+                 std::invalid_argument);
+    EXPECT_THROW(COSUrlParser::parse("tencent://bucket/key"),
+                 std::invalid_argument);
+}
+
+TEST(COSBrowserMockTest, UrlParserRejectsMissingHost) {
+    // "cos://" 后没有任何 host
+    EXPECT_THROW(COSUrlParser::parse("cos://"), std::invalid_argument);
+}
+
+//==============================================================================
+// 浏览器元数据与协议支持
+//==============================================================================
+
+TEST(COSBrowserMockTest, BrowserMetadataAndProtocolSupport) {
+    COSBrowser browser;
+    EXPECT_EQ(browser.get_name(), "腾讯云COS");
+    EXPECT_EQ(browser.get_supported_protocols(),
+              (std::vector<std::string>{"cos", "tencent", "qcloud"}));
+
+    EXPECT_TRUE(browser.can_handle("cos://bucket/key"));
+    EXPECT_TRUE(browser.can_handle("tencent://bucket/key"));
+    EXPECT_TRUE(browser.can_handle("https://bucket.cos.ap-beijing.myqcloud.com/key"));
+    EXPECT_TRUE(browser.can_handle("https://bucket-123.cos.ap-beijing.myqcloud.com"));
+    EXPECT_FALSE(browser.can_handle("https://example.com/file.zip"));
+    EXPECT_FALSE(browser.can_handle(""));
+}
+
+//==============================================================================
+// endpoint 形态
+//==============================================================================
+
+TEST(COSBrowserMockTest, ConnectStripsEndpointTrailingSlash) {
+    // endpoint 带尾斜杠：不得产生 "endpoint//bucket-appid" 双斜杠路径
+    auto server = make_server(defaultReply);
+    ASSERT_NE(server, nullptr);
+
+    COSBrowser browser;
+    auto options = connect_options(server->base_url() + "/");
+    ASSERT_TRUE(browser.connect("cos://" + std::string(kBucket), options));
+
+    for (const auto& r : server->requests()) {
+        EXPECT_EQ(r.second.find("//"), std::string::npos) << r.second;
+    }
+    EXPECT_TRUE(has_request(server->requests(), "GET",
+                            std::string(kBucketPath) + "?max-keys=1"));
+}
+
+TEST(COSBrowserMockTest, ConnectWithHttpsEndpointFailsOnPlaintextMock) {
+    // https:// scheme 的 endpoint 会被识别为自定义 endpoint（path-style），
+    // 但明文 mock 端口经 TLS 握手必然失败——连接如实报败
+    auto server = make_server(defaultReply);
+    ASSERT_NE(server, nullptr);
+
+    COSBrowser browser;
+    auto options = connect_options("https://127.0.0.1:" +
+                                   server->base_url().substr(server->base_url().rfind(':') + 1));
+    EXPECT_FALSE(browser.connect("cos://" + std::string(kBucket), options));
+}
+
+TEST(COSBrowserMockTest, ConnectAcceptsTokenOption) {
+    // token（临时密钥）选项可传入并正常连接
+    auto server = make_server(defaultReply);
+    ASSERT_NE(server, nullptr);
+
+    COSBrowser browser;
+    auto options = connect_options(server->base_url());
+    options["token"] = "temporary-token";
+    EXPECT_TRUE(browser.connect("cos://" + std::string(kBucket), options));
+}
+
+//==============================================================================
+// 过滤 / 排序
+//==============================================================================
+
+TEST(COSBrowserMockTest, ListFilterWildcardPrefixSuffixExactAndStar) {
+    auto server = make_server([](const std::string&, const std::string&) {
+        return MockServer::Response{200,
+            R"({"Contents":[)"
+            R"({"Key":"a.txt","Size":1},)"
+            R"({"Key":"pre_x.txt","Size":1},)"
+            R"({"Key":"exact.log","Size":1},)"
+            R"({"Key":"other.bin","Size":1}]})"};
+    });
+    ASSERT_NE(server, nullptr);
+
+    COSBrowser browser;
+    ASSERT_TRUE(connect_cos(browser, server->base_url()));
+
+    // 后缀通配
+    ListOptions suffix;
+    suffix.filter = "*.txt";
+    auto resources = browser.list_directory("/", suffix);
+    ASSERT_EQ(resources.size(), 2u);
+    EXPECT_EQ(resources[0].name, "a.txt");
+    EXPECT_EQ(resources[1].name, "pre_x.txt");
+
+    // 前缀+后缀
+    ListOptions both;
+    both.filter = "pre_*.txt";
+    resources = browser.list_directory("/", both);
+    ASSERT_EQ(resources.size(), 1u);
+    EXPECT_EQ(resources[0].name, "pre_x.txt");
+
+    // 无通配符按精确名匹配
+    ListOptions exact;
+    exact.filter = "exact.log";
+    resources = browser.list_directory("/", exact);
+    ASSERT_EQ(resources.size(), 1u);
+    EXPECT_EQ(resources[0].name, "exact.log");
+
+    // 单独 "*" 匹配一切
+    ListOptions all;
+    all.filter = "*";
+    resources = browser.list_directory("/", all);
+    ASSERT_EQ(resources.size(), 4u);
+}
+
+TEST(COSBrowserMockTest, ListSortsByNameDescending) {
+    auto server = make_server([](const std::string&, const std::string&) {
+        return MockServer::Response{200,
+            R"({"Contents":[)"
+            R"({"Key":"alpha.txt","Size":1},)"
+            R"({"Key":"zeta.txt","Size":1}]})"};
+    });
+    ASSERT_NE(server, nullptr);
+
+    COSBrowser browser;
+    ASSERT_TRUE(connect_cos(browser, server->base_url()));
+
+    ListOptions options;
+    options.sort_by = "name";
+    options.sort_desc = true;
+    auto resources = browser.list_directory("/", options);
+    ASSERT_EQ(resources.size(), 2u);
+    EXPECT_EQ(resources[0].name, "zeta.txt");
+    EXPECT_EQ(resources[1].name, "alpha.txt");
+}
+
+TEST(COSBrowserMockTest, ListSortsBySizeAscendingAndDescending) {
+    auto server = make_server([](const std::string&, const std::string&) {
+        return MockServer::Response{200,
+            R"({"Contents":[)"
+            R"({"Key":"c.bin","Size":300},)"
+            R"({"Key":"a.bin","Size":100},)"
+            R"({"Key":"b.bin","Size":200}]})"};
+    });
+    ASSERT_NE(server, nullptr);
+
+    COSBrowser browser;
+    ASSERT_TRUE(connect_cos(browser, server->base_url()));
+
+    ListOptions asc;
+    asc.sort_by = "size";
+    auto resources = browser.list_directory("/", asc);
+    ASSERT_EQ(resources.size(), 3u);
+    EXPECT_EQ(resources[0].name, "a.bin");
+    EXPECT_EQ(resources[2].name, "c.bin");
+
+    ListOptions desc;
+    desc.sort_by = "size";
+    desc.sort_desc = true;
+    resources = browser.list_directory("/", desc);
+    ASSERT_EQ(resources.size(), 3u);
+    EXPECT_EQ(resources[0].name, "c.bin");
+    EXPECT_EQ(resources[2].name, "a.bin");
+}
+
+//==============================================================================
+// 目录辅助与断开
+//==============================================================================
+
+TEST(COSBrowserMockTest, DirectoryHelpersAreInMemory) {
+    COSBrowser browser;
+    EXPECT_EQ(browser.get_root_path(), "/");
+    EXPECT_TRUE(browser.change_directory("docs"));
+    EXPECT_EQ(browser.get_current_directory(), "docs");
+    browser.disconnect();  // 无状态协议，无副作用
+}
+
+TEST(COSBrowserMockTest, DisconnectIsSafeBeforeAndAfterConnect) {
+    COSBrowser browser;
+    browser.disconnect();  // 未连接也安全
+    auto server = make_server(defaultReply);
+    ASSERT_NE(server, nullptr);
+    ASSERT_TRUE(connect_cos(browser, server->base_url()));
+    browser.disconnect();
 }

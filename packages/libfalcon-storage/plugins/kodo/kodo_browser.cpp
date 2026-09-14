@@ -36,14 +36,19 @@ KodoUrl KodoUrlParser::parse(const std::string& url) {
 
     KodoUrl kodo_url;
 
-    // 检查支持的协议
+    // 检查支持的协议（qn:// 与 kodo/qiniu 同义——can_handle 与
+    // get_supported_protocols 均承诺接受，parse 拒绝会把
+    // std::invalid_argument 直接抛出 connect() 公共 API）
     std::string_view protocol;
     if (starts_with_protocol(url, PROTOCOL_KODO)) {
         protocol = PROTOCOL_KODO;
     } else if (starts_with_protocol(url, PROTOCOL_QINIU)) {
         protocol = PROTOCOL_QINIU;
+    } else if (starts_with_protocol(url, PROTOCOL_QN)) {
+        protocol = PROTOCOL_QN;
     } else {
-        throw std::invalid_argument("Invalid Kodo URL: missing kodo:// or qiniu:// protocol");
+        throw std::invalid_argument(
+            "Invalid Kodo URL: missing kodo:// or qiniu:// or qn:// protocol");
     }
 
     // 使用协议常量自动计算偏移量，无需魔法数字！

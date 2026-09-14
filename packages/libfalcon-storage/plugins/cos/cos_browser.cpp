@@ -191,7 +191,7 @@ public:
             all_headers[lower_key] = value;
         }
         all_headers["host"] = get_host_from_url(build_cos_url(cos_url_.bucket));
-        all_headers["x-tc-action"] = get_cos_action(method, uri);
+        all_headers["x-tc-action"] = get_cos_action(method, query_string);
         all_headers["x-tc-timestamp"] = timestamp;
 
         // 构建canonical headers（map 有序且键已小写）
@@ -260,8 +260,16 @@ public:
         size_t path_start =
             scheme_end == std::string::npos ? std::string::npos : url.find('/', scheme_end + 3);
         std::string uri = path_start == std::string::npos ? "/" : url.substr(path_start);
-        // 虚拟主机域名下 path 不含 bucket，规范资源须以 /bucket 开头
-        if (uri.rfind("/" + cos_url_.bucket, 0) != 0) {
+        // 虚拟主机域名下 path 不含 bucket，规范资源须以 /bucket 开头。
+        // 仅对官方域名做前缀启发式：path-style（自定义 endpoint）的
+        // path 恒以 /bucket 开头，无须判断；对官方域名按前缀判断会把
+        // "key 以 bucket 名开头"（bucket=docs, key=docs/f.txt →
+        // /docs/f.txt）误判为已含 bucket 而漏前缀，签名必错。
+        // path-style 判定与 build_cos_url 的分支同构（endpoint 携带
+        // scheme；endpoint 无 scheme 时同样走官方域名）
+        const bool path_style = cos_url_.endpoint.rfind("http://", 0) == 0 ||
+                                cos_url_.endpoint.rfind("https://", 0) == 0;
+        if (!path_style && uri.rfind("/" + cos_url_.bucket, 0) != 0) {
             uri = "/" + cos_url_.bucket + uri;
         }
 
@@ -346,9 +354,11 @@ public:
         return response;
     }
 
-    std::string get_cos_action(const std::string& method, const std::string& uri) {
-        // 根据不同的API路径返回对应的Action
-        if (method == "GET" && uri.find("?list-type") != std::string::npos) {
+    std::string get_cos_action(const std::string& method,
+                               const std::string& query_string) {
+        // 根据不同的API路径返回对应的Action（列举请求的 list-type 在
+        // query_string 里——uri 是纯 path，按 uri 判断该分支永不可达）
+        if (method == "GET" && query_string.find("list-type") != std::string::npos) {
             return "ListObjects";
         } else if (method == "HEAD") {
             return "HeadObject";

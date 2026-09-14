@@ -556,6 +556,10 @@ std::vector<RemoteResource> UpyunBrowser::list_directory(
         }
     }
 
+    // 客户端排序兜底：x-list-order 只是请求服务器侧排序，服务器可以
+    // 无视；sort_resources 此前是死代码，sort_by/sort_desc 从未生效
+    p_impl_->sort_resources(resources, options);
+
     return resources;
 }
 

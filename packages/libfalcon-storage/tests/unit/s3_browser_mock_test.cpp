@@ -207,6 +207,14 @@ TEST_F(S3BrowserMockTest, ListDirectoryFiltersHiddenAndSortsByName) {
     ASSERT_EQ(resources.size(), size_t{2});
     EXPECT_EQ(resources[0].name, "a.txt");
     EXPECT_EQ(resources[1].name, "b.txt");
+
+    ListOptions desc;
+    desc.sort_by = "name";
+    desc.sort_desc = true;
+    resources = browser.list_directory("", desc);
+    ASSERT_EQ(resources.size(), size_t{2});
+    EXPECT_EQ(resources[0].name, "b.txt");
+    EXPECT_EQ(resources[1].name, "a.txt");
 }
 
 TEST_F(S3BrowserMockTest, ListDirectoryRecursiveDescendsCommonPrefixes) {
@@ -431,4 +439,178 @@ TEST_F(S3BrowserMockTest, GetQuotaInfoEmptyOnBadResponse) {
 
     auto quota = browser.get_quota_info();  // 默认 handler 应答 "{}"
     EXPECT_TRUE(quota.empty());
+}
+
+//==============================================================================
+// 过滤/排序/URL 边缘补充
+//==============================================================================
+
+TEST_F(S3BrowserMockTest, ListSortsBySizeAscendingAndDescending) {
+    server_ = std::make_unique<MockS3Server>(
+        [](const std::string&, const std::string& path) {
+            if (path.find("list-type=2") != std::string::npos) {
+                return MockS3Server::Response{200, contentsJson(
+                    R"({"Key":"c.bin","Size":300},)"
+                    R"({"Key":"a.bin","Size":100},)"
+                    R"({"Key":"b.bin","Size":200})")};
+            }
+            return defaultReply("", path);
+        });
+    ASSERT_TRUE(server_->start());
+
+    S3Browser browser;
+    ASSERT_TRUE(connectBrowser(browser));
+
+    ListOptions asc;
+    asc.sort_by = "size";
+    auto resources = browser.list_directory("", asc);
+    ASSERT_EQ(resources.size(), size_t{3});
+    EXPECT_EQ(resources[0].name, "a.bin");
+    EXPECT_EQ(resources[2].name, "c.bin");
+
+    ListOptions desc;
+    desc.sort_by = "size";
+    desc.sort_desc = true;
+    resources = browser.list_directory("", desc);
+    ASSERT_EQ(resources.size(), size_t{3});
+    EXPECT_EQ(resources[0].name, "c.bin");
+    EXPECT_EQ(resources[2].name, "a.bin");
+}
+
+TEST_F(S3BrowserMockTest, ListSortsByModifiedTime) {
+    server_ = std::make_unique<MockS3Server>(
+        [](const std::string&, const std::string& path) {
+            if (path.find("list-type=2") != std::string::npos) {
+                return MockS3Server::Response{200, contentsJson(
+                    R"({"Key":"new.txt","Size":1,"LastModified":"2026-05-01T00:00:00Z"},)"
+                    R"({"Key":"old.txt","Size":1,"LastModified":"2026-01-01T00:00:00Z"})")};
+            }
+            return defaultReply("", path);
+        });
+    ASSERT_TRUE(server_->start());
+
+    S3Browser browser;
+    ASSERT_TRUE(connectBrowser(browser));
+
+    ListOptions asc;
+    asc.sort_by = "modified_time";
+    auto resources = browser.list_directory("", asc);
+    ASSERT_EQ(resources.size(), size_t{2});
+    EXPECT_EQ(resources[0].name, "old.txt");
+
+    ListOptions desc;
+    desc.sort_by = "modified_time";
+    desc.sort_desc = true;
+    resources = browser.list_directory("", desc);
+    ASSERT_EQ(resources.size(), size_t{2});
+    EXPECT_EQ(resources[0].name, "new.txt");
+}
+
+TEST_F(S3BrowserMockTest, ListFilterWildcardPrefixSuffixExactAndStar) {
+    server_ = std::make_unique<MockS3Server>(
+        [](const std::string&, const std::string& path) {
+            if (path.find("list-type=2") != std::string::npos) {
+                return MockS3Server::Response{200, contentsJson(
+                    R"({"Key":"a.txt","Size":1},)"
+                    R"({"Key":"pre_x.txt","Size":1},)"
+                    R"({"Key":"exact.log","Size":1},)"
+                    R"({"Key":"other.bin","Size":1})")};
+            }
+            return defaultReply("", path);
+        });
+    ASSERT_TRUE(server_->start());
+
+    S3Browser browser;
+    ASSERT_TRUE(connectBrowser(browser));
+
+    // 后缀通配
+    ListOptions suffix;
+    suffix.filter = "*.txt";
+    auto resources = browser.list_directory("", suffix);
+    ASSERT_EQ(resources.size(), size_t{2});
+    EXPECT_EQ(resources[0].name, "a.txt");
+    EXPECT_EQ(resources[1].name, "pre_x.txt");
+
+    // 前缀+后缀
+    ListOptions both;
+    both.filter = "pre_*.txt";
+    resources = browser.list_directory("", both);
+    ASSERT_EQ(resources.size(), size_t{1});
+    EXPECT_EQ(resources[0].name, "pre_x.txt");
+
+    // 无通配符按精确名匹配
+    ListOptions exact;
+    exact.filter = "exact.log";
+    resources = browser.list_directory("", exact);
+    ASSERT_EQ(resources.size(), size_t{1});
+    EXPECT_EQ(resources[0].name, "exact.log");
+
+    // 单独 "*" 匹配一切
+    ListOptions all;
+    all.filter = "*";
+    resources = browser.list_directory("", all);
+    ASSERT_EQ(resources.size(), size_t{4});
+}
+
+TEST_F(S3BrowserMockTest, ConnectSucceedsWithoutCredentials) {
+    // 无凭据只告警不拒绝（公开只读 bucket 场景）
+    S3Browser browser;
+    std::map<std::string, std::string> options;
+    options["endpoint"] = server_->base_url();
+    EXPECT_TRUE(browser.connect("s3://" + std::string(kBucket), options));
+}
+
+TEST_F(S3BrowserMockTest, ConnectStripsEndpointTrailingSlash) {
+    // endpoint 带尾斜杠：不得产生 "endpoint//bucket" 双斜杠路径
+    S3Browser browser;
+    std::map<std::string, std::string> options;
+    options["endpoint"] = server_->base_url() + "/";
+    options["access_key_id"] = "AKIA_TEST";
+    options["secret_access_key"] = "secret";
+    options["region"] = "us-west-2";
+    ASSERT_TRUE(browser.connect("s3://" + std::string(kBucket), options));
+
+    auto reqs = server_->requests();
+    ASSERT_FALSE(reqs.empty());
+    for (const auto& [method, path] : reqs) {
+        EXPECT_EQ(path.find("//"), std::string::npos) << path;
+    }
+}
+
+TEST_F(S3BrowserMockTest, KeySpecialCharactersPercentEncoded) {
+    // key 中的空格逐段编码（'/' 保留）
+    S3Browser browser;
+    ASSERT_TRUE(connectBrowser(browser));
+    EXPECT_TRUE(browser.remove("docs/a b.txt"));
+
+    bool saw_encoded = false;
+    for (const auto& [method, path] : server_->requests()) {
+        if (method == "DELETE" && path.find("a%20b.txt") != std::string::npos) {
+            saw_encoded = true;
+        }
+        EXPECT_EQ(path.find("a b.txt"), std::string::npos) << path;
+    }
+    EXPECT_TRUE(saw_encoded);
+}
+
+TEST_F(S3BrowserMockTest, RenameFailsWhenCopyFails) {
+    // copy（PUT 带 copy 语义）被服务器拒绝 → rename 失败且不删除源对象
+    server_ = std::make_unique<MockS3Server>(
+        [](const std::string& method, const std::string& path) {
+            if (method == "PUT" && path.find("dest.txt") != std::string::npos) {
+                return MockS3Server::Response{403, R"(<Error><Code>AccessDenied</Code></Error>)"};
+            }
+            return defaultReply(method, path);
+        });
+    ASSERT_TRUE(server_->start());
+
+    S3Browser browser;
+    ASSERT_TRUE(connectBrowser(browser));
+    EXPECT_FALSE(browser.rename("docs/src.txt", "docs/dest.txt"));
+
+    for (const auto& [method, path] : server_->requests()) {
+        if (method == "DELETE") {
+            ADD_FAILURE() << "rename 不得删除源对象: " << path;
+        }
+    }
 }

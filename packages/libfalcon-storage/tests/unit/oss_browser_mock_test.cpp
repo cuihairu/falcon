@@ -17,6 +17,7 @@
 #include "mock_http_server.hpp"
 
 #include <map>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -377,4 +378,236 @@ TEST(OSSBrowserMockTest, GetQuotaInfoEmptyOnBadResponse) {
     ASSERT_TRUE(connect_oss(browser, server->base_url()));
 
     EXPECT_TRUE(browser.get_quota_info().empty());
+}
+
+//==============================================================================
+// 过滤/排序/选项/元数据补充
+//==============================================================================
+
+TEST(OSSBrowserMockTest, ConnectThrowsOnUrlWithoutHost) {
+    // "oss://" 无 host：URL 解析在网络之前即拒绝
+    OSSBrowser browser;
+    EXPECT_THROW(browser.connect("oss://", connect_options("http://127.0.0.1:1")),
+                 std::invalid_argument);
+}
+
+TEST(OSSBrowserMockTest, ConnectStripsEndpointSchemeAndTrailingSlash) {
+    // endpoint 带 scheme 与尾斜杠：剥 scheme 后剥 '/'，不得产生
+    // "endpoint//bucket" 双斜杠路径
+    auto server = make_server(defaultReply);
+    ASSERT_NE(server, nullptr);
+
+    OSSBrowser browser;
+    std::map<std::string, std::string> options = connect_options(server->base_url() + "/");
+    EXPECT_TRUE(browser.connect("oss://" + std::string(kBucket), options));
+
+    for (const auto& r : server->requests()) {
+        EXPECT_EQ(r.second.find("//"), std::string::npos) << r.second;
+    }
+    EXPECT_TRUE(has_request(server->requests(), "GET",
+                            "/" + std::string(kBucket) + "?max-keys=1"));
+}
+
+TEST(OSSBrowserMockTest, ConnectHonorsRegionOption) {
+    // region 与 endpoint 同时给出：endpoint 优先（不得推导官方域名
+    // 覆盖自定义 endpoint），请求仍发往 mock 的 path-style 地址
+    auto server = make_server(defaultReply);
+    ASSERT_NE(server, nullptr);
+
+    OSSBrowser browser;
+    auto options = connect_options(server->base_url());
+    options.emplace("region", "cn-hangzhou");
+    EXPECT_TRUE(browser.connect("oss://" + std::string(kBucket), options));
+    EXPECT_TRUE(has_request(server->requests(), "GET",
+                            "/" + std::string(kBucket) + "?max-keys=1"));
+}
+
+TEST(OSSBrowserMockTest, ConnectHonorsSecurityTokenOption) {
+    // STS 临时凭据：token 随选项接受，连接与列举照常
+    auto server = make_server(listAwareReply);
+    ASSERT_NE(server, nullptr);
+
+    OSSBrowser browser;
+    auto options = connect_options(server->base_url());
+    options.emplace("security_token", "sts-token-xyz");
+    ASSERT_TRUE(browser.connect("oss://" + std::string(kBucket), options));
+
+    auto resources = browser.list_directory("docs/", ListOptions{});
+    EXPECT_FALSE(resources.empty());
+}
+
+TEST(OSSBrowserMockTest, DisconnectIsSafeAfterConnect) {
+    // 无状态协议：disconnect 无副作用，之后浏览器不可再用即可
+    auto server = make_server(defaultReply);
+    ASSERT_NE(server, nullptr);
+
+    OSSBrowser browser;
+    ASSERT_TRUE(connect_oss(browser, server->base_url()));
+    browser.disconnect();
+}
+
+TEST(OSSBrowserMockTest, BrowserMetadataAndProtocolDetection) {
+    OSSBrowser browser;
+    EXPECT_EQ(browser.get_name(), "阿里云OSS");
+
+    const auto protocols = browser.get_supported_protocols();
+    EXPECT_EQ(protocols, (std::vector<std::string>{"oss", "aliyun", "oss-cn"}));
+
+    EXPECT_TRUE(browser.can_handle("oss://bucket/key"));
+    EXPECT_TRUE(browser.can_handle("aliyun://bucket/key"));
+    EXPECT_TRUE(browser.can_handle("https://bucket.oss-cn-hangzhou.aliyuncs.com/key"));
+    EXPECT_TRUE(browser.can_handle("https://oss-aliyuncs.com/bucket"));
+    EXPECT_FALSE(browser.can_handle("https://example.com/file.zip"));
+    EXPECT_FALSE(browser.can_handle("s3://bucket/key"));
+}
+
+TEST(OSSBrowserMockTest, DirectoryHelpersAreInMemory) {
+    OSSBrowser browser;
+    EXPECT_TRUE(browser.get_current_directory().empty());
+    EXPECT_TRUE(browser.change_directory("docs/"));
+    EXPECT_EQ(browser.get_current_directory(), "docs/");
+    EXPECT_EQ(browser.get_root_path(), "/");
+}
+
+TEST(OSSBrowserMockTest, ListSortsByNameDescending) {
+    auto server = make_server([](const std::string&, const std::string&) {
+        return MockServer::Response{200,
+            R"({"Contents":[)"
+            R"({"Key":"alpha.txt","Size":1},)"
+            R"({"Key":"zeta.txt","Size":1}]})"};
+    });
+    ASSERT_NE(server, nullptr);
+
+    OSSBrowser browser;
+    ASSERT_TRUE(connect_oss(browser, server->base_url()));
+
+    ListOptions options;
+    options.sort_by = "name";
+    options.sort_desc = true;
+    auto resources = browser.list_directory("/", options);
+    ASSERT_EQ(resources.size(), 2u);
+    EXPECT_EQ(resources[0].name, "zeta.txt");
+    EXPECT_EQ(resources[1].name, "alpha.txt");
+}
+
+TEST(OSSBrowserMockTest, ListSortsBySizeAscendingAndDescending) {
+    auto server = make_server([](const std::string&, const std::string&) {
+        return MockServer::Response{200,
+            R"({"Contents":[)"
+            R"({"Key":"c.bin","Size":300},)"
+            R"({"Key":"a.bin","Size":100},)"
+            R"({"Key":"b.bin","Size":200}]})"};
+    });
+    ASSERT_NE(server, nullptr);
+
+    OSSBrowser browser;
+    ASSERT_TRUE(connect_oss(browser, server->base_url()));
+
+    ListOptions asc;
+    asc.sort_by = "size";
+    auto resources = browser.list_directory("/", asc);
+    ASSERT_EQ(resources.size(), 3u);
+    EXPECT_EQ(resources[0].name, "a.bin");
+    EXPECT_EQ(resources[2].name, "c.bin");
+
+    ListOptions desc;
+    desc.sort_by = "size";
+    desc.sort_desc = true;
+    resources = browser.list_directory("/", desc);
+    ASSERT_EQ(resources.size(), 3u);
+    EXPECT_EQ(resources[0].name, "c.bin");
+    EXPECT_EQ(resources[2].name, "a.bin");
+}
+
+TEST(OSSBrowserMockTest, ListFilterWildcardSuffixPrefixExactAndStar) {
+    auto server = make_server([](const std::string&, const std::string&) {
+        return MockServer::Response{200,
+            R"({"Contents":[)"
+            R"({"Key":"a.txt","Size":1},)"
+            R"({"Key":"pre_x.txt","Size":1},)"
+            R"({"Key":"exact.log","Size":1},)"
+            R"({"Key":"other.bin","Size":1}]})"};
+    });
+    ASSERT_NE(server, nullptr);
+
+    OSSBrowser browser;
+    ASSERT_TRUE(connect_oss(browser, server->base_url()));
+
+    // 后缀通配
+    ListOptions suffix;
+    suffix.filter = "*.txt";
+    auto resources = browser.list_directory("/", suffix);
+    ASSERT_EQ(resources.size(), 2u);
+    EXPECT_EQ(resources[0].name, "a.txt");
+    EXPECT_EQ(resources[1].name, "pre_x.txt");
+
+    // 前缀 + 后缀
+    ListOptions both;
+    both.filter = "pre_*.txt";
+    resources = browser.list_directory("/", both);
+    ASSERT_EQ(resources.size(), 1u);
+    EXPECT_EQ(resources[0].name, "pre_x.txt");
+
+    // 无通配符按精确名匹配
+    ListOptions exact;
+    exact.filter = "exact.log";
+    resources = browser.list_directory("/", exact);
+    ASSERT_EQ(resources.size(), 1u);
+    EXPECT_EQ(resources[0].name, "exact.log");
+
+    // 单独 "*" 匹配一切
+    ListOptions all;
+    all.filter = "*";
+    resources = browser.list_directory("/", all);
+    ASSERT_EQ(resources.size(), 4u);
+}
+
+//==============================================================================
+// 排序：modified_time（此前 sort_resources 完全忽略该排序键，静默不排）
+//==============================================================================
+
+TEST(OSSBrowserMockTest, ListSortsByModifiedTimeAscendingAndDescending) {
+    auto server = make_server([](const std::string& method, const std::string& path) {
+        if (method == "GET" && path.find("list-type=2") != std::string::npos) {
+            return MockServer::Response{200,
+                R"({"Contents":[)"
+                R"({"Key":"old.txt","Size":1,"LastModified":"2026-01-01T00:00:00Z"},)"
+                R"({"Key":"mid.txt","Size":1,"LastModified":"2026-06-01T00:00:00Z"},)"
+                R"({"Key":"new.txt","Size":1,"LastModified":"2026-09-01T00:00:00Z"}]})"};
+        }
+        return MockServer::Response{200, "{}"};
+    });
+    ASSERT_NE(server, nullptr);
+
+    OSSBrowser browser;
+    ASSERT_TRUE(connect_oss(browser, server->base_url()));
+
+    ListOptions asc;
+    asc.sort_by = "modified_time";
+    auto resources = browser.list_directory("/", asc);
+    ASSERT_EQ(resources.size(), 3u);
+    EXPECT_EQ(resources[0].name, "old.txt");
+    EXPECT_EQ(resources[2].name, "new.txt");
+
+    ListOptions desc;
+    desc.sort_by = "modified_time";
+    desc.sort_desc = true;
+    resources = browser.list_directory("/", desc);
+    ASSERT_EQ(resources.size(), 3u);
+    EXPECT_EQ(resources[0].name, "new.txt");
+    EXPECT_EQ(resources[2].name, "old.txt");
+}
+
+//==============================================================================
+// endpoint 带 https:// scheme 的 path-style 前缀分支（96 行）。指向
+// 活着的明文 mock 会互等死锁（TLS ClientHello vs 等请求行），指向
+// 无人监听的端口则连接立即被拒——URL 构造分支照样执行
+//==============================================================================
+
+TEST(OSSBrowserMockTest, ConnectHttpsEndpointPrefixStillPathStyle) {
+    OSSBrowser browser;
+    std::map<std::string, std::string> options = {
+        {"access_key_id", "ak"}, {"access_key_secret", "sk"},
+        {"endpoint", "https://127.0.0.1:1"}};
+    EXPECT_FALSE(browser.connect("oss://" + std::string(kBucket), options));
 }

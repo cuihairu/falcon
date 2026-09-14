@@ -251,6 +251,9 @@ public:
         } else if (options.sort_by == "modified_time") {
             std::sort(resources.begin(), resources.end(),
                 [&](const RemoteResource& a, const RemoteResource& b) {
+                    if (options.sort_desc) {
+                        return a.modified_time > b.modified_time;
+                    }
                     return a.modified_time < b.modified_time;
                 });
         }

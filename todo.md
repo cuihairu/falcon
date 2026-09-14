@@ -1470,4 +1470,56 @@ mock_http_server.hpp；新增防 RST 排空——POST 带请求体未读即
 close 会以 RST 收场吞掉刚写出的响应）：**
 - 全量 ctest 1701 用例通过，ASan 下五 browser 套件 81 用例零告警
 
+### 2026-09-14 覆盖率专项第二轮（75.9% 行 / 87.5% 函数，进行中）
+
+**基线与方法论：** gcovr 8.6 必加
+`--merge-mode-functions=merge-use-line-min`（header-only inline 函数
+多 TU 行号漂移 merge 崩溃）与
+`--gcov-ignore-parse-errors=negative_hits.warn_once_per_file`
+（gcc #68080）；gcovr 行数分母含无代码行严重虚高（s3 报 310 实为
+36），**真实缺口以 gcov 文本 `#####` 标记为准**。基线 75.9% 行 /
+87.5% 函数 / 41.1% 分支（1727 ctest 全绿）。
+
+**FTP 浏览器收敛到 2 行（已完成，7de47a7 + e042766）：**
+- storage 版 ftp_browser.cpp 六项协议缺陷修复（QUOTE 写操作、
+  RNFR/RNTO 拆分、stale WRITEDATA UAF、get_resource_info 恒真、
+  modified_time 解析、endpoint/ssl 消费）+ mock FTP 服务器 26 用例
+- normalize_path 内部 "/./" 段不消除（path 带脏前缀）修复 +
+  不可达 "./" 开头剥离死分支裁剪；测试 26 → 37
+- 剩余 2 行：CURL init throw（OOM 防御）+ gcc static 初始化
+  行归属伪影
+
+**S3 浏览器 36 → 8 行（已完成）：** 排序/通配符/无凭据/endpoint
+尾斜杠/key 特殊字符编码/rename copy 失败七用例；顺带修复 S3
+modified_time 排序忽略 sort_desc（与 ftp 同构缺陷）。剩余 8 行
+为官方域名 fallback 簇（真实网络）+ OOM throw。
+
+**OSS/COS/Kodo/Upyun 四 browser 收敛（已完成，12→11/20/30→29/18）：**
+四家并行补充 53 用例（排序/通配符/协议变体/options 消费/递归
+删除/无效 URL/官方域名离线必败等）；五 browser 套件 103 用例
+cov+asan 双绿。**顺带修复五项 fork 报告的产品缺陷**：① Kodo
+`qn://` 协议断裂（can_handle/protocols 承诺接受、parse 拒绝，
+`connect()` 直接把 invalid_argument 抛出公共 API，新增
+PROTOCOL_QN）；② OSS sort_resources 完全忽略 modified_time 排序
+键（补 sort_desc 双向分支）；③ COS get_cos_action 的 ListObjects
+分支永不可达（uri 是纯 path，改判 query_string）；④ COS 签名
+资源前缀误报（官方域名 + key 以 bucket 名开头即漏 /bucket 前缀
+→ 真实 403；path-style 判定改为与 build_cos_url 分支同构）；
+⑤ Upyun sort_resources 死代码（无调用点，客户端排序从未生效，
+接线进 list_directory 作 x-list-order 被服务器无视时的兜底）。
+剩余缺口均不可离线测：官方域名簇（真实网络）、CURL init/EVP/
+HMAC/base64 长度防御（需注入）、`~Browser()` 的 gcov D0/D2 析构
+变体伪影（行实际已被 D2 执行，`78*` 标记）。
+**测试陷阱记录**：api_domain/endpoint 带 https:// 时绝不能指向
+活着的明文 mock——TLS ClientHello 与等请求行双向互等到 curl 级
+超时（单用例 300s+），改指无人监听端口（URL 构造分支照样执行）。
+
+**覆盖率（批次 C 收口）：行 76.8% / 函数 89.8% / 分支 41.8%**
+（基线 75.9/87.5/41.1），1790 ctest 全绿（净增 63 用例）。
+
+**后续批次（真实缺口）：** http_commands.cpp 256（TLS 错误路径
+17/段失败收口 17/chunked 边界 17/代理应答 13/续传调度 12/
+update_progress 11 等）→ bittorrent_plugin 187 → ftp_plugin 135 →
+http_handler 82 → task_manager 78。
+
 
