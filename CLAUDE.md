@@ -2,6 +2,33 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-14 - 覆盖率批次 G：http_handler.cpp V1 curl 数据面回环测试 + 空指针缺陷修复
+- **修复 HttpHandler::pause/resume/cancel 空指针崩溃**（新测试曝
+  光）：`pause(nullptr)` 直接解引用，与 FtpHandler 同位置的
+  `if (!task) return;` 防御不一致——三外层入口统一补防御（impl
+  与 V2 转发共用）
+- 覆盖率批次 G：http_handler.cpp gcov miss **80 → 16**（行
+  96.2%）；全包（批次 C 同款 gcovr 口径）行 79.2% / 函数 91.5% /
+  分支 43.1%（78.9/91.5/42.9 → 涨幅 0.3/0.0/0.2）。剩余缺口全
+  部定性：curl init OOM×3、单连接 cancelled 标志防御（接口未暴
+  露）、段文件打开失败、段续传截回（worker 超尺寸先删结构性不可
+  达）、200-instead-of-206 纵深防御（现代 curl resume 守卫先
+  拒）、else 行归属伪影、重试间隙毫秒竞态窗口
+- 新文件 `http_handler_edges_test.cpp` 26 用例全量 ctest 全绿
+  （1844，cov + ASan 双零告警）：自包含可编程 HTTP 服务器（应答
+  剧本 + HEAD 探测末位放行 + Range 自动 206 切片 + 按 Range 差异
+  化慢发 + 部分发送硬断连 + Range 撒谎 + 无 Content-Length EOF
+  定界）——CD 引号/无引号 filename 解析、URL 推导、curl 选项传
+  播（cookie 引擎往返/401 挑战 Basic 重放/必败代理）、REST 续
+  传、500 重试与 404 快速失败、rename 失败、限速热应用、未知总
+  长下载、分段端到端/段错误收口/传输中 pause-cancel 转发/暂停
+  resume 重入/段短传重试续传/Range 撒谎分段失败干净
+- 语义记录：download() 顶部 get_file_info（HEAD）先行——错误剧
+  本必须在 HEAD 层放行否则直接炸掉；分段路径的段只看 downloader
+  cancelled 标志不查 task 状态，中止必须经 handler 转发；
+  SegmentDownloader 析构即清段文件（handler 层暂停不保留段断
+  点）；resume 前置位 Downloading 是 TaskManager 职责
+
 ### 2026-09-14 - 覆盖率批次 F：ftp_plugin.cpp 135 → 3 miss（占位测试重写 + weak stub 链接陷阱）
 - **缺口定性**：135/146 miss = 零真实测试——旧 ftp_handler_test.cpp
   55 个用例全是断言字符串字面量的占位测试，唯一真实的 registry 测

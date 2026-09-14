@@ -788,6 +788,7 @@ void HttpHandler::download(DownloadTask::Ptr task, IEventListener* listener) {
 }
 
 void HttpHandler::pause(DownloadTask::Ptr task) {
+    if (!task) return;  // 与 FtpHandler 同款防御：空任务无操作
     impl_->pause(task);
     // V2 组同步暂停（V1 任务无 V2 组时引擎侧幂等返回 false）
     if (auto engine = V2EngineHost::instance().try_engine()) {
@@ -796,10 +797,12 @@ void HttpHandler::pause(DownloadTask::Ptr task) {
 }
 
 void HttpHandler::resume(DownloadTask::Ptr task, IEventListener* listener) {
+    if (!task) return;
     impl_->resume(task, listener);
 }
 
 void HttpHandler::cancel(DownloadTask::Ptr task) {
+    if (!task) return;
     impl_->cancel(task);
     // V2 组同步取消（桥接轮询亦会兜底转发，幂等）
     if (auto engine = V2EngineHost::instance().try_engine()) {

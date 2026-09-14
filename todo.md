@@ -1694,4 +1694,70 @@ content 应答、REST 续传偏移、一次性/永久命令失败（重试语义
 
 **后续批次（真实缺口）：** http_handler 82 → task_manager 78。
 
+### 2026-09-14 覆盖率批次 G（http_handler.cpp 80 → 16 miss：V1 curl 数据面回环测试 + 空指针缺陷修复）
+
+**缺口定性（80 miss 分簇）：** 响应头解析（Content-Disposition 引
+号/无引号、filename 从 URL 推导）、进度中止/记账/限速热应用、curl
+选项簇（proxy/SSL/referer/cookie/http auth/自定义头）、单连接续传
+与 Range 防护、HTTP 错误重试语义、rename/打开失败、分段限速均摊
+与生命周期。V2 分叉默认关（v2_http_enabled()=false），全部测试走
+V1 curl 路径。
+
+**缺陷修复（测试曝光，与 FtpHandler 对齐）：**
+- `HttpHandler::pause/resume/cancel` 缺空指针防御——`pause(nullptr)`
+  直接解引用崩溃（FTP 插件同位置有 `if (!task) return;`，跨插件
+  不一致）；在外层三入口统一补防御（impl 与 V2 转发共用）
+
+**测试基建：** 新 `tests/unit/http_handler_edges_test.cpp` 自包含
+可编程 HTTP 服务器：按路径应答/剧本（末位无限重复，**HEAD 探测
+恒用末位放行**——download() 顶部 get_file_info 先行，否则 500
+剧本直接炸掉）、Range 自动 206 + Content-Range 切片、按 Range 起
+始差异化慢发、一次性部分发送后硬断连（段短传）、Range 撒谎
+（HEAD 宣称 Accept-Ranges / GET 一律 200）、无 Content-Length
+（Connection: close EOF 定界）、起零死端口（连接拒绝/必败代理）。
+
+**26 用例（cov + ASan 双绿）：**
+- get_file_info：CD 引号/无引号 filename、URL 推导（query 剥除/
+  根路径默认 "download"）、连接拒绝 throw
+- 选项传播（服务器侧观测）：UA/Referer/自定义头原样到达、
+  COOKIEFILE 激活 cookie 引擎（真实 cookie 头回传 + COOKIEJAR
+  会话写出）、401 挑战后 Basic 凭据重放（CURLAUTH_ANY 不预发）、
+  无人监听代理必败且流量从未直连
+- 单连接：慢发进度记账（越 200ms 节流窗）、限速热应用（编程
+  listener 首窗 0 次窗 32KB/s，want != applied 分支）、REST 续传
+  （Range: bytes=2- 断言 + app 拼接）、Range 撒谎服务器绝不产出
+  损坏成品（现代 curl resume 守卫 CURLE_RANGE_ERROR 先拒——
+  handler 内 200-check 分支是老 curl 纵深防御，本 curl 不可达）、
+  500×2 重试剧本（恰 3 次 GET）与 404 立即抛（恰 1 次 GET）、
+  rename 失败（成品路径被目录占用 → FileIOException + 状态
+  Pending + temp 保留）、输出打不开零网络、重试退避窗口内 Paused
+  静默退出、EOF 定界未知总长下载（total 记 0、进度照常记账）
+- 生命周期：暂停中止（进度回调返回 1 → CURLE_ABORTED_BY_
+  CALLBACK，tmp 保留断点）、resume 重入（**恢复前置位
+  Downloading 是 TaskManager 职责**——handler resume 只重跑
+  download()，Paused 守卫直接返回）、cancel 先行跳过 + 三入口
+  空任务防御
+- 分段：64KB 4 段端到端逐字节一致（listener 限速按连接均摊）、
+  段 HTTP 错误失败收口（非零段一律 500 → FileIOException + 成品
+  不发布）、传输中 pause/cancel 经 active_segmented_downloads_
+  转发 downloader->cancel（**分段路径的段只看 cancelled 标志不查
+  task 状态**，仅 set_status 无法中止）、暂停后 resume 重入（
+  **SegmentDownloader 析构即清段文件**——handler 层暂停不保留段
+  断点，重新全量下载仍逐字节一致）、段短传重试从部分数据续传
+  （4096 字节断连 → 精确尺寸校验失败 → worker 按段文件已有尺寸
+  算续传起点 → app 模式补齐，无洞无重叠）、Range 撒谎服务器分段
+  必须失败干净（V1 段完整性闭环回环钉）
+
+**覆盖率（批次 G 收口）：http_handler.cpp gcov miss 80 → 16（行
+96.2%）**，剩余定性：143 单连接 cancelled 标志防御（外部接口未
+暴露恒 false）、287/401/537 curl_easy_init OOM、310-311 段文件
+打开失败（输出目录创建先行）、359-360 段续传截回（worker 超尺寸
+best-effort 先删，结构性不可达）、611-617 200-instead-of-206 纵
+深防御（本 curl 守卫先拒）、619 else 行归属伪影、634 重试间隙
+Paused 检查（500 返回与状态置位间毫秒级竞态窗口）。全包（批次 C
+同款 gcovr 口径）：**行 79.2% / 函数 91.5% / 分支 43.1%**（批次 F
+78.9/91.5/42.9；净涨 0.3/0.0/0.2 点）。
+
+**后续批次（真实缺口）：** task_manager 78。
+
 
