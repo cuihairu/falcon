@@ -2,6 +2,36 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-14 - 覆盖率批次 P：json_rpc_server.cpp 68 → 15 miss（RPC 分发边界 + WebSocket 协议路径）
+- **21 新用例三文件**（cov + ASan 双绿，全量 ctest 1958 零失败，
+  新增 21 条）：RPC 分发层参数形状与"合法 gid 无任务"变体全簇
+  （changePriority/tellStatus/getFiles 族/pause 族/
+  removeDownloadResult，含活动任务拒绝 code 1、终态移除 OK、整
+  数值 max-concurrent-downloads、getOption 自定义 header 回显）、
+  bind 占口 start 失败（POSIX only，Windows SO_REUSEADDR 可双绑
+  定）、半截 HTTP 头写端关闭；WS 升级 path 白名单 404、握手
+  CORS 回显、ping→pong/pong 忽略、坏操作码 1002 close、慢分发
+  +RST 双失败路径（set_shutdown_handler 滞留会话线程 400ms +
+  SO_LINGER{1,0} RST——广播命中死 fd 与应答发送失败两条注销路
+  径）、Preparing→Downloading 通知、进度节流窗口到期恢复、引擎
+  移除后通知退化为仅 gid；storage 侧 unpauseAll 收集/落库链与
+  tellWaiting storage 回落并集
+- **两个测量级发现**：① 既有 gid 用例的 "00000000000ffffffc"
+  是 17-18 字符被长度检查拒绝——命中非法 gid 路径而非"合法 gid
+  无任务"，后者须用 16 字符 "00000000000000ff"；②
+  json_rpc_server.cpp:372（Preparing→Downloading 分支）#####
+  为 gcc 行归属伪影——task_manager worker 层调 handler->
+  download 前已置 Downloading（task_manager.cpp:831），handler
+  内 set_status(Preparing) 即产生该通知，探针实证 status 2→1→2
+  + 371/374 计数相等的执行序矛盾铁证（`||` 链指令归属 371 行）
+- 剩余 15 miss 全部定性：伪影 ×2（372/987）、OOM/发送失败注入
+  ×6、时序竞态 ×2（Pause failed/Remove failed 仅任务消失瞬间
+  可达）、结构不可达 ×1（1321——add_task 失败恒抛异常）、全枚
+  举兜底 ×1
+- **全包覆盖率（批次 C 同款 gcovr 口径）：行 81.4% / 函数
+  94.4% / 分支 45.1%**（批次 O 81.2/94.5/44.5，函数 -0.1 为边
+  缘函数计数翻转）；json_rpc_server.cpp 单 target 无多编译水分
+
 ### 2026-09-14 - 覆盖率批次 O：incremental_download 46 → 11 + file_hash 23 → 12 + OpenSSL 宏 PUBLIC 化
 - **修复公共头 ODR 隐患**：`FALCON_USE_OPENSSL`/`FALCON_ENABLE_
   OPENSSL` 从 falcon_protocols 的 PRIVATE 改 PUBLIC——

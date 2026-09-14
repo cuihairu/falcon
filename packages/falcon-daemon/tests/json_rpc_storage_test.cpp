@@ -537,4 +537,51 @@ TEST_F(JsonRpcStorageTest, GlobalOptionRoundTrip) {
     EXPECT_TRUE(unknown.contains("error")) << unknown.dump();
 }
 
+TEST_F(JsonRpcStorageTest, UnpauseAllSyncsPausedTasksToStorage) {
+    json add = call("aria2.addUri", json::array({json::array({"test://unpause.bin"})}));
+    ASSERT_TRUE(add.contains("result")) << add.dump();
+    const std::string gid = add["result"].get<std::string>();
+    const auto id = static_cast<falcon::TaskId>(std::stoull(gid, nullptr, 16));
+    wait_until_active(id);
+
+    // pause：storage 状态同步为 Paused
+    json paused = call("aria2.pause", json::array({gid}));
+    ASSERT_TRUE(paused.contains("result")) << paused.dump();
+    auto record = storage_->get_task(id);
+    ASSERT_TRUE(record.has_value());
+    EXPECT_EQ(record->status, falcon::TaskStatus::Paused);
+
+    // unpauseAll：收集 Paused 任务 → 恢复 → 按引擎当前状态落库
+    json unpaused = call("aria2.unpauseAll", json::array());
+    ASSERT_TRUE(unpaused.contains("result")) << unpaused.dump();
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    for (;;) {
+        record = storage_->get_task(id);
+        ASSERT_TRUE(record.has_value());
+        if (record->status != falcon::TaskStatus::Paused) break;
+        ASSERT_LT(std::chrono::steady_clock::now(), deadline)
+            << "storage status stuck at Paused after unpauseAll";
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+}
+
+TEST_F(JsonRpcStorageTest, TellWaitingIncludesStorageOnlyRecords) {
+    // 引擎侧 Paused 任务 + storage 侧引擎没有的遗留记录，tellWaiting 取并集
+    auto task = engine_.add_task("test://engine-waiting.bin");
+    ASSERT_NE(task, nullptr);
+    ASSERT_TRUE(task->pause());
+    seed_record(3001, falcon::TaskStatus::Pending, "test://storage-only.bin", 100);
+
+    json waiting = call("aria2.tellWaiting", json::array({0, 10}));
+    ASSERT_TRUE(waiting.contains("result")) << waiting.dump();
+    bool found_engine = false, found_storage = false;
+    for (const auto& item : waiting["result"]) {
+        if (item["gid"] == gid_of(task->id())) found_engine = true;
+        if (item["gid"] == gid_of(3001)) found_storage = true;
+    }
+    EXPECT_TRUE(found_engine) << waiting.dump();
+    EXPECT_TRUE(found_storage) << waiting.dump();
+}
+
 } // namespace

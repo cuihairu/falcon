@@ -2200,3 +2200,52 @@ json_rpc_server 68（回环基建现成）/ resource_browser 系 153 /
 request_group 系 106 / resource_search 47（WebCrawler 泄漏已
 修）/ cloud_storage_plugin 55 行存根（方案 A：manager 只读插件
 访问器）/ http_commands 176（TLS 防御与 OOM 为主）。
+
+### 批次 P 收口（2026-09-14）：json_rpc_server.cpp 68 → 15 miss（RPC 分发边界 + WebSocket 协议路径收敛）
+- **21 新用例三文件**（cov + ASan 双绿，全部复用既有基建）：
+  `json_rpc_server_coverage_test.cpp` +11（HangingHandler 阻塞
+  handler 基建）——changePriority/changeGlobalOption/tellStatus/
+  getFiles 族/pause 族/removeDownloadResult 的参数形状与"合法 gid
+  无任务"变体、整数值 max-concurrent-downloads、getOption 自定义
+  header 回显、removeDownloadResult 终态移除与活动任务拒绝
+  （code 1 "Task cannot be removed while active"）、forceShutdown
+  无 handler 仅告警、bind 占口 start 失败（`#ifndef _WIN32`——
+  Windows SO_REUSEADDR 允许双绑定）、半截 HTTP 头写端关闭连接；
+  `websocket_test.cpp` +8——WS 升级 path 白名单 404、握手 CORS
+  头回显、ping→pong 且 pong 被忽略、坏操作码 1002 close、慢分发
+  +RST 双失败路径（广播命中死 fd + dispatch 返回后应答发送失败，
+  set_shutdown_handler 睡 400ms 滞留会话线程 + SO_LINGER{1,0}
+  RST 关闭；POSIX 须 SIGPIPE SIG_IGN）、Preparing→Downloading
+  通知、进度节流窗口到期恢复推送、引擎移除后通知退化为仅 gid
+  （TwoStageHandler 两阶段门 + set_status 无终态守卫 + remove_
+  finished_tasks）；`json_rpc_storage_test.cpp` +2——unpauseAll
+  的 Paused 收集/恢复落库链、tellWaiting storage 回落并集
+- **gid 长度陷阱（既有测试名字与实际路径不符）**：
+  gid_to_task_id 拒绝 >16 字符——既有用例的
+  "00000000000ffffffc/d"（17-18 字符）命中的是非法 gid 路径而非
+  "合法 gid 无任务"；后者须用 16 字符合法 gid
+  "00000000000000ff"（=TaskId 255）
+- **引擎语义记录**：task_manager worker 层在调 handler->download
+  **之前**已置 Downloading（task_manager.cpp:831）——handler 内
+  再 set_status(Preparing) 即产生 Preparing→Downloading 通知序
+  列；372 行 ##### 为 gcc 行归属伪影（`||` 链指令归属 371 行，
+  探针实证 status 2→1→2 通知发出 + 371/374 计数相等执行序矛盾
+  铁证），与 987 同类
+- 剩余 15 行全部定性：gcc 行归属伪影 ×2（372/987）、OOM 与发
+  送失败注入 ×6（519-520 socket、559-562 listen、816 握手 send、
+  854 PONG send 失败——PING 处理与会话读循环同线程无慢分发等
+  价手段、636 accept EINTR 竞态）、时序竞态 ×2（1435/1460——
+  pause_task/cancel_task 仅在任务消失瞬间可 false）、结构不可
+  达 ×1（1321——add_task 失败恒抛异常走 -32603）、全枚举兜底
+  ×1（153）、多 target 编译水分已排除（json_rpc_server.cpp 仅
+  编进 falcon_daemon_rpc 单 target）
+- **覆盖率（批次 P 收口，批次 C 同款 gcovr 口径）：行 81.4% /
+  函数 94.4% / 分支 45.1%**（批次 O 81.2/94.5/44.5；函数 -0.1
+  为边缘函数计数翻转，行 +0.2/分支 +0.6 为本批净贡献）；全量
+  ctest **1958 = 1947 通过 + 11 设计内 skip，零失败**；新增 21
+  用例 cov + ASan 双绿（daemon RPC 三套件 44 用例 ASan 零告警）
+
+**批次 Q 候选（##### 铁账，多 target OR 合并口径复核后推进）：**
+resource_browser 系 153 / request_group 系 106 / resource_search
+47 / cloud_storage_plugin 55 行存根（方案 A：manager 只读插件
+访问器）/ http_commands 176（TLS 防御与 OOM 为主）。

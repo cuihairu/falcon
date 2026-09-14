@@ -31,6 +31,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <csignal>
 #include <cstring>
 #include <mutex>
 #include <optional>
@@ -285,6 +286,20 @@ public:
         }
     }
 
+    // RST 关闭：SO_LINGER{1,0} + close，不发 FIN——对端下一次 send/recv
+    // 立即得到连接重置，用于模拟客户端崩溃式断连
+    void reset_close() {
+        if (fd_ >= 0) {
+            linger lg{};
+            lg.l_onoff = 1;
+            lg.l_linger = 0;
+            ::setsockopt(fd_, SOL_SOCKET, SO_LINGER,
+                         reinterpret_cast<const char*>(&lg), sizeof(lg));
+            socket_close(fd_);
+            fd_ = -1;
+        }
+    }
+
 private:
     int fd_ = -1;
     std::string handshake_response_;
@@ -318,6 +333,12 @@ public:
     }
 
     void download(DownloadTask::Ptr task, IEventListener* listener) override {
+        if (prepare_first_) {
+            // 先进 Preparing 再 Downloading：驱动 RpcEventBridge 的
+            // Preparing→Downloading 通知分支（与 Pending→Downloading 区分）
+            task->set_status(TaskStatus::Preparing);
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
         task->set_status(TaskStatus::Downloading);
         for (const auto& step : progress_steps_) {
             if (!listener) break;
@@ -349,6 +370,8 @@ public:
         progress_steps_ = std::move(steps);
     }
 
+    void set_prepare_first(bool v) { prepare_first_ = v; }
+
     void release() {
         released_.store(true);
         cv_.notify_all();
@@ -359,6 +382,7 @@ private:
     std::condition_variable cv_;
     std::atomic<bool> released_{false};
     std::vector<ProgressStep> progress_steps_;
+    bool prepare_first_ = false;
 };
 
 struct ServerHarness {
@@ -368,11 +392,12 @@ struct ServerHarness {
 
     explicit ServerHarness(const std::string& secret = "",
                            std::chrono::milliseconds progress_interval =
-                               std::chrono::milliseconds{1000}) {
+                               std::chrono::milliseconds{1000},
+                           bool allow_origin_all = false) {
         cfg.listen_port = 0;
         cfg.bind_address = "127.0.0.1";
         cfg.secret = secret;
-        cfg.allow_origin_all = false;
+        cfg.allow_origin_all = allow_origin_all;
         cfg.progress_push_interval = progress_interval;
         server = std::make_unique<falcon::daemon::rpc::JsonRpcServer>(&engine, cfg);
         server->start();
@@ -391,6 +416,69 @@ bool wait_registered(falcon::daemon::rpc::JsonRpcServer* server, std::size_t n) 
     }
     return server->websocket_client_count() == n;
 }
+
+// 两阶段 handler：第一阶段完成后停在 stage2 门等测试放行，随后以 Paused
+// 收尾——测试在两阶段间隙把任务从引擎移除，驱动「任务已不存在时的通知
+// 退化为仅 gid」分支
+class TwoStageHandler final : public IProtocolHandler {
+public:
+    std::string protocol_name() const override { return "ws_twostage"; }
+    std::vector<std::string> supported_schemes() const override { return {"https"}; }
+    bool can_handle(const std::string& url) const override {
+        return url.rfind("https://", 0) == 0;
+    }
+    FileInfo get_file_info(const std::string& url, const DownloadOptions&) override {
+        FileInfo info;
+        info.url = url;
+        info.filename = "twostage.bin";
+        info.total_size = 1000;
+        info.supports_resume = false;
+        return info;
+    }
+
+    void download(DownloadTask::Ptr task, IEventListener*) override {
+        task->set_status(TaskStatus::Downloading);
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            stage1_.wait_for(lock, std::chrono::seconds(10),
+                             [this] { return stage1_go_.load(); });
+        }
+        // 第一阶段终点：Complete 通知（此时任务仍在引擎）
+        task->set_status(TaskStatus::Completed);
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            stage2_.wait_for(lock, std::chrono::seconds(10),
+                             [this] { return stage2_go_.load(); });
+        }
+        // 第二阶段终点：Pause 通知（此时任务已被引擎移除——
+        // set_status 无终态守卫，保留的 Ptr 仍可触发状态变化）
+        task->set_status(TaskStatus::Paused);
+    }
+
+    void pause(DownloadTask::Ptr task) override { task->set_status(TaskStatus::Paused); }
+    void resume(DownloadTask::Ptr task, IEventListener*) override {
+        task->set_status(TaskStatus::Downloading);
+    }
+    void cancel(DownloadTask::Ptr task) override { task->set_status(TaskStatus::Cancelled); }
+
+    bool supports_resume() const override { return false; }
+
+    void go_stage1() {
+        stage1_go_.store(true);
+        stage1_.notify_all();
+    }
+    void go_stage2() {
+        stage2_go_.store(true);
+        stage2_.notify_all();
+    }
+
+private:
+    std::mutex mutex_;
+    std::condition_variable stage1_;
+    std::condition_variable stage2_;
+    std::atomic<bool> stage1_go_{false};
+    std::atomic<bool> stage2_go_{false};
+};
 
 } // namespace
 
@@ -673,4 +761,188 @@ TEST(WsServerTest, StopWithActiveSubscriberDoesNotHang) {
     EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count(),
               5000);
     EXPECT_EQ(h.server->websocket_client_count(), 0u);
+}
+
+// ===========================================================================
+// Batch P: handshake routing, control-frame handling and failure paths.
+// ===========================================================================
+
+TEST(WsServerTest, WsUpgradeUnknownPathReturns404) {
+    ServerHarness h;
+    WsTestClient client;
+    // path 白名单之外的 WS 升级请求按普通 HTTP 404 拒绝
+    EXPECT_FALSE(client.connect(h.server->port(), "/nope"));
+    EXPECT_NE(client.handshake_response().find("HTTP/1.1 404"), std::string::npos);
+}
+
+TEST(WsServerTest, WsHandshakeEchoesCorsHeaderWhenAllowed) {
+    ServerHarness h("", std::chrono::milliseconds{1000}, true);
+    WsTestClient client;
+    ASSERT_TRUE(client.connect(h.server->port()));
+    EXPECT_NE(client.handshake_response().find("Access-Control-Allow-Origin: *"),
+              std::string::npos);
+}
+
+TEST(WsServerTest, WsPingPongThenPongIgnored) {
+    ServerHarness h;
+    WsTestClient client;
+    ASSERT_TRUE(client.connect(h.server->port()));
+    ASSERT_TRUE(wait_registered(h.server.get(), 1u));
+
+    // ping → 服务器原样回 pong
+    ASSERT_TRUE(client.send_frame(WS_OP_PING, "hb"));
+    auto pong = client.read_frame(5000);
+    ASSERT_TRUE(pong.has_value());
+    EXPECT_EQ(pong->opcode, WS_OP_PONG);
+    EXPECT_EQ(pong->payload, "hb");
+
+    // 服务器方向收到的 pong 被静默忽略（不回帧）
+    ASSERT_TRUE(client.send_frame(WS_OP_PONG, "idle"));
+
+    // 随后的 text RPC 正常应答——连接未被 pong 打断，也未产生多余应答
+    json req = {{"jsonrpc", "2.0"},
+                {"id", 9},
+                {"method", "system.listMethods"},
+                {"params", json::array()}};
+    ASSERT_TRUE(client.send_frame(WS_OP_TEXT, req.dump()));
+    auto resp = client.read_frame(5000);
+    ASSERT_TRUE(resp.has_value());
+    EXPECT_EQ(resp->opcode, WS_OP_TEXT);
+    json parsed = json::parse(resp->payload);
+    EXPECT_EQ(parsed.value("id", 0), 9);
+}
+
+TEST(WsServerTest, WsBadOpcodeFrameClosedWith1002) {
+    ServerHarness h;
+    WsTestClient client;
+    ASSERT_TRUE(client.connect(h.server->port()));
+    ASSERT_TRUE(wait_registered(h.server.get(), 1u));
+
+    // 坏操作码（0x3 保留区间）→ 解析器 error → 协议违规 1002 close
+    ASSERT_TRUE(client.send_frame(0x3, "x"));
+    auto frame = client.read_frame(5000);
+    ASSERT_TRUE(frame.has_value());
+    EXPECT_EQ(frame->opcode, WS_OP_CLOSE);
+    EXPECT_EQ(frame->payload, std::string("\x03\xEA", 2));
+    EXPECT_TRUE(client.closed_by_server(5000));
+}
+
+TEST(WsServerTest, WsBroadcastToRstPeerWhileDispatchSlowShutsSession) {
+#ifndef _WIN32
+    // 服务器对已 RST 的 fd send 会触发 SIGPIPE（无 MSG_NOSIGNAL），先忽略
+    ::signal(SIGPIPE, SIG_IGN);
+#endif
+    ServerHarness h;
+    WsTestClient client;
+    ASSERT_TRUE(client.connect(h.server->port()));
+    ASSERT_TRUE(wait_registered(h.server.get(), 1u));
+
+    // 慢分发：会话线程滞留在 dispatch（forceShutdown 的 handler 睡 400ms），
+    // 其间 RST 掉客户端并广播——广播快照仍含死 fd（发送失败），dispatch
+    // 返回后的应答发送同样失败，两条失败路径都把会话注销
+    h.server->set_shutdown_handler(
+        [] { std::this_thread::sleep_for(std::chrono::milliseconds(400)); });
+
+    json req = {{"jsonrpc", "2.0"},
+                {"id", 1},
+                {"method", "aria2.forceShutdown"},
+                {"params", json::array()}};
+    ASSERT_TRUE(client.send_frame(WS_OP_TEXT, req.dump()));
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    client.reset_close();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    h.server->broadcast_notification("falcon.test", R"([{"gid":"0000000000000042"}])");
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (h.server->websocket_client_count() != 0 &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    EXPECT_EQ(h.server->websocket_client_count(), 0u);
+}
+
+TEST(WsServerTest, WsDownloadStartEmittedFromPreparingTransition) {
+    auto handler = std::make_unique<BlockingHandler>();
+    auto* handler_ptr = handler.get();
+    handler_ptr->set_prepare_first(true);
+    ServerHarness h;
+    h.engine.register_handler(std::move(handler));
+
+    WsTestClient client;
+    ASSERT_TRUE(client.connect(h.server->port()));
+
+    json req = {{"jsonrpc", "2.0"},
+                {"id", 1},
+                {"method", "aria2.addUri"},
+                {"params", json::array({json::array({"https://example.com/prep.bin"})})}};
+    ASSERT_TRUE(client.send_frame(WS_OP_TEXT, req.dump()));
+
+    // Preparing→Downloading 同样触发 onDownloadStart
+    auto start = client.read_notification("aria2.onDownloadStart", 5000);
+    ASSERT_TRUE(start.has_value());
+
+    handler_ptr->release();
+}
+
+TEST(WsServerTest, WsProgressPushResumesAfterThrottleInterval) {
+    auto handler = std::make_unique<BlockingHandler>();
+    auto* handler_ptr = handler.get();
+    // 节流 50ms：第一步推送后睡 120ms（>50ms），第二步应再次推送
+    ServerHarness h("", std::chrono::milliseconds{50});
+    h.engine.register_handler(std::move(handler));
+
+    handler_ptr->set_progress_steps({{0.25f, 250, 120}, {0.50f, 500, 0}});
+
+    WsTestClient client;
+    ASSERT_TRUE(client.connect(h.server->port()));
+
+    json req = {{"jsonrpc", "2.0"},
+                {"id", 1},
+                {"method", "aria2.addUri"},
+                {"params", json::array({json::array({"https://example.com/th.bin"})})}};
+    ASSERT_TRUE(client.send_frame(WS_OP_TEXT, req.dump()));
+
+    auto first = client.read_notification("falcon.onProgress", 5000);
+    ASSERT_TRUE(first.has_value());
+    // 节流窗口到期后恢复推送（时间戳被刷新）
+    auto second = client.read_notification("falcon.onProgress", 5000);
+    ASSERT_TRUE(second.has_value());
+    EXPECT_LT((*first)["params"][0]["progress"].get<float>(),
+              (*second)["params"][0]["progress"].get<float>());
+
+    handler_ptr->release();
+}
+
+TEST(WsServerTest, WsNotificationAfterEngineRemovalDegradesToGidOnly) {
+    auto handler = std::make_unique<TwoStageHandler>();
+    auto* handler_ptr = handler.get();
+    ServerHarness h;
+    h.engine.register_handler(std::move(handler));
+
+    WsTestClient client;
+    ASSERT_TRUE(client.connect(h.server->port()));
+
+    json req = {{"jsonrpc", "2.0"},
+                {"id", 1},
+                {"method", "aria2.addUri"},
+                {"params", json::array({json::array({"https://example.com/two.bin"})})}};
+    ASSERT_TRUE(client.send_frame(WS_OP_TEXT, req.dump()));
+
+    ASSERT_TRUE(client.read_notification("aria2.onDownloadStart", 5000).has_value());
+    handler_ptr->go_stage1();
+
+    // 第一阶段终点：任务仍在引擎，Complete 通知携带完整进度快照
+    auto complete = client.read_notification("aria2.onDownloadComplete", 5000);
+    ASSERT_TRUE(complete.has_value());
+    const std::string gid = (*complete)["params"][0]["gid"];
+    EXPECT_TRUE((*complete)["params"][0].contains("status"));
+    EXPECT_EQ(h.engine.remove_finished_tasks(), std::size_t{1});
+
+    handler_ptr->go_stage2();
+    // 第二阶段终点：任务已不在引擎，Pause 通知退化为仅 gid
+    auto pause = client.read_notification("aria2.onDownloadPause", 5000);
+    ASSERT_TRUE(pause.has_value());
+    EXPECT_EQ((*pause)["params"][0]["gid"], gid);
+    EXPECT_FALSE((*pause)["params"][0].contains("status"));
 }

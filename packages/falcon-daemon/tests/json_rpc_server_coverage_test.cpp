@@ -32,6 +32,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -1315,6 +1316,253 @@ TEST_F(JsonRpcCoverageTest, RemoveDownloadResultUnknownGidIsError) {
     auto parsed = call("aria2.removeDownloadResult", json::array({"00000000000ffffffc"}));
     EXPECT_TRUE(parsed.contains("error")) << parsed.dump();
     EXPECT_EQ(parsed["error"]["code"], 2);
+}
+
+// ===========================================================================
+// Batch P: parameter validation and edge paths across the method dispatch.
+// ===========================================================================
+
+// A handler whose download() blocks until the test releases it, so the task
+// stays Downloading (active) for the duration of an RPC call.
+class HangingHandler final : public falcon::IProtocolHandler {
+public:
+    std::string protocol_name() const override { return "hang"; }
+
+    std::vector<std::string> supported_schemes() const override { return {"hang"}; }
+
+    bool can_handle(const std::string& url) const override {
+        return url.rfind("hang://", 0) == 0;
+    }
+
+    falcon::FileInfo get_file_info(const std::string& url,
+                                   const falcon::DownloadOptions&) override {
+        falcon::FileInfo info;
+        info.url = url;
+        info.filename = "hang.bin";
+        info.total_size = 100;
+        info.supports_resume = true;
+        return info;
+    }
+
+    void download(falcon::DownloadTask::Ptr task, falcon::IEventListener*) override {
+        task->update_progress(50, 100, 0);
+        task->set_status(falcon::TaskStatus::Downloading);
+        std::unique_lock<std::mutex> lock(mutex_);
+        cv_.wait_for(lock, std::chrono::seconds(10),
+                     [this] { return released_.load(); });
+    }
+
+    void pause(falcon::DownloadTask::Ptr task) override {
+        task->set_status(falcon::TaskStatus::Paused);
+    }
+
+    void resume(falcon::DownloadTask::Ptr task, falcon::IEventListener*) override {
+        task->set_status(falcon::TaskStatus::Downloading);
+    }
+
+    void cancel(falcon::DownloadTask::Ptr task) override {
+        task->set_status(falcon::TaskStatus::Cancelled);
+    }
+
+    bool supports_resume() const override { return true; }
+
+    void release() {
+        released_.store(true);
+        cv_.notify_all();
+    }
+
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    std::atomic<bool> released_{false};
+};
+
+// Release the hanging worker and drive the task to a terminal state so the
+// engine can be torn down without a stuck worker thread.
+static void release_and_finish(falcon::DownloadEngine& engine,
+                               HangingHandler& handler, falcon::TaskId id) {
+    handler.release();
+    engine.cancel_task(id);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    for (;;) {
+        auto task = engine.get_task(id);
+        if (!task || task->is_finished()) break;
+        ASSERT_LT(std::chrono::steady_clock::now(), deadline);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+}
+
+static bool wait_for_status(falcon::DownloadEngine& engine, falcon::TaskId id,
+                            falcon::TaskStatus status) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    for (;;) {
+        auto task = engine.get_task(id);
+        if (task && task->status() == status) return true;
+        if (std::chrono::steady_clock::now() >= deadline) return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+}
+
+TEST_F(JsonRpcCoverageTest, ChangePriorityParameterValidation) {
+    start_server();
+    // 形状错误：空对象 / 单元素 / priority 非数值
+    auto parsed = call("aria2.changePriority", json::object());
+    EXPECT_EQ(parsed["error"]["code"], -32602) << parsed.dump();
+    parsed = call("aria2.changePriority", json::array({"00000000000000ff"}));
+    EXPECT_EQ(parsed["error"]["code"], -32602) << parsed.dump();
+    parsed = call("aria2.changePriority", json::array({"00000000000000ff", true}));
+    EXPECT_EQ(parsed["error"]["code"], -32602) << parsed.dump();
+    // gid 非法
+    parsed = call("aria2.changePriority", json::array({"zzz", 1}));
+    EXPECT_EQ(parsed["error"]["code"], -32602) << parsed.dump();
+    // 合法 gid，引擎无任务
+    parsed = call("aria2.changePriority", json::array({"00000000000000ff", 1}));
+    EXPECT_EQ(parsed["error"]["code"], 2) << parsed.dump();
+}
+
+TEST_F(JsonRpcCoverageTest, ChangeGlobalOptionIntegerValue) {
+    start_server();
+    // 整数值形式的 max-concurrent-downloads（字符串形式由既有用例覆盖）
+    auto parsed = call("aria2.changeGlobalOption",
+                       json::array({json{{"max-concurrent-downloads", 6}}}));
+    ASSERT_TRUE(parsed.contains("result")) << parsed.dump();
+    EXPECT_EQ(parsed["result"], "OK");
+    EXPECT_EQ(engine_.get_max_concurrent_tasks(), std::size_t{6});
+}
+
+TEST_F(JsonRpcCoverageTest, TellStatusAndGetFilesParameterValidation) {
+    start_server();
+    auto parsed = call("aria2.tellStatus", json::array());
+    EXPECT_EQ(parsed["error"]["code"], -32602) << parsed.dump();
+    for (const char* method : {"aria2.getFiles", "aria2.getUris", "aria2.getOption"}) {
+        parsed = call(method, json::array());
+        EXPECT_EQ(parsed["error"]["code"], -32602) << method << ": " << parsed.dump();
+    }
+    // 合法 gid 但引擎与 storage 均无记录
+    parsed = call("aria2.getFiles", json::array({"00000000000000ff"}));
+    EXPECT_EQ(parsed["error"]["code"], 2) << parsed.dump();
+}
+
+TEST_F(JsonRpcCoverageTest, PauseFamilyUnknownTaskVariants) {
+    start_server();
+    // 非法 gid
+    for (const char* method : {"aria2.pause", "aria2.forcePause"}) {
+        auto parsed = call(method, json::array({"zzz"}));
+        EXPECT_EQ(parsed["error"]["code"], 2) << method << ": " << parsed.dump();
+    }
+    // 合法 gid 但引擎无任务
+    for (const char* method :
+         {"aria2.pause", "aria2.forcePause", "aria2.unpause", "aria2.remove",
+          "aria2.forceRemove"}) {
+        auto parsed = call(method, json::array({"00000000000000ff"}));
+        EXPECT_EQ(parsed["error"]["code"], 2) << method << ": " << parsed.dump();
+    }
+}
+
+TEST_F(JsonRpcCoverageTest, RemoveDownloadResultParameterAndNeverExisted) {
+    start_server();
+    auto parsed = call("aria2.removeDownloadResult", json::array());
+    EXPECT_EQ(parsed["error"]["code"], -32602) << parsed.dump();
+    // 合法 gid 但引擎与 storage 从未有过该任务
+    parsed = call("aria2.removeDownloadResult", json::array({"00000000000000ff"}));
+    EXPECT_EQ(parsed["error"]["code"], 2) << parsed.dump();
+}
+
+TEST_F(JsonRpcCoverageTest, RemoveDownloadResultCompletedTaskRemoved) {
+    start_server();
+    auto task = engine_.add_task("test://remove-me.bin");
+    ASSERT_NE(task, nullptr);
+    ASSERT_TRUE(engine_.start_task(task->id()));
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!task->is_finished()) {
+        ASSERT_LT(std::chrono::steady_clock::now(), deadline);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    auto parsed = call("aria2.removeDownloadResult", json::array({gid_of(task->id())}));
+    ASSERT_TRUE(parsed.contains("result")) << parsed.dump();
+    EXPECT_EQ(parsed["result"], "OK");
+}
+
+TEST_F(JsonRpcCoverageTest, RemoveDownloadResultActiveTaskRejected) {
+    auto hanging = std::make_unique<HangingHandler>();
+    HangingHandler* handler = hanging.get();
+    engine_.register_handler(std::move(hanging));
+    start_server();
+    auto task = engine_.add_task("hang://active.bin");
+    ASSERT_NE(task, nullptr);
+    ASSERT_TRUE(engine_.start_task(task->id()));
+    ASSERT_TRUE(wait_for_status(engine_, task->id(), falcon::TaskStatus::Downloading));
+
+    auto parsed = call("aria2.removeDownloadResult", json::array({gid_of(task->id())}));
+    ASSERT_TRUE(parsed.contains("error")) << parsed.dump();
+    EXPECT_EQ(parsed["error"]["code"], 1);
+    EXPECT_EQ(parsed["error"]["message"], "Task cannot be removed while active");
+
+    release_and_finish(engine_, *handler, task->id());
+}
+
+TEST_F(JsonRpcCoverageTest, GetOptionEchoesCustomHeaders) {
+    start_server();
+    falcon::DownloadOptions opts;
+    opts.headers["X-Custom-A"] = "1";
+    opts.headers["X-Custom-B"] = "two";
+    auto task = engine_.add_task("test://hdr.bin", opts);
+    ASSERT_NE(task, nullptr);
+    auto parsed = call("aria2.getOption", json::array({gid_of(task->id())}));
+    ASSERT_TRUE(parsed.contains("result")) << parsed.dump();
+    EXPECT_EQ(parsed["result"]["header"]["X-Custom-A"], "1");
+    EXPECT_EQ(parsed["result"]["header"]["X-Custom-B"], "two");
+}
+
+TEST_F(JsonRpcCoverageTest, ForceShutdownWithoutHandlerIgnored) {
+    start_server();
+    auto parsed = call("aria2.forceShutdown", json::array());
+    ASSERT_TRUE(parsed.contains("result")) << parsed.dump();
+    EXPECT_EQ(parsed["result"], "OK");
+    // 无 shutdown handler：仅告警，服务器照常服务
+    parsed = call("system.listMethods", json::array());
+    ASSERT_TRUE(parsed.contains("result")) << parsed.dump();
+    EXPECT_FALSE(parsed["result"].empty());
+}
+
+#ifndef _WIN32
+TEST(JsonRpcLifecycleTest, StartFailsWhenPortAlreadyBound) {
+    int blocker = ::socket(AF_INET, SOCK_STREAM, 0);
+    ASSERT_GE(blocker, 0);
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    ASSERT_EQ(::bind(blocker, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)), 0);
+    ASSERT_EQ(::listen(blocker, 1), 0);
+    socklen_t len = sizeof(addr);
+    ASSERT_EQ(::getsockname(blocker, reinterpret_cast<sockaddr*>(&addr), &len), 0);
+    const uint16_t taken = ntohs(addr.sin_port);
+
+    falcon::DownloadEngine engine;
+    falcon::daemon::rpc::JsonRpcServerConfig cfg;
+    cfg.listen_port = taken;
+    cfg.bind_address = "127.0.0.1";
+    falcon::daemon::rpc::JsonRpcServer server(&engine, cfg);
+    EXPECT_FALSE(server.start());
+    server.stop();
+    ::close(blocker);
+}
+#endif
+
+TEST_F(JsonRpcCoverageTest, TruncatedRequestHeadersCloseConnection) {
+    start_server();
+    ScopedFd fd = connect_loopback(port());
+    ASSERT_GE(fd.fd, 0);
+    // 半截 HTTP 头后写端关闭：请求永不完整，服务器应直接关闭连接
+    const std::string partial = "POST /jsonrpc HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Trunc";
+    ASSERT_TRUE(send_all(fd.fd, partial));
+#ifdef _WIN32
+    ::shutdown(fd.fd, SD_SEND);
+#else
+    ::shutdown(fd.fd, SHUT_WR);
+#endif
+    auto resp = recv_all(fd.fd);
+    ASSERT_TRUE(resp.has_value());
+    EXPECT_TRUE(resp->empty());
 }
 
 } // namespace
