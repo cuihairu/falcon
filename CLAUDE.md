@@ -13,9 +13,15 @@
 - incremental_download.cpp gcov miss **46 → 11**：6 新用例
   （CRLF 行裁剪/零分块两态/未知哈希算法降级/无效远程哈希列表
   回退/Range 短传干净失败/目录读失败）挂 `falcon_protocols_
-  tests`；file_hash.cpp **23 → 12**：未知算法枚举防御（switch
-  无 default → md_type 空 → OpenSSL 对 null 安全）+
+  tests`；file_hash.cpp **23 → 12**：未知算法枚举防御 +
   get_hash_length default
+- **修复 Windows SEH 崩溃（CI 曝光的生产缺陷）**：calculate 的
+  switch 无 default，未知枚举使 md_type=nullptr 直达
+  EVP_get_digestbyname——Linux OpenSSL 防 null 安全返回（本地
+  测试绿，掩盖问题），Windows OpenSSL 解引用 null 崩溃（SEH
+  0xc0000005，run 34892890668 实证）。补 `default: md_type =
+  ""` 走既有获取失败防御路径，两平台一致；损坏的持久化算法字
+  段在 Windows 上原会使 calculate 段错误
 - 剩余定性：EVP 注入防御 ×17、curl OOM ×2、阈值日志 ×1、环境
   不可达 ×4、downloadRange 零尺寸路径（memcpy(dst,nullptr,0)
   UB，记录潜在缺陷不覆盖）

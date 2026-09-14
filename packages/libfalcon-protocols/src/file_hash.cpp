@@ -71,6 +71,10 @@ std::string FileHasher::calculate(const char* data, std::size_t size,
         case HashAlgorithm::SHA1:   md_type = "SHA1"; break;
         case HashAlgorithm::SHA256: md_type = "SHA256"; break;
         case HashAlgorithm::SHA512: md_type = "SHA512"; break;
+        // 未知枚举值（如损坏的持久化字段）：交由 EVP 获取失败防御统一
+        // 拒绝。不能把 nullptr 传给 EVP_get_digestbyname——Linux OpenSSL
+        // 防 null，Windows OpenSSL 会解引用崩溃（CI SEH 0xc0000005 实证）
+        default: md_type = "";
     }
 
     // 使用 OpenSSL 3.0 EVP API

@@ -2165,8 +2165,15 @@ download 46。
   libstdc++ ifstream 对目录 open 即败走早返回，用例保底防回归）
 - file_hash.cpp gcov miss **23 → 12**（宏激活 -7、新用例 -4）：
   2 新用例——未知算法枚举（calculate 的 switch 无 default →
-  md_type 空指针 → EVP 获取失败防御，OpenSSL 对 null 名安全返
-  回非崩溃）+ get_hash_length default 64
+  md_type 空指针）+ get_hash_length default 64
+- **Windows CI 曝光生产缺陷并修复**：未知枚举用例在 Windows 上
+  SEH 0xc0000005 崩溃（run 34892890668）——switch 无 default 使
+  md_type=nullptr 直达 EVP_get_digestbyname；Linux OpenSSL 防
+  null 安全返回（本地绿、掩盖了问题），Windows OpenSSL 解引用
+  null 崩溃。修复：switch 补 `default: md_type = ""`，走既有
+  EVP 获取失败防御路径（file_hash.cpp 85-87，两平台一致）。生
+  产定性：损坏的持久化算法字段在 Windows 上会使 calculate 段错
+  误；新用例在该路径上从"探测"升级为真回归守卫
 - 剩余定性：incremental_download 11 = EVP DigestInit/Update/
   Final 失败 ×6（需 crypto 注入）+ 文件读取错误日志 ×2
   （ifstream 在本环境对目录/无权限文件 open 即败，读中失败无注
