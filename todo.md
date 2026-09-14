@@ -1816,4 +1816,29 @@ on_task_status_changed/on_task_progress 是给引擎适配层的显式注
 **后续批次（真实缺口）：** 下一批按 gcov 全包扫描重新定位（四批
 已收敛 protocols 包三个大头与 core 最大头）。
 
+### 批次 I 预定位（2026-09-14 侦察，待实施）：websocket_rpc_client.cpp 99 miss
+
+全包 gcov `#####` 真实计数排名（gcovr CSV 初筛虚高 2.5-2.7 倍不
+可作依据）：websocket_rpc_client 99 / dht_node 94 / config_manager
+82 / task_storage 81 / cloud_storage_plugin 78 / segment_downloader
+77 / incremental_download 46 / kodo_browser 29 / cos_browser 20 /
+upyun_browser 18 / oss_browser 11 / s3_browser 8 / ftp_browser 2。
+
+批次 I 目标 `websocket_rpc_client.cpp`（641 行）缺口分簇：
+① 便捷方法簇 547-638 **整段零覆盖**——WS 客户端只测过裸 call
+往返，addUri/tell*/pause/... 全部便捷转发从未执行；回环批量调用
+即可一次收口（最大头）；② call 失败路径：466 对象 params 归一、
+507-514 应答超时（config timeout_seconds=1 可测）、494-499 发送
+失败（时机难，可能定性）、520-530 响应防御分支；③ 控制帧
+351-360：ping→pong 回帧、close 帧收尾、binary/pong 忽略——需
+服务器侧注入控制帧（websocket_test.cpp 有帧基建）；④ 握手失败
+簇：252-253 半截头 EOF、263-264 非 101 应答、285-286 错 Accept、
+112 getaddrinfo 失败（.invalid 域）、238-239 握手 send 失败（难
+确定性）；⑤ set_url/parse_url 分支 165-206：自定义 path（服务
+器侧断言请求行）、IPv6 字面量、无端口默认 6800、userinfo 剥除、
+set_url 运行期重定向；⑥ fail_pending 437-442：call 挂起中服务
+器断连 → -32000 唤醒（373 已覆盖而 437-442 未覆盖，疑似行归属
+伪影混合，实测再定）。测试挂 `falcon_daemon_rpc_client_tests`
+（websocket_rpc_client_test.cpp 增量）。
+
 
