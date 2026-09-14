@@ -32,6 +32,7 @@ struct COSUrl {
     std::string region;
     std::string key;
     std::string app_id;
+    std::string endpoint;       // 自定义endpoint（可选，携带scheme时path-style）
 };
 
 /**

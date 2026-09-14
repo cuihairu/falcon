@@ -20,6 +20,7 @@ struct KodoConfig {
     std::string secret_key;
     std::string bucket;          // 存储空间名称
     std::string domain;          // 自定义域名（可选）
+    std::string endpoint;        // 自定义API endpoint（可选，携带scheme时优先于官方rs/rsf域名）
     bool use_https = true;       // 是否使用HTTPS
 };
 

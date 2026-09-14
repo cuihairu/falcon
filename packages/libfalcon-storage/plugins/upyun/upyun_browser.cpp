@@ -72,6 +72,21 @@ public:
     }
 
     std::string build_upyun_url(const std::string& path) {
+        // 自定义 api_domain（携带 scheme，如 Mock/网关）走 path-style：
+        // api_domain/uri；否则官方 bucket.api_domain 虚拟主机
+        if (config_.api_domain.rfind("http://", 0) == 0 ||
+            config_.api_domain.rfind("https://", 0) == 0) {
+            std::string url = config_.api_domain;
+            if (url.back() == '/') {
+                url.pop_back();
+            }
+            if (!path.empty() && path[0] != '/') {
+                url += "/";
+            }
+            url += path;
+            return url;
+        }
+
         // 又拍云REST API URL
         std::string url = "https://" + upyun_url_.bucket + "." + config_.api_domain;
         if (!path.empty()) {
@@ -150,7 +165,9 @@ public:
         const std::string& method,
         const std::string& uri,
         const std::map<std::string, std::string>& headers = {},
-        const std::string& body = "") {
+        const std::string& body = "",
+        std::map<std::string, std::string>* response_headers = nullptr,
+        bool* ok = nullptr) {
 
         std::string url = build_upyun_url(uri);
 
@@ -182,16 +199,29 @@ public:
         }
 
         curl_easy_setopt(curl_, CURLOPT_URL, url.c_str());
-        curl_easy_setopt(curl_, CURLOPT_CUSTOMREQUEST, method.c_str());
-
-        // 设置请求体
-        if (!body.empty()) {
-            curl_easy_setopt(curl_, CURLOPT_POSTFIELDS, body.c_str());
+        if (method == "HEAD") {
+            // CURLOPT_NOBODY 才是真正的 HEAD：CUSTOMREQUEST 只改请求行方法
+            // 字符串、响应仍按 GET 处理，且 handle 复用时残留会覆盖 NOBODY
+            // 的方法切换——二者必须互斥清设
+            curl_easy_setopt(curl_, CURLOPT_NOBODY, 1L);
+            curl_easy_setopt(curl_, CURLOPT_CUSTOMREQUEST, nullptr);
+        } else {
+            curl_easy_setopt(curl_, CURLOPT_NOBODY, 0L);
+            curl_easy_setopt(curl_, CURLOPT_CUSTOMREQUEST, method.c_str());
         }
+
+        // 设置请求体（handle 复用：空 body 请求清除先前残留）
+        curl_easy_setopt(curl_, CURLOPT_POSTFIELDS,
+                         body.empty() ? nullptr : body.c_str());
 
         std::string response;
         curl_easy_setopt(curl_, CURLOPT_WRITEFUNCTION, WriteCallback);
         curl_easy_setopt(curl_, CURLOPT_WRITEDATA, &response);
+
+        // 响应头回传（HEAD 的元数据只在头部）
+        std::map<std::string, std::string> header_map;
+        curl_easy_setopt(curl_, CURLOPT_HEADERFUNCTION, HeaderCallback);
+        curl_easy_setopt(curl_, CURLOPT_HEADERDATA, &header_map);
 
         CURLcode res = curl_easy_perform(curl_);
 
@@ -199,8 +229,25 @@ public:
             curl_slist_free_all(header_list);
         }
 
-        if (res != CURLE_OK) {
-            FALCON_LOG_ERROR_STREAM("Upyun request failed: " << curl_easy_strerror(res));
+        if (response_headers) {
+            *response_headers = std::move(header_map);
+        }
+
+        // HTTP 层失败（4xx/5xx）同样视为请求失败：又拍云建目录/删除成功
+        // 返回 200 + 空 body，成功与否不能只看 body 非空
+        long status = 0;
+        curl_easy_getinfo(curl_, CURLINFO_RESPONSE_CODE, &status);
+        const bool request_ok = (res == CURLE_OK) && status >= 200 && status < 400;
+        if (ok) {
+            *ok = request_ok;
+        }
+
+        if (!request_ok) {
+            if (res != CURLE_OK) {
+                FALCON_LOG_ERROR_STREAM("Upyun request failed: " << curl_easy_strerror(res));
+            } else {
+                FALCON_LOG_ERROR_STREAM("Upyun request failed with HTTP status " << status);
+            }
             return "";
         }
 
@@ -317,6 +364,25 @@ public:
         return size * nmemb;
     }
 
+    static size_t HeaderCallback(void* contents, size_t size, size_t nmemb, void* userp) {
+        auto* headers = static_cast<std::map<std::string, std::string>*>(userp);
+        std::string line(static_cast<char*>(contents), size * nmemb);
+        // 去掉行终止符
+        while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) {
+            line.pop_back();
+        }
+        const auto colon = line.find(':');
+        if (colon != std::string::npos && colon > 0) {
+            std::string key = line.substr(0, colon);
+            std::string value = line.substr(colon + 1);
+            // 值前导空白剔除（HTTP 允许 ": value"）
+            size_t begin = value.find_first_not_of(" \t");
+            value = (begin == std::string::npos) ? "" : value.substr(begin);
+            (*headers)[key] = value;
+        }
+        return size * nmemb;
+    }
+
     CURL* curl_;
     UpyunConfig config_;
     UpyunUrl upyun_url_;
@@ -376,10 +442,11 @@ bool UpyunBrowser::connect(const std::string& url,
     }
 
     // 测试连接
-    std::string response = p_impl_->perform_upyun_request("GET", "/usage/");
+    bool ok = false;
+    p_impl_->perform_upyun_request("GET", "/usage/", {}, "", nullptr, &ok);
 
-    // 又拍云API返回格式为JSON，只要不是空就算成功
-    return !response.empty();
+    // 又拍云API返回格式为JSON，只要请求成功就算连接可用
+    return ok;
 }
 
 void UpyunBrowser::disconnect() {
@@ -468,9 +535,11 @@ std::vector<RemoteResource> UpyunBrowser::list_directory(
         }
     }
 
-    // 递归列出子目录
+    // 递归列出子目录：先快照顶层再遍历——边遍历边向同一 vector 插入
+    // 会因扩容产生悬垂迭代
     if (options.recursive) {
-        for (const auto& res : resources) {
+        std::vector<RemoteResource> top_level = resources;
+        for (const auto& res : top_level) {
             if (res.is_directory() && res.name != "." && res.name != "..") {
                 std::string sub_path = res.path;
                 if (sub_path.back() == '/') {
@@ -499,14 +568,26 @@ RemoteResource UpyunBrowser::get_resource_info(const std::string& path) {
         uri = "/" + uri;
     }
 
-    std::string response = p_impl_->perform_upyun_request("HEAD", uri);
+    // HEAD 无响应体，成功与否看状态码（原条件恒真——对象不存在也报
+    // "存在"）；元数据在响应头里回传
+    std::map<std::string, std::string> response_headers;
+    bool ok = false;
+    p_impl_->perform_upyun_request("HEAD", uri, {}, "", &response_headers, &ok);
 
-    if (!response.empty() || response != "error") {
+    if (ok) {
         info.path = path;
         info.name = path.substr(path.find_last_of('/') + 1);
         info.type = ResourceType::File;
 
-        // HEAD请求的响应在headers中，这里简化处理
+        auto content_length = response_headers.find("Content-Length");
+        if (content_length != response_headers.end()) {
+            info.size = std::stoull(content_length->second);
+        }
+
+        auto last_modified = response_headers.find("Last-Modified");
+        if (last_modified != response_headers.end()) {
+            info.modified_time = last_modified->second;
+        }
     }
 
     return info;
@@ -525,9 +606,11 @@ bool UpyunBrowser::create_directory(const std::string& path, bool recursive) {
     std::map<std::string, std::string> headers;
     headers["folder"] = "true";
 
-    std::string response = p_impl_->perform_upyun_request("POST", uri, headers);
+    // 又拍云建目录成功返回 200 + 空 body，按请求结果判定
+    bool ok = false;
+    p_impl_->perform_upyun_request("POST", uri, headers, "", nullptr, &ok);
 
-    return !response.empty();
+    return ok;
 }
 
 bool UpyunBrowser::remove(const std::string& path, bool recursive) {
@@ -550,16 +633,19 @@ bool UpyunBrowser::remove(const std::string& path, bool recursive) {
 
         for (const auto& res : resources) {
             if (!res.is_directory()) {
-                std::string obj_uri = "/" + res.path;
+                // 列举路径可能已带前导 '/'（子目录列举），避免拼出 "//"
+                std::string obj_uri = res.path[0] == '/' ? res.path : "/" + res.path;
                 p_impl_->perform_upyun_request("DELETE", obj_uri);
             }
         }
     }
 
-    // 删除指定路径
-    std::string response = p_impl_->perform_upyun_request("DELETE", uri);
+    // 删除指定路径（不存在的对象按又拍云语义仍算成功，网络/权限失败如实
+    // 返回 false）
+    bool ok = false;
+    p_impl_->perform_upyun_request("DELETE", uri, {}, "", nullptr, &ok);
 
-    return !response.empty();
+    return ok;
 }
 
 bool UpyunBrowser::rename(const std::string& old_path, const std::string& new_path) {
@@ -579,9 +665,10 @@ bool UpyunBrowser::copy(const std::string& source_path, const std::string& dest_
     std::map<std::string, std::string> headers;
     headers["x-upyun-copy-source"] = "/" + p_impl_->upyun_url_.bucket + "/" + source_path;
 
-    std::string response = p_impl_->perform_upyun_request("PUT", uri, headers);
+    bool ok = false;
+    p_impl_->perform_upyun_request("PUT", uri, headers, "", nullptr, &ok);
 
-    return !response.empty();
+    return ok;
 }
 
 bool UpyunBrowser::exists(const std::string& path) {

@@ -65,6 +65,10 @@ if(FALCON_ENABLE_RESOURCE_BROWSER)
     if(OPENSSL_FOUND AND TARGET OpenSSL::Crypto)
         target_sources(falcon_storage_tests PRIVATE
             unit/resource_cloud_browsers_test.cpp
+            unit/oss_browser_mock_test.cpp
+            unit/cos_browser_mock_test.cpp
+            unit/kodo_browser_mock_test.cpp
+            unit/upyun_browser_mock_test.cpp
         )
     endif()
 

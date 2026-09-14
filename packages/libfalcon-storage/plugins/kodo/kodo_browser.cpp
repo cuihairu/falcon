@@ -81,6 +81,20 @@ public:
     }
 
     std::string build_api_url(const std::string& path) {
+        // 自定义 endpoint（携带 scheme，如 Mock/私有化网关）优先于官方域名；
+        // rs/rsf 两个 API 由路径区分，共用同一 endpoint
+        if (config_.endpoint.rfind("http://", 0) == 0 ||
+            config_.endpoint.rfind("https://", 0) == 0) {
+            std::string url = config_.endpoint;
+            if (url.back() == '/') {
+                url.pop_back();
+            }
+            if (!path.empty()) {
+                url += path[0] == '/' ? path : "/" + path;
+            }
+            return url;
+        }
+
         // 七牛API基础URL
         std::string url = config_.use_https ? "https://" : "http://";
         url += "rs.qbox.me";
@@ -96,6 +110,19 @@ public:
     }
 
     std::string build_rsf_url(const std::string& path) {
+        // 自定义 endpoint 优先（同 build_api_url）
+        if (config_.endpoint.rfind("http://", 0) == 0 ||
+            config_.endpoint.rfind("https://", 0) == 0) {
+            std::string url = config_.endpoint;
+            if (url.back() == '/') {
+                url.pop_back();
+            }
+            if (!path.empty()) {
+                url += path[0] == '/' ? path : "/" + path;
+            }
+            return url;
+        }
+
         // 七牛RSF API基础URL（用于列举）
         std::string url = config_.use_https ? "https://" : "http://";
         url += "rsf.qbox.me";
@@ -117,6 +144,9 @@ public:
             return "";
         }
         BIO* b64 = BIO_new(BIO_f_base64());
+        // 输出不含换行（默认会在尾部追加 '\n'，拼进 URL 后 curl 报
+        // "bad/illegal format"，连接探测从未成功过）
+        BIO_set_flags(b64, BIO_FLAGS_BASE64_NO_NL);
         BIO* bmem = BIO_new(BIO_s_mem());
         b64 = BIO_push(b64, bmem);
         BIO_write(b64, str.c_str(), static_cast<int>(str.length()));
@@ -183,7 +213,9 @@ public:
         const std::string& method,
         const std::string& url,
         const std::string& body = "",
-        bool /*is_rsf*/ = false) {
+        bool /*is_rsf*/ = false,
+        std::map<std::string, std::string>* response_headers = nullptr,
+        bool* ok = nullptr) {
 
         curl_easy_setopt(curl_, CURLOPT_URL, url.c_str());
         curl_easy_setopt(curl_, CURLOPT_CUSTOMREQUEST, method.c_str());
@@ -201,14 +233,18 @@ public:
             curl_easy_setopt(curl_, CURLOPT_HTTPHEADER, header_list);
         }
 
-        // 设置请求体
-        if (!body.empty()) {
-            curl_easy_setopt(curl_, CURLOPT_POSTFIELDS, body.c_str());
-        }
+        // 设置请求体（handle 复用：空 body 请求清除先前残留）
+        curl_easy_setopt(curl_, CURLOPT_POSTFIELDS,
+                         body.empty() ? nullptr : body.c_str());
 
         std::string response;
         curl_easy_setopt(curl_, CURLOPT_WRITEFUNCTION, WriteCallback);
         curl_easy_setopt(curl_, CURLOPT_WRITEDATA, &response);
+
+        // 响应头回传
+        std::map<std::string, std::string> header_map;
+        curl_easy_setopt(curl_, CURLOPT_HEADERFUNCTION, HeaderCallback);
+        curl_easy_setopt(curl_, CURLOPT_HEADERDATA, &header_map);
 
         CURLcode res = curl_easy_perform(curl_);
 
@@ -216,8 +252,25 @@ public:
             curl_slist_free_all(header_list);
         }
 
-        if (res != CURLE_OK) {
-            FALCON_LOG_ERROR_STREAM("Kodo request failed: " << curl_easy_strerror(res));
+        if (response_headers) {
+            *response_headers = std::move(header_map);
+        }
+
+        // HTTP 层失败（4xx/5xx）同样视为请求失败：七牛删除/复制成功返回
+        // 200 + 空 body，成功与否不能只看 body 非空
+        long status = 0;
+        curl_easy_getinfo(curl_, CURLINFO_RESPONSE_CODE, &status);
+        const bool request_ok = (res == CURLE_OK) && status >= 200 && status < 400;
+        if (ok) {
+            *ok = request_ok;
+        }
+
+        if (!request_ok) {
+            if (res != CURLE_OK) {
+                FALCON_LOG_ERROR_STREAM("Kodo request failed: " << curl_easy_strerror(res));
+            } else {
+                FALCON_LOG_ERROR_STREAM("Kodo request failed with HTTP status " << status);
+            }
             return "";
         }
 
@@ -324,6 +377,25 @@ public:
         return size * nmemb;
     }
 
+    static size_t HeaderCallback(void* contents, size_t size, size_t nmemb, void* userp) {
+        auto* headers = static_cast<std::map<std::string, std::string>*>(userp);
+        std::string line(static_cast<char*>(contents), size * nmemb);
+        // 去掉行终止符
+        while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) {
+            line.pop_back();
+        }
+        const auto colon = line.find(':');
+        if (colon != std::string::npos && colon > 0) {
+            std::string key = line.substr(0, colon);
+            std::string value = line.substr(colon + 1);
+            // 值前导空白剔除（HTTP 允许 ": value"）
+            size_t begin = value.find_first_not_of(" \t");
+            value = (begin == std::string::npos) ? "" : value.substr(begin);
+            (*headers)[key] = value;
+        }
+        return size * nmemb;
+    }
+
     CURL* curl_;
     KodoConfig config_;
     KodoUrl kodo_url_;
@@ -375,13 +447,19 @@ bool KodoBrowser::connect(const std::string& url,
         p_impl_->config_.use_https = (it->second == "true" || it->second == "1");
     }
 
+    it = options.find("endpoint");
+    if (it != options.end()) {
+        p_impl_->config_.endpoint = it->second;
+    }
+
     // 测试连接
     std::string test_url = p_impl_->build_api_url("stat/" +
         p_impl_->encode_base64_url(p_impl_->kodo_url_.bucket + ":test"));
-    std::string response = p_impl_->perform_kodo_request("GET", test_url);
+    bool ok = false;
+    p_impl_->perform_kodo_request("GET", test_url, "", false, nullptr, &ok);
 
-    // 七牛API即使对象不存在也返回JSON，所以只要不是空就算成功
-    return !response.empty();
+    // 七牛API即使对象不存在也返回JSON，所以只要请求成功就算连接可用
+    return ok;
 }
 
 void KodoBrowser::disconnect() {
@@ -417,9 +495,10 @@ std::vector<RemoteResource> KodoBrowser::list_directory(
     }
 
     std::string body = request_body.dump();
-    std::string response = p_impl_->perform_kodo_request("POST", list_url, body, true);
+    bool ok = false;
+    std::string response = p_impl_->perform_kodo_request("POST", list_url, body, true, nullptr, &ok);
 
-    if (response.empty()) {
+    if (!ok) {
         FALCON_LOG_ERROR_STREAM("Failed to list Kodo directory");
         return resources;
     }
@@ -438,23 +517,28 @@ std::vector<RemoteResource> KodoBrowser::list_directory(
             }
         }
 
-        // 处理目录（需要根据key的/分隔符判断）
+        // 处理目录（需要根据key的/分隔符判断）：先收集再插入——
+        // 边遍历边向同一 vector 插入会因扩容/位移产生悬垂迭代
         if (options.recursive) {
-            std::map<std::string, bool> directories;
+            std::vector<std::string> dir_names;
+            std::map<std::string, bool> seen;
             for (const auto& res : resources) {
                 size_t slash_pos = res.path.find('/');
                 if (slash_pos != std::string::npos && slash_pos > 0) {
                     std::string dir_name = res.path.substr(0, slash_pos);
-                    if (directories.find(dir_name) == directories.end()) {
-                        RemoteResource dir_res;
-                        dir_res.name = dir_name;
-                        dir_res.path = dir_name;
-                        dir_res.type = ResourceType::Directory;
-                        if (p_impl_->apply_filter(dir_res, options)) {
-                            resources.insert(resources.begin(), dir_res);
-                        }
-                        directories[dir_name] = true;
+                    if (seen.find(dir_name) == seen.end()) {
+                        seen[dir_name] = true;
+                        dir_names.push_back(dir_name);
                     }
+                }
+            }
+            for (const auto& dir_name : dir_names) {
+                RemoteResource dir_res;
+                dir_res.name = dir_name;
+                dir_res.path = dir_name;
+                dir_res.type = ResourceType::Directory;
+                if (p_impl_->apply_filter(dir_res, options)) {
+                    resources.insert(resources.begin(), dir_res);
                 }
             }
         }
@@ -477,9 +561,10 @@ RemoteResource KodoBrowser::get_resource_info(const std::string& path) {
     std::string entry = p_impl_->kodo_url_.bucket + ":" + path;
     std::string entry_encoded = p_impl_->encode_base64_url(entry);
     std::string url = p_impl_->build_api_url("stat/" + entry_encoded);
-    std::string response = p_impl_->perform_kodo_request("GET", url);
+    bool ok = false;
+    std::string response = p_impl_->perform_kodo_request("GET", url, "", false, nullptr, &ok);
 
-    if (!response.empty()) {
+    if (ok) {
         info.path = path;
         info.name = path.substr(path.find_last_of('/') + 1);
         info.type = ResourceType::File;
@@ -528,9 +613,11 @@ bool KodoBrowser::create_directory(const std::string& path, bool recursive) {
 
     // 七牛需要生成上传token，这里简化处理
     std::string body = request_body.dump();
-    std::string response = p_impl_->perform_kodo_request("POST", url, body, true);
+    // 七牛建目录成功返回 200 + 空 body，按请求结果判定
+    bool ok = false;
+    p_impl_->perform_kodo_request("POST", url, body, true, nullptr, &ok);
 
-    return !response.empty();
+    return ok;
 }
 
 bool KodoBrowser::remove(const std::string& path, bool recursive) {
@@ -560,9 +647,11 @@ bool KodoBrowser::remove(const std::string& path, bool recursive) {
         {"key", path}
     };
     std::string body = delete_body.dump();
-    std::string response = p_impl_->perform_kodo_request("POST", url, body);
+    // 删除成功返回 200 + 空 body，按请求结果判定
+    bool ok = false;
+    p_impl_->perform_kodo_request("POST", url, body, false, nullptr, &ok);
 
-    return !response.empty();
+    return ok;
 }
 
 bool KodoBrowser::rename(const std::string& old_path, const std::string& new_path) {
@@ -585,9 +674,10 @@ bool KodoBrowser::copy(const std::string& source_path, const std::string& dest_p
     };
 
     std::string body = copy_body.dump();
-    std::string response = p_impl_->perform_kodo_request("POST", url, body);
+    bool ok = false;
+    p_impl_->perform_kodo_request("POST", url, body, false, nullptr, &ok);
 
-    return !response.empty();
+    return ok;
 }
 
 bool KodoBrowser::exists(const std::string& path) {

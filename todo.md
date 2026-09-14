@@ -1435,4 +1435,39 @@ feature 候选：
   bittorrent_plugin 195
 - logger.hpp 417 miss 为 gcc 15 行号漂移的测量伪影，非真实缺口
 
+### 2026-09-14 覆盖率专项续（四云 browser endpoint 改造 + mock 测试）
+
+**OSS/COS/Kodo/Upyun 四浏览器 endpoint 改造 + 缺陷修复：**
+- endpoint（OSS/COS/Kodo）/api_domain（Upyun）携带 scheme 时优先
+  生效 path-style `endpoint[/bucket[-app_id]]/key`，否则官方
+  virtual-host；四个 browser 的 endpoint 配置此前全链路零消费
+- query_string 从未拼到请求 URL（只进签名）——列举的 prefix/
+  max-keys 从未真正发到服务端（OSS/COS）
+- 递归列举边遍历边向同一 vector 插入（Kodo 目录合成、Upyun 子
+  目录列举）——先收集/快照再插入
+- Upyun 递归删除双斜杠：子目录列举 path 已带前导 '/' 再拼 "/"
+  产生 "//"
+- get_resource_info 恒真条件（对象不存在也报"存在"）——改按
+  状态码 ok 化
+- 全套 curl 修复与 S3 模板对齐：真 HEAD（NOBODY 与 CUSTOMREQUEST
+  互斥清设）、POSTFIELDS 恒设（handle 复用残留）、HEADERFUNCTION
+  响应头回传、状态码成功判定 + ok 出参；encode_key 逐段编码保留 '/'
+
+**mock 测试首跑即曝光的三个额外真实缺陷：**
+- COS/OSS 签名 URI 提取用 `find('/')+bucket.length()+N` 偏移算术
+  ——host/port 长度不同即把 authority 片段混进规范资源（签名恒
+  错），COS 端口个位数时 substr 越界抛 out_of_range；改为 scheme
+  后定位 path
+- COS 签名 canonical 头键小写化后 `all_headers.at(小写键)` 查原
+  大小写 map——带大写键头（Content-Type）的请求必抛 map::at
+  （建目录从未成功过）；改为插入时统一小写
+- Kodo base64url（OpenSSL BIO）输出带尾部 '\n' 拼进 URL——curl
+  报 "bad/illegal format"，stat 探测从未成功过；改
+  BIO_FLAGS_BASE64_NO_NL
+
+**新增 59 用例（oss/cos/kodo/upyun_browser_mock_test.cpp，共享
+mock_http_server.hpp；新增防 RST 排空——POST 带请求体未读即
+close 会以 RST 收场吞掉刚写出的响应）：**
+- 全量 ctest 1701 用例通过，ASan 下五 browser 套件 81 用例零告警
+
 

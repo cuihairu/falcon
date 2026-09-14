@@ -11,29 +11,14 @@
  * 服务器监听 INADDR_ANY、绑定随机端口，离线可运行。
  */
 
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <winsock2.h>
-#include <windows.h>
-#define CLOSE_SOCKET(fd) closesocket(fd)
-#else
-#include <unistd.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#define CLOSE_SOCKET(fd) close(fd)
-#endif
-
 #include <falcon/storage/s3_browser.hpp>
 
 #include <gtest/gtest.h>
 
-#include <atomic>
-#include <cstring>
-#include <mutex>
+#include "mock_http_server.hpp"
+
+#include <map>
 #include <string>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -41,145 +26,8 @@ using namespace falcon;
 
 namespace {
 
-/// S3 兼容 mock 服务器：一连接一请求，应答由编程式 handler 决定
-class MockS3Server {
-public:
-    struct Response {
-        int status = 200;
-        std::string body = "ok";
-        std::map<std::string, std::string> headers;  // 额外响应头
-    };
-    using Handler = std::function<Response(const std::string& method,
-                                           const std::string& path)>;
-
-    explicit MockS3Server(Handler handler) : handler_(std::move(handler)) {}
-    ~MockS3Server() { stop(); }
-
-    bool start() {
-#ifdef _WIN32
-        WSADATA data{};
-        WSAStartup(MAKEWORD(2, 2), &data);
-#endif
-        listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
-        if (listen_fd_ < 0) return false;
-
-        sockaddr_in addr{};
-        addr.sin_family = AF_INET;
-        addr.sin_port = 0;
-        addr.sin_addr.s_addr = htonl(INADDR_ANY);
-        if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 ||
-            ::listen(listen_fd_, 8) != 0) {
-            CLOSE_SOCKET(listen_fd_);
-            listen_fd_ = -1;
-            return false;
-        }
-
-        sockaddr_in bound{};
-#ifdef _WIN32
-        int len = sizeof(bound);
-#else
-        socklen_t len = sizeof(bound);
-#endif
-        if (::getsockname(listen_fd_, reinterpret_cast<sockaddr*>(&bound), &len) != 0) {
-            stop();
-            return false;
-        }
-        port_ = ntohs(bound.sin_port);
-
-        running_ = true;
-        accept_thread_ = std::thread([this] { accept_loop(); });
-        return true;
-    }
-
-    void stop() {
-        if (!running_.exchange(false)) {
-            return;
-        }
-        if (listen_fd_ >= 0) {
-            // shutdown 唤醒阻塞在 accept 的线程（close 不会）
-#ifdef _WIN32
-            ::shutdown(listen_fd_, SD_BOTH);
-#else
-            ::shutdown(listen_fd_, SHUT_RDWR);
-#endif
-            CLOSE_SOCKET(listen_fd_);
-            listen_fd_ = -1;
-        }
-        if (accept_thread_.joinable()) {
-            accept_thread_.join();
-        }
-    }
-
-    std::string base_url() const { return "http://127.0.0.1:" + std::to_string(port_); }
-
-    std::vector<std::pair<std::string, std::string>> requests() const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return requests_;
-    }
-
-private:
-    void accept_loop() {
-        while (running_.load()) {
-            int client = ::accept(listen_fd_, nullptr, nullptr);
-            if (client < 0) {
-                return;  // listen fd 已关闭（stop）
-            }
-            handle_connection(client);
-            CLOSE_SOCKET(client);
-        }
-    }
-
-    void handle_connection(int client) {
-        // 读到请求头结束（curl 请求均无请求体）
-        std::string request;
-        char buf[4096];
-        while (request.find("\r\n\r\n") == std::string::npos) {
-            int n = static_cast<int>(::recv(client, buf, sizeof(buf), 0));
-            if (n <= 0) return;
-            request.append(buf, static_cast<size_t>(n));
-            if (request.size() > 64 * 1024) return;
-        }
-
-        // 请求行：METHOD SP PATH SP VERSION
-        const std::string line = request.substr(0, request.find("\r\n"));
-        const auto sp1 = line.find(' ');
-        const auto sp2 = line.find(' ', sp1 + 1);
-        if (sp1 == std::string::npos || sp2 == std::string::npos) return;
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            requests_.emplace_back(line.substr(0, sp1), line.substr(sp1 + 1, sp2 - sp1 - 1));
-        }
-
-        const Response resp = handler_(line.substr(0, sp1),
-                                       line.substr(sp1 + 1, sp2 - sp1 - 1));
-        // 自定义头与固定头冲突时（如 HEAD 用例自定 Content-Length）以自定义为准，
-        // 重复且不一致的 Content-Length 会被 curl 拒绝（Weird server reply）
-        const bool has_cl = resp.headers.count("Content-Length") > 0;
-        const bool has_ct = resp.headers.count("Content-Type") > 0;
-        std::string raw = "HTTP/1.1 " + std::to_string(resp.status) +
-                          (resp.status < 400 ? " OK" : " Error") + "\r\n";
-        if (!has_ct) {
-            raw += "Content-Type: application/json\r\n";
-        }
-        if (!has_cl) {
-            raw += "Content-Length: " + std::to_string(resp.body.size()) + "\r\n";
-        }
-        raw += "Connection: close\r\n";
-        for (const auto& [k, v] : resp.headers) {
-            raw += k + ": " + v + "\r\n";
-        }
-        raw += "\r\n" + resp.body;
-        ::send(client, raw.c_str(), raw.size(), 0);
-    }
-
-    Handler handler_;
-    int listen_fd_ = -1;
-    uint16_t port_ = 0;
-    std::atomic<bool> running_{false};
-    std::thread accept_thread_;
-    mutable std::mutex mutex_;
-    std::vector<std::pair<std::string, std::string>> requests_;
-};
+/// S3 兼容 mock：复用共享 MockHttpServer（一连接一请求 + 编程式应答）
+using MockS3Server = MockHttpServer;
 
 const char* kBucket = "testbucket";
 

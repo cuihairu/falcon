@@ -90,11 +90,44 @@ public:
     }
 
     std::string build_oss_url(const std::string& bucket, const std::string& key = "") {
+        // 自定义 endpoint（携带 scheme，如 S3 兼容网关/私有化部署/Mock）走
+        // path-style：endpoint/bucket/key；否则官方 virtual-host 域名
+        if (oss_url_.endpoint.rfind("http://", 0) == 0 ||
+            oss_url_.endpoint.rfind("https://", 0) == 0) {
+            std::string url = oss_url_.endpoint;
+            if (url.back() == '/') {
+                url.pop_back();
+            }
+            url += "/" + bucket;
+            if (!key.empty()) {
+                url += "/" + encode_key(key);
+            }
+            return url;
+        }
         std::string url = "https://" + bucket + "." + oss_url_.endpoint;
         if (!key.empty()) {
-            url += "/" + url_encode(key);
+            url += "/" + encode_key(key);
         }
         return url;
+    }
+
+    /// 对象 key 编码：逐段编码、保留 '/'（url_encode 会把 '/' 编成 %2F，
+    /// 导致子目录 key 的对象在真实服务上必然 404）
+    std::string encode_key(const std::string& key) {
+        std::string out;
+        size_t start = 0;
+        while (true) {
+            size_t slash = key.find('/', start);
+            out += url_encode(key.substr(start, slash == std::string::npos
+                                                   ? std::string::npos
+                                                   : slash - start));
+            if (slash == std::string::npos) {
+                break;
+            }
+            out += '/';
+            start = slash + 1;
+        }
+        return out;
     }
 
     std::string generate_signature(const std::string& method, const std::string& uri,
@@ -147,10 +180,28 @@ public:
         const std::string& url,
         const std::map<std::string, std::string>& headers = {},
         const std::string& query_string = "",
-        const std::string& body = "") {
+        const std::string& body = "",
+        std::map<std::string, std::string>* response_headers = nullptr,
+        bool* ok = nullptr) {
 
-        curl_easy_setopt(curl_, CURLOPT_URL, url.c_str());
-        curl_easy_setopt(curl_, CURLOPT_CUSTOMREQUEST, method.c_str());
+        // 列举等请求的查询串此前从未拼到 URL 上（只进了签名）——prefix/
+        // max-keys 等参数从未真正发到服务端；统一在此追加
+        std::string full_url = url;
+        if (!query_string.empty()) {
+            full_url += (full_url.find('?') == std::string::npos ? "?" : "&") + query_string;
+        }
+
+        curl_easy_setopt(curl_, CURLOPT_URL, full_url.c_str());
+        if (method == "HEAD") {
+            // CURLOPT_NOBODY 才是真正的 HEAD：CUSTOMREQUEST 只改请求行方法
+            // 字符串、响应仍按 GET 处理，且 handle 复用时残留会覆盖 NOBODY
+            // 的方法切换——二者必须互斥清设
+            curl_easy_setopt(curl_, CURLOPT_NOBODY, 1L);
+            curl_easy_setopt(curl_, CURLOPT_CUSTOMREQUEST, nullptr);
+        } else {
+            curl_easy_setopt(curl_, CURLOPT_NOBODY, 0L);
+            curl_easy_setopt(curl_, CURLOPT_CUSTOMREQUEST, method.c_str());
+        }
 
         // 准备请求头
         std::map<std::string, std::string> request_headers = headers;
@@ -160,8 +211,17 @@ public:
         request_headers["Date"] = date;
         request_headers["Host"] = get_host_from_url(url);
 
-        // 生成签名
-        std::string uri = url.substr(url.find('/') + oss_url_.bucket.length() + 1);
+        // 生成签名（取 URL 的 path 部分参与签名——原 find('/')+bucket
+        // 偏移算术假设固定布局，host/port 长度不同即把 authority 片段
+        // 混进规范资源，签名恒错）
+        size_t scheme_end = url.find("://");
+        size_t path_start =
+            scheme_end == std::string::npos ? std::string::npos : url.find('/', scheme_end + 3);
+        std::string uri = path_start == std::string::npos ? "/" : url.substr(path_start);
+        // 虚拟主机域名下 path 不含 bucket，规范资源须以 /bucket 开头
+        if (uri.rfind("/" + oss_url_.bucket, 0) != 0) {
+            uri = "/" + oss_url_.bucket + uri;
+        }
         std::string signature = generate_signature(method, uri, request_headers, query_string);
         request_headers["Authorization"] = "OSS " + config_.access_key_id + ":" + signature;
 
@@ -176,14 +236,18 @@ public:
             curl_easy_setopt(curl_, CURLOPT_HTTPHEADER, header_list);
         }
 
-        // 设置请求体
-        if (!body.empty()) {
-            curl_easy_setopt(curl_, CURLOPT_POSTFIELDS, body.c_str());
-        }
+        // 设置请求体（handle 复用：空 body 请求清除先前残留）
+        curl_easy_setopt(curl_, CURLOPT_POSTFIELDS,
+                         body.empty() ? nullptr : body.c_str());
 
         std::string response;
         curl_easy_setopt(curl_, CURLOPT_WRITEFUNCTION, WriteCallback);
         curl_easy_setopt(curl_, CURLOPT_WRITEDATA, &response);
+
+        // 响应头回传（HEAD 的元数据只在头部）
+        std::map<std::string, std::string> header_map;
+        curl_easy_setopt(curl_, CURLOPT_HEADERFUNCTION, HeaderCallback);
+        curl_easy_setopt(curl_, CURLOPT_HEADERDATA, &header_map);
 
         CURLcode res = curl_easy_perform(curl_);
 
@@ -191,8 +255,25 @@ public:
             curl_slist_free_all(header_list);
         }
 
-        if (res != CURLE_OK) {
-            FALCON_LOG_ERROR_STREAM("OSS request failed: " << curl_easy_strerror(res));
+        if (response_headers) {
+            *response_headers = std::move(header_map);
+        }
+
+        // HTTP 层失败（4xx/5xx）同样视为请求失败：成功与否不能只看传输
+        // 结果，OSS 用状态码表达对象不存在/权限不足等业务错误
+        long status = 0;
+        curl_easy_getinfo(curl_, CURLINFO_RESPONSE_CODE, &status);
+        const bool request_ok = (res == CURLE_OK) && status >= 200 && status < 400;
+        if (ok) {
+            *ok = request_ok;
+        }
+
+        if (!request_ok) {
+            if (res != CURLE_OK) {
+                FALCON_LOG_ERROR_STREAM("OSS request failed: " << curl_easy_strerror(res));
+            } else {
+                FALCON_LOG_ERROR_STREAM("OSS request failed with HTTP status " << status);
+            }
             return "";
         }
 
@@ -340,6 +421,25 @@ public:
         return size * nmemb;
     }
 
+    static size_t HeaderCallback(void* contents, size_t size, size_t nmemb, void* userp) {
+        auto* headers = static_cast<std::map<std::string, std::string>*>(userp);
+        std::string line(static_cast<char*>(contents), size * nmemb);
+        // 去掉行终止符
+        while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) {
+            line.pop_back();
+        }
+        const auto colon = line.find(':');
+        if (colon != std::string::npos && colon > 0) {
+            std::string key = line.substr(0, colon);
+            std::string value = line.substr(colon + 1);
+            // 值前导空白剔除（HTTP 允许 ": value"）
+            size_t begin = value.find_first_not_of(" \t");
+            value = (begin == std::string::npos) ? "" : value.substr(begin);
+            (*headers)[key] = value;
+        }
+        return size * nmemb;
+    }
+
     CURL* curl_;
     OSSConfig config_;
     OSSUrl oss_url_;
@@ -402,9 +502,10 @@ bool OSSBrowser::connect(const std::string& url,
 
     // 测试连接
     std::string test_url = p_impl_->build_oss_url(p_impl_->oss_url_.bucket) + "?max-keys=1";
-    std::string response = p_impl_->perform_oss_request("GET", test_url);
+    bool ok = false;
+    p_impl_->perform_oss_request("GET", test_url, {}, "", "", nullptr, &ok);
 
-    return !response.empty();
+    return ok;
 }
 
 void OSSBrowser::disconnect() {
@@ -487,16 +588,37 @@ RemoteResource OSSBrowser::get_resource_info(const std::string& path) {
 
     // 使用HEAD请求获取对象信息
     std::string url = p_impl_->build_oss_url(p_impl_->oss_url_.bucket, path);
-    std::string response = p_impl_->perform_oss_request("HEAD", url);
 
-    if (!response.empty() || response != "error") {
-        // 解析响应头获取信息
+    // HEAD 无响应体，成功与否看状态码（原条件 `!response.empty() ||
+    // response != "error"` 恒真——对象不存在也报"存在"）；元数据在响应头里回传
+    std::map<std::string, std::string> response_headers;
+    bool ok = false;
+    p_impl_->perform_oss_request("HEAD", url, {}, "", "", &response_headers, &ok);
+
+    if (ok) {
         info.path = path;
         info.name = path.substr(path.find_last_of('/') + 1);
         info.type = ResourceType::File;
 
-        // 从响应头提取信息需要通过curl获取
-        // 这里简化处理
+        auto content_length = response_headers.find("Content-Length");
+        if (content_length != response_headers.end()) {
+            info.size = std::stoull(content_length->second);
+        }
+
+        auto last_modified = response_headers.find("Last-Modified");
+        if (last_modified != response_headers.end()) {
+            info.modified_time = last_modified->second;
+        }
+
+        auto etag = response_headers.find("ETag");
+        if (etag != response_headers.end()) {
+            info.etag = etag->second;
+        }
+
+        auto content_type = response_headers.find("Content-Type");
+        if (content_type != response_headers.end()) {
+            info.mime_type = content_type->second;
+        }
     }
 
     return info;
@@ -514,9 +636,11 @@ bool OSSBrowser::create_directory(const std::string& path, [[maybe_unused]] bool
     headers["Content-Type"] = "application/x-directory";
     headers["x-oss-meta-type"] = "directory";
 
-    std::string response = p_impl_->perform_oss_request("PUT", url, headers);
+    // OSS 的写操作成功响应通常无响应体（204 No Content），按请求结果判定
+    bool ok = false;
+    p_impl_->perform_oss_request("PUT", url, headers, "", "", nullptr, &ok);
 
-    return !response.empty();
+    return ok;
 }
 
 bool OSSBrowser::remove(const std::string& path, bool recursive) {
@@ -536,10 +660,11 @@ bool OSSBrowser::remove(const std::string& path, bool recursive) {
         }
     }
 
-    // 删除指定路径
-    std::string response = p_impl_->perform_oss_request("DELETE", url);
+    // 删除指定路径（对象不存在的 204 仍算成功，网络/权限失败如实返回 false）
+    bool ok = false;
+    p_impl_->perform_oss_request("DELETE", url, {}, "", "", nullptr, &ok);
 
-    return true; // OSS DELETE即使对象不存在也返回204
+    return ok;
 }
 
 bool OSSBrowser::rename(const std::string& old_path, const std::string& new_path) {
@@ -555,9 +680,10 @@ bool OSSBrowser::copy(const std::string& source_path, const std::string& dest_pa
     std::map<std::string, std::string> headers;
     headers["x-oss-copy-source"] = "/" + p_impl_->oss_url_.bucket + "/" + source_path;
 
-    std::string response = p_impl_->perform_oss_request("PUT", url, headers);
+    bool ok = false;
+    p_impl_->perform_oss_request("PUT", url, headers, "", "", nullptr, &ok);
 
-    return !response.empty();
+    return ok;
 }
 
 bool OSSBrowser::exists(const std::string& path) {

@@ -2,6 +2,38 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-14 - 四云存储浏览器 endpoint 改造 + 缺陷修复 + mock 测试（OSS/COS/Kodo/Upyun）
+- 四浏览器 endpoint（又拍云为 api_domain）配置此前全链路零消费——
+  官方 virtual-host 域名 mock 不可行，配置了自定义 endpoint 也被
+  无视（MinIO/私有化网关类部署不可用）。现携带 scheme（http:// 或
+  https://）时走 path-style `endpoint[/bucket[-app_id]]/key`
+  （Kodo 为 rs/rsf 同 endpoint 按路径区分，Upyun 无 bucket 前缀），
+  否则保持官方域名；同步推广 S3 模板全套修复：真 HEAD（NOBODY 与
+  CUSTOMREQUEST 互斥清设）、POSTFIELDS 恒设（handle 复用残留）、
+  HEADERFUNCTION 响应头回传、状态码成功判定（200≤status<400）+
+  ok 出参、encode_key 逐段编码保留 '/'
+- **修复各 browser 特有缺陷**：① OSS/COS 列举 query_string 从未拼
+  到请求 URL（只进签名）——prefix/max-keys 从未真正发到服务端；
+  ② Kodo/Upyun 递归列举边遍历边向同一 vector 插入（扩容即悬垂
+  迭代）——先收集/快照再插入；③ Upyun 递归删除双斜杠（子目录
+  列举 path 已带前导 '/' 再拼 "/"）；④ get_resource_info 恒真
+  条件（对象不存在也报"存在"）改按状态码判定
+- **mock 测试首跑曝光三个额外真实缺陷**：① COS/OSS 签名 URI 用
+  `find('/')+bucket.length()+N` 偏移算术提取——host/port 长度不同
+  即把 authority 片段混进规范资源（签名恒错），COS 端口个位数时
+  substr 越界抛 out_of_range，改为 scheme 后定位 path；② COS 签名
+  头键小写化后 `at(小写键)` 查原大小写 map——带 Content-Type 的
+  请求（建目录）必抛 map::at，改为插入时统一小写；③ Kodo
+  base64url 输出带尾部换行拼进 URL——curl 报 "bad/illegal format"
+  （stat 探测从未成功过），改 BIO_FLAGS_BASE64_NO_NL
+- 测试基建：共享 `mock_http_server.hpp`（自 S3 测试提取，新增防
+  RST 排空——POST 带请求体未读即 close 会以 RST 收场吞掉刚写出
+  的响应，应答后半关闭写端 + SO_RCVTIMEO 排空读端再 close）；新增
+  四个 browser mock 测试共 59 用例（endpoint path-style 连接断言/
+  列举解析/递归/HEAD 信息头/exists 状态码语义/建目录/递归删除顺序
+  /rename/配额/错误路径）；全量 ctest 1701 用例通过，ASan 下五
+  browser 套件 81 用例零告警
+
 ### 2026-09-13 - 测试覆盖率专项（行 68.1% → 74.0%）+ S3 浏览器五缺陷修复 + PEX 重复回调
 - 覆盖率从基线 68.1%/77.0%/36.2%（行/函数/分支）提升到 **74.0%/
   81.0%/39.4%**（gcovr，packages/ 范围排除 tests/），净增 1365 行
