@@ -349,6 +349,8 @@ TEST_F(FTPBrowserMockTest, QuotaInfoIsEmpty) {
     EXPECT_TRUE(browser_->get_quota_info().empty());
     EXPECT_EQ(browser_->get_root_path(), "/");
     EXPECT_EQ(browser_->get_name(), "FTP");
+    const auto protocols = browser_->get_supported_protocols();
+    EXPECT_EQ(protocols, (std::vector<std::string>{"ftp", "ftps"}));
     EXPECT_TRUE(browser_->can_handle("ftp://host/file"));
     EXPECT_TRUE(browser_->can_handle("ftps://host/file"));
     EXPECT_FALSE(browser_->can_handle("http://host/file"));
@@ -366,6 +368,143 @@ TEST_F(FTPBrowserMockTest, ConnectParsesUrlWithPathAndCredentials) {
     auto resources = browser_->list_directory("", {});
     ASSERT_EQ(resources.size(), 1u);
     EXPECT_EQ(resources[0].path, "/docs/readme.txt");
+}
+
+TEST_F(FTPBrowserMockTest, ConnectStripsUrlQuery) {
+    // URL 路径上的查询参数不属于 FTP 路径（此前拼进 CWD/LIST 目标）
+    server_.set_listing("/docs",
+                        "-rw-r--r-- 1 alice staff 264 Jan 02 2024 readme.txt\r\n");
+    bool ok = browser_->connect(
+        "ftp://127.0.0.1:" + std::to_string(server_.port()) + "/docs?view=list", {});
+    ASSERT_TRUE(ok);
+
+    auto resources = browser_->list_directory("", {});
+    ASSERT_EQ(resources.size(), 1u);
+    EXPECT_EQ(resources[0].path, "/docs/readme.txt");
+}
+
+// ---- ssl 选项 ----
+
+TEST_F(FTPBrowserMockTest, ConnectAppliesSslOptionNone) {
+    // ssl=none：curl 不应发起 AUTH 升级
+    bool ok = browser_->connect(
+        "ftp://127.0.0.1:" + std::to_string(server_.port()) + "/",
+        {{"username", "testuser"}, {"password", "testpass"}, {"ssl", "none"}});
+    EXPECT_TRUE(ok);
+    EXPECT_FALSE(server_.any_command("AUTH"));
+}
+
+TEST_F(FTPBrowserMockTest, ConnectFailsWhenSslRequiredButServerPlain) {
+    // ssl=control/all：服务器（明文 mock）拒绝 AUTH 升级后连接必须失败，
+    // 不能静默降级明文继续（缺省 TRY 才容忍 502）
+    for (const char* ssl : {"control", "all", "1"}) {
+        FTPBrowser browser;
+        bool ok = browser.connect(
+            "ftp://127.0.0.1:" + std::to_string(server_.port()) + "/",
+            {{"username", "testuser"}, {"password", "testpass"}, {"ssl", ssl}});
+        EXPECT_FALSE(ok) << "ssl=" << ssl;
+        EXPECT_TRUE(server_.any_command("AUTH")) << "ssl=" << ssl;
+    }
+}
+
+TEST_F(FTPBrowserMockTest, ConnectKeepsTryForUnknownSslValue) {
+    // 未知 ssl 值保持缺省 TRY：AUTH 被拒后继续明文登录
+    bool ok = browser_->connect(
+        "ftp://127.0.0.1:" + std::to_string(server_.port()) + "/",
+        {{"username", "testuser"}, {"password", "testpass"}, {"ssl", "bogus"}});
+    EXPECT_TRUE(ok);
+    EXPECT_TRUE(server_.any_command("AUTH"));
+}
+
+// ---- 列表解析容错与排序 ----
+
+TEST_F(FTPBrowserMockTest, ListToleratesUnparseableLines) {
+    // 非法类型位（非 d/l/-）的行被跳过，其余条目照常解析
+    server_.set_listing(
+        "/mixed",
+        "-rw-r--r-- 1 u g 1 Jan 02 2024 good.txt\r\n"
+        "bogus-entry-goes-here\r\n");
+    ASSERT_TRUE(connect_default());
+    auto resources = browser_->list_directory("mixed", {});
+    ASSERT_EQ(resources.size(), 1u);
+    EXPECT_EQ(resources[0].name, "good.txt");
+}
+
+TEST_F(FTPBrowserMockTest, ListFilterExactNameWithoutWildcard) {
+    // 无 * 的 filter 按精确名匹配
+    ASSERT_TRUE(connect_default());
+    ListOptions options;
+    options.filter = "readme.txt";
+    auto resources = browser_->list_directory("", options);
+    ASSERT_EQ(resources.size(), 1u);
+    EXPECT_EQ(resources[0].name, "readme.txt");
+}
+
+TEST_F(FTPBrowserMockTest, ListSortsBySizeAscendingAndDescending) {
+    server_.set_listing(
+        "/sizes",
+        "-rw-r--r-- 1 u g 300 Jan 02 2024 c.bin\r\n"
+        "-rw-r--r-- 1 u g 100 Jan 02 2024 a.bin\r\n"
+        "-rw-r--r-- 1 u g 200 Jan 02 2024 b.bin\r\n");
+    ASSERT_TRUE(connect_default());
+
+    ListOptions asc;
+    asc.sort_by = "size";
+    auto resources = browser_->list_directory("sizes", asc);
+    ASSERT_EQ(resources.size(), 3u);
+    EXPECT_EQ(resources[0].name, "a.bin");
+    EXPECT_EQ(resources[2].name, "c.bin");
+
+    ListOptions desc;
+    desc.sort_by = "size";
+    desc.sort_desc = true;
+    resources = browser_->list_directory("sizes", desc);
+    ASSERT_EQ(resources.size(), 3u);
+    EXPECT_EQ(resources[0].name, "c.bin");
+    EXPECT_EQ(resources[2].name, "a.bin");
+}
+
+TEST_F(FTPBrowserMockTest, ListSortsByModifiedTimeDescending) {
+    server_.set_listing(
+        "/times",
+        "-rw-r--r-- 1 u g 1 Jan 02 2022 older.txt\r\n"
+        "-rw-r--r-- 1 u g 1 Jan 02 2024 newer.txt\r\n");
+    ASSERT_TRUE(connect_default());
+
+    ListOptions options;
+    options.sort_by = "modified_time";
+    options.sort_desc = true;
+    auto resources = browser_->list_directory("times", options);
+    ASSERT_EQ(resources.size(), 2u);
+    EXPECT_EQ(resources[0].name, "newer.txt");
+    EXPECT_EQ(resources[1].name, "older.txt");
+}
+
+// ---- 路径归一化 ----
+
+TEST_F(FTPBrowserMockTest, ListTreatsDotSlashAsCurrentDirectory) {
+    ASSERT_TRUE(connect_default());
+    auto resources = browser_->list_directory("./", {});
+    ASSERT_EQ(resources.size(), 2u);
+    EXPECT_EQ(resources[0].path, "/readme.txt");
+}
+
+TEST_F(FTPBrowserMockTest, ListResolvesRelativeDotPath) {
+    server_.set_listing("/docs",
+                        "-rw-r--r-- 1 alice staff 264 Jan 02 2024 readme.txt\r\n");
+    ASSERT_TRUE(connect_default());
+    auto resources = browser_->list_directory("./docs", {});
+    ASSERT_EQ(resources.size(), 1u);
+    EXPECT_EQ(resources[0].path, "/docs/readme.txt");
+}
+
+// ---- 断开 ----
+
+TEST_F(FTPBrowserMockTest, DisconnectIsSafeBeforeAndAfterConnect) {
+    // FTP 无状态：未连接/已连接的 disconnect 都必须安全
+    browser_->disconnect();
+    ASSERT_TRUE(connect_default());
+    browser_->disconnect();
 }
 
 } // namespace

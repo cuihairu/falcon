@@ -362,19 +362,28 @@ public:
         // 替换\\为/
         std::replace(result.begin(), result.end(), '\\', '/');
 
-        // 压缩多个/
-        size_t pos = 0;
-        while ((pos = result.find("//", pos)) != std::string::npos) {
-            result.replace(pos, 2, "/");
+        // 交替压缩 "//" 与消除 "/./" 段至稳定（"//" 与 "./" 相对当前
+        // 目录拼接后会互相再生，如 "//./docs" 只压 // 得 "/./docs"）
+        bool changed = true;
+        while (changed) {
+            changed = false;
+            size_t pos = result.find("//");
+            while (pos != std::string::npos) {
+                result.replace(pos, 2, "/");
+                changed = true;
+                pos = result.find("//", pos);
+            }
+            pos = result.find("/./");
+            while (pos != std::string::npos) {
+                result.replace(pos, 3, "/");
+                changed = true;
+                pos = result.find("/./", pos);
+            }
         }
 
-        // 处理相对路径
-        if (result == "./") {
-            result = "";
-        } else if (result.length() > 1 && result.substr(0, 2) == "./") {
-            result = result.substr(2);
-        }
-
+        // 相对段已在上面消除：resolve_path 的两条输入通路（'/' 开头
+        // 原样、与 current_path_ 拼接）都不可能产生 "./" 开头的结果，
+        // 此前的开头 "./" 剥离分支不可达，直接返回归一化结果
         return result;
     }
 
