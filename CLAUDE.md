@@ -2,6 +2,32 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-14 - 覆盖率批次 K：config_manager.cpp 认证门/主密码/导入导出边界收敛
+- config_manager.cpp gcov miss **82 → 32**（行 92.01%）：8 用例
+  （`config_manager_test.cpp` 18→26，cov + ASan 双绿）覆盖未初始
+  化 manager 全操作拒绝（认证门 db_=nullptr 提前返回一径覆盖七个
+  门行）、verify 全链（正确/错误/恢复）、master 表行删除、
+  set_master_password 换密与弱密码拒绝、update 空 provider、导
+  出导入边界（空密码/不存在文件/短文件/错 magic）、篡改 payload
+  语义（mini-GCM 加密器构造生产对齐布局的导出文件：无 configs
+  键/非 array/条目缺 name 跳过的部分导入语义）、库内密文截短
+  （get 成功且解密失败字段空串）
+- 测试构造手段：`exec_sql` sqlite3 直连篡改库内容、
+  `mini_gcm_encrypt`（IV12+ct+tag16，key=SHA256(password)）构造
+  任意语义的导出 payload（驱动 import 的深层解析分支）
+- 两个真实语义发现（记录不修，未接线 API 的设计缺口，修复属特
+  性开发）：① set_master_password 换密不重加密已存配置——旧密
+  文解密失败恒空串（生产零调用方）；② verify missing-row 提前
+  返回不撤销 authenticated_——已认证 manager 删行后写入仍放行
+- ASan 曝出 resource_search.cpp 既有泄漏（WebCrawler::set_
+  headers 的 headers_ slist 76 字节，排除本批用例依旧实证），留
+  给 resource_search 批次
+- 剩余 32 miss 全部定性：EVP crypto 失败防御×12（需注入）、
+  sqlite prepare/exec/step 失败防御×15、initialize 空密码路径不
+  可达×2、export encrypt 空返回×1、import 中 save 失败不可达×1
+- 全包覆盖率（gcovr 批次 C 同款口径）：**行 80.5% / 函数 93.7% /
+  分支 44.0%**（批次 J 80.3/93.4/43.8）；全量 ctest 1908 零失败
+
 ### 2026-09-14 - 覆盖率批次 J：dht_node.cpp Kademlia 查找边界与路由表纯单元收敛
 - dht_node.cpp gcov miss **94 → 10**（行 97.3%）：16 新用例挂
   `falcon_protocols_tests`（dht_node_test.cpp 9 → 25，cov + ASan

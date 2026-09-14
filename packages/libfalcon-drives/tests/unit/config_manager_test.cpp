@@ -4,8 +4,14 @@
 
 #include <gtest/gtest.h>
 
+#include <sqlite3.h>
+#include <openssl/evp.h>
+#include <openssl/rand.h>
+#include <openssl/sha.h>
+
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <thread>
 
@@ -36,6 +42,63 @@ falcon::CloudStorageConfig make_config(const std::string& name,
     cfg.created_at = 0;
     cfg.updated_at = 0;
     return cfg;
+}
+
+// 直连 SQLite 执行写语句（绕过 ConfigManager 构造防御/损坏数据场景）
+bool exec_sql(const std::string& db_path, const std::string& sql) {
+    sqlite3* db = nullptr;
+    if (sqlite3_open(db_path.c_str(), &db) != SQLITE_OK) {
+        sqlite3_close(db);
+        return false;
+    }
+    char* err = nullptr;
+    bool ok = sqlite3_exec(db, sql.c_str(), nullptr, nullptr, &err) == SQLITE_OK;
+    sqlite3_free(err);
+    sqlite3_close(db);
+    return ok;
+}
+
+// 与 AES256GCM 相同布局的最小 GCM 加密器（IV12 + 密文 + tag16，密钥
+// SHA256 派生）——构造篡改语义的导出 payload
+std::string mini_gcm_encrypt(const std::string& plaintext, const std::string& key) {
+    unsigned char iv[12];
+    RAND_bytes(iv, 12);
+    unsigned char derived[32];
+    SHA256(reinterpret_cast<const unsigned char*>(key.data()), key.size(), derived);
+
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) return "";
+    EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, derived, iv);
+    std::string ct(plaintext.size() + 16, '\0');
+    int len = 0;
+    int total = 0;
+    EVP_EncryptUpdate(ctx, reinterpret_cast<unsigned char*>(&ct[0]), &len,
+                      reinterpret_cast<const unsigned char*>(plaintext.data()),
+                      static_cast<int>(plaintext.size()));
+    total = len;
+    EVP_EncryptFinal_ex(ctx, reinterpret_cast<unsigned char*>(&ct[total]), &len);
+    total += len;
+    unsigned char tag[16];
+    EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, 16, tag);
+    EVP_CIPHER_CTX_free(ctx);
+
+    std::string out(reinterpret_cast<char*>(iv), 12);
+    out.append(ct, 0, static_cast<size_t>(total));
+    out.append(reinterpret_cast<char*>(tag), 16);
+    return out;
+}
+
+std::string make_export_payload(const std::string& json_text, const std::string& password) {
+    std::string payload = "FALCONCFG1";  // kExportMagic
+    payload += mini_gcm_encrypt(json_text, password);
+    return payload;
+}
+
+bool write_file(const std::string& path, const std::string& data) {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out) return false;
+    out.write(data.data(), static_cast<std::streamsize>(data.size()));
+    return out.good();
 }
 
 } // namespace
@@ -423,6 +486,189 @@ TEST(ConfigManagerTest, ConfigTimestamps) {
 
     // 更新时间应该改变
     EXPECT_GE(loaded.updated_at, loaded.created_at);
+}
+
+//==============================================================================
+// 主密码认证全链 / 导出导入边界（覆盖率批次 K）
+//==============================================================================
+
+// 未初始化的 manager：所有操作一律拒绝（认证门 verify 因 db_ 为空失败）
+TEST(ConfigManagerTest, UninitializedManagerRejectsEverything) {
+    auto dir = unique_temp_dir("falcon_cfg_uninit_");
+    const auto export_path = (dir / "out.bin").string();
+
+    falcon::ConfigManager cm;
+    EXPECT_FALSE(cm.verify_master_password("Whatever123"));
+    EXPECT_FALSE(cm.set_master_password("Whatever123"));
+
+    falcon::CloudStorageConfig cfg = make_config("n", "s3", "a", "s");
+    EXPECT_FALSE(cm.save_cloud_config(cfg));
+    falcon::CloudStorageConfig loaded{};
+    EXPECT_FALSE(cm.get_cloud_config("n", loaded));
+    EXPECT_FALSE(cm.delete_cloud_config("n"));
+    EXPECT_TRUE(cm.list_cloud_configs().empty());
+    EXPECT_TRUE(cm.search_configs("").empty());
+    EXPECT_FALSE(cm.update_cloud_config("n", cfg));
+    EXPECT_FALSE(cm.export_configs(export_path, "Export123!"));
+    EXPECT_FALSE(cm.import_configs(export_path, "Export123!"));
+}
+
+// verify_master_password 全链：正确/错误密码、错误尝试后可恢复
+TEST(ConfigManagerTest, VerifyMasterPasswordFlow) {
+    auto dir = unique_temp_dir("falcon_cfg_verify_");
+    const auto db = (dir / "config.db").string();
+
+    falcon::ConfigManager cm;
+    ASSERT_TRUE(cm.initialize(db, "Master123!"));
+
+    EXPECT_TRUE(cm.verify_master_password("Master123!"));
+    EXPECT_FALSE(cm.verify_master_password("Wrong1234"));
+    // 错误尝试使认证失效，正确密码立即恢复
+    falcon::CloudStorageConfig cfg = make_config("after_wrong", "s3", "a", "s");
+    EXPECT_TRUE(cm.verify_master_password("Master123!"));
+    EXPECT_TRUE(cm.save_cloud_config(cfg));
+}
+
+// master 表无行（库被外部破坏）：verify 返回 false。已知语义瑕疵：
+// missing-row 提前返回路径不触碰认证态——已认证 manager 的写操作
+// 不受影响（认证门仅在 authenticated_ 已失效时才复核）
+TEST(ConfigManagerTest, VerifyWithMissingMasterRow) {
+    auto dir = unique_temp_dir("falcon_cfg_nomaster_");
+    const auto db = (dir / "config.db").string();
+
+    falcon::ConfigManager cm;
+    ASSERT_TRUE(cm.initialize(db, "Master123!"));
+    ASSERT_TRUE(exec_sql(db, "DELETE FROM master"));
+
+    EXPECT_FALSE(cm.verify_master_password("Master123!"));
+
+    // 已认证态未被撤销：写入仍放行
+    falcon::CloudStorageConfig cfg = make_config("still_writable", "s3", "a", "s");
+    EXPECT_TRUE(cm.save_cloud_config(cfg));
+    EXPECT_FALSE(cm.list_cloud_configs().empty());
+}
+
+// set_master_password：弱密码拒绝、换密后旧密码失效、新密码可认证。
+// 已知语义（生产零调用的未接线 API）：换密只更新 master 表哈希，不
+// 重加密已存配置——旧密文以旧密码密钥加密，换密后解密失败返回空串
+TEST(ConfigManagerTest, SetMasterPasswordRotatesAndValidates) {
+    auto dir = unique_temp_dir("falcon_cfg_rotate_");
+    const auto db = (dir / "config.db").string();
+
+    falcon::ConfigManager cm;
+    ASSERT_TRUE(cm.initialize(db, "First123!"));
+    auto cfg = make_config("rot", "s3", "AKIA_ROT", "SECRET_ROT");
+    ASSERT_TRUE(cm.save_cloud_config(cfg));
+
+    EXPECT_FALSE(cm.set_master_password("weak"));
+    EXPECT_TRUE(cm.set_master_password("Second456!"));
+
+    EXPECT_FALSE(cm.verify_master_password("First123!"));
+    ASSERT_TRUE(cm.verify_master_password("Second456!"));
+
+    // 行仍在、非敏感字段完好；敏感字段解密失败为空串（不崩溃不误读）
+    falcon::CloudStorageConfig loaded{};
+    ASSERT_TRUE(cm.get_cloud_config("rot", loaded));
+    EXPECT_EQ(loaded.provider, "s3");
+    EXPECT_EQ(loaded.access_key, "");
+}
+
+// 库内密文被截短：get 仍成功，解密失败的敏感字段为空串（不崩溃不误报）
+TEST(ConfigManagerTest, GetConfigWithTruncatedEncryptedBlob) {
+    auto dir = unique_temp_dir("falcon_cfg_trunc_");
+    const auto db = (dir / "config.db").string();
+
+    {
+        falcon::ConfigManager cm;
+        ASSERT_TRUE(cm.initialize(db, "Master123!"));
+        ASSERT_TRUE(cm.save_cloud_config(
+            make_config("victim", "s3", "AKIA_TEST", "SECRET_TEST")));
+    }
+    ASSERT_TRUE(exec_sql(db,
+                         "UPDATE configs SET access_key = x'00112233' "
+                         "WHERE name = 'victim'"));
+
+    falcon::ConfigManager cm;
+    ASSERT_TRUE(cm.initialize(db, "Master123!"));
+    falcon::CloudStorageConfig loaded{};
+    ASSERT_TRUE(cm.get_cloud_config("victim", loaded));
+    EXPECT_EQ(loaded.access_key, "");  // 解密失败 → 空串
+    EXPECT_EQ(loaded.secret_key, "SECRET_TEST");
+}
+
+// update 拒绝空 provider
+TEST(ConfigManagerTest, UpdateRejectsEmptyProvider) {
+    auto dir = unique_temp_dir("falcon_cfg_updprov_");
+    const auto db = (dir / "config.db").string();
+
+    falcon::ConfigManager cm;
+    ASSERT_TRUE(cm.initialize(db, "Master123!"));
+    ASSERT_TRUE(cm.save_cloud_config(make_config("u1", "s3", "a", "s")));
+
+    auto bad = make_config("u1", "", "a", "s");
+    EXPECT_FALSE(cm.update_cloud_config("u1", bad));
+}
+
+// 导出导入边界：空密码 / 不存在文件 / 短文件 / 错 magic
+TEST(ConfigManagerTest, ExportImportEdgeCases) {
+    auto dir = unique_temp_dir("falcon_cfg_edge_");
+    const auto db = (dir / "config.db").string();
+    const auto export_path = (dir / "export.bin").string();
+
+    falcon::ConfigManager cm;
+    ASSERT_TRUE(cm.initialize(db, "Master123!"));
+    ASSERT_TRUE(cm.save_cloud_config(make_config("edge", "s3", "a", "s")));
+
+    EXPECT_FALSE(cm.export_configs(export_path, ""));
+    ASSERT_TRUE(cm.export_configs(export_path, "Export123!"));
+
+    EXPECT_FALSE(cm.import_configs(export_path, ""));
+
+    const auto missing = (dir / "missing.bin").string();
+    EXPECT_FALSE(cm.import_configs(missing, "Export123!"));
+
+    const auto short_file = (dir / "short.bin").string();
+    ASSERT_TRUE(write_file(short_file, "abc"));
+    EXPECT_FALSE(cm.import_configs(short_file, "Export123!"));
+
+    const auto bad_magic = (dir / "badmagic.bin").string();
+    ASSERT_TRUE(write_file(bad_magic, std::string(40, 'X')));
+    EXPECT_FALSE(cm.import_configs(bad_magic, "Export123!"));
+}
+
+// 篡改 payload 语义：解密成功但结构非法的导出文件被逐层拒绝；条目缺
+// name 跳过不阻塞其余条目（部分导入语义）
+TEST(ConfigManagerTest, ImportMalformedPayloadVariants) {
+    auto dir = unique_temp_dir("falcon_cfg_malformed_");
+    const auto db = (dir / "config.db").string();
+    const auto payload_path = (dir / "payload.bin").string();
+
+    falcon::ConfigManager cm;
+    ASSERT_TRUE(cm.initialize(db, "Master123!"));
+
+    // configs 键缺失
+    ASSERT_TRUE(write_file(payload_path,
+                           make_export_payload("{\"version\":1}", "Export123!")));
+    EXPECT_FALSE(cm.import_configs(payload_path, "Export123!"));
+
+    // configs 非 array
+    ASSERT_TRUE(write_file(payload_path,
+                           make_export_payload("{\"configs\":42}", "Export123!")));
+    EXPECT_FALSE(cm.import_configs(payload_path, "Export123!"));
+
+    // 条目缺 name：跳过，其余条目照常导入
+    ASSERT_TRUE(write_file(
+        payload_path,
+        make_export_payload(
+            "{\"configs\":[{\"name\":\"good\",\"provider\":\"s3\","
+            "\"access_key\":\"AK\",\"secret_key\":\"SK\"},"
+            "{\"provider\":\"no-name\"}]}",
+            "Export123!")));
+    EXPECT_TRUE(cm.import_configs(payload_path, "Export123!"));
+    falcon::CloudStorageConfig good{};
+    EXPECT_TRUE(cm.get_cloud_config("good", good));
+    EXPECT_EQ(good.access_key, "AK");
+    EXPECT_TRUE(cm.search_configs("no-name").empty());
 }
 
 #endif

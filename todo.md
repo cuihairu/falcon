@@ -1930,4 +1930,65 @@ finalize 已发生则 pendingRequests_ 已清空，handleLookupResponse
 81 / cloud_storage_plugin 78 / segment_downloader 77 / resource_
 search 47 / incremental_download 46。
 
+### 批次 K 收口（2026-09-14）：config_manager.cpp 82 → 32 miss
+
+**测试基建：** `config_manager_test.cpp` 增量 8 用例（挂
+falcon_drives_tests，18 → 26；`FALCON_ENABLE_CONFIG_MANAGER` 未
+开启时仍 SKIP——新增用例全部在既有 `#else` 分支内）。测试 target
+经 falcon_drives 的 PUBLIC 链接可直接用 sqlite3/OpenSSL。两个新
+构造手段：① `exec_sql` sqlite3 直连写库（绕过 ConfigManager 构
+造防御/篡改数据场景）；② `mini_gcm_encrypt`（OpenSSL EVP
+aes-256-gcm，IV12+ct+tag16 布局、key=SHA256(password)，与生产
+AES256GCM::decrypt 对齐）+ "FALCONCFG1" magic 前缀构造任意语义
+的导出 payload。
+
+**八簇收口：** ① 未初始化 manager（db_=nullptr）全部操作拒绝——
+verify/set_master_password false，save/get/delete/list/search/
+update/export/import 全 false/空，一次性覆盖认证门的 312 提前
+返回路径（401/466/489/514/592/667/713 七个门行同源）。注意不可
+对未初始化 manager 调 set_master_password（276 先设成员再走
+internal → sqlite3_prepare_v2(nullptr)）。② verify 全链：正确
+true/错误 false/错误后正确恢复。③ master 表行被删（exec_sql 直
+连）：verify false。④ set_master_password：弱密码拒、换密后旧
+密码失效新密码认证。⑤ update 空 provider 拒绝（595）。⑥ 导出
+导入边界：export/import 空密码（662/710）、import 不存在文件
+（718）、短文件 <10 字节（721）、错 magic（724）。⑦ 篡改 payload
+语义（mini_gcm 构造）：JSON 无 configs 键/非 array（741）、数组
+条目缺 name 跳过且其余照常导入——部分导入语义验证（764）。⑧ 库
+内密文截短（exec_sql UPDATE blob）：get 仍成功且解密失败字段空
+串、非敏感字段完好（128 decrypt 短密文返空）。公共转发行
+806-807/810-811 经 ② 覆盖。
+
+**两个真实语义发现（记录不修，均为未接线 API 的设计缺口，修复
+属特性开发）：** ① `set_master_password` 换密只更新 master 表
+PBKDF2 哈希，不重加密已存配置——旧密文以旧密码密钥加密，换密后
+access_key/secret_key 解密失败恒空串（数据废）。生产零调用方
+（grep 实证），与 core PasswordManager 同语义。② verify 的
+missing-row 路径（321-323）提前返回不触碰 authenticated_——
+已认证 manager 删行后写入仍放行（认证门仅在 authenticated_ 已
+失效时才复核）。两者均已在测试注释与断言中记录真实行为。
+
+**ASan：** 新用例零新增告警。曝出 resource_search.cpp 既有泄漏
+（WebCrawler::set_headers 的 headers_ slist 76 字节/4 处，经
+GenericSearchProvider 构造 ← load_config；排除 ConfigManager
+用例后泄漏依旧实证与本批无关）——留给 resource_search 批次。
+
+**剩余 32 miss 全部定性：** EVP init/update/final 失败防御×12
+（89-90/99-100/106-107/149-150/155-156/165-166，需 crypto 注
+入）；sqlite prepare/exec/step 失败防御×15（318/376/412/472/
+480/495/531/602/633/653 各方法 prepare+step、217-219 PRAGMA、
+255-257 create table）；265/267 initialize 空密码路径不可达
+（is_reasonable_master_password 拒空密码 → 200 入口已拒）；695
+export encrypt 空返回（仅 OOM/内部错误）；768 import 中 save
+失败不可达（有效数据+已认证+合法 SQL 下恒成功）。
+
+**覆盖率（批次 K 收口，批次 C 同款 gcovr 口径）：行 80.5% / 函
+数 93.7% / 分支 44.0%**（批次 J 80.3/93.4/43.8；净涨 0.2/0.3/
+0.2 点）。全量 ctest 1908 零失败；drives 136 用例 cov 树全绿 +
+ASan 排除既存泄漏后零新增告警。
+
+**批次 L 候选（##### 铁账）：** task_storage 81 / cloud_storage_
+plugin 78 / segment_downloader 76 / resource_search 47（顺带修
+WebCrawler 泄漏）/ incremental_download 46。
+
 
