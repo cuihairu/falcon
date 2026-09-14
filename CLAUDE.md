@@ -2,6 +2,43 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-13 - 测试覆盖率专项（行 68.1% → 74.0%）+ S3 浏览器五缺陷修复 + PEX 重复回调
+- 覆盖率从基线 68.1%/77.0%/36.2%（行/函数/分支）提升到 **74.0%/
+  81.0%/39.4%**（gcovr，packages/ 范围排除 tests/），净增 1365 行
+  覆盖；100% 行覆盖对本项目不可达（http_commands 平台分支与真实
+  网络交互、cli main 入口、logger.hpp 为 gcc 15 行号漂移测量伪影
+  、其余五个 browser 需各自 endpoint 改造），如实评估见 todo.md
+- 新增 S3 浏览器 mock 测试 27 用例（`s3_browser_mock_test.cpp`，
+  编程式 mock HTTP 服务器一连接一请求）：URL 解析/连接/列表（JSON
+  解析+隐藏过滤+递归 CommonPrefixes）/HEAD 信息头解析/exists 状态
+  码语义/建目录 marker/递归删除降序/复制改名/配额；测试基建踩坑
+  记录——Linux close() 不唤醒阻塞在 accept() 的线程（strace 实证
+  join 死等），停机必须先 shutdown(listen_fd, SHUT_RDWR) 再 close
+  再 join；测试服务器绑 htonl(INADDR_ANY) + getsockname 取随机
+  端口（本沙盒 INADDR_LOOPBACK 有字节序怪癖）
+- **S3 浏览器五项产品缺陷修复**（`s3_browser.cpp`，mock 测试曝光）：
+  ① endpoint 配置全链路零消费（MinIO 等 S3 兼容服务不可用），现
+  endpoint 优先生效 path-style `endpoint/bucket/key`；② 对象 key
+  的 '/' 被 url_encode 编成 %2F 导致子目录 key 必然 404，新增
+  encode_key 逐段编码保留 '/'；③ HEAD 语义错误——
+  CURLOPT_CUSTOMREQUEST 只改请求行方法字符串响应仍按 GET 处理，
+  真 HEAD 须 CURLOPT_NOBODY 且与 CUSTOMREQUEST 互斥清设（handle
+  复用时残留覆盖方法切换，curl 实报 "Weird server reply"）；④
+  get_resource_info 解析从不存在的 body（HEAD 无体，info 恒空）
+  ——响应头经 HEADERFUNCTION 回传填充；⑤ 成功判定看 body 非空
+  （S3 写操作成功常为 204 无 body），改状态码判定（200≤status<
+  400）+ ok 出参
+- **PEX 重复发现回调修复**：handlePexMessage Add 分支对已存在
+  peer 重复触发 onPeerDiscovered_，改为仅新插入候选集才触发
+- 新增 PEX 25 用例（编解码往返/字节布局/握手分发/去重/回调/异常
+  输入）、bencode 边界 ~12 用例（深层嵌套/空容器/非最小整数/截断
+  ）、BT 解析 ~10 用例；手写 bencode 测试数据的长度前缀须用解析
+  器逐字符验证（`3:aa` 类错误高频）
+- ASan 构建重配 `FALCON_ENABLE_BITTORRENT=ON`（此前 OFF 导致 BT
+  测试整个不编；纯 C++ 模式无需 libtorrent），BT 86 用例 + S3 27
+  用例零告警；全量 ctest 1629 用例仅 DaemonModeLifecycle 一例并行
+  抖动（串行复跑即过）
+
 ### 2026-09-13 - DHT Kademlia 迭代查找（异步回调接线 + 三个既有缺陷修复）
 - 完成 todo 未完成事项 #2/#3：`findPeers/findNode` 此前的回调参数从未
   接线（`pendingRequests_` 只读不写、永远为空），`performLookup` 仅对

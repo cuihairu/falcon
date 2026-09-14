@@ -1381,4 +1381,58 @@ feature 候选：
 - ✅ DHT 9 用例全绿；全量 ctest 1548/1548 通过（2 项 CLI NOT_BUILT
   为 build-ci 未编 CLI 的残留注册）
 
+---
+
+## 2026-09-13 测试覆盖率专项（68.1% → 74.0% 行覆盖）
+
+**新增测试（+1365 行覆盖）：**
+- PEX 协议 25 用例（`pex_protocol_test.cpp`）：消息编解码往返、
+  Add/Drop 字节布局、握手/无握手分发、候选去重、回调触发、异常
+  输入；顺带修复产品缺陷——Add 分支对已存在 peer 重复触发发现回调
+  （仅新插入候选集才触发）
+- bencode 边界 ~12 用例（`bencode_edge_test.cpp`）：深层嵌套、
+  空容器、键序校验、非最小整数编码、截断输入、大整数
+- BitTorrent 解析 ~10 用例（`bittorrent_parse_test.cpp` 补全）：
+  can_handle/get_file_info 单多文件/错误路径；修好手写 bencode
+  测试数据的长度前缀错误（`3:aa` → `2:aa`）
+- S3 浏览器 27 用例（`s3_browser_mock_test.cpp`，本地 mock HTTP
+  服务器）：URL 解析、连接（自定义 endpoint/不可达失败）、列表
+  （JSON 解析/隐藏过滤/递归 CommonPrefixes/损坏响应/403）、HEAD
+  信息（响应头解析）、exists 状态码语义、建目录 marker、删除
+  （对象/递归降序）、复制改名重命名、配额解析；顺带修复 mock
+  服务器挂死模式（Linux close() 不唤醒阻塞 accept 线程，须先
+  shutdown(SHUT_RDWR) 再 close 再 join）
+
+**S3 浏览器五项产品缺陷修复（`s3_browser.cpp`）：**
+- endpoint 配置从未消费：build_s3_url 只会拼 AWS 官方域名，MinIO
+  等 S3 兼容服务不可用；现 endpoint 优先生效（path-style
+  `endpoint/bucket/key`）
+- 对象 key 的 '/' 被 url_encode 编成 %2F，子目录 key 在真实服务
+  必然 404；新增 encode_key 逐段编码保留 '/'
+- HEAD 语义错误：CURLOPT_CUSTOMREQUEST("HEAD") 只改请求行方法
+  字符串，响应仍按 GET 处理；真 HEAD 须 CURLOPT_NOBODY，且与
+  CUSTOMREQUEST 互斥清设（handle 复用时残留覆盖 NOBODY 的方法
+  切换——实测 curl 报 "Weird server reply"）
+- get_resource_info 此前解析从不存在的 body（HEAD 无体，info
+  恒空）——响应头经 HEADERFUNCTION 回传后填充
+  name/path/size/modified_time/etag/mime_type
+- 成功判定不能看 body 非空（S3 写操作成功常为 204 No Content）：
+  perform_s3_request 状态码判定（200≤status<400）+ ok 出参，
+  create_directory/remove/copy 改按请求结果返回
+
+**覆盖率终值（gcovr，packages/ 范围排除 tests/）：**
+- 行 74.0%（15730/21252）、函数 81.0%（1471/1816）、分支 39.4%
+- 基线为 68.1%/77.0%/36.2%；+1365 行覆盖
+
+**100% 不可达的诚实评估（剩余 top 缺口）：**
+- http_commands.cpp 899 miss（57.6%）：平台分支（Winsock/POSIX
+  双路径仅一路可在单平台执行）+ 真实网络交互
+- ftp_browser 456：走真实 FTP 控制连接，需同类 endpoint 改造
+- cos 356 / kodo 333 / oss 312 / upyun 293：与 S3 同构的五个
+  browser，官方 virtual-host 域名 mock 不可行，需各自 endpoint
+  改造 + mock 测试（本轮 S3 已立样板）
+- http_handler 319、cli main.cpp 239（入口 main 不可测）、
+  bittorrent_plugin 195
+- logger.hpp 417 miss 为 gcc 15 行号漂移的测量伪影，非真实缺口
+
 
