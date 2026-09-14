@@ -1760,4 +1760,60 @@ Paused 检查（500 返回与状态置位间毫秒级竞态窗口）。全包（
 
 **后续批次（真实缺口）：** task_manager 78。
 
+### 2026-09-14 覆盖率批次 H（task_manager.cpp 75 → 13 miss：状态持久化容错 + 事件转发层测试）
+
+**缺口定性（75 miss 分簇）：** ① 序列化/解析辅助函数全部容错分支
+（read_int/read_download_options/read_task_data 的逐字段截断
+return false、越界优先级与活动状态净化）；② add_task/start_task
+防御（非法 id/重复 id/终结任务/重复入队）；③ auto-save 异步保存
+链（save_state_async CAS + state_pool，add_task/remove_task/
+cleanup_loop 三触发点全 miss）；④ set_state_file、on_completed、
+公共 API 转发层（set_state_file/on_task_status_changed/
+on_task_progress/双参 start_task）；⑤ 轮询循环 cleanup/auto_save
+与 worker 出队过期条目。
+
+**测试基建：** 新 `tests/unit/task_manager_edges_test.cpp`（挂
+falcon_core_tests，不新增 target）。损坏状态文件以 save_state
+version-2 行格式的镜像手工构造——options 字段序列拆成 22 个字段
+组，按前缀截断生成损坏行变体，每行独立解析失败互不影响，一批行
+（18 行）即可精确对准 read_download_options/read_task_data 的每
+个解析失败分支。确定性技巧：worker 出队过期条目 = start_task 入
+队后**绕过 TaskManager 直接 set_status 终结任务**（cancel_task 会
+清入队版本走另一分支）；stop 取消活动下载 = 自定义 handler 在
+download() 内置 Downloading 后挂起等取消；无 handler 任务 =
+worker 下载线程内 throw → catch 收口 Failed。
+
+**21 用例（cov + ASan 双绿）：** add_task 非法/重复 id 拒绝；
+start_task 拒绝簇（不存在/终结/已入队，单参与双参重载分别命中
+357/298 两条 return）；无 handler 任务启动即 Failed；stop 先取消
+活动下载再拆线程（handler 侧观测取消）；worker 出队过期条目静默
+丢弃；save_state 不可打开路径失败；空文件/坏版本 load 拒绝；截
+断行跳过（基础数据簇 + options 18 变体簇）；非法 id/空 URL/重复
+id 行跳过；越界优先级回落 Normal + Downloading/Preparing 净化为
+Paused（恢复不自动启动）；options 全字段 save/load 往返（含引
+号/反斜杠/空格转义、非空 error_message、进度与优先级）；auto-save
+三触发点（add/remove/cleanup 周期，stop 排空后断言文件存在 +
+重载校验）；set_state_file 动态启用；state_file 为空静默跳过；
+on_task_status_changed/on_task_progress 经 EventDispatcher 派发
+（RecordingListener 轮询断言 + 活动计数进出）。
+
+**覆盖率（批次 H 收口）：task_manager.cpp gcov miss 75 → 13（行
+97.31%）**，剩余定性：76-77 与 553/557-560/563-564 共 9 行为
+gcc 15 行归属伪影（**铁证：同一顺序执行块内 561 proxy_password
+覆盖而执行序更早的 560 proxy_username 不覆盖、78 行覆盖而更早的
+76/77 不覆盖——直线代码部分行覆盖部分不覆盖在执行模型上不可能**
+；round-trip 用例全字段断言通过即证明这些行在执行）；751-756
+Impl::on_completed 4 行不可达——**全库零调用方**（唯一命中是
+IEventListener 接口默认空实现；完成事件实际派发走
+on_status_changed 内的 Completed 分支），接口完整性 override
+保留不删。附带修正确认：TaskManager 不继承 IEventListener，
+on_task_status_changed/on_task_progress 是给引擎适配层的显式注
+入口。全包（批次 C 同款 gcovr 口径）：**行 79.6% / 函数 92.1% /
+分支 43.2%**（批次 G 79.2/91.5/43.1；净涨 0.4/0.6/0.1 点）。
+全量 ctest 1864（2 例 DownloadEngineTest 并行抖动串行复跑即
+过，非回归——本次零生产代码改动）。
+
+**后续批次（真实缺口）：** 下一批按 gcov 全包扫描重新定位（四批
+已收敛 protocols 包三个大头与 core 最大头）。
+
 

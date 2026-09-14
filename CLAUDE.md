@@ -2,6 +2,26 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-14 - 覆盖率批次 H：task_manager.cpp 状态持久化容错与事件转发层收敛
+- task_manager.cpp gcov miss **75 → 13**（行 97.31%）：21 用例
+  （`task_manager_edges_test.cpp`，cov + ASan 双绿）覆盖状态持久
+  化容错全链（损坏状态文件逐字段截断解析防御、非法 id/空 URL/
+  重复 id 跳过、越界优先级回落 + 活动状态净化为 Paused、options
+  全字段含转义字符 save/load 往返）、auto-save 异步保存链三触发
+  点（add/remove/cleanup 周期，stop 排空后断言落盘 + 重载校验）、
+  调度防御（无 handler 任务启动即 Failed、stop 先取消活动下载、
+  worker 出队过期条目静默丢弃）、事件注入转发层
+  （on_task_status_changed/on_task_progress 经 EventDispatcher
+  派发 + 活动计数进出）
+- 剩余 13 miss 全部定性：9 行 gcc 15 行归属伪影（铁证：同一顺序
+  执行块内后执行的行覆盖而先执行的不覆盖——如 561 覆盖而 560 不
+  覆盖；round-trip 全字段断言通过即证明在执行）、4 行
+  Impl::on_completed 不可达（全库零调用方，完成事件实际走
+  on_status_changed 的 Completed 分支）
+- 全包覆盖率（gcovr 批次 C 同款口径）：**行 79.6% / 函数 92.1% /
+  分支 43.2%**（批次 G 79.2/91.5/43.1）；全量 ctest 1864（2 例
+  DownloadEngineTest 并行抖动串行复跑即过，本次零生产代码改动）
+
 ### 2026-09-14 - 覆盖率批次 G：http_handler.cpp V1 curl 数据面回环测试 + 空指针缺陷修复
 - **修复 HttpHandler::pause/resume/cancel 空指针崩溃**（新测试曝
   光）：`pause(nullptr)` 直接解引用，与 FtpHandler 同位置的

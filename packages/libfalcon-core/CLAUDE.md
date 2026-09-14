@@ -6,6 +6,31 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-14 - 覆盖率批次 H：task_manager.cpp 75 → 13 miss
+- 新 `tests/unit/task_manager_edges_test.cpp` 21 用例（挂
+  falcon_core_tests）：状态持久化容错全链（损坏状态文件按
+  save_state version-2 行格式镜像逐字段截断，18 个 options 变体
+  一批精确对准每个解析失败分支；非法 id/空 URL/重复 id 跳过；越
+  界优先级回落 Normal、Downloading/Preparing 净化为 Paused；全字
+  段含引号/反斜杠转义 save/load 往返）、auto-save 异步保存链
+  （save_state_async 的 CAS 合并 + add/remove/cleanup 三触发点，
+  stop 排空后断言落盘并重载校验）、调度防御（无 handler 任务
+  worker 内收口 Failed、stop 先取消活动下载——自定义 handler
+  download() 内置 Downloading 后挂起观测、入队后直接终结任务的
+  过期条目被 worker 静默丢弃）、事件注入转发层
+  （on_task_status_changed/on_task_progress → EventDispatcher
+  派发 + 活动集进出）
+- 剩余 13 miss 定性：76-77/553/557-560/563-564 为 gcc 15 行归属
+  伪影（顺序块内后执行行覆盖而先执行行不覆盖，执行模型上不可能
+  ——round-trip 全字段断言通过即证实在执行）；751-756
+  Impl::on_completed 不可达（**全库零调用方**：完成事件实际派发
+  走 on_status_changed 内 Completed 分支，on_completed 是接口完
+  整性 override；TaskManager 本身不继承 IEventListener，
+  on_task_status_changed/on_task_progress 是引擎适配层的显式注
+  入口）
+- 测试注意：start_task 单参重载经 impl 单参取优先级后转发双参实
+  现——拒绝分支单参命中 357、双参命中 298，断言要分别覆盖
+
 ### 2026-09-12 - 全局限速查询通道（query_speed_limit）
 - `IEventListener` 新增 `query_speed_limit(task_id)`（默认返回 0，
   非破坏扩展）：协议处理器可在下载过程中周期性查询任务当前限速

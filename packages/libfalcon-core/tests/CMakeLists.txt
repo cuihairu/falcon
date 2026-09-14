@@ -55,6 +55,7 @@ add_executable(falcon_core_tests
     unit/download_engine_test.cpp
     unit/download_engine_api_test.cpp
     unit/task_manager_api_test.cpp
+    unit/task_manager_edges_test.cpp
     unit/version_test.cpp
     unit/password_manager_test.cpp
     unit/bug_fix_test.cpp
