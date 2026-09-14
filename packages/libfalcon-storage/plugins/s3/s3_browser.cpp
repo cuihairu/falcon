@@ -64,21 +64,64 @@ public:
     }
 
     std::string build_s3_url(const std::string& bucket, const std::string& key = "") {
+        // 自定义 endpoint（S3 兼容服务，如 MinIO）走 path-style：endpoint/bucket/key；
+        // 否则用 AWS 官方 virtual-host 风格域名
+        if (!s3_url_.endpoint.empty()) {
+            std::string url = s3_url_.endpoint;
+            if (url.back() == '/') {
+                url.pop_back();
+            }
+            url += "/" + bucket;
+            if (!key.empty()) {
+                url += "/" + encode_key(key);
+            }
+            return url;
+        }
         std::string url = "https://" + bucket + ".s3." + s3_url_.region + ".amazonaws.com";
         if (!key.empty()) {
-            url += "/" + url_encode(key);
+            url += "/" + encode_key(key);
         }
         return url;
+    }
+
+    /// S3 对象 key 编码：逐段编码、保留 '/'（url_encode 会把 '/' 编成 %2F，
+    /// 导致子目录 key 的对象在真实服务上必然 404）
+    std::string encode_key(const std::string& key) {
+        std::string out;
+        size_t start = 0;
+        while (true) {
+            size_t slash = key.find('/', start);
+            out += url_encode(key.substr(start, slash == std::string::npos
+                                                   ? std::string::npos
+                                                   : slash - start));
+            if (slash == std::string::npos) {
+                break;
+            }
+            out += '/';
+            start = slash + 1;
+        }
+        return out;
     }
 
     std::string perform_s3_request(
         const std::string& method,
         const std::string& url,
         const std::map<std::string, std::string>& headers,
-        const std::string& body = "") {
+        const std::string& body = "",
+        std::map<std::string, std::string>* response_headers = nullptr,
+        bool* ok = nullptr) {
 
         curl_easy_setopt(curl_, CURLOPT_URL, url.c_str());
-        curl_easy_setopt(curl_, CURLOPT_CUSTOMREQUEST, method.c_str());
+        if (method == "HEAD") {
+            // CURLOPT_NOBODY 才是真正的 HEAD：curl 不再期待响应体
+            //（CURLOPT_CUSTOMREQUEST 只改方法字符串，响应仍按 GET 处理，
+            //  且其残留会覆盖 NOBODY 的方法切换——handle 复用必须互斥清设）
+            curl_easy_setopt(curl_, CURLOPT_NOBODY, 1L);
+            curl_easy_setopt(curl_, CURLOPT_CUSTOMREQUEST, nullptr);
+        } else {
+            curl_easy_setopt(curl_, CURLOPT_NOBODY, 0L);
+            curl_easy_setopt(curl_, CURLOPT_CUSTOMREQUEST, method.c_str());
+        }
 
         // 添加AWS签名头部
         std::map<std::string, std::string> signed_headers = headers;
@@ -100,14 +143,18 @@ public:
             curl_easy_setopt(curl_, CURLOPT_HTTPHEADER, header_list);
         }
 
-        // 设置请求体
-        if (!body.empty()) {
-            curl_easy_setopt(curl_, CURLOPT_POSTFIELDS, body.c_str());
-        }
+        // 设置请求体（handle 复用：空 body 请求清除先前残留）
+        curl_easy_setopt(curl_, CURLOPT_POSTFIELDS,
+                         body.empty() ? nullptr : body.c_str());
 
         std::string response;
         curl_easy_setopt(curl_, CURLOPT_WRITEFUNCTION, WriteCallback);
         curl_easy_setopt(curl_, CURLOPT_WRITEDATA, &response);
+
+        // 响应头回传（HEAD 的元数据只在头部）
+        std::map<std::string, std::string> header_map;
+        curl_easy_setopt(curl_, CURLOPT_HEADERFUNCTION, HeaderCallback);
+        curl_easy_setopt(curl_, CURLOPT_HEADERDATA, &header_map);
 
         CURLcode res = curl_easy_perform(curl_);
 
@@ -115,8 +162,25 @@ public:
             curl_slist_free_all(header_list);
         }
 
-        if (res != CURLE_OK) {
-            FALCON_LOG_ERROR("S3 request failed: {}", curl_easy_strerror(res));
+        if (response_headers) {
+            *response_headers = std::move(header_map);
+        }
+
+        // HTTP 层失败（4xx/5xx）同样视为请求失败：成功与否不能只看
+        // 传输结果，S3 用状态码表达对象不存在/权限不足等业务错误
+        long status = 0;
+        curl_easy_getinfo(curl_, CURLINFO_RESPONSE_CODE, &status);
+        const bool request_ok = (res == CURLE_OK) && status >= 200 && status < 400;
+        if (ok) {
+            *ok = request_ok;
+        }
+
+        if (!request_ok) {
+            if (res != CURLE_OK) {
+                FALCON_LOG_ERROR("S3 request failed: {}", curl_easy_strerror(res));
+            } else {
+                FALCON_LOG_ERROR("S3 request failed with HTTP status {}", status);
+            }
             return "";
         }
 
@@ -265,6 +329,25 @@ public:
         return size * nmemb;
     }
 
+    static size_t HeaderCallback(void* contents, size_t size, size_t nmemb, void* userp) {
+        auto* headers = static_cast<std::map<std::string, std::string>*>(userp);
+        std::string line(static_cast<char*>(contents), size * nmemb);
+        // 去掉行终止符
+        while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) {
+            line.pop_back();
+        }
+        const auto colon = line.find(':');
+        if (colon != std::string::npos && colon > 0) {
+            std::string key = line.substr(0, colon);
+            std::string value = line.substr(colon + 1);
+            // 值前导空白剔除（HTTP 允许 ": value"）
+            size_t begin = value.find_first_not_of(" \t");
+            value = (begin == std::string::npos) ? "" : value.substr(begin);
+            (*headers)[key] = value;
+        }
+        return size * nmemb;
+    }
+
     CURL* curl_;
     S3Config config_;
     S3Url s3_url_;
@@ -404,33 +487,35 @@ RemoteResource S3Browser::get_resource_info(const std::string& path) {
     // 使用HEAD请求获取对象信息
     std::string url = p_impl_->build_s3_url(p_impl_->s3_url_.bucket, path);
 
-    std::map<std::string, std::string> headers;
-    std::string response = p_impl_->perform_s3_request("HEAD", url, headers);
+    // HEAD 无响应体，成功与否看请求结果；元数据在响应头里回传
+    std::map<std::string, std::string> response_headers;
+    bool ok = false;
+    p_impl_->perform_s3_request("HEAD", url, {}, "", &response_headers, &ok);
 
-    if (!response.empty()) {
+    if (ok) {
         // 解析响应头获取信息
         info.path = path;
         info.name = path.substr(path.find_last_of('/') + 1);
         info.type = ResourceType::File;
 
         // 从响应头提取信息
-        auto content_length = headers.find("Content-Length");
-        if (content_length != headers.end()) {
+        auto content_length = response_headers.find("Content-Length");
+        if (content_length != response_headers.end()) {
             info.size = std::stoull(content_length->second);
         }
 
-        auto last_modified = headers.find("Last-Modified");
-        if (last_modified != headers.end()) {
+        auto last_modified = response_headers.find("Last-Modified");
+        if (last_modified != response_headers.end()) {
             info.modified_time = last_modified->second;
         }
 
-        auto etag = headers.find("ETag");
-        if (etag != headers.end()) {
+        auto etag = response_headers.find("ETag");
+        if (etag != response_headers.end()) {
             info.etag = etag->second;
         }
 
-        auto content_type = headers.find("Content-Type");
-        if (content_type != headers.end()) {
+        auto content_type = response_headers.find("Content-Type");
+        if (content_type != response_headers.end()) {
             info.mime_type = content_type->second;
         }
     }
@@ -451,9 +536,11 @@ bool S3Browser::create_directory(const std::string& path, [[maybe_unused]] bool 
     headers["Content-Type"] = "application/x-directory";
     headers["x-amz-meta-type"] = "directory";
 
-    std::string response = p_impl_->perform_s3_request("PUT", url, headers, "");
+    // S3 的写操作成功响应通常无响应体（204 No Content），按请求结果判定
+    bool ok = false;
+    p_impl_->perform_s3_request("PUT", url, headers, "", nullptr, &ok);
 
-    return !response.empty();
+    return ok;
 }
 
 bool S3Browser::remove(const std::string& path, bool recursive) {
@@ -478,9 +565,10 @@ bool S3Browser::remove(const std::string& path, bool recursive) {
     }
 
     // 删除指定路径
-    std::string response = p_impl_->perform_s3_request("DELETE", url, {});
+    bool ok = false;
+    p_impl_->perform_s3_request("DELETE", url, {}, "", nullptr, &ok);
 
-    return !response.empty();
+    return ok;
 }
 
 bool S3Browser::rename(const std::string& old_path, const std::string& new_path) {
@@ -499,9 +587,10 @@ bool S3Browser::copy(const std::string& source_path, const std::string& dest_pat
     std::map<std::string, std::string> headers;
     headers["x-amz-copy-source"] = "/" + p_impl_->s3_url_.bucket + "/" + source_path;
 
-    std::string response = p_impl_->perform_s3_request("PUT", dest_url, headers, "");
+    bool ok = false;
+    p_impl_->perform_s3_request("PUT", dest_url, headers, "", nullptr, &ok);
 
-    return !response.empty();
+    return ok;
 }
 
 bool S3Browser::exists(const std::string& path) {
