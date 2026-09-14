@@ -1570,13 +1570,13 @@ HMAC/base64 长度防御（需注入）、`~Browser()` 的 gcov D0/D2 析构
   - 不可解析域/仅 IPv6 主机 2：.invalid 快速失败、ip6-localhost
     （::1）AF_INET 数据面干净失败
 
-**覆盖率（批次 D 收口）：行 86.6% / 函数 90.7% / 分支 48.3%**
-（gcovr 四库 src+include 正则口径；批次 C 的全包百分比口径未留档
-不可直接对比，文件级铁账：http_commands.cpp gcov 文本 miss
-256 → **176**，行覆盖 87.95%/1461 行）。剩余缺口定性：TLS 防御分
-支（SSL_CTX/OOM/证书解析失败）、send/recv/CONNECT 硬错误路径、
-resume 理论不可达防御、Windows 平台分支。ASan 引擎相关 194 用例
-零告警。
+**覆盖率（批次 D 收口）：行 77.3% / 函数 89.8% / 分支 42.1%**
+（批次 C 同款全包口径 76.8/89.8/41.8；涨幅 0.5 点含四云批次贡献
+——全包分母 22932 行下 80 行收敛即 0.35 点）。文件级铁账：
+http_commands.cpp gcov 文本 miss 256 → **176**（行 87.95%/1461 行）
+。剩余缺口定性：TLS 防御分支（SSL_CTX/OOM/证书解析失败）、
+send/recv/CONNECT 硬错误路径、resume 理论不可达防御、Windows 平台
+分支。ASan 引擎相关 194 用例零告警。
 
 **后续批次（真实缺口）：** bittorrent_plugin 187 → ftp_plugin 135
 → http_handler 82 → task_manager 78。

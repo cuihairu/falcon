@@ -16,9 +16,10 @@
   级 SO_NOSIGPIPE）、CLI main 补 SIGPIPE SIG_IGN（daemon 既有）；
   顺带消除 base64 移位与 send/recv 长度参数的既有符号转换告警
 - 覆盖率批次 D：http_commands.cpp gcov miss **256 → 176**（行
-  87.95%），净收敛 80 行真实缺口；全包（gcovr 四库 src+include 口
-  径）行 86.6% / 函数 90.7% / 分支 48.3%。剩余缺口：TLS 防御分支、
-  send/recv 硬错误、resume 理论不可达、Windows 平台分支
+  87.95%），净收敛 80 行真实缺口；全包（批次 C 同款 gcovr 口径）行
+  77.3% / 函数 89.8% / 分支 42.1%（76.8/89.8/41.8 → 涨幅 0.5 点含
+  四云批次贡献）。剩余缺口：TLS 防御分支、send/recv 硬错误、
+  resume 理论不可达、Windows 平台分支
 - 测试 +30 用例全量 ctest 全绿：proxy 套件 4（连接应答跨分片重入/
   base64 填充向量/IPv6 authority 与斜杠 path 判 Unsupported）+ 新
   文件 `http_commands_edges_test.cpp` 26（编程式剧本服务器：传输中
