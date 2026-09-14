@@ -1876,4 +1876,58 @@ dispatch_message 387 行 is_object 检查后 / fail_pending 431 行字
 task_storage 81 / cloud_storage_plugin 78 / segment_downloader 77
 / resource_search 47 / incremental_download 46。
 
+### 批次 J 收口（2026-09-14）：dht_node.cpp 94 → 10 miss
+
+**测试基建：** `dht_node_test.cpp` 增量 16 用例（挂
+falcon_protocols_tests，9 → 25），复用既有本地 UDP mock DHT 网络
+（MockDhtNode）。纯单元簇直接构造公开类型（DhtBucket K=8 /
+DhtRoutingTable / DhtMessage / DhtUtils），DhtClient 簇沿用 mock
+端到端。两个测试设计要点：① **bootstrap 候选 id 全零，距离排序退
+化**——需要确定距离序的用例（α 上限验证）必须先跑一次热身查找，
+让响应把带真实 id 的节点写入路由表，第二阶段查找的候选才来自路
+由表的确定性排序（直接 getRoutingTable 注入不可行，返回 const）；
+② 冻结迭代轮次用「响应门闩」：被查询节点的 responder 自旋等待
+atomic 门闩，主线程观察到第 1 轮恰好 α=3 个查询后放行，响应驱
+动第 2 轮查询第 4 近的候选——时序完全确定，无 sleep 依赖。
+
+**六簇收口：** ① 纯单元：nodeIdFromString 大写 hex / 40 长度含非
+hex 回退 / 非 40 长度短补零超长截断（140-162）、DhtNode::
+distanceTo（193-194）、DhtBucket 全 API（桶满替换 15 分钟不活跃
+最旧节点——lastSeen 直接回拨 16 分钟构造、桶满全员活跃拒绝进替
+换缓存、removeNode / getNodes / getActiveNodeCount 含 inactive 不
+计入、findClosestNodes 排序截断）、DhtRoutingTable 跨桶聚合
+（getAllNodes / getTotalNodeCount / findClosestNodes / 全零 id 钳
+位桶 159 不越界）、DhtMessage Error encode/decode 往返（含空错误
+表回落 "Unknown error"）+ 非 dict 与垃圾输入返回默认消息不抛。
+② 未 start 客户端：socket_==-1 → sendMessage 快速失败 → noteU
+nreachable 链立即终结，findPeers/findNode 均不悬挂（700）。③
+α=3 并发上限（783）：热身 + 门闩两阶段断言第 1 轮恰查最近 3 个、
+第 4 近在放行后才被查。④ kMaxCandidates=64 吸收截断（896）：响应
+携带 70 个新节点强制命中 break，剩余候选不可达经 1s 超时干净终
+结。⑤ k=8 上报截断（965）：9 个响应者恰报最近 8 个、最远者不报
+且无重复。⑥ 重复 id 去重（968）：两端点不同声称同一 id 的响应者
+各查一次、只上报一次（idA + sharedId 共 2 个回调）。
+
+**剩余 10 miss 全部定性（与批次 J 预定位清单逐一对应）：**
+495-496（socket() 构造失败，需 OOM 注入）；542-543（维护线程 5
+分钟周期，测试不可等待）；637-638（recvfrom 非 EAGAIN 错误，本
+地 UDP 竞态/平台窗口）；771 / 850 / 876 / 938（四个并发防御行：
+finalizeLookup 与 pendingRequests_ 在同一把锁内同步清理——迟到
+响应/迟到的发送失败/双重终结仅在「超时线程 finalize 与回调派发
+之间」的微窗口可达，非确定性注入点不存在；如 876 的迟到响应若
+finalize 已发生则 pendingRequests_ 已清空，handleLookupResponse
+根本不会被调用）。
+
+**覆盖率（批次 J 收口，批次 C 同款 gcovr 口径）：行 80.3% / 函数
+93.4% / 分支 43.8%**（批次 I 79.9/92.9/43.6；净涨 0.4/0.5/0.2
+点）。全量 ctest 1900 零失败；DHT 25 用例 ASan+UBSan 零告警。
+**口径警示（批次 J 实测）：** gcovr 显式位置参数 `.` 只扫 cov 树
+（曾得 90.5% 虚高口径），留档命令无位置参数时搜索目录默认 root
+（`..`）= 仓库根，同时吃进 build-cov 与 build-asan 两棵树——铁
+账链为两树合并口径，跨批次对比必须用原命令。
+
+**批次 K 候选（##### 铁账）：** config_manager 82 / task_storage
+81 / cloud_storage_plugin 78 / segment_downloader 77 / resource_
+search 47 / incremental_download 46。
+
 

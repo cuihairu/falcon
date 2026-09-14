@@ -15,13 +15,16 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <future>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -501,6 +504,488 @@ TEST_F(DhtClientTest, UnresolvableBootstrapFailsFastWithoutHanging) {
     ASSERT_EQ(future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
     // 远小于默认 30s 查找超时
     EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds(10));
+
+    client->stop();
+}
+
+//==============================================================================
+// DhtUtils / DhtNode 边界
+//==============================================================================
+
+// 大写 hex 同样解码（hexVal 的大写分支）
+TEST(DhtUtilsTest, NodeIdFromStringUppercaseHex) {
+    DhtNodeId id{};
+    for (size_t i = 0; i < id.size(); ++i) {
+        id[i] = static_cast<uint8_t>(i * 7 + 3);
+    }
+    std::string lower = DhtUtils::nodeIdToString(id);
+    std::string upper = lower;
+    std::transform(upper.begin(), upper.end(), upper.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    EXPECT_EQ(DhtUtils::nodeIdFromString(upper), id);
+}
+
+// 非 hex 形态回退：40 长度含非 hex 字符、非 40 长度（短/超长）一律按
+// 原始字节截断/补零
+TEST(DhtUtilsTest, NodeIdFromStringNonHexFallsBackToRawBytes) {
+    std::string raw(40, 'z');  // 'z' 非 hex → hex 解码整体失败 → 字节回退
+    DhtNodeId id = DhtUtils::nodeIdFromString(raw);
+    EXPECT_EQ(id[0], static_cast<uint8_t>('z'));
+    EXPECT_EQ(id[19], static_cast<uint8_t>('z'));
+
+    // 短于 20 字节：原始字节 + 尾部补零
+    DhtNodeId shortId = DhtUtils::nodeIdFromString("abc");
+    EXPECT_EQ(shortId[0], static_cast<uint8_t>('a'));
+    EXPECT_EQ(shortId[1], static_cast<uint8_t>('b'));
+    EXPECT_EQ(shortId[2], static_cast<uint8_t>('c'));
+    EXPECT_EQ(shortId[3], uint8_t{0});
+
+    // 超长输入：截断到 20 字节
+    DhtNodeId longId = DhtUtils::nodeIdFromString(std::string(50, 'w'));
+    EXPECT_EQ(longId[0], static_cast<uint8_t>('w'));
+    EXPECT_EQ(longId[19], static_cast<uint8_t>('w'));
+}
+
+// DhtNode::distanceTo 与 DhtUtils::xorDistance 一致
+TEST(DhtNodeTest, DistanceToMatchesXor) {
+    DhtNode a;
+    a.id = DhtUtils::nodeIdFromString(std::string(40, 'a'));
+    DhtNodeId b = DhtUtils::nodeIdFromString(std::string(40, 'b'));
+    EXPECT_EQ(a.distanceTo(b), DhtUtils::xorDistance(a.id, b));
+}
+
+//==============================================================================
+// DhtBucket / DhtRoutingTable
+//==============================================================================
+
+namespace {
+
+// 构造桶测试节点：id 全部填充 tag，lastSeen 可回拨
+DhtNode makeBucketNode(uint8_t tag, int ageMinutes = 0) {
+    DhtNode n;
+    n.ip = "10.0.0.1";
+    n.port = static_cast<uint16_t>(1000 + tag);
+    n.id.fill(tag);
+    n.lastSeen = std::chrono::steady_clock::now() - std::chrono::minutes(ageMinutes);
+    return n;
+}
+
+} // namespace
+
+// 桶满（K=8）时替换 15 分钟不活跃的最旧节点
+TEST(DhtBucketTest, FullBucketReplacesStaleNode) {
+    DhtBucket bucket;
+    bucket.addNode(makeBucketNode(0, 16));  // 最旧：16 分钟未活跃
+    for (uint8_t i = 1; i < 8; ++i) {
+        EXPECT_TRUE(bucket.addNode(makeBucketNode(i)));
+    }
+    EXPECT_EQ(bucket.getNodes().size(), size_t{8});
+
+    DhtNode newcomer = makeBucketNode(0x30);
+    EXPECT_TRUE(bucket.addNode(newcomer));
+    auto nodes = bucket.getNodes();
+    EXPECT_EQ(nodes.size(), size_t{8});
+    EXPECT_TRUE(std::any_of(nodes.begin(), nodes.end(),
+                            [&](const DhtNode& n) { return n.id == newcomer.id; }));
+    // 被替换掉的正是 16 分钟前的最旧节点（tag 0）
+    EXPECT_FALSE(std::any_of(nodes.begin(), nodes.end(),
+                             [](const DhtNode& n) { return n.id[0] == 0; }));
+}
+
+// 桶满且全员活跃：新节点进替换缓存，桶内容不变
+TEST(DhtBucketTest, FullBucketWithActiveNodesRejectsNewcomer) {
+    DhtBucket bucket;
+    for (uint8_t i = 0; i < 8; ++i) {
+        bucket.addNode(makeBucketNode(i));
+    }
+    DhtNode newcomer = makeBucketNode(0x40);
+    EXPECT_FALSE(bucket.addNode(newcomer));
+    auto nodes = bucket.getNodes();
+    EXPECT_EQ(nodes.size(), size_t{8});
+    EXPECT_FALSE(std::any_of(nodes.begin(), nodes.end(),
+                             [&](const DhtNode& n) { return n.id == newcomer.id; }));
+}
+
+// removeNode / getNodes / getActiveNodeCount（inactive 节点不计活跃）
+TEST(DhtBucketTest, RemoveNodesAndGetActiveCount) {
+    DhtBucket bucket;
+    for (uint8_t i = 0; i < 5; ++i) {
+        bucket.addNode(makeBucketNode(i));
+    }
+    DhtNode idle = makeBucketNode(9);
+    idle.active = false;
+    bucket.addNode(idle);
+    EXPECT_EQ(bucket.getNodes().size(), size_t{6});
+    EXPECT_EQ(bucket.getActiveNodeCount(), size_t{5});
+
+    bucket.removeNode(idle.id);
+    EXPECT_EQ(bucket.getNodes().size(), size_t{5});
+    bucket.removeNode(makeBucketNode(2).id);
+    EXPECT_EQ(bucket.getNodes().size(), size_t{4});
+    // 移除不存在的节点：无操作
+    bucket.removeNode(makeBucketNode(0x77).id);
+    EXPECT_EQ(bucket.getNodes().size(), size_t{4});
+}
+
+// findClosestNodes：按 XOR 距离排序并截断到 count
+TEST(DhtBucketTest, FindClosestNodesSortsAndTruncates) {
+    DhtNodeId target{};
+    target[0] = 0x80;
+    auto nodeAtDistance = [&](uint8_t mask, uint8_t tag) {
+        DhtNode n = makeBucketNode(tag);
+        n.id = target;
+        n.id[0] = static_cast<uint8_t>(n.id[0] ^ mask);
+        return n;
+    };
+
+    DhtBucket bucket;
+    bucket.addNode(nodeAtDistance(0x80, 1));  // 距离 0x80：最远
+    bucket.addNode(nodeAtDistance(0x01, 2));  // 距离 0x01：最近
+    bucket.addNode(nodeAtDistance(0x40, 3));  // 距离 0x40：中间
+
+    auto closest = bucket.findClosestNodes(target, 2);
+    ASSERT_EQ(closest.size(), size_t{2});
+    EXPECT_EQ(closest[0].id[0], uint8_t{0x81});  // 0x80 ^ 0x01
+    EXPECT_EQ(closest[1].id[0], uint8_t{0xC0});  // 0x80 ^ 0x40
+
+    auto all = bucket.findClosestNodes(target, 10);  // count 超过节点数：原样返回
+    EXPECT_EQ(all.size(), size_t{3});
+}
+
+// 路由表跨桶聚合：getAllNodes / getTotalNodeCount / findClosestNodes
+TEST(DhtRoutingTableTest, CollectSortCountAcrossBuckets) {
+    DhtRoutingTable table;
+    DhtNodeId target{};
+    target[0] = 0x80;
+    auto nodeWithFirstByte = [&](uint8_t firstByte, uint8_t tag) {
+        DhtNode n = makeBucketNode(tag);
+        n.id.fill(0);
+        n.id[0] = firstByte;
+        return n;
+    };
+
+    // 不同前导零的 id 落入不同桶
+    table.addNode(nodeWithFirstByte(0x80, 1));  // 0 个前导零
+    table.addNode(nodeWithFirstByte(0x40, 2));  // 1 个前导零
+    table.addNode(nodeWithFirstByte(0x01, 3));  // 7 个前导零
+    table.addNode(nodeWithFirstByte(0x00, 4));  // 全零 id → 桶上限 159
+    EXPECT_EQ(table.getTotalNodeCount(), size_t{4});
+    EXPECT_EQ(table.getAllNodes().size(), size_t{4});
+
+    auto closest = table.findClosestNodes(target, 2);
+    ASSERT_EQ(closest.size(), size_t{2});
+    EXPECT_EQ(closest[0].id[0], uint8_t{0x80});  // 距离 0
+    EXPECT_EQ(closest[1].id[0], uint8_t{0x00});  // 距离 0x80（全零 id 节点）
+
+    auto all = table.findClosestNodes(target, 100);
+    EXPECT_EQ(all.size(), size_t{4});
+}
+
+// 全零 id：前导零计数钳位到桶上限（159），不越界
+TEST(DhtRoutingTableTest, AllZeroIdFallsIntoLastBucket) {
+    DhtRoutingTable table;
+    table.addNode(makeBucketNode(0));
+    EXPECT_EQ(table.getTotalNodeCount(), size_t{1});
+    EXPECT_EQ(table.getAllNodes().size(), size_t{1});
+}
+
+//==============================================================================
+// DhtMessage Error 分支与防御
+//==============================================================================
+
+// Error 消息 encode/decode 往返（含空错误表回落 "Unknown error"）
+TEST(DhtMessageTest, ErrorEncodeDecodeRoundTrip) {
+    DhtMessage err;
+    err.type = DhtMessageType::Error;
+    err.transactionId = "er";
+    err.nodeId = DhtUtils::nodeIdFromString(kTestInfoHash);
+    err.response["error"] = "method not allowed";
+
+    DhtMessage back = DhtMessage::decode(err.encode());
+    EXPECT_EQ(back.type, DhtMessageType::Error);
+    EXPECT_EQ(back.transactionId, "er");
+    ASSERT_FALSE(back.response.empty());
+    EXPECT_EQ(back.response.at("error"), "method not allowed");
+
+    DhtMessage bare;
+    bare.type = DhtMessageType::Error;  // response 为空 → "Unknown error"
+    DhtMessage bareBack = DhtMessage::decode(bare.encode());
+    EXPECT_EQ(bareBack.type, DhtMessageType::Error);
+    EXPECT_EQ(bareBack.response.at("error"), "Unknown error");
+}
+
+// 非 dict 的合法 bencode：返回默认消息；垃圾输入不抛异常
+TEST(DhtMessageTest, DecodeNonDictAndGarbageReturnDefaultMessage) {
+    DhtMessage msg = DhtMessage::decode("i42e");
+    EXPECT_TRUE(msg.transactionId.empty());
+    EXPECT_TRUE(msg.response.empty());
+
+    DhtMessage garbage = DhtMessage::decode("not-bencode-at-all");
+    EXPECT_TRUE(garbage.transactionId.empty());
+}
+
+//==============================================================================
+// DhtClient 查找边界
+//==============================================================================
+
+// 未 start 的客户端：socket 未建立，发送必败 → 查找立即终结（不悬挂）
+TEST_F(DhtClientTest, NotStartedClientFailsFastOnLookup) {
+    auto client = std::make_unique<DhtClient>(0);
+    client->clear_bootstrap_nodes();
+    client->addBootstrapNode("127.0.0.1", 6881);
+    // 有意不调用 start()
+
+    std::promise<PeerList> pp;
+    auto pf = pp.get_future();
+    client->findPeers(kTestInfoHash,
+                      [&pp](const std::string&, const PeerList& peers) {
+                          pp.set_value(peers);
+                      });
+    ASSERT_EQ(pf.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    EXPECT_TRUE(pf.get().empty());
+
+    // findNode 同样快速终结（活体证据：后续 findPeers 仍能到达回调）
+    client->findNode(infoHashId_, [](const DhtNode&) {});
+    std::promise<PeerList> pp2;
+    auto pf2 = pp2.get_future();
+    client->findPeers(kTestInfoHash,
+                      [&pp2](const std::string&, const PeerList& peers) {
+                          pp2.set_value(peers);
+                      });
+    ASSERT_EQ(pf2.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+
+    client->stop();
+}
+
+// 单轮并发查询受 α=3 上限：第 4 近的候选等前一轮响应后才被查询
+TEST_F(DhtClientTest, AlphaCapsConcurrentQueriesPerRound) {
+    MockDhtNode nodes[4];
+    for (auto& n : nodes) {
+        ASSERT_TRUE(n.valid());
+    }
+    DhtNodeId ids[4];
+    std::string allNodesBlob;
+    for (int i = 0; i < 4; ++i) {
+        ids[i] = idNearTarget(infoHashId_, 19, static_cast<uint8_t>(1 << i));
+        allNodesBlob += encodeCompactNode(ids[i], "127.0.0.1", nodes[i].port());
+    }
+    // 引导节点响应带出全部 4 个节点（含自身端点，已被查询会跳过）
+    DhtNodeId id0 = ids[0];
+    nodes[0].responder = [id0, allNodesBlob](const DhtMessage&) {
+        return makeResponse(id0, allNodesBlob, "");
+    };
+    for (int i = 1; i < 4; ++i) {
+        MockDhtNode& n = nodes[i];
+        DhtNodeId id = ids[i];
+        n.responder = [id](const DhtMessage&) { return makeResponse(id, "", ""); };
+    }
+
+    auto client = std::make_unique<DhtClient>(0);
+    client->clear_bootstrap_nodes();
+    client->addBootstrapNode("127.0.0.1", nodes[0].port());
+    client->start();
+
+    // 第一阶段热身查找：响应把 4 个节点以真实 id 写入路由表——
+    // bootstrap 候选的 id 全零，距离排序退化，必须经路由表获得确定的距离序
+    std::promise<PeerList> warmPromise;
+    auto warmFuture = warmPromise.get_future();
+    client->findPeers(kTestInfoHash,
+                      [&warmPromise](const std::string&, const PeerList& peers) {
+                          warmPromise.set_value(peers);
+                      });
+    ASSERT_EQ(warmFuture.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+
+    int baseline[4];
+    for (int i = 0; i < 4; ++i) {
+        baseline[i] = nodes[i].request_count.load();
+        ASSERT_EQ(baseline[i], 1);  // 热身阶段每个节点恰好被查询一次
+    }
+
+    // 第二阶段：门闩扣住最近 3 个节点的响应，冻结第一轮
+    std::atomic<bool> gate{false};
+    for (int i = 0; i < 3; ++i) {
+        MockDhtNode& n = nodes[i];
+        DhtNodeId id = ids[i];
+        n.responder = [&gate, id](const DhtMessage&) {
+            while (!gate.load()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            return makeResponse(id, "", "");
+        };
+    }
+    DhtNodeId farId = ids[3];
+    nodes[3].responder = [farId](const DhtMessage&) {
+        return makeResponse(farId, "", "");
+    };
+
+    std::promise<PeerList> promise;
+    auto future = promise.get_future();
+    client->findPeers(kTestInfoHash,
+                      [&promise](const std::string&, const PeerList& peers) {
+                          promise.set_value(peers);
+                      });
+
+    // 第一轮只查询最近 α=3 个候选（来自路由表的确定性距离序）
+    auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while ((nodes[0].request_count.load() - baseline[0]) +
+                   (nodes[1].request_count.load() - baseline[1]) +
+                   (nodes[2].request_count.load() - baseline[2]) <
+               3 &&
+           std::chrono::steady_clock::now() < until) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    EXPECT_EQ((nodes[0].request_count.load() - baseline[0]) +
+                  (nodes[1].request_count.load() - baseline[1]) +
+                  (nodes[2].request_count.load() - baseline[2]),
+              3);
+    EXPECT_EQ(nodes[3].request_count.load() - baseline[3], 0);  // 被 α 上限挡住
+
+    gate.store(true);  // 放行 → 响应驱动下一轮 → 第 4 近的候选被查询
+    ASSERT_EQ(future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    EXPECT_TRUE(future.get().empty());
+    EXPECT_EQ(nodes[3].request_count.load() - baseline[3], 1);
+
+    client->stop();
+}
+
+// 响应携带超量节点：候选吸收在 kMaxCandidates=64 处截断，查找仍正常终结
+TEST_F(DhtClientTest, CandidateAbsorptionCappedAtMaxCandidates) {
+    MockDhtNode nodeA;
+    ASSERT_TRUE(nodeA.valid());
+    DhtNodeId idA = idNearTarget(infoHashId_, 0, 0xFF);
+    std::string nodesBlob;
+    for (int i = 0; i < 70; ++i) {  // 70 > 64：截断分支必然命中
+        DhtNodeId nid{};
+        nid[19] = static_cast<uint8_t>(i + 1);
+        nodesBlob += encodeCompactNode(nid, "10.1.0.1", static_cast<uint16_t>(2000 + i));
+    }
+    nodeA.responder = [idA, nodesBlob](const DhtMessage&) {
+        return makeResponse(idA, nodesBlob, "");
+    };
+
+    auto client = makeClient(nodeA);
+    client->set_lookup_timeout(std::chrono::seconds(1));
+
+    std::promise<PeerList> promise;
+    auto future = promise.get_future();
+    client->findPeers(kTestInfoHash,
+                      [&promise](const std::string&, const PeerList& peers) {
+                          promise.set_value(peers);
+                      });
+
+    // 吸收截断后剩余候选不可达 → 超时终结（而非悬挂或崩溃）
+    ASSERT_EQ(future.wait_for(std::chrono::seconds(8)), std::future_status::ready);
+    EXPECT_TRUE(future.get().empty());
+
+    client->stop();
+}
+
+// 收敛上报按距离取前 k=8 个已响应节点（第 9 近的被截断）
+TEST_F(DhtClientTest, NodeReportingCappedAtK) {
+    constexpr int kNodeCount = 9;  // kLookupK = 8
+    MockDhtNode nodes[kNodeCount];
+    for (auto& n : nodes) {
+        ASSERT_TRUE(n.valid());
+    }
+    DhtNodeId ids[kNodeCount];
+    std::string allNodesBlob;
+    for (int i = 0; i < kNodeCount; ++i) {
+        ids[i] = idNearTarget(infoHashId_, 19, static_cast<uint8_t>(0x10 + i));
+        allNodesBlob += encodeCompactNode(ids[i], "127.0.0.1", nodes[i].port());
+    }
+    for (int i = 0; i < kNodeCount; ++i) {
+        MockDhtNode& n = nodes[i];
+        DhtNodeId id = ids[i];
+        n.responder = [id](const DhtMessage&) { return makeResponse(id, "", ""); };
+    }
+    // bootstrap 响应带出全部 9 个节点（自身端点已查询，会被跳过）
+    DhtNodeId id0 = ids[0];
+    nodes[0].responder = [id0, allNodesBlob](const DhtMessage&) {
+        return makeResponse(id0, allNodesBlob, "");
+    };
+
+    auto client = std::make_unique<DhtClient>(0);
+    client->clear_bootstrap_nodes();
+    client->addBootstrapNode("127.0.0.1", nodes[0].port());
+    client->start();
+
+    std::mutex resultMutex;
+    std::vector<DhtNodeId> reported;
+    std::promise<void> donePromise;
+    auto done = donePromise.get_future();
+    client->findNode(infoHashId_, [&](const DhtNode& node) {
+        std::lock_guard<std::mutex> lock(resultMutex);
+        reported.push_back(node.id);
+        if (reported.size() == 8) {
+            donePromise.set_value();
+        }
+    });
+
+    ASSERT_EQ(done.wait_for(std::chrono::seconds(8)), std::future_status::ready);
+    {
+        std::lock_guard<std::mutex> lock(resultMutex);
+        EXPECT_EQ(reported.size(), size_t{8});
+        // 全部去重且为最近的 8 个（最远的 ids[8] 被截断）
+        std::set<DhtNodeId> unique(reported.begin(), reported.end());
+        EXPECT_EQ(unique.size(), size_t{8});
+        EXPECT_EQ(unique.count(ids[8]), size_t{0});
+    }
+
+    client->stop();
+}
+
+// 两个端点不同但声称同一节点 id 的响应者：只上报一次
+TEST_F(DhtClientTest, DuplicateResponderIdsReportedOnce) {
+    MockDhtNode nodeA;
+    MockDhtNode nodeB1;
+    MockDhtNode nodeB2;
+    ASSERT_TRUE(nodeA.valid());
+    ASSERT_TRUE(nodeB1.valid());
+    ASSERT_TRUE(nodeB2.valid());
+
+    DhtNodeId idA = idNearTarget(infoHashId_, 0, 0xFF);
+    DhtNodeId sharedId = idNearTarget(infoHashId_, 19, 0x01);
+    std::string nodesB = encodeCompactNode(sharedId, "127.0.0.1", nodeB1.port()) +
+                         encodeCompactNode(sharedId, "127.0.0.1", nodeB2.port());
+    nodeA.responder = [idA, nodesB](const DhtMessage&) {
+        return makeResponse(idA, nodesB, "");
+    };
+    nodeB1.responder = [sharedId](const DhtMessage&) {
+        return makeResponse(sharedId, "", "");
+    };
+    nodeB2.responder = [sharedId](const DhtMessage&) {
+        return makeResponse(sharedId, "", "");
+    };
+
+    auto client = makeClient(nodeA);
+
+    std::mutex resultMutex;
+    std::vector<DhtNodeId> reported;
+    auto reportedCount = [&]() {
+        std::lock_guard<std::mutex> lock(resultMutex);
+        return reported.size();
+    };
+    client->findNode(infoHashId_, [&](const DhtNode& node) {
+        std::lock_guard<std::mutex> lock(resultMutex);
+        reported.push_back(node.id);
+    });
+
+    // 引导 A、B1、B2 三个响应者都被查询并收敛终结
+    auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while ((nodeA.request_count.load() < 1 || nodeB1.request_count.load() < 1 ||
+            nodeB2.request_count.load() < 1 || reportedCount() < 2) &&
+           std::chrono::steady_clock::now() < until) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));  // 终结余量
+    EXPECT_EQ(nodeA.request_count.load(), 1);
+    EXPECT_EQ(nodeB1.request_count.load(), 1);
+    EXPECT_EQ(nodeB2.request_count.load(), 1);
+
+    std::lock_guard<std::mutex> lock(resultMutex);
+    ASSERT_EQ(reported.size(), size_t{2});  // idA + sharedId（去重后）
+    EXPECT_EQ(std::set<DhtNodeId>(reported.begin(), reported.end()).size(), size_t{2});
+    EXPECT_EQ(std::count(reported.begin(), reported.end(), sharedId), 1);  // 只报一次
 
     client->stop();
 }

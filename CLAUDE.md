@@ -2,6 +2,33 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-14 - 覆盖率批次 J：dht_node.cpp Kademlia 查找边界与路由表纯单元收敛
+- dht_node.cpp gcov miss **94 → 10**（行 97.3%）：16 新用例挂
+  `falcon_protocols_tests`（dht_node_test.cpp 9 → 25，cov + ASan
+  双绿）。纯单元簇直接构造公开类型：DhtUtils nodeIdFromString
+  （大写 hex/非 hex 回退/非 40 长度补零截断）、DhtBucket 全 API
+  （桶满替换 15 分钟不活跃最旧节点——lastSeen 回拨 16 分钟构造、
+  替换缓存拒绝、inactive 记账、距离排序截断）、DhtRoutingTable 跨
+  桶聚合 + 全零 id 桶钳位、DhtMessage Error 往返 + 非 dict 防御
+- DhtClient 查找边界：未 start 客户端 socket==-1 快速终结不悬挂、
+  α=3 单轮并发上限（第 4 近候选放行后才被查）、kMaxCandidates=64
+  吸收截断（响应携 70 节点强制命中）、k=8 上报截断（9 响应者恰报
+  8）、重复 id 两端点各查一次只报一次
+- 测试设计要点：bootstrap 候选 id 全零距离排序退化——需确定距离
+  序的用例先热身查找让响应把真实 id 写入路由表，第二阶段候选才
+  确定有序（getRoutingTable 返回 const 不可直接注入）；迭代轮次
+  冻结用响应门闩（responder 自旋等 atomic 门闩，观察到第 1 轮恰
+  α=3 个查询后放行），零 sleep 依赖
+- 剩余 10 miss 全部定性：socket() OOM×2、维护线程 5 分钟周期×2、
+  recvfrom 错误竞态×2、并发防御×4（finalizeLookup 与
+  pendingRequests_ 同锁同步清理，迟到响应/双重终结仅在超时
+  finalize 与回调派发间微窗口可达，无确定性注入点）
+- 全包覆盖率（gcovr 批次 C 同款口径）：**行 80.3% / 函数 93.4% /
+  分支 43.8%**（批次 I 79.9/92.9/43.6）；全量 ctest 1900 零失败。
+  口径警示：gcovr 显式位置参数 `.` 只扫单棵构建树（曾得 90.5% 虚
+  高），留档命令无位置参数吃进 cov+asan 两树，铁账链为两树合并
+  口径
+
 ### 2026-09-14 - 覆盖率批次 I：websocket_rpc_client.cpp 客户端协议栈边界收敛 + daemon 进 ASan
 - websocket_rpc_client.cpp gcov miss **99 → 9**（行 97.6%）：18 新
   用例挂 `falcon_daemon_rpc_client_tests`（29 → 47）。新增可编程
