@@ -808,3 +808,47 @@ TEST_F(CloudStorageCovLocalTest, ManagerFallsBackToCustomPluginWithKnownPlatform
     ASSERT_EQ(result.files.size(), 1u);
     EXPECT_EQ(result.files[0].name, "cov.bin");
 }
+
+// ============================================================================
+// 失败路径：detect 命中但 file_id 提取为空 / 无插件可路由（覆盖率批次 M）
+// ============================================================================
+
+// 蓝奏云：detect 的 [\w]+ 接受下划线开头，extract 的 [a-zA-Z0-9]+ 不接受
+// ——「识别到平台但拿不到文件 id」直接短路为无效链接（不发起网络请求）
+TEST(CloudStorageCovTest, LanzouInvalidLinkRejected) {
+    CloudStorageManager manager;
+
+    auto result = manager.handle_share_link("https://www.lanzoux.com/_-");
+    EXPECT_FALSE(result.success);
+    EXPECT_FALSE(result.recognized);
+    EXPECT_EQ(result.error_message, "无效的蓝奏云链接");
+    EXPECT_EQ(result.platform_name, "LanzouCloud");
+    EXPECT_EQ(result.platform_type, CloudPlatform::LanzouCloud);
+    EXPECT_TRUE(result.files.empty());
+}
+
+// Google Drive：docs.google.com 形态 detect 必命中（[^\s]+），
+// 但无 /file/d/ 与 ?id= 时 extract 为空——轻量基类的无效链接分支
+TEST(CloudStorageCovTest, GoogleDriveDocsLinkWithoutFileId) {
+    CloudStorageManager manager;
+
+    auto result = manager.handle_share_link("https://docs.google.com/xyz");
+    EXPECT_FALSE(result.success);
+    EXPECT_FALSE(result.recognized);
+    EXPECT_EQ(result.error_message, "无效的Google Drive链接");
+    EXPECT_EQ(result.platform_name, "GoogleDrive");
+    EXPECT_EQ(result.platform_type, CloudPlatform::GoogleDrive);
+    EXPECT_TRUE(result.files.empty());
+}
+
+// 未知平台且无自定义插件接手：三循环路由全部落空后给出统一错误
+TEST(CloudStorageCovTest, UnknownLinkReportsNoPlugin) {
+    CloudStorageManager manager;
+
+    auto result = manager.handle_share_link("https://example.com/file.zip");
+    EXPECT_FALSE(result.success);
+    EXPECT_FALSE(result.recognized);
+    EXPECT_EQ(result.error_message, "未找到对应的网盘插件");
+    EXPECT_EQ(result.platform_type, CloudPlatform::Unknown);
+    EXPECT_TRUE(result.files.empty());
+}

@@ -172,6 +172,8 @@ public:
         if (curl_) {
             curl_easy_cleanup(curl_);
         }
+        // set_headers 保存的请求头链表随句柄一起释放（空指针安全）
+        curl_slist_free_all(headers_);
     }
 
     void set_proxy(const std::string& proxy_url,

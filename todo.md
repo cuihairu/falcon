@@ -2023,4 +2023,60 @@ WebCrawler 泄漏）/ incremental_download 46。
 segment_downloader 76 / resource_search 47（顺带修 WebCrawler
 headers_ slist 泄漏）/ incremental_download 46。
 
+### 批次 M 收口（2026-09-14）：cloud_storage_plugin.cpp 78 → 75 miss + WebCrawler slist 泄漏修复
+- **修复 WebCrawler 析构泄漏**（批次 L 预记录的既存缺陷，ASan
+  实证 76 字节/4 处）：set_headers 保存 `curl_slist* headers_`
+  且重复调用时释放旧链，但 `~WebCrawler()` 只 `curl_easy_
+  cleanup` 从不释放 slist——每个 GenericSearchProvider 构造
+  （load_config 每引擎一个）泄漏整条请求头链。修复：析构补
+  `curl_slist_free_all(headers_)`（空指针安全）。resource_
+  search.cpp:224 ← GenericSearchProvider 构造 ← load_config:698
+  栈与本批 ASan 复验零告警
+- cloud_storage_plugin.cpp gcov miss **78 → 75**：3 新用例挂
+  `falcon_drives_tests`（139 用例）——①蓝奏云无效链接（detect
+  `[\w]+` 接受下划线开头而 extract `[a-zA-Z0-9]+` 不接受，
+  "https://www.lanzoux.com/_-"：识别到平台但拿不到文件 id，不
+  发网络请求直接短路"无效的蓝奏云链接"）；②Google Drive docs
+  形态无 file id（docs.google.com detect 必命中 `[^\s]+`，无
+  /file/d/ 与 ?id= 时 extract 空 → 轻量基类无效链接分支 +
+  platform_display_name）；③未知平台三循环路由全落空（"未找
+  到对应的网盘插件"）
+- 剩余 75 miss 全部定性：
+  - **44-114（12 行）gcc 15 行归属伪影**：init_patterns 的 map
+    initializer_list 赋值首行。铁证（执行序矛盾）：41 行
+    `if (!url_patterns_.empty()) return` 命中 14045 次 ⇒ map
+    非空 ⇒ 12 个赋值必然执行过；且 DetectCloudPlatform 等 12
+    平台 detect 断言全通过（map 空则全 Unknown 必失败）
+  - **435-450/545-574/648-671/741-764/813-832（55 行）死接口
+    存根**：五类（Lanzou/Baidu/Aliyun/Quark/LightweightBase）
+    的 get_download_url/authenticate/get_user_info/get_quota_
+    info 四件套。grep 全库实证：CloudStorageManager 生产代码
+    零调用方（纯库 API，仅测试消费）、register_plugin 生产零
+    调用、get_download_url 包外零调用——manager 不暴露插件指
+    针，四件套对内部类不可达，属 ICloudStoragePlugin 纯虚的占
+    位实现
+  - **879/894/909/954/969/984（6 行）display_name 死代码**：
+    唯一调用点是轻量基类 file_id 空分支（784），而腾讯微云/
+    115/PikPak/OneDrive/Dropbox/Yandex 的 detect 与 extract 正
+    则字符类对齐（detect 命中 ⇒ extract 必命中），784 对它们
+    结构性不可达（Mega/GoogleDrive 两平台可构造且已覆盖）
+  - **1063-1064（2 行）死防御分支**：第二循环的
+    `platform_type()==detected → continue`。detected!=Unknown
+    时 platform_type==detected 的默认插件 can_handle ≡
+    （detect==自身平台）≡ true，第一循环必命中——第二循环对
+    已识别平台永不可达
+- **覆盖率（批次 M 收口，批次 C 同款 gcovr 口径）：行 80.8% /
+  函数 94.1% / 分支 44.2%**（批次 L 80.7/94.0/44.0）；ctest 清
+  单 1919（1859 通过 + 60 既存 Skipped，零失败；out-of 分母
+  1918 为 CTest 对 Skipped 的显示口径）；drives 139 用例 cov +
+  ASan 双绿（零新增告警，既存泄漏清零）
+- ctest 计数注意：gtest_discover_tests 清单（-N 1919）与运行
+  分母（1918）差 1 来自 CTest Skipped 口径，账目闭合式
+  = passed + skipped + failed；`Test  #917`（<1000 双空格对
+  齐）与 `Test #1000`（单空格）会骗过单行格式 grep
+
+**批次 N 候选（##### 铁账）：** segment_downloader 76 /
+resource_search 47（泄漏已修，剩缺口待收）/ incremental_
+download 46。
+
 

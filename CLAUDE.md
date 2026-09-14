@@ -2,6 +2,27 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-14 - 覆盖率批次 M：cloud_storage_plugin.cpp 失败路由路径收敛 + WebCrawler 泄漏修复
+- **修复 WebCrawler 析构泄漏**（ASan 实证 76 字节/4 处）：
+  set_headers 保存的 `curl_slist* headers_` 在析构中从不释放，
+  每个 GenericSearchProvider 构造（load_config 每引擎一个）泄
+  漏整条请求头链；析构补 `curl_slist_free_all`
+- 覆盖率批次 M：cloud_storage_plugin.cpp gcov miss **78 → 75**：
+  3 新用例覆盖失败路由路径（蓝奏云 detect/extract 正则字符类差
+  导致的无效链接短路、Google Drive docs 形态无 file id 的轻量
+  基类分支、未知平台三循环落空"未找到对应的网盘插件"）
+- 剩余 75 miss 全部定性：init_patterns 的 map initializer_list
+  行归属伪影×12（执行序矛盾铁证：empty 检查 14045 次提前返回 ⇒
+  map 非空 ⇒ 赋值必执行过）；五类接口四件套存根×55（管理器不暴
+  露插件指针 + register_plugin/handle_share_link 生产零调用方，
+  grep 全库实证）；6 平台 display_name 死代码（唯一调用点对其结
+  构性不可达——detect/extract 正则字符类对齐）；第二循环已识别
+  平台防御×2（默认插件 can_handle ≡ true，第一循环必命中）
+- 全包覆盖率（批次 C 同款 gcovr 口径）：**行 80.8% / 函数
+  94.1% / 分支 44.2%**（批次 L 80.7/94.0/44.0）；ctest 清单
+  1919（1859 通过 + 60 既存 Skipped，零失败）；drives 139 用例
+  cov + ASan 双绿
+
 ### 2026-09-14 - 覆盖率批次 L：task_storage.cpp 收敛 + initialize 死锁缺陷修复
 - **修复 TaskStorage::initialize 死锁缺陷**（新测试曝光，strace
   铁证）：initialize() 入口持 `std::mutex`（不可重入），建表失败
