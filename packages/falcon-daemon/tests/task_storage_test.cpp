@@ -11,6 +11,8 @@
 
 #include "storage/task_storage.hpp"
 
+#include <chrono>
+#include <filesystem>
 #include <fstream>
 #include <cstdio>
 
@@ -371,6 +373,162 @@ TEST_F(TaskStorageTest, Vacuum) {
     }
 
     EXPECT_TRUE(storage_->vacuum());
+}
+
+// ============================================================================
+// Initialization failure / error surface / cleanup / move（覆盖率批次 L）
+// ============================================================================
+
+// 打不开的库路径（父目录不存在）：initialize 失败并留下 last_error
+TEST_F(TaskStorageTest, InitializeOpenFailure) {
+    TaskStorageConfig config;
+    config.db_path = (std::filesystem::temp_directory_path() /
+                      "falcon_no_such_dir/sub/tasks.db").string();
+
+    TaskStorage bad(config);
+    EXPECT_FALSE(bad.initialize());
+    EXPECT_FALSE(bad.is_ready());
+    EXPECT_FALSE(bad.get_last_error().empty());
+}
+
+// 库文件不是 SQLite 数据库：建表阶段失败，initialize 关闭连接返回 false
+TEST_F(TaskStorageTest, InitializeNonDatabaseFile) {
+    auto path = (std::filesystem::temp_directory_path() /
+                 ("falcon_not_a_db_" +
+                  std::to_string(std::chrono::steady_clock::now()
+                                     .time_since_epoch().count()) + ".db")).string();
+    {
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        out << std::string(256, (char)0xAB);
+    }
+
+    TaskStorageConfig config;
+    config.db_path = path;
+    config.enable_wal_mode = false;
+    TaskStorage bad(config);
+    EXPECT_FALSE(bad.initialize());
+    EXPECT_FALSE(bad.is_ready());
+    EXPECT_FALSE(bad.get_last_error().empty());
+    std::filesystem::remove(path);
+}
+
+// completed_at 有值：create 写入毫秒时间戳，get 回读还原
+TEST_F(TaskStorageTest, CreateTaskWithCompletedAt) {
+    auto record = create_test_record();
+    record.status = TaskStatus::Completed;
+    auto completed = std::chrono::system_clock::now();
+    record.completed_at = completed;
+
+    TaskId id = storage_->create_task(record);
+    ASSERT_NE(INVALID_TASK_ID, id);
+
+    auto loaded = storage_->get_task(id);
+    ASSERT_TRUE(loaded.has_value());
+    ASSERT_TRUE(loaded->completed_at.has_value());
+    EXPECT_LT(std::chrono::abs(*loaded->completed_at - completed),
+              std::chrono::seconds(2));
+}
+
+// 显式 id 重复插入：UNIQUE 约束使 step 失败，返回 INVALID_TASK_ID
+TEST_F(TaskStorageTest, CreateTaskDuplicateExplicitIdFails) {
+    auto record = create_test_record();
+    record.id = 4200;
+    TaskId first = storage_->create_task(record);
+    ASSERT_NE(INVALID_TASK_ID, first);
+
+    EXPECT_EQ(INVALID_TASK_ID, storage_->create_task(record));
+    EXPECT_FALSE(storage_->get_last_error().empty());
+}
+
+// update 通道同样承载 completed_at
+TEST_F(TaskStorageTest, UpdateTaskWithCompletedAt) {
+    auto record = create_test_record();
+    TaskId id = storage_->create_task(record);
+    ASSERT_NE(INVALID_TASK_ID, id);
+
+    auto completed = std::chrono::system_clock::now();
+    record.completed_at = completed;
+    record.status = TaskStatus::Completed;
+    ASSERT_TRUE(storage_->update_task(id, record));
+
+    auto loaded = storage_->get_task(id);
+    ASSERT_TRUE(loaded.has_value());
+    ASSERT_TRUE(loaded->completed_at.has_value());
+    EXPECT_LT(std::chrono::abs(*loaded->completed_at - completed),
+              std::chrono::seconds(2));
+}
+
+// limit + offset 分页（created_at 显式错开保证 ORDER BY 次序确定）
+TEST_F(TaskStorageTest, ListTasksWithOffset) {
+    auto base = std::chrono::system_clock::now();
+    for (int i = 0; i < 3; ++i) {
+        auto record = create_test_record("https://example.com/paged" +
+                                         std::to_string(i) + ".zip");
+        record.created_at = base + std::chrono::minutes(i);
+        storage_->create_task(record);
+    }
+
+    TaskQueryOptions options;
+    options.limit = 2;
+    options.offset = 1;
+    auto page = storage_->list_tasks(options);
+    ASSERT_EQ(2u, page.size());
+    // 默认按 created_at 降序：paged2 > paged1 > paged0，跳过第 1 条
+    EXPECT_EQ("https://example.com/paged1.zip", page[0].url);
+    EXPECT_EQ("https://example.com/paged0.zip", page[1].url);
+}
+
+// 过期清理：只删「Completed 且 completed_at 早于保留期」的行；
+// 未初始化实例返回 0
+TEST_F(TaskStorageTest, CleanupCompletedTasks) {
+    namespace chrono = std::chrono;
+    auto old_completed = create_test_record("https://example.com/old1.zip");
+    old_completed.status = TaskStatus::Completed;
+    old_completed.completed_at = chrono::system_clock::now() - chrono::hours(24 * 30);
+    storage_->create_task(old_completed);
+
+    auto old_completed2 = create_test_record("https://example.com/old2.zip");
+    old_completed2.status = TaskStatus::Completed;
+    old_completed2.completed_at = chrono::system_clock::now() - chrono::hours(24 * 30);
+    TaskId keep_pending_check = storage_->create_task(old_completed2);
+
+    auto fresh_completed = create_test_record("https://example.com/fresh.zip");
+    fresh_completed.status = TaskStatus::Completed;
+    fresh_completed.completed_at = chrono::system_clock::now();
+    storage_->create_task(fresh_completed);
+
+    auto old_pending = create_test_record("https://example.com/pending.zip");
+    old_pending.status = TaskStatus::Pending;
+    storage_->create_task(old_pending);
+
+    EXPECT_EQ(2, storage_->cleanup_completed_tasks(7));
+    EXPECT_FALSE(storage_->task_exists(keep_pending_check));
+    EXPECT_EQ(2, storage_->count_all_tasks());  // fresh + pending 留存
+    EXPECT_EQ(1, storage_->count_tasks_by_status(TaskStatus::Completed));
+    EXPECT_EQ(1, storage_->count_tasks_by_status(TaskStatus::Pending));
+
+    // 再次清理无可删行
+    EXPECT_EQ(0, storage_->cleanup_completed_tasks(7));
+
+    // 未初始化实例：返回 0
+    TaskStorageConfig config;
+    TaskStorage cold(config);
+    EXPECT_EQ(0, cold.cleanup_completed_tasks(7));
+}
+
+// move 语义：move 构造与 move 赋值后目标实例接管连接可正常工作
+TEST_F(TaskStorageTest, MoveSemantics) {
+    TaskId id = storage_->create_task(create_test_record());
+    ASSERT_NE(INVALID_TASK_ID, id);
+
+    TaskStorage moved_to(std::move(*storage_));
+    EXPECT_TRUE(moved_to.is_ready());
+    EXPECT_TRUE(moved_to.task_exists(id));
+
+    TaskStorage assigned_to(TaskStorageConfig{});
+    assigned_to = std::move(moved_to);
+    EXPECT_TRUE(assigned_to.is_ready());
+    EXPECT_TRUE(assigned_to.task_exists(id));
 }
 
 } // anonymous namespace

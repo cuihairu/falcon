@@ -2,6 +2,26 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-14 - 覆盖率批次 L：task_storage.cpp 收敛 + initialize 死锁缺陷修复
+- **修复 TaskStorage::initialize 死锁缺陷**（新测试曝光，strace
+  铁证）：initialize() 入口持 `std::mutex`（不可重入），建表失败
+  分支调 close()，close() 内部再次 lock 同一把锁 → 死锁。生产影
+  响：**task db 损坏（非 SQLite 文件）时 daemon 启动永久挂死**而
+  非优雅报错。修复：close() 去掉内部加锁（private 辅助，仅析构与
+  已持锁的 initialize 流程两个调用点）
+- 覆盖率批次 L：task_storage.cpp gcov miss **81 → 39**：8 新用例
+  （storage 24 → 32，cov + ASan 双绿）覆盖 open 失败（不存在父目
+  录）、坏库文件建表失败（256 字节垃圾）、completed_at 有值
+  create/update 往返、显式 id 重复插入 step 失败（UNIQUE 冲突）、
+  list limit+offset 分页（created_at 显式错开保证次序确定——同毫
+  秒并列时 DESC 次序未定义）、cleanup_completed_tasks 全语义（过
+  期删除/留存/幂等/未初始化 0）、move 构造与 move 赋值、get_last_
+  error
+- 剩余 39 miss 定性：sqlite prepare/step 失败防御×36、gcc 15 行
+  归属伪影×3（664/666/670，同块尾行覆盖 + 字段断言通过双证）
+- 全包覆盖率（gcovr 批次 C 同款口径）：**行 80.7% / 函数 94.0% /
+  分支 44.0%**（批次 K 80.5/93.7/44.0）；全量 ctest 1916 零失败
+
 ### 2026-09-14 - 覆盖率批次 K：config_manager.cpp 认证门/主密码/导入导出边界收敛
 - config_manager.cpp gcov miss **82 → 32**（行 92.01%）：8 用例
   （`config_manager_test.cpp` 18→26，cov + ASan 双绿）覆盖未初始

@@ -1991,4 +1991,36 @@ ASan 排除既存泄漏后零新增告警。
 plugin 78 / segment_downloader 76 / resource_search 47（顺带修
 WebCrawler 泄漏）/ incremental_download 46。
 
+### 批次 L 收口（2026-09-14）：task_storage.cpp 81 → 39 miss + initialize 死锁缺陷修复
+- **修复 TaskStorage::initialize 死锁缺陷**（测试曝光，strace 栈
+  铁证）：initialize() 入口持 `std::mutex`（不可重入），建表失
+  败分支调 close()，close() 内部再次 lock 同一把锁 → 死锁。生产
+  影响：**task db 损坏（非 SQLite 文件）时 daemon 启动永久挂死**
+  而非优雅报错。修复：close() 去掉内部加锁（private 辅助，仅析
+  构与已持锁的 initialize 流程两个调用点）。strace 证据链：sqlite
+  判定 NOTADB 并解锁文件 → 进入 close → futex 死等
+- task_storage.cpp gcov miss **81 → 39**：8 新用例挂
+  `falcon_daemon_storage_tests`（24 → 32）——open 失败（不存在
+  父目录）、坏库文件建表失败（256 字节垃圾 + 死锁修复后干净返回
+  false）、completed_at 有值 create/update 往返、显式 id 重复插
+  入 step 失败（UNIQUE 冲突）、list limit+offset 分页（created_
+  at 显式错开保证 ORDER BY 次序确定——同毫秒并列时 DESC 次序未
+  定义曾致断言抖动）、cleanup_completed_tasks 全语义（过期删除/
+  新完成与 Pending 留存/幂等/未初始化实例 0）、move 构造与 move
+  赋值（连接接管 + CRUD 复验）、get_last_error 错误面
+- 剩余 39 miss 定性：sqlite prepare/step 失败防御×36（各方法成
+  对 return 行，需 SQL 注入/句柄失败；cleanup 内两对同行）、gcc
+  15 行归属伪影×3（664/666/670 parse_task_record 时间点构造多行
+  表达式首行——同块尾行覆盖 + GetTask 字段断言通过双证在执行）
+- **覆盖率（批次 L 收口，批次 C 同款 gcovr 口径）：行 80.7% /
+  函数 94.0% / 分支 44.0%**（批次 K 80.5/93.7/44.0）；全量 ctest
+  1916 零失败；storage 42 用例 cov + ASan 双绿（UBSan 零告警）
+- 测试执行环境注意：storage 用例是死锁敏感户——批次 L 期间挂在
+  futex 的进程用 strace 定位（沙盒无 gdb）；gcovr 在 cwd 漂离
+  build-cov 根时报 TOTAL 0 行，回根重跑即可
+
+**批次 M 候选（##### 铁账）：** cloud_storage_plugin 78 /
+segment_downloader 76 / resource_search 47（顺带修 WebCrawler
+headers_ slist 泄漏）/ incremental_download 46。
+
 

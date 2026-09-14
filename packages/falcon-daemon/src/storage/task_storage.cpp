@@ -743,7 +743,9 @@ private:
     }
 
     void close() {
-        std::lock_guard<std::mutex> lock(mutex_);
+        // 仅在已持锁的 initialize 流程与析构中调用——自身再加锁会与
+        // initialize 的锁形成非递归死锁（损坏库建表失败时曾致 daemon
+        // 启动永久挂死）
         if (db_) {
             sqlite3_close(db_);
             db_ = nullptr;
