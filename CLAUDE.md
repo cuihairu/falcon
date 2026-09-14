@@ -2,6 +2,32 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-14 - 覆盖率批次 I：websocket_rpc_client.cpp 客户端协议栈边界收敛 + daemon 进 ASan
+- websocket_rpc_client.cpp gcov miss **99 → 9**（行 97.6%）：18 新
+  用例挂 `falcon_daemon_rpc_client_tests`（29 → 47）。新增可编程
+  原始 WS 服务器 `RawWsServer` 测试基建（握手剧本 + on_connected
+  控制帧注入 + on_request 应答脚本 + 客户端帧记录），与
+  JsonRpcServer 回环互补，帧级行为完全由测试控制
+- 收口六簇：便捷方法全簇（14 转发方法 params 归一形状服务器侧断
+  言 + as_gid/expect_ok 解包防御变体）、call 失败路径（非数组
+  params 归一、应答超时 -32000、无 result 无 error -32600、请求
+  在途中断连 fail_pending 唤醒）、服务器控制帧（ping→pong 回帧、
+  close 回应后收尾、binary/pong 忽略）、握手容错（半截头 EOF/
+  非 101/错 Sec-WebSocket-Accept/.invalid 域）、set_url 运行期重
+  定向（旧服务器下线后 call 仍成功 ⇒ 必连新端点的强断言）与
+  parse_url 分支（IPv6 字面量/裸主机默认 path+端口/自定义 path
+  请求行断言）
+- 剩余 9 miss 定性：238-239/494-499 时序窗口不可测（TCP 刚建立
+  首发失败无注入点；fd 失效与读线程收尾之间的竞态无可控时机）、
+  520 不可达（slot->response 两条赋值路径均保证 object）
+- **ASan 树首次纳入 daemon**：build-asan `FALCON_BUILD_DAEMON`
+  OFF→ON，falcon_daemon_rpc_client_tests 47 用例 ASan+UBSan 零告
+  警（WS 客户端多线程 socket 代码首次内存检查）
+- 全包覆盖率（gcovr 批次 C 同款口径）：**行 79.9% / 函数 92.9% /
+  分支 43.6%**（批次 H 79.6/92.1/43.2）；全量 ctest 1884 零失败
+- 批次 J 候选（##### 铁账）：dht_node 94 / config_manager 82 /
+  task_storage 81 / cloud_storage_plugin 78 / segment_downloader 77
+
 ### 2026-09-14 - 覆盖率批次 H：task_manager.cpp 状态持久化容错与事件转发层收敛
 - task_manager.cpp gcov miss **75 → 13**（行 97.31%）：21 用例
   （`task_manager_edges_test.cpp`，cov + ASan 双绿）覆盖状态持久

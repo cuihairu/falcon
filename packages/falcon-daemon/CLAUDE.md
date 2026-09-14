@@ -6,6 +6,27 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-14 - 覆盖率批次 I：websocket_rpc_client.cpp 99 → 9 miss + 原始 WS 测试服务器
+- `websocket_rpc_client_test.cpp` 增量 18 用例（29 → 47，挂
+  `falcon_daemon_rpc_client_tests`），新增 `RawWsServer` 可编程原
+  始 WS 服务器基建：握手剧本（正确 101 / 半截头 EOF / 非 101 /
+  错 Accept）、`on_connected` 会话钩子注入服务器帧（ping/close/
+  binary）、`on_request` 请求应答脚本、客户端帧记录与等待辅助——
+  与 JsonRpcServer 回环互补，帧级行为完全由测试控制
+- 收口：便捷方法全簇 14 转发方法（params 归一形状服务器侧逐项断
+  言 + as_gid/expect_ok 解包防御 -32600 变体）、call 失败路径（非
+  数组 params 归一 / 应答超时 -32000 / 无 result 无 error -32600
+  / 请求在途中断连 fail_pending -32000 "connection closed" 唤
+  醒）、控制帧（ping→pong 回帧 payload 断言、close 回应后会话收
+  尾、binary/pong 忽略且连接仍可用）、握手容错簇、set_url 运行期
+  重定向（旧服务器下线后 call 仍成功 ⇒ 必连新端点）、parse_url
+  （IPv6 字面量 / 裸主机默认 / 自定义 path 请求行）
+- 剩余 9 miss 定性：238-239/494-499 时序窗口不可测（无注入点）、
+  520 不可达（response 两条赋值路径均保证 object）
+- **daemon 套件首次进 ASan**：build-asan `FALCON_BUILD_DAEMON`
+  OFF→ON，rpc_client_tests 47 用例 ASan+UBSan 零告警；全量 ctest
+  1884 零失败
+
 ### 2026-09-12 - 下载参数配置化（daemon.json "download" 节）
 - `daemon.json` 新增 `download` 节：`max_concurrent_tasks`（全局并发
   任务数）、`max_overall_speed_limit`（全局总限速，字节/秒，0=不限），

@@ -1816,7 +1816,7 @@ on_task_status_changed/on_task_progress 是给引擎适配层的显式注
 **后续批次（真实缺口）：** 下一批按 gcov 全包扫描重新定位（四批
 已收敛 protocols 包三个大头与 core 最大头）。
 
-### 批次 I 预定位（2026-09-14 侦察，待实施）：websocket_rpc_client.cpp 99 miss
+### 批次 I 收口（2026-09-14）：websocket_rpc_client.cpp 99 → 9 miss
 
 全包 gcov `#####` 真实计数排名（gcovr CSV 初筛虚高 2.5-2.7 倍不
 可作依据）：websocket_rpc_client 99 / dht_node 94 / config_manager
@@ -1824,21 +1824,56 @@ on_task_status_changed/on_task_progress 是给引擎适配层的显式注
 77 / incremental_download 46 / kodo_browser 29 / cos_browser 20 /
 upyun_browser 18 / oss_browser 11 / s3_browser 8 / ftp_browser 2。
 
-批次 I 目标 `websocket_rpc_client.cpp`（641 行）缺口分簇：
-① 便捷方法簇 547-638 **整段零覆盖**——WS 客户端只测过裸 call
-往返，addUri/tell*/pause/... 全部便捷转发从未执行；回环批量调用
-即可一次收口（最大头）；② call 失败路径：466 对象 params 归一、
-507-514 应答超时（config timeout_seconds=1 可测）、494-499 发送
-失败（时机难，可能定性）、520-530 响应防御分支；③ 控制帧
-351-360：ping→pong 回帧、close 帧收尾、binary/pong 忽略——需
-服务器侧注入控制帧（websocket_test.cpp 有帧基建）；④ 握手失败
-簇：252-253 半截头 EOF、263-264 非 101 应答、285-286 错 Accept、
-112 getaddrinfo 失败（.invalid 域）、238-239 握手 send 失败（难
-确定性）；⑤ set_url/parse_url 分支 165-206：自定义 path（服务
-器侧断言请求行）、IPv6 字面量、无端口默认 6800、userinfo 剥除、
-set_url 运行期重定向；⑥ fail_pending 437-442：call 挂起中服务
-器断连 → -32000 唤醒（373 已覆盖而 437-442 未覆盖，疑似行归属
-伪影混合，实测再定）。测试挂 `falcon_daemon_rpc_client_tests`
-（websocket_rpc_client_test.cpp 增量）。
+**测试基建：** `websocket_rpc_client_test.cpp` 增量 18 用例（挂
+falcon_daemon_rpc_client_tests，29 → 47），新增可编程原始 WS 服务
+器 `RawWsServer`——握手剧本（Ok/半截头/非 101/错 Accept）+
+`on_connected` 会话钩子注入服务器帧（ping/close/binary）+
+`on_request` 请求应答脚本 + 客户端帧记录（opcode/payload 快照与
+等待辅助）；随机端口 htonl(INADDR_ANY)+getsockname，停机
+shutdown(listen) 唤醒 accept、shutdown 会话 fd 唤醒读线程。与
+JsonRpcServer 回环互补：帧级行为完全由测试控制，覆盖客户端单侧
+防御路径。
+
+**六簇收口：** ① 便捷方法簇 547-638 整段零覆盖 →
+ConvenienceMethodsFullSuite 批量一次收口：14 个转发方法逐一调用，
+服务器侧断言每个 method 的 params 归一形状（addUri 的
+[[uris],{options}]、changePriority 的 [gid,2]、tell* 的 [0,10000]、
+无 secret 时无 token 前缀等 15 项），响应解包
+as_gid/expect_ok 往返断言；外加两个防御变体（addUri result 非字
+符串 → -32600、expect_ok 的非字符串/"NG" → -32600）。② call 失
+败路径：466 非数组 params 归一（服务器回显 params==[] 证明）、
+507-514 应答超时（timeout=1s，断言 ≥900ms 与错误消息精确）、530
+无 result 无 error → -32600、435/437-442 fail_pending（call 挂
+起中服务器 shutdown 会话 → 读线程收尾 → -32000 "connection
+closed" 唤醒挂起调用）。③ 控制帧 351-360：服务器 ping → 客户端
+回 pong（payload 原样断言）、close → 客户端回应 close 帧且
+connected_ 复位、binary/pong 帧忽略后连接仍可用（且客户端不回
+pong 不转发 binary）。④ 握手失败簇：252-253 半截头 EOF、263-264
+非 101 状态行、285-286 错 Sec-WebSocket-Accept、112 getaddrinfo
+失败（.invalid 保留域，connect 干净失败不悬挂）。⑤ set_url/
+parse_url：165-169 运行期重定向（强断言：旧服务器下线后 call 仍
+成功 ⇒ 必然连到了新端点）、191-195 IPv6 字面量（[::1]:1 连接
+必败——服务器只听 127.0.0.1，换回后恢复）、186+204 裸主机默认
+path/端口、自定义 path 原样进请求行（服务器侧断言）。⑥ ASan 树
+首次纳入 daemon：build-asan `FALCON_BUILD_DAEMON` OFF→ON，
+falcon_daemon_rpc_client_tests 47 用例 ASan+UBSan 零告警（WS 客
+户端多线程 socket 代码首次内存检查）。
+
+**剩余 9 miss 全部定性：** 238-239（握手请求 send 失败——TCP 连
+接刚建立后首个 send 的失败窗口无注入点，服务器无法在客户端
+connect 返回前精确 RST）；494-499（call 发送失败收口——需 fd 失
+效而读线程尚未收尾的竞态窗口：读线程对任何连接死亡都立即 recv
+出错收尾并置 fd_=-1，send 路径无可控注入时机）；520（response
+非 object **不可达**——slot->response 两条赋值路径
+dispatch_message 387 行 is_object 检查后 / fail_pending 431 行字
+面量构造都保证 object，519 行检查恒真）。
+
+**覆盖率（批次 I 收口，批次 C 同款 gcovr 口径）：行 79.9% / 函数
+92.9% / 分支 43.6%**（批次 H 79.6/92.1/43.2；净涨 0.3/0.8/0.4
+点）。全量 ctest 1884 零失败。
+
+**批次 J 候选（##### 铁账）：** dht_node 94 / config_manager 82 /
+task_storage 81 / cloud_storage_plugin 78 / segment_downloader 77
+/ resource_search 47 / incremental_download 46。
 
 
