@@ -34,6 +34,16 @@ bin/
 Testing/
 *.log
 
+# Coverage (gcov/gcovr artifacts)
+*.gcda
+*.gcno
+*.gcov
+coverage/
+coverage*.xml
+coverage*.html
+*.info
+lcov*.info
+
 # IDE
 .vscode/
 .idea/
