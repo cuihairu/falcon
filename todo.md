@@ -2079,4 +2079,60 @@ headers_ slist 泄漏）/ incremental_download 46。
 resource_search 47（泄漏已修，剩缺口待收）/ incremental_
 download 46。
 
+### 批次 N 收口（2026-09-14）：segment_downloader.cpp 76 → 11 miss + 死代码清理
+- **删除 22 miss 行匿名命名空间死函数**（批次 E 死代码清理先
+  例）：`generate_random_suffix`（自带 `[[maybe_unused]]`，零调
+  用）与 `format_bytes`（唯一"引用"在 monitor_connections 的注
+  释行里），连带 `<cmath>/<iomanip>/<random>/<sstream>` 四个仅
+  其使用的 include
+- segment_downloader.cpp gcov miss **76 → 11**：11 新用例挂
+  `falcon_protocols_tests`（既有 27 用例 + 新 11）——①修复
+  ZeroFileSize 占位测试（从未调 start() → 现断言 0 尺寸快速失
+  败且无半成品）；②start 门禁两态（运行中重入拒绝：栅栏 mock
+  保持运行态 + is_active 轮询；cancel 后启动拒绝）；③等分策略
+  （adaptive_sizing=false + 非整除 10243 → 末段带走余数，全链
+  从未跑过）；④续传完成态两态（恰好整段的既有段文件被标记完
+  成后正常补齐；全部段已完成 → download_func 零调用直接合并 +
+  成品按序逐字节校验）；⑤暂停三循环（worker 主循环 50ms 节拍
+  + 监控线程 1s 节拍暂停分支（持续暂停 >1.15s）+ 段内重试循环
+  100ms 节拍（失败后置暂停 300ms 再 resume，断点续上）），
+  顺带断言暂停态 is_active=false 与只读查询可用；⑥返回 false
+  但段文件恰好整段 → best-effort 记账识别完成态不浪费重试；
+  ⑦merge 前逐段闸门（等 seg0 完整落盘 5120 后 trunc 篡改为
+  100 字节——已完成段无重试自愈窗口，确定性触发拒绝）；
+  ⑧输出路径是已存在目录 → rename(文件→目录) 失败干净收尾；
+  ⑨传输中 cancel（栅栏 mock 响应取消立即退出，cancel 收割
+  worker 与存活监控线程，start 收尾二次 join 跳过已收割线程）
+- **MergeGate 用例的时序教训**：初版 `num_connections=1` 实际
+  只产生 1 段（calculate_optimal_segments 返回 num_connections
+  本身），篡改分支从未执行（假绿）；改 2 连接后并发交错下篡改
+  可能落在写入中途 → 重试循环会把段自愈成精确尺寸反让闸门放
+  行（且 retry_delay_ms 默认 1000 使用例耗时 7s）。确定性构造：
+  等目标段完整落盘（文件尺寸==段长即已完成态）再篡改，已完成
+  段绝无重试窗口
+- 其余观察：start() 收尾 join 监控线程使其最后一秒 tick 跑满
+  （多数用例 +1s 墙钟，既有行为非本批引入）；单跑失败先查段数
+  是否等于 num_connections 再怀疑并发
+- 剩余 11 miss 全部定性：184 死防御（calculate_optimal_segments
+  恒 ≥1 → segments 不可能为空）；301-305 五行 30s worker 超时
+  兜底（墙钟不可测）；345 防御（worker 无失败/取消退出时每段必
+  已完成）；416-417 防御（resume 预标记使段入口完成检查不可
+  达）；521 防御（merge 临时文件与段文件同目录，段已成功写）；
+  545 权限依赖（ifstream 打开失败需 chmod 000，Windows 不兼容）
+- **覆盖率（批次 N 收口，批次 C 同款 gcovr 口径）：行 81.0% /
+  函数 94.3% / 分支 44.3%**（批次 M 80.8/94.1/44.2）；全量
+  ctest 零失败（DownloadEngineTest.ResumeTask 并行抖动串行复跑
+  即过，批次 H 同款既知条目）；新增 11 用例 cov + ASan 双绿
+- **85% 路线全包扫描（本轮完成）**：18664/23103 → 85% 需
+  ~974 行新覆盖；缺口分布（##### 铁账）：http_commands 146 /
+  json_rpc_server 68 / resource_browser 系 153 / daemon config
+  54 / incremental_download+file_hash 69（60 个 GTEST_SKIP 待
+  查明）/ request_group 系 106 / resource_search 47 / 纯逻辑
+  散矿 ~90；cloud_storage_plugin 剩余 75 行中 55 行四件套存根
+  需 manager 只读插件访问器（方案 A）或 include-cpp 才可达
+
+**批次 O 候选（##### 铁账）：** daemon/config.cpp 54（纯 JSON
+解析最易）/ json_rpc_server 68（回环基建现成）/ resource_search
+47 / incremental_download 46 + file_hash 23（先查明 GTEST_SKIP）。
+
 

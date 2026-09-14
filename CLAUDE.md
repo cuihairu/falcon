@@ -2,6 +2,25 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-14 - 覆盖率批次 N：segment_downloader.cpp 76 → 11 miss + 死代码清理
+- **删除匿名命名空间死函数** `generate_random_suffix`（零调用）
+  与 `format_bytes`（唯一"引用"在注释里），22 miss 行出账；全
+  包覆盖率（批次 C 同款 gcovr 口径）**行 81.0% / 函数 94.3% /
+  分支 44.3%**（批次 M 80.8/94.1/44.2）
+- segment_downloader.cpp gcov miss **76 → 11**：11 新用例——修
+  复 ZeroFileSize 占位测试（从未调 start()）、start 门禁两态、
+  等分策略（adaptive_sizing=false 全链首覆盖）、续传完成态两态
+  （零下载直接合并 + 逐字节序校验）、暂停三循环（worker/监控
+  线程/段内重试）、返回 false 但段恰好整段的 best-effort 收口、
+  merge 闸门确定性篡改（等目标段完整落盘后再改——中途篡改会被
+  重试自愈反而放行）、输出为已存在目录的 rename 失败、传输中
+  cancel 收割存活监控线程
+- 剩余 11 miss 全部定性：死防御 ×4（segments 恒非空/全段必完
+  成/段入口完成检查/merge 临时文件）、30s worker 超时兜底 ×5
+  （墙钟）、权限依赖 ×1（chmod 类，Windows 不兼容）
+- 批次 N 时序教训：`num_connections=1` 经 calculate_optimal_
+  segments 只产生 1 段（段数=连接数），多段场景先核段数
+
 ### 2026-09-14 - 覆盖率批次 M：cloud_storage_plugin.cpp 失败路由路径收敛 + WebCrawler 泄漏修复
 - **修复 WebCrawler 析构泄漏**（ASan 实证 76 字节/4 处）：
   set_headers 保存的 `curl_slist* headers_` 在析构中从不释放，

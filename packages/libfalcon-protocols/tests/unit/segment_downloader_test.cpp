@@ -9,6 +9,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -329,8 +330,10 @@ TEST(SegmentDownloaderBoundary, ZeroFileSize) {
     SegmentDownloader downloader(task, "http://test.example.com/empty.bin",
                                  output_path, config);
 
-    // Zero file size should be handled
-    // May return false or handle as special case
+    // 未知文件大小无法分段：start 必须快速失败（FileIOException → false），
+    // 且不产出任何半成品
+    EXPECT_FALSE(downloader.start(mock_segment_download));
+    EXPECT_FALSE(std::filesystem::exists(output_path));
     std::remove(output_path.c_str());
 }
 
@@ -934,5 +937,472 @@ TEST(SegmentDownloaderStress, RapidStartStop) {
         cancel_thread.join();
     }
 
+    std::remove(output_path.c_str());
+}
+
+//==============================================================================
+// 覆盖率批次 N：start 门禁 / 等分策略 / 续传完成态 / 暂停循环 / 合并闸门
+//==============================================================================
+
+namespace {
+
+// 带超时轮询原子标志（防环境抖动挂死）
+template <typename Pred>
+static bool wait_for_cond(Pred&& pred,
+                          std::chrono::milliseconds timeout =
+                              std::chrono::milliseconds(5000)) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (!pred()) {
+        if (std::chrono::steady_clock::now() > deadline) {
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    return true;
+}
+
+// 预置段文件：写入 bytes 个重复字节
+static void seed_segment_file(const std::string& output_path, std::size_t idx,
+                              std::size_t bytes, char fill) {
+    std::ofstream seg(output_path + ".falcon.tmp.seg" + std::to_string(idx),
+                      std::ios::binary);
+    ASSERT_TRUE(seg.is_open());
+    std::string data(bytes, fill);
+    seg.write(data.data(), static_cast<std::streamsize>(data.size()));
+}
+
+}  // namespace
+
+// start() 运行中重入：直接拒绝（不抛错、不重置正在进行的下载）
+TEST(SegmentDownloaderEdges, StartRejectedWhileRunning) {
+    auto task = std::make_shared<MockDownloadTask>(
+        1, "http://test.example.com/file.bin", DownloadOptions{});
+    task->set_test_file_info(1024 * 10);
+
+    SegmentConfig config;
+    config.num_connections = 1;
+    config.min_segment_size = 1024;
+    config.min_file_size = 1;
+
+    const std::string output_path = make_unique_temp_path("falcon_test_seg_reentry.bin");
+    SegmentDownloader downloader(task, "http://test.example.com/file.bin",
+                                 output_path, config);
+
+    // seg0 的下载阻塞在栅栏上，让首个 start 保持运行态
+    std::promise<void> gate;
+    std::shared_future<void> gate_future = gate.get_future().share();
+    std::atomic<bool> first_result{true};
+
+    auto gated_download = [&](const std::string& url, Bytes start, Bytes end,
+                              const std::string& path,
+                              std::atomic<bool>& cancelled) -> bool {
+        if (gate_future.wait_for(std::chrono::seconds(5)) !=
+            std::future_status::ready) {
+            return false;
+        }
+        return mock_segment_download(url, start, end, path, cancelled);
+    };
+
+    std::thread download_thread(
+        [&]() { first_result = downloader.start(gated_download); });
+    ASSERT_TRUE(wait_for_cond([&]() { return downloader.is_active(); }));
+
+    // 运行中重入 start：false
+    EXPECT_FALSE(downloader.start(gated_download));
+
+    gate.set_value();
+    download_thread.join();
+    EXPECT_TRUE(first_result.load());
+    std::remove(output_path.c_str());
+}
+
+// start() 前已取消：直接拒绝
+TEST(SegmentDownloaderEdges, StartRejectedAfterCancel) {
+    auto task = std::make_shared<MockDownloadTask>(
+        1, "http://test.example.com/file.bin", DownloadOptions{});
+    task->set_test_file_info(1024 * 5);
+
+    const std::string output_path = make_unique_temp_path("falcon_test_seg_precancel.bin");
+    SegmentDownloader downloader(task, "http://test.example.com/file.bin",
+                                 output_path, SegmentConfig{});
+
+    downloader.cancel();
+    EXPECT_FALSE(downloader.start(mock_segment_download));
+    EXPECT_FALSE(std::filesystem::exists(output_path));
+    std::remove(output_path.c_str());
+}
+
+// 等分策略（adaptive_sizing=false）：段边界等分、末段带走余数
+TEST(SegmentDownloaderEdges, EqualSizedSegmentsWithRemainder) {
+    auto task = std::make_shared<MockDownloadTask>(
+        1, "http://test.example.com/file.bin", DownloadOptions{});
+    const Bytes file_size = 1024 * 10 + 3;  // 非整除，末段 +3
+    task->set_test_file_info(file_size);
+
+    SegmentConfig config;
+    config.num_connections = 2;
+    config.min_segment_size = 512;
+    config.min_file_size = 1;
+    config.adaptive_sizing = false;
+
+    const std::string output_path = make_unique_temp_path("falcon_test_seg_equal.bin");
+    SegmentDownloader downloader(task, "http://test.example.com/file.bin",
+                                 output_path, config);
+
+    EXPECT_TRUE(downloader.start(mock_segment_download));
+    EXPECT_EQ(downloader.total_segments(), 2u);
+
+    std::error_code ec;
+    EXPECT_EQ(std::filesystem::file_size(output_path, ec), file_size);
+    std::remove(output_path.c_str());
+}
+
+// 续传：恰好整段的既有段文件被标记完成，其余段照常补齐
+TEST(SegmentDownloaderEdges, ResumeMarksFullSegmentComplete) {
+    DownloadOptions options;
+    options.resume_enabled = true;
+
+    auto task = std::make_shared<MockDownloadTask>(
+        1, "http://test.example.com/file.bin", options);
+    task->set_test_file_info(1024 * 10);
+
+    SegmentConfig config;
+    config.num_connections = 4;
+    config.min_segment_size = 1024;
+    config.min_file_size = 1;
+    config.adaptive_sizing = false;  // 等分：4 × 2560
+
+    const std::string output_path = make_unique_temp_path("falcon_test_seg_resume_full.bin");
+    seed_segment_file(output_path, 0, 2560, '\xAA');  // 段 0 恰好整段
+    seed_segment_file(output_path, 1, 512, '\xBB');   // 其余部分
+
+    SegmentDownloader downloader(task, "http://test.example.com/file.bin",
+                                 output_path, config);
+
+    EXPECT_TRUE(downloader.start(mock_segment_download));
+
+    std::error_code ec;
+    EXPECT_EQ(std::filesystem::file_size(output_path, ec), 10240U);
+    std::remove(output_path.c_str());
+}
+
+// 续传：全部段已完成 → 不触达下载函数，直接合并出成品
+TEST(SegmentDownloaderEdges, ResumeAllCompleteSkipsDownload) {
+    DownloadOptions options;
+    options.resume_enabled = true;
+
+    auto task = std::make_shared<MockDownloadTask>(
+        1, "http://test.example.com/file.bin", options);
+    task->set_test_file_info(1024 * 10);
+
+    SegmentConfig config;
+    config.num_connections = 4;
+    config.min_segment_size = 1024;
+    config.min_file_size = 1;
+    config.adaptive_sizing = false;  // 等分：4 × 2560
+
+    const std::string output_path = make_unique_temp_path("falcon_test_seg_resume_all.bin");
+    for (std::size_t i = 0; i < 4; ++i) {
+        seed_segment_file(output_path, i, 2560, static_cast<char>(i + 1));
+    }
+
+    std::atomic<bool> invoked{false};
+    SegmentDownloader downloader(task, "http://test.example.com/file.bin",
+                                 output_path, config);
+
+    EXPECT_TRUE(downloader.start([&](const std::string&, Bytes, Bytes,
+                                     const std::string&,
+                                     std::atomic<bool>&) {
+        invoked = true;
+        return false;
+    }));
+    EXPECT_FALSE(invoked.load());  // 一次网络调用都不该发生
+
+    // 合并次序校验：成品 = 各段按序拼接
+    std::ifstream out(output_path, std::ios::binary);
+    ASSERT_TRUE(out.is_open());
+    std::string merged(10240, '\0');
+    out.read(merged.data(), static_cast<std::streamsize>(merged.size()));
+    for (std::size_t seg = 0; seg < 4; ++seg) {
+        for (std::size_t off = 0; off < 2560; ++off) {
+            ASSERT_EQ(merged[seg * 2560 + off], static_cast<char>(seg + 1))
+                << "seg" << seg << " offset " << off;
+        }
+    }
+    std::remove(output_path.c_str());
+}
+
+// 暂停阻塞 worker 循环与监控线程：is_active=false、resume 后恢复推进
+TEST(SegmentDownloaderEdges, PauseBlocksWorkerAndMonitorLoops) {
+    auto task = std::make_shared<MockDownloadTask>(
+        1, "http://test.example.com/file.bin", DownloadOptions{});
+    task->set_test_file_info(1024 * 10);
+
+    SegmentConfig config;
+    config.num_connections = 1;
+    config.min_segment_size = 1024;
+    config.min_file_size = 1;
+    config.adaptive_sizing = false;  // 2 × 5120
+
+    const std::string output_path = make_unique_temp_path("falcon_test_seg_pause.bin");
+    SegmentDownloader downloader(task, "http://test.example.com/file.bin",
+                                 output_path, config);
+
+    std::atomic<bool> paused_flag{false};
+    std::atomic<bool> first_result{true};
+
+    auto pause_on_first = [&](const std::string& url, Bytes start, Bytes end,
+                              const std::string& path,
+                              std::atomic<bool>& cancelled) -> bool {
+        const bool ok = mock_segment_download(url, start, end, path, cancelled);
+        if (ok && !paused_flag.exchange(true)) {
+            downloader.pause();  // seg0 完成后暂停：worker 循环停在暂停分支
+        }
+        return ok;
+    };
+
+    std::thread download_thread(
+        [&]() { first_result = downloader.start(pause_on_first); });
+    ASSERT_TRUE(wait_for_cond([&]() { return paused_flag.load(); }));
+
+    // 暂停态：is_active=false；只读查询照常可用
+    EXPECT_FALSE(downloader.is_active());
+    EXPECT_EQ(downloader.total_bytes(), 10240U);
+    EXPECT_NO_FATAL_FAILURE((void)downloader.active_connections());
+
+    // 持续暂停 >1s：让监控线程走到暂停分支（其节拍为 1s）
+    std::this_thread::sleep_for(std::chrono::milliseconds(1150));
+
+    downloader.resume();
+    download_thread.join();
+
+    EXPECT_TRUE(first_result.load());
+    std::error_code ec;
+    EXPECT_EQ(std::filesystem::file_size(output_path, ec), 10240U);
+    std::remove(output_path.c_str());
+}
+
+// 暂停命中段内重试循环：失败重试在暂停期间挂起，resume 后从断点续上
+TEST(SegmentDownloaderEdges, PauseBlocksSegmentRetryLoop) {
+    auto task = std::make_shared<MockDownloadTask>(
+        1, "http://test.example.com/file.bin", DownloadOptions{});
+    task->set_test_file_info(1024 * 5);
+
+    SegmentConfig config;
+    config.num_connections = 1;
+    config.min_segment_size = 1024;
+    config.min_file_size = 1;
+    config.adaptive_sizing = false;  // 单段 5120
+    config.max_retries = 2;
+    config.retry_delay_ms = 10;
+
+    const std::string output_path = make_unique_temp_path("falcon_test_seg_pause_retry.bin");
+    SegmentDownloader downloader(task, "http://test.example.com/file.bin",
+                                 output_path, config);
+
+    std::atomic<int> calls{0};
+    std::atomic<bool> paused_flag{false};
+    std::atomic<bool> first_result{true};
+
+    auto fail_then_pause = [&](const std::string& url, Bytes start, Bytes end,
+                               const std::string& path,
+                               std::atomic<bool>& cancelled) -> bool {
+        if (calls++ == 0) {
+            // 首次：半量写入后失败，并把下载置入暂停
+            std::ofstream f(path, std::ios::binary | std::ios::app);
+            if (!f.is_open()) return false;
+            const Bytes half = (end - start + 1) / 2;
+            std::string data(static_cast<std::size_t>(half), 'a');
+            f.write(data.data(), static_cast<std::streamsize>(data.size()));
+            f.close();
+            downloader.pause();
+            paused_flag = true;
+            return false;
+        }
+        return mock_segment_download(url, start, end, path, cancelled);
+    };
+
+    std::thread download_thread(
+        [&]() { first_result = downloader.start(fail_then_pause); });
+    ASSERT_TRUE(wait_for_cond([&]() { return paused_flag.load(); }));
+
+    // 暂停保持 300ms：重试循环在暂停分支空转（100ms 节拍 ≥2 轮）
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+    downloader.resume();
+    download_thread.join();
+
+    EXPECT_TRUE(first_result.load());
+    EXPECT_GE(calls.load(), 2);  // 至少一次失败 + 一次续传成功
+    std::error_code ec;
+    EXPECT_EQ(std::filesystem::file_size(output_path, ec), 5120U);
+    std::remove(output_path.c_str());
+}
+
+// 返回 false 但段文件恰好整段：best-effort 记账识别完成态，不浪费重试
+TEST(SegmentDownloaderEdges, FalseReturnWithExactSizeCompletes) {
+    auto task = std::make_shared<MockDownloadTask>(
+        1, "http://test.example.com/file.bin", DownloadOptions{});
+    task->set_test_file_info(1024 * 5);
+
+    SegmentConfig config;
+    config.num_connections = 1;
+    config.min_segment_size = 1024;
+    config.min_file_size = 1;
+    config.adaptive_sizing = false;  // 单段 5120
+    config.max_retries = 3;
+
+    const std::string output_path =
+        make_unique_temp_path("falcon_test_seg_false_exact.bin");
+    SegmentDownloader downloader(task, "http://test.example.com/file.bin",
+                                 output_path, config);
+
+    // 数据齐全但返回 false：精确尺寸记账必须判定完成并跳出重试
+    auto complete_but_false = [](const std::string&, Bytes start, Bytes end,
+                                 const std::string& path,
+                                 std::atomic<bool>& cancelled) -> bool {
+        if (cancelled.load()) return false;
+        std::ofstream f(path, std::ios::binary | std::ios::app);
+        if (!f.is_open()) return false;
+        const Bytes size = end - start + 1;
+        std::string data(static_cast<std::size_t>(size), 'z');
+        f.write(data.data(), static_cast<std::streamsize>(data.size()));
+        return false;
+    };
+
+    EXPECT_TRUE(downloader.start(complete_but_false));
+
+    std::error_code ec;
+    EXPECT_EQ(std::filesystem::file_size(output_path, ec), 5120U);
+    std::remove(output_path.c_str());
+}
+
+// merge 前逐段闸门：已完成段在合并前被外部篡改（尺寸漂移）→ 拒绝出成品
+TEST(SegmentDownloaderEdges, MergeGateRejectsDriftedSegment) {
+    auto task = std::make_shared<MockDownloadTask>(
+        1, "http://test.example.com/file.bin", DownloadOptions{});
+    task->set_test_file_info(1024 * 10);
+
+    SegmentConfig config;
+    config.num_connections = 2;  // 2 段（1 连接时 calculate_optimal_segments 返回 1 段）
+    config.min_segment_size = 1024;
+    config.min_file_size = 1;
+    config.adaptive_sizing = false;  // 等分 2 × 5120
+    config.retry_delay_ms = 10;
+
+    const std::string output_path = make_unique_temp_path("falcon_test_seg_gate.bin");
+    SegmentDownloader downloader(task, "http://test.example.com/file.bin",
+                                 output_path, config);
+
+    // 确定性时序：等 seg0 完整落盘（5120 = 段全长，此时它已完成、
+    // 不会再有重试自愈）后实施篡改——merge 闸门必须拦下
+    auto corrupt_after_seg0_complete = [&](const std::string& url, Bytes start,
+                                           Bytes end, const std::string& path,
+                                           std::atomic<bool>& cancelled) -> bool {
+        const std::string seg0_path = output_path + ".falcon.tmp.seg0";
+        if (path != seg0_path) {
+            const auto deadline =
+                std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            for (;;) {
+                std::error_code sz_ec;
+                const auto sz = std::filesystem::file_size(seg0_path, sz_ec);
+                if (!sz_ec && sz == 5120) {
+                    break;
+                }
+                if (std::chrono::steady_clock::now() > deadline ||
+                    cancelled.load()) {
+                    return false;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+            // 篡改已完成的 seg0：trunc 后写 100 字节
+            std::ofstream f(seg0_path, std::ios::binary | std::ios::trunc);
+            std::string drift(100, 'X');
+            f.write(drift.data(), static_cast<std::streamsize>(drift.size()));
+            f.close();
+        }
+        return mock_segment_download(url, start, end, path, cancelled);
+    };
+
+    EXPECT_FALSE(downloader.start(corrupt_after_seg0_complete));
+    EXPECT_FALSE(std::filesystem::exists(output_path));  // 绝不产出坏成品
+    std::remove(output_path.c_str());
+}
+
+// 输出路径是已存在目录：段文件与合并临时文件都正常（是兄弟路径），
+// 最终 rename(文件 → 目录) 失败 → 失败收尾而非假报完成
+TEST(SegmentDownloaderEdges, RenameFailureWhenOutputIsDirectory) {
+    namespace fs = std::filesystem;
+
+    auto task = std::make_shared<MockDownloadTask>(
+        1, "http://test.example.com/file.bin", DownloadOptions{});
+    task->set_test_file_info(1024 * 5);
+
+    SegmentConfig config;
+    config.num_connections = 1;
+    config.min_segment_size = 1024;
+    config.min_file_size = 1;
+    config.adaptive_sizing = false;
+
+    const auto dir = fs::temp_directory_path() /
+                     ("falcon_test_dir_out_" +
+                      std::to_string(std::chrono::steady_clock::now()
+                                         .time_since_epoch().count()));
+    fs::create_directories(dir);
+    SegmentDownloader downloader(task, "http://test.example.com/file.bin",
+                                 dir.string(), config);
+
+    EXPECT_FALSE(downloader.start(mock_segment_download));
+    EXPECT_FALSE(fs::is_regular_file(dir));  // 目录没有被成品顶替
+
+    // 段文件/临时文件是 dir 的兄弟路径，析构清理段文件后移除目录
+    std::error_code ec;
+    fs::remove(dir, ec);
+    SUCCEED();
+}
+
+// 传输中 cancel：worker 与尚存活的监控线程都由 cancel 收尸
+// （此后 start 收尾路径的二次 join 必须跳过已收割的线程）
+TEST(SegmentDownloaderEdges, CancelMidFlightJoinsLiveMonitor) {
+    auto task = std::make_shared<MockDownloadTask>(
+        1, "http://test.example.com/file.bin", DownloadOptions{});
+    task->set_test_file_info(1024 * 10);
+
+    SegmentConfig config;
+    config.num_connections = 1;
+    config.min_segment_size = 1024;
+    config.min_file_size = 1;
+    config.adaptive_sizing = false;
+
+    const std::string output_path = make_unique_temp_path("falcon_test_seg_midcancel.bin");
+    SegmentDownloader downloader(task, "http://test.example.com/file.bin",
+                                 output_path, config);
+
+    // mock 堵在栅栏上并响应取消：cancel 时 worker 立即退出而非等满超时
+    std::promise<void> gate;
+    std::shared_future<void> gate_future = gate.get_future().share();
+    std::atomic<bool> first_result{true};
+
+    auto cancellable_gated = [&](const std::string& url, Bytes start, Bytes end,
+                                 const std::string& path,
+                                 std::atomic<bool>& cancelled) -> bool {
+        while (gate_future.wait_for(std::chrono::milliseconds(20)) !=
+               std::future_status::ready) {
+            if (cancelled.load()) {
+                return false;
+            }
+        }
+        return mock_segment_download(url, start, end, path, cancelled);
+    };
+
+    std::thread download_thread(
+        [&]() { first_result = downloader.start(cancellable_gated); });
+    ASSERT_TRUE(wait_for_cond([&]() { return downloader.is_active(); }));
+
+    downloader.cancel();  // join worker + 收割存活的监控线程
+    download_thread.join();
+
+    EXPECT_FALSE(first_result.load());
+    gate.set_value();  // 兜底放行（线程已退出，无害）
     std::remove(output_path.c_str());
 }

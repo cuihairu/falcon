@@ -7,49 +7,12 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cmath>
 #include <filesystem>
 #include <fstream>
-#include <iomanip>
 #include <iostream>
-#include <random>
-#include <sstream>
 #include <system_error>
 
 namespace falcon {
-
-namespace {
-    // Generate random string for temp file suffix
-    [[maybe_unused]] static std::string generate_random_suffix(std::size_t length = 8) {
-        const char charset[] = "0123456789abcdef";
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::uniform_int_distribution<> dis(0, sizeof(charset) - 2);
-
-        std::string result;
-        result.reserve(length);
-        for (std::size_t i = 0; i < length; ++i) {
-            result += charset[dis(gen)];
-        }
-        return result;
-    }
-
-    // Format bytes to human readable string
-    [[maybe_unused]] static std::string format_bytes(Bytes bytes) {
-        const char* units[] = {"B", "KB", "MB", "GB", "TB"};
-        int unit_index = 0;
-        double size = static_cast<double>(bytes);
-
-        while (size >= 1024.0 && unit_index < 4) {
-            size /= 1024.0;
-            ++unit_index;
-        }
-
-        std::ostringstream oss;
-        oss << std::fixed << std::setprecision(2) << size << " " << units[unit_index];
-        return oss.str();
-    }
-}  // namespace
 
 SegmentDownloader::SegmentDownloader(DownloadTask::Ptr task,
                                      const std::string& url,
