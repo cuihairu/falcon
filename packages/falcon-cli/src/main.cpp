@@ -584,6 +584,11 @@ int main(int argc, char* argv[]) {
     // 设置信号处理
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
+#ifndef _WIN32
+    // 对端 RST 后写 socket 默认触发 SIGPIPE 杀死进程（daemon 已同法
+    // 忽略）；下载器对断连应得到 EPIPE 错误并正常收尾，而非被信号杀死
+    std::signal(SIGPIPE, SIG_IGN);
+#endif
 
     // 解析命令行参数
     auto args = parse_args(argc, argv);

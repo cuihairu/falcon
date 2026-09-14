@@ -66,6 +66,7 @@ add_executable(falcon_protocols_tests
     unit/http_commands_redirect_test.cpp
     unit/http_commands_tls_test.cpp
     unit/http_commands_proxy_test.cpp
+    unit/http_commands_edges_test.cpp
     unit/coverage_supplement_test.cpp
 )
 

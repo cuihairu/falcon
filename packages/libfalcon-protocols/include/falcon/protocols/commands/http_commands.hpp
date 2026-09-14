@@ -739,6 +739,10 @@ private:
     };
     ChunkParseState chunk_state_ = ChunkParseState::READ_SIZE;
     std::string chunk_size_str_;      // 存储块大小字符串
+    // 块大小行/尾部区域的 CR 已单独到达、LF 尚未到达（TCP 分片把
+    // CRLF 拆开）：置位等待下批数据补判，CR 绝不预消费——预消费会让
+    // LF 与后续字节被并进大小行，静默错帧
+    bool chunk_cr_pending_ = false;
 
     // 进度计算
     std::chrono::steady_clock::time_point last_update_;

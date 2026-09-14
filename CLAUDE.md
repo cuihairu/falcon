@@ -2,6 +2,30 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-14 - 覆盖率批次 D：http_commands.cpp 真实缺口收敛 + chunked 分片/SIGPIPE 缺陷修复
+- **chunked 分片错帧修复**：TCP 可把块大小行 CRLF 拆开送达，旧代码
+  预消费 CR 进大小行——LF 与块数据被并进 size_str，stoul 在 '\r' 静
+  默截断得错误块大小 → 数据错位。新增 `chunk_cr_pending_` 状态位，
+  CR 在缓冲末尾置位等待下批补判 LF 绝不预消费；trailer 同法修复跨
+  缓冲 CR 丢失（终止 CRLF 被分片时曾永不可见挂到 EOF 判截断），
+  trailer 侧宽松（CR 后非 LF 不消费继续扫描）与大小行严格判定有意
+  不对称
+- **SIGPIPE 三层防护**（测试 SIGPIPE 暴露的生产缺陷）：引擎三处
+  `send(...,0)` 无 MSG_NOSIGNAL，对端 RST 后写 socket 即杀死整个进
+  程。引擎 POSIX send 统一 kSendFlags（MSG_NOSIGNAL；macOS socket
+  级 SO_NOSIGPIPE）、CLI main 补 SIGPIPE SIG_IGN（daemon 既有）；
+  顺带消除 base64 移位与 send/recv 长度参数的既有符号转换告警
+- 覆盖率批次 D：http_commands.cpp gcov miss **256 → 176**（行
+  87.95%），净收敛 80 行真实缺口；全包（gcovr 四库 src+include 口
+  径）行 86.6% / 函数 90.7% / 分支 48.3%。剩余缺口：TLS 防御分支、
+  send/recv 硬错误、resume 理论不可达、Windows 平台分支
+- 测试 +30 用例全量 ctest 全绿：proxy 套件 4（连接应答跨分片重入/
+  base64 填充向量/IPv6 authority 与斜杠 path 判 Unsupported）+ 新
+  文件 `http_commands_edges_test.cpp` 26（编程式剧本服务器：传输中
+  断 4/段失败收口 2/大流量让出 1/发布失败 1/重定向变体 5/续传调度
+  3/chunked 边界 5/解析容错 1/TLS 与代理失败收口 5/域名失败 2）；
+  ASan 引擎相关 194 用例零告警
+
 ### 2026-09-14 - 四云存储浏览器 endpoint 改造 + 缺陷修复 + mock 测试（OSS/COS/Kodo/Upyun）
 - 四浏览器 endpoint（又拍云为 api_domain）配置此前全链路零消费——
   官方 virtual-host 域名 mock 不可行，配置了自定义 endpoint 也被

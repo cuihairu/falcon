@@ -1517,9 +1517,68 @@ HMAC/base64 长度防御（需注入）、`~Browser()` 的 gcov D0/D2 析构
 **覆盖率（批次 C 收口）：行 76.8% / 函数 89.8% / 分支 41.8%**
 （基线 75.9/87.5/41.1），1790 ctest 全绿（净增 63 用例）。
 
-**后续批次（真实缺口）：** http_commands.cpp 256（TLS 错误路径
-17/段失败收口 17/chunked 边界 17/代理应答 13/续传调度 12/
-update_progress 11 等）→ bittorrent_plugin 187 → ftp_plugin 135 →
-http_handler 82 → task_manager 78。
+### 2026-09-14 覆盖率批次 D（http_commands.cpp 真实缺口收敛 256 → 176 miss）
+
+**两个真实缺陷修复（写测试先行 trace 时发现）：**
+- **chunked 分片错帧**（READ_SIZE）：TCP 可把块大小行的 CRLF 拆开送
+  达，旧代码把 CR 预消费进大小行缓冲——LF 与后续块数据被并进
+  size_str，`stoul` 在 '\r' 处静默截断得错误块大小，数据错位后
+  CR/LF 校验失败挂死下载。新增 `chunk_cr_pending_` 状态位：CR 在缓
+  冲末尾时置位等待下批数据补判 LF，CR 绝不预消费；pending 后非 LF
+  显式判帧错误
+- **chunked trailer 跨缓冲 CR 丢失**（READ_TRAILER）：CR 恰在缓冲末
+  尾时 `chunk_buffer_.clear()` 把它丢掉，终止 CRLF 被 TCP 分片拆开
+  时永不可见，挂到 EOF 判截断。同一 pending 机制收口；trailer 侧宽
+  松（CR 后非 LF 不消费该字节继续扫描——尾部不承载数据，与
+  READ_SIZE 的严格判定有意不对称）
+- **SIGPIPE 三层防护**（测试 SIGPIPE 暴露的生产缺陷）：引擎三处
+  `send(...,0)` 均无 MSG_NOSIGNAL——对端 RST 后写 socket 即杀死整
+  个进程（daemon 虽已 SIG_IGN 兜底，CLI 完全没有）。修复：引擎
+  POSIX send 统一 `kSendFlags`（MSG_NOSIGNAL，Windows=0）、macOS
+  socket 级 SO_NOSIGPIPE、CLI main 补 SIGPIPE SIG_IGN（与 daemon
+  对称）
+- 顺带消除重编显形的既有符号转换告警（base64 移位提前进无符号域、
+  send/recv 长度参数 Windows/POSIX 分支化）
+
+**测试（+30 用例，全量 ctest 全绿）：**
+- proxy 套件扩展 4 用例：连接应答跨分片到达（200 先到 15 字节再补
+  齐——would-block 重入路径）、base64 短凭据填充向量、`http:///path`
+  与 IPv6 字面量 authority 判 Unsupported（parse 表驱动）
+- 新文件 `http_commands_edges_test.cpp` 26 用例（编程式剧本服务器
+  ScriptableServer：poll accept + 每连接一线程按剧本队列处理 + 可
+  选 TLS 上下文 + 请求记录）：
+  - 传输中断 4：TLS close_notify 干净关闭截断必 FAILED（总长未收
+    满不构成完成证据）、TLS 半截头断连、明文体 RST 截断、accept 即
+    RST（发送失败终态收口）
+  - 段失败收口 2：段响应非 206（Range 撒谎）"response rejected"
+    组 FAILED；TLS 多段段 1 握手前被裸关 → 段失败收口聚合终态，段
+    0 体延迟到达唤醒后静默退出不覆盖
+  - 大流量让出 1：5MB 单次 execute 4MB 读上限 NEED_RETRY 留队重执
+    至完成（半分批让出不丢数据）
+  - 发布失败 1：最终名被目录占用时 rename 失败按失败收尾，绝不假
+    报 COMPLETED（错误消息"发布失败"，临时文件保留）
+  - 重定向 5：query 剥除、相对 `..` 归一化到根、空 Location 失败、
+    协议相对 `//host` 跟随、304+Location 不跟随失败
+  - 续传调度 3：零断点全量响应继续、Content-Range 不可解析放弃续
+    传转全新下载（控制文件删除+成品逐字节一致）、跨会话三段计划
+    初始连接承载部分进度段（已完成段跳过不建连接，恰好 2 连接）
+  - chunked 5：块大小行 CRLF 跨分片（回归）、trailer 终止序列跨分
+    片（回归）、trailer 头块双 CRLF、数据后 CR/LF 错位各判帧错误
+  - 解析容错 1：头区裸 LF 空行跳过后正常完成
+  - TLS/代理 5：上述 TLS 截断/半截头/多段握手失败 + 代理 CONNECT
+    前断连（recv==0）与 CONNECT 后 RST 两条失败收口
+  - 不可解析域/仅 IPv6 主机 2：.invalid 快速失败、ip6-localhost
+    （::1）AF_INET 数据面干净失败
+
+**覆盖率（批次 D 收口）：行 86.6% / 函数 90.7% / 分支 48.3%**
+（gcovr 四库 src+include 正则口径；批次 C 的全包百分比口径未留档
+不可直接对比，文件级铁账：http_commands.cpp gcov 文本 miss
+256 → **176**，行覆盖 87.95%/1461 行）。剩余缺口定性：TLS 防御分
+支（SSL_CTX/OOM/证书解析失败）、send/recv/CONNECT 硬错误路径、
+resume 理论不可达防御、Windows 平台分支。ASan 引擎相关 194 用例
+零告警。
+
+**后续批次（真实缺口）：** bittorrent_plugin 187 → ftp_plugin 135
+→ http_handler 82 → task_manager 78。
 
 

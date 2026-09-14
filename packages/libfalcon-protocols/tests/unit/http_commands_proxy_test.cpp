@@ -322,6 +322,12 @@ public:
         body_ = std::move(body);
     }
 
+    /// CONNECT 应答分片发送：先给半行，留出客户端 would-block 重入
+    /// 窗口后再补发余下部分（验证半包重组）
+    void set_split_connect_response(bool split) {
+        split_connect_response_ = split;
+    }
+
     std::string last_request_line() {
         std::lock_guard<std::mutex> lock(mutex_);
         return last_request_line_;
@@ -436,7 +442,19 @@ private:
 
         static const char kEstablished[] =
             "HTTP/1.1 200 Connection established\r\n\r\n";
-        if (!send_all_plain(conn, kEstablished, sizeof(kEstablished) - 1)) {
+        bool established_sent = true;
+        if (split_connect_response_) {
+            const std::string first = std::string(kEstablished).substr(0, 15);
+            const std::string rest = std::string(kEstablished).substr(15);
+            established_sent =
+                send_all_plain(conn, first.data(), first.size()) &&
+                (std::this_thread::sleep_for(std::chrono::milliseconds(120)),
+                 send_all_plain(conn, rest.data(), rest.size()));
+        } else {
+            established_sent = send_all_plain(conn, kEstablished,
+                                              sizeof(kEstablished) - 1);
+        }
+        if (!established_sent) {
             CLOSE_SOCKET(conn);
             return;
         }
@@ -511,6 +529,7 @@ private:
     }
 
     Mode mode_ = Mode::kPlainProxy;
+    bool split_connect_response_ = false;
 
     mutable std::mutex mutex_;
     std::string body_;
@@ -669,6 +688,26 @@ TEST(ParseHttpProxy, InvalidPortIsUnsupported) {
     for (const char* raw :
          {"http://proxy.local:0", "http://proxy.local:99999",
           "http://proxy.local:abc", "http://proxy.local:"}) {
+        DownloadOptions options;
+        options.proxy = raw;
+        EXPECT_EQ(parse_http_proxy(options).kind, HttpProxyKind::Unsupported)
+            << raw;
+    }
+}
+
+/// 剥路径前的前导斜杠（"http:///path"：空 authority + 绝对路径）
+/// 不能被当成合法 host，判 Unsupported
+TEST(ParseHttpProxy, LeadingSlashInsteadOfHostIsUnsupported) {
+    DownloadOptions options;
+    options.proxy = "http:///path";
+    EXPECT_EQ(parse_http_proxy(options).kind, HttpProxyKind::Unsupported);
+}
+
+/// IPv6 字面量代理：V2 数据面为 AF_INET，明确判 Unsupported（不静默
+/// 截断 "[::1]" 之类畸形 authority）
+TEST(ParseHttpProxy, Ipv6LiteralAuthorityIsUnsupported) {
+    for (const char* raw :
+         {"http://[::1]:8080", "http://[2001:db8::1]:3128", "[::1]:3128"}) {
         DownloadOptions options;
         options.proxy = raw;
         EXPECT_EQ(parse_http_proxy(options).kind, HttpProxyKind::Unsupported)
@@ -862,6 +901,97 @@ TEST(DownloadEngineV2Proxy, ConnectRefusedFailsCleanly) {
 
     EXPECT_EQ(server.connect_count(), 1);
     EXPECT_TRUE(read_file_content(out_path).empty());
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+/// CONNECT 认证头的 base64 填充分支：凭据 "user:pw" 共 7 字节（非 3
+/// 的倍数），编码必须带 "==" 填充（RFC 4648 标准向量：dXNlcjpwdw==）。
+/// 既有用例的凭据都恰好是 3 的倍数，padding 分支从未被执行过
+TEST(DownloadEngineV2Proxy, ConnectAuthBase64PaddingForShortCredentials) {
+    const std::string body = make_body(16 * 1024);
+
+    ProxyTestServer server;
+    ASSERT_TRUE(server.start(ProxyTestServer::Mode::kConnectAccept));
+    server.set_body(body);
+
+    const std::string dir = temp_dir_for("padding");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options = base_proxy_options(out_path);
+    options.proxy = "http://user:pw@127.0.0.1:" + std::to_string(server.port());
+    options.verify_ssl = false;  // 自签证书：本用例焦点在凭据形态
+
+    const TaskId task_id = engine.add_download(
+        "https://localhost:" + std::to_string(server.port()) + "/f.bin",
+        options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    ProxyEngineRunner runner(engine);
+    ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
+    ASSERT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+
+    runner.shutdown_and_join();
+    server.stop();
+
+    // 7 字节凭据 → 3×2 循环 + 1 字节余数（"==" 填充分支）
+    EXPECT_EQ(server.last_proxy_auth(), "Basic dXNlcjpwdw==");
+    EXPECT_EQ(read_file_content(out_path), body);
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+/// CONNECT 应答跨 TCP 分片：代理先发半行应答再补余下部分。客户端
+/// 头缓冲不完整时必须注册 READ 挂起（would-block 重入），补发到达
+/// 后重组出完整应答继续隧道，半包绝不丢失或错位
+TEST(DownloadEngineV2Proxy, ConnectResponseSplitAcrossSegmentsSucceeds) {
+    const std::string body = make_body(48 * 1024);
+
+    ProxyTestServer server;
+    ASSERT_TRUE(server.start(ProxyTestServer::Mode::kConnectAccept));
+    server.set_body(body);
+    server.set_split_connect_response(true);
+
+    const std::string dir = temp_dir_for("split");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options = base_proxy_options(out_path);
+    options.proxy = server.proxy_url();
+    options.verify_ssl = false;
+
+    const TaskId task_id = engine.add_download(
+        "https://localhost:" + std::to_string(server.port()) + "/f.bin",
+        options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    ProxyEngineRunner runner(engine);
+    ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
+    ASSERT_EQ(group->status(), RequestGroupStatus::COMPLETED)
+        << "CONNECT 应答半包必须被完整重组";
+
+    runner.shutdown_and_join();
+    server.stop();
+
+    EXPECT_EQ(server.connect_count(), 1);
+    EXPECT_EQ(read_file_content(out_path), body);
 
     std::error_code rm_ec;
     std::filesystem::remove_all(dir, rm_ec);

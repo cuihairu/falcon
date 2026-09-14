@@ -135,6 +135,18 @@ std::string sock_err_str(int err) { return strerror(err); }
 bool sock_would_block(int err) { return err == EAGAIN || err == EWOULDBLOCK; }
 #endif
 
+#ifdef _WIN32
+constexpr int kSendFlags = 0;
+#elif defined(MSG_NOSIGNAL)
+// 对端已 RST 的 socket 上写数据默认触发 SIGPIPE——默认处置是杀死整个
+// 进程，daemon 不能因一个断连的服务器而死；MSG_NOSIGNAL 把它降级为
+// EPIPE 错误，走正常失败收口
+constexpr int kSendFlags = MSG_NOSIGNAL;
+#else
+constexpr int kSendFlags = 0;  // macOS：无 MSG_NOSIGNAL，SO_NOSIGPIPE 在
+                               // socket 级设置（见 create_socket）
+#endif
+
 /// 构造连接级重试命令；返回 nullptr 表示不可重试：
 /// - 多连接意图的任务不参与连接级重试（分段失败语义不同，暂不覆盖）
 /// - 已达 max_retries（首连 + max_retries 次重试）
@@ -242,28 +254,32 @@ std::string base64_encode(const std::string& in) {
     std::string out;
     out.reserve(((in.size() + 2) / 3) * 4);
 
+    // 字节先经 unsigned char 转 unsigned int（保 8 位语义、无符号扩
+    // 展），移位全程在无符号域进行——uchar 参与移位会先提升为 int，
+    // 再并入 unsigned 会触发符号转换告警
+    const auto u8 = [&in](std::size_t k) -> unsigned int {
+        return static_cast<unsigned char>(in[k]);
+    };
+
     std::size_t i = 0;
     while (i + 2 < in.size()) {
-        const unsigned int v = (static_cast<unsigned char>(in[i]) << 16) |
-                               (static_cast<unsigned char>(in[i + 1]) << 8) |
-                               static_cast<unsigned char>(in[i + 2]);
-        out += kTable[(v >> 18) & 0x3f];
-        out += kTable[(v >> 12) & 0x3f];
-        out += kTable[(v >> 6) & 0x3f];
-        out += kTable[v & 0x3f];
+        const unsigned int v = (u8(i) << 16) | (u8(i + 1) << 8) | u8(i + 2);
+        out += kTable[(v >> 18) & 0x3fu];
+        out += kTable[(v >> 12) & 0x3fu];
+        out += kTable[(v >> 6) & 0x3fu];
+        out += kTable[v & 0x3fu];
         i += 3;
     }
     if (i + 1 == in.size()) {
-        const unsigned int v = static_cast<unsigned char>(in[i]) << 16;
-        out += kTable[(v >> 18) & 0x3f];
-        out += kTable[(v >> 12) & 0x3f];
+        const unsigned int v = u8(i) << 16;
+        out += kTable[(v >> 18) & 0x3fu];
+        out += kTable[(v >> 12) & 0x3fu];
         out += "==";
     } else if (i + 2 == in.size()) {
-        const unsigned int v = (static_cast<unsigned char>(in[i]) << 16) |
-                               (static_cast<unsigned char>(in[i + 1]) << 8);
-        out += kTable[(v >> 18) & 0x3f];
-        out += kTable[(v >> 12) & 0x3f];
-        out += kTable[(v >> 6) & 0x3f];
+        const unsigned int v = (u8(i) << 16) | (u8(i + 1) << 8);
+        out += kTable[(v >> 18) & 0x3fu];
+        out += kTable[(v >> 12) & 0x3fu];
+        out += kTable[(v >> 6) & 0x3fu];
         out += '=';
     }
     return out;
@@ -641,6 +657,13 @@ bool HttpInitiateConnectionCommand::create_socket() {
         socket_fd_ = -1;
         return false;
     }
+#ifdef SO_NOSIGPIPE
+    // macOS 无 MSG_NOSIGNAL：socket 级禁用 SIGPIPE（写对端已关的连接
+    // 得 EPIPE 而非进程信号）
+    int no_sigpipe = 1;
+    setsockopt(socket_fd_, SOL_SOCKET, SO_NOSIGPIPE, &no_sigpipe,
+               sizeof(no_sigpipe));
+#endif
 #endif
 
     FALCON_LOG_DEBUG_STREAM("创建 Socket: fd=" << socket_fd_);
@@ -891,9 +914,9 @@ HttpInitiateConnectionCommand::send_proxy_connect(
         const std::size_t remaining = proxy_request_.size() - proxy_sent_;
 #ifdef _WIN32
         const ssize_t n = send(socket_fd_, data,
-                               static_cast<int>(remaining), 0);
+                               static_cast<int>(remaining), kSendFlags);
 #else
-        const ssize_t n = send(socket_fd_, data, remaining, 0);
+        const ssize_t n = send(socket_fd_, data, remaining, kSendFlags);
 #endif
         if (n < 0) {
             if (sock_would_block(sock_errno())) {
@@ -1076,7 +1099,12 @@ AbstractCommand::ExecutionResult HttpInitiateConnectionCommand::send_http_reques
         } else {
 #endif
             // 使用普通 send 发送 HTTP 数据
-            n = send(socket_fd_, data, static_cast<int>(remaining), 0);
+#ifdef _WIN32
+            n = send(socket_fd_, data, static_cast<int>(remaining),
+                     kSendFlags);
+#else
+            n = send(socket_fd_, data, remaining, kSendFlags);
+#endif
             if (n < 0) {
                 if (sock_would_block(sock_errno())) {
                     engine->register_socket_event(
@@ -2213,7 +2241,11 @@ AbstractCommand::ExecutionResult HttpDownloadCommand::receive_data(DownloadEngin
         } else
 #endif
         {
+#ifdef _WIN32
             n = recv(socket_fd_, buffer, static_cast<int>(chunk), 0);
+#else
+            n = recv(socket_fd_, buffer, chunk, 0);
+#endif
         }
         if (n < 0) {
             if (sock_would_block(sock_errno())) {
@@ -2415,9 +2447,46 @@ bool HttpDownloadCommand::handle_chunked_encoding(const char* data, std::size_t 
     const char* ptr = chunk_buffer_.data();
     std::size_t remaining = chunk_buffer_.size();
 
+    // 解析已缓存的块大小行文本（大小行终止符补齐后两个入口共用）
+    auto parse_chunk_size = [this]() -> bool {
+        try {
+            chunk_remaining_ = std::stoul(chunk_size_str_, nullptr, 16);
+        } catch (const std::exception&) {
+            FALCON_LOG_ERROR_STREAM("无效的分块大小: " << chunk_size_str_);
+            return false;
+        }
+        chunk_size_str_.clear();
+
+        if (chunk_remaining_ == 0) {
+            // 最后一个块，进入读取尾部状态
+            chunk_state_ = ChunkParseState::READ_TRAILER;
+            chunk_end_ = true;
+        } else {
+            chunk_state_ = ChunkParseState::READ_DATA;
+        }
+        return true;
+    };
+
     while (remaining > 0) {
         switch (chunk_state_) {
             case ChunkParseState::READ_SIZE: {
+                // 上轮块大小行的 CR 已单独到达（TCP 分片拆开 CRLF）：
+                // 本轮首个字节必须是 LF，补齐后大小行即完整
+                if (chunk_cr_pending_) {
+                    if (ptr[0] != '\n') {
+                        FALCON_LOG_ERROR_STREAM("分块大小行 CR 后未紧跟 LF: "
+                                                << *ptr);
+                        return false;
+                    }
+                    ptr++;
+                    remaining--;
+                    chunk_cr_pending_ = false;
+                    if (!parse_chunk_size()) {
+                        return false;
+                    }
+                    break;
+                }
+
                 // 查找 CRLF 表示块大小结束
                 const char* crlf = static_cast<const char*>(
                     memchr(ptr, '\r', remaining));
@@ -2431,33 +2500,29 @@ bool HttpDownloadCommand::handle_chunked_encoding(const char* data, std::size_t 
 
                 // 检查是否有 LF
                 const std::size_t crlf_offset = static_cast<std::size_t>(crlf - ptr);
-                if (crlf_offset + 1 >= remaining || crlf[1] != '\n') {
-                    chunk_size_str_.append(ptr, crlf_offset + 1);
-                    ptr += crlf_offset + 1;
-                    remaining -= crlf_offset + 1;
-                    continue;
+                if (crlf_offset + 1 >= remaining) {
+                    // CR 位于缓冲末尾、LF 尚未到达：仅缓存 CR 前的字节
+                    // 并置位等待——预消费 CR 会让 LF 与块数据被并进大小
+                    // 行，静默错帧
+                    chunk_size_str_.append(ptr, crlf_offset);
+                    chunk_cr_pending_ = true;
+                    chunk_buffer_.clear();
+                    return true;
+                }
+                if (crlf[1] != '\n') {
+                    FALCON_LOG_ERROR_STREAM("分块大小行 CR 后未紧跟 LF: "
+                                            << crlf[1]);
+                    return false;
                 }
 
                 // 解析块大小
                 chunk_size_str_.append(ptr, crlf_offset);
-                try {
-                    chunk_remaining_ = std::stoul(chunk_size_str_, nullptr, 16);
-                } catch (const std::exception&) {
-                    FALCON_LOG_ERROR_STREAM("无效的分块大小: " << chunk_size_str_);
+                if (!parse_chunk_size()) {
                     return false;
                 }
 
                 ptr += crlf_offset + 2;  // 跳过 CRLF
                 remaining -= crlf_offset + 2;
-                chunk_size_str_.clear();
-
-                if (chunk_remaining_ == 0) {
-                    // 最后一个块，进入读取尾部状态
-                    chunk_state_ = ChunkParseState::READ_TRAILER;
-                    chunk_end_ = true;
-                } else {
-                    chunk_state_ = ChunkParseState::READ_DATA;
-                }
                 break;
             }
 
@@ -2503,6 +2568,21 @@ bool HttpDownloadCommand::handle_chunked_encoding(const char* data, std::size_t 
             }
 
             case ChunkParseState::READ_TRAILER: {
+                // 尾部区域的 CR 若在上一轮位于缓冲末尾被留下，本轮首个
+                // 字节为 LF 即尾部结束。尾部只做终止检测不承载数据，CR
+                // 后非 LF 时按噪音继续扫描（与大小行的严格判定不同：
+                // 这里宽松不会损伤载荷完整性）
+                if (chunk_cr_pending_) {
+                    chunk_cr_pending_ = false;
+                    if (ptr[0] == '\n') {
+                        download_complete_ = true;
+                        chunk_buffer_.clear();
+                        return true;
+                    }
+                    // 非 LF：不消费该字节——它可能是补全 CRLF 的 CR，
+                    // 交给下方扫描原样判定
+                }
+
                 // 读取可选的尾部头部，直到连续的 CRLF
                 const char* double_crlf = static_cast<const char*>(
                     memmem(ptr, remaining, "\r\n\r\n", 4));
@@ -2516,6 +2596,12 @@ bool HttpDownloadCommand::handle_chunked_encoding(const char* data, std::size_t 
                         download_complete_ = true;
                         chunk_buffer_.clear();
                         return true;
+                    }
+                    if (crlf && crlf + 1 == ptr + remaining) {
+                        // CR 位于缓冲末尾：置位等待下批数据补判 LF——
+                        // 丢弃它会让跨缓冲的 CRLF 永远不可见（终止序列
+                        // 恰好被 TCP 分片时只能挂到 EOF 判截断）
+                        chunk_cr_pending_ = true;
                     }
                     // 尚未收到完整的尾部
                     chunk_buffer_.clear();
