@@ -75,11 +75,14 @@ message(STATUS "OpenSSL_FOUND: ${OpenSSL_FOUND}, OPENSSL_FOUND: ${OPENSSL_FOUND}
 if(OpenSSL_FOUND)
     message(STATUS "Using OpenSSL_FOUND branch")
     target_link_libraries(falcon_protocols PUBLIC OpenSSL::Crypto OpenSSL::SSL)
-    target_compile_definitions(falcon_protocols PRIVATE FALCON_USE_OPENSSL FALCON_ENABLE_OPENSSL)
+    # PUBLIC：http_commands.hpp 等公共头按这些宏条件声明成员，消费方（tests/
+    # daemon/CLI）必须与库看到同一布局，否则 ODR 错位；测试同样借此启用
+    # OpenSSL 路径（否则 file_hash/incremental_download 全套运行时 skip）
+    target_compile_definitions(falcon_protocols PUBLIC FALCON_USE_OPENSSL FALCON_ENABLE_OPENSSL)
 elseif(OPENSSL_FOUND)
     message(STATUS "Using OPENSSL_FOUND branch")
     target_link_libraries(falcon_protocols PUBLIC OpenSSL::Crypto OpenSSL::SSL)
-    target_compile_definitions(falcon_protocols PRIVATE FALCON_USE_OPENSSL FALCON_ENABLE_OPENSSL)
+    target_compile_definitions(falcon_protocols PUBLIC FALCON_USE_OPENSSL FALCON_ENABLE_OPENSSL)
 else()
     message(STATUS "OpenSSL not found, TLS support will be disabled")
 endif()

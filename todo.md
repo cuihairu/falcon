@@ -2136,3 +2136,60 @@ download 46。
 47 / incremental_download 46 + file_hash 23（先查明 GTEST_SKIP）。
 
 
+
+### 批次 O 收口（2026-09-14）：incremental_download.cpp 46 → 11 + file_hash.cpp 23 → 12 + OpenSSL 宏 PUBLIC 化
+- **修复公共头 ODR 隐患 + 测试 OpenSSL 路径长期被跳过**：
+  `FALCON_USE_OPENSSL`/`FALCON_ENABLE_OPENSSL` 以 PRIVATE 挂在
+  falcon_protocols，而 http_commands.hpp 等公共头按宏条件声明成
+  员（TLS 会话指针等）——消费方 TU 看到不同类布局（ODR 错位风
+  险）；测试 TU 看不到宏 → 13 个 FileHash 真实测试运行时
+  GTEST_SKIP（"OpenSSL not available"，实际构建有 OpenSSL）。宏
+  改 PUBLIC（与 OpenSSL::Crypto/SSL 的 PUBLIC 链接一致）后 13 个
+  用例激活全过，**全量 ctest skip 60 → 11**（余量为设计内
+  opt-in：10 个 DownloadIntegrationTest 环境变量门控 +
+  HttpHandlerTest 两项既存占位）
+- **删除死代码 mergeFile**（49 行）：private 且全库零生产调用
+  方（downloadChanged 直写输出不经过它），唯一消费者是被整块注
+  释的测试（"私有方法 - 暂时注释"）——.cpp 实现、.hpp 声明、注
+  释测试块三处清出
+- incremental_download.cpp gcov miss **46 → 11**：6 新用例挂
+  `falcon_protocols_tests`——①CRLF+首尾空白哈希行裁剪（trim_
+  line 尾部裁剪路径）；②零分块校验两态（元数据 `chunkSize: 0`
+  被 v>0 守卫忽略按默认值合法解析 + defaultChunkSize=0 无覆盖
+  时直达拒绝）；③未知哈希算法（EVP_get_digestbyname 失败 → 空
+  串哈希，compare 优雅降级）；④无效远程哈希列表（算法元数据与
+  请求不一致 → 解析空 → 回退全量下载建议）；⑤Range 短传服务器
+  （Content-Length 与实际字节一致而尺寸不足，curl 判 CURLE_OK
+  由调用方尺寸校验兜底）→ downloadChanged 干净失败且不产半成
+  品；⑥目录读失败（POSIX fopen 目录成功而 read 必败——实测
+  libstdc++ ifstream 对目录 open 即败走早返回，用例保底防回归）
+- file_hash.cpp gcov miss **23 → 12**（宏激活 -7、新用例 -4）：
+  2 新用例——未知算法枚举（calculate 的 switch 无 default →
+  md_type 空指针 → EVP 获取失败防御，OpenSSL 对 null 名安全返
+  回非崩溃）+ get_hash_length default 64
+- 剩余定性：incremental_download 11 = EVP DigestInit/Update/
+  Final 失败 ×6（需 crypto 注入）+ 文件读取错误日志 ×2
+  （ifstream 在本环境对目录/无权限文件 open 即败，读中失败无注
+  入点）+ curl_easy_init OOM ×1 + downloadRange 零尺寸早返回
+  ×1（唯一公开路径需经 downloadChanged 传零尺寸 chunk，将执行
+  memcpy(dst, nullptr, 0) UB——记录为潜在健壮性缺陷，测试不覆
+  盖 UB 路径）；file_hash 12 = >100MB 阈值日志 ×1（单测需
+  100MB+ 内存文件，代价不成比例）+ EVP 五段失败防御 ×11（注入）
+- **覆盖率（批次 O 收口，批次 C 同款 gcovr 口径）：行 81.2% /
+  函数 94.5% / 分支 44.5%**（批次 N 81.0/94.3/44.3）；全量
+  ctest **1938 = 1927 通过 + 11 设计内 skip，零失败**；新增 8
+  用例 cov + ASan 双绿（ASan 全量重建后 protocols 696 + http 47
+  + daemon rpc_client 47 + daemon storage 42 零告警）
+- Windows CI 修复（c7feabc 单独提交）：http_handler_edges_test.
+  cpp 补 `#ifdef _WIN32` 适配块（批次 G 漏 guard，MSVC C1083
+  netinet/in.h——CI run 34883115118 的 Build 失败根因）
+- 测量口径备忘：多 target 编译水分——同一 .cpp 编进多个 target
+  时单份 gcov 的 miss 虚高（daemon/config.cpp 单份 54、两 target
+  gcda 各跑 gcov 后 OR 合并实为 13）；矿点表使用前需按
+  `paste a/x.gcov b/x.gcov | awk 两列同 #####` 口径复核
+
+**批次 P 候选（##### 铁账，需按多 target OR 合并口径复核）：**
+json_rpc_server 68（回环基建现成）/ resource_browser 系 153 /
+request_group 系 106 / resource_search 47（WebCrawler 泄漏已
+修）/ cloud_storage_plugin 55 行存根（方案 A：manager 只读插件
+访问器）/ http_commands 176（TLS 防御与 OOM 为主）。

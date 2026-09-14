@@ -416,58 +416,6 @@ TEST_F(IncrementalDownloadTest, Compare_Integration) {
 }
 
 // ============================================================================
-// mergeFile 测试 (私有方法 - 暂时注释)
-// ============================================================================
-
-/*
-TEST_F(IncrementalDownloadTest, MergeFile_Valid) {
-    IncrementalDownloader downloader;
-
-    // 创建本地文件
-    std::string filePath = createTestFile("test_merge.bin", 2048);
-
-    // 模拟变化的分块
-    std::vector<std::vector<uint8_t>> changedChunks = {
-        std::vector<uint8_t>(1024, 0xFF),  // 第一个分块数据
-        std::vector<uint8_t>(1024, 0xAA)   // 第二个分块数据
-    };
-
-    std::vector<ChunkInfo> chunkInfo = {
-        {0, 1024, "hash1", true},
-        {1024, 1024, "hash2", true}
-    };
-
-    EXPECT_TRUE(downloader.mergeFile(filePath, changedChunks, chunkInfo));
-
-    // 验证文件已被修改
-    std::ifstream inFile(filePath, std::ios::binary);
-    std::vector<uint8_t> fileData(2048);
-    inFile.read(reinterpret_cast<char*>(fileData.data()), 2048);
-    inFile.close();
-
-    // 验证第一个分块被修改
-    EXPECT_EQ(0xFF, fileData[0]);
-    EXPECT_EQ(0xFF, fileData[1023]);
-}
-
-TEST_F(IncrementalDownloadTest, MergeFile_NonExistent) {
-    IncrementalDownloader downloader;
-
-    std::string nonExistentPath = testDir_ + "/non_existent.bin";
-
-    std::vector<std::vector<uint8_t>> changedChunks = {
-        std::vector<uint8_t>(1024, 0xFF)
-    };
-
-    std::vector<ChunkInfo> chunkInfo = {
-        {0, 1024, "hash1", true}
-    };
-
-    EXPECT_FALSE(downloader.mergeFile(nonExistentPath, changedChunks, chunkInfo));
-}
-*/
-
-// ============================================================================
 // 性能测试
 // ============================================================================
 
@@ -631,6 +579,11 @@ public:
 
     uint16_t port() const { return port_; }
 
+    /// Range 请求短传：声明的 Content-Range 不变，实际只发一半
+    /// （Content-Length 与实际字节一致，curl 判 CURLE_OK，由调用方
+    /// 的尺寸校验兜底——Range 尺寸不匹配失败路由）
+    void set_range_short(bool v) { range_short_ = v; }
+
     ~IncrementalTestServer() { stop(); }
 
 private:
@@ -704,15 +657,16 @@ private:
 
             if (has_range) {
                 const Bytes slice_len = range_end - range_start + 1;
+                const Bytes actual = range_short_ ? slice_len / 2 : slice_len;
                 send_all(conn,
                          "HTTP/1.1 206 Partial Content\r\n"
                          "Content-Range: bytes " + std::to_string(range_start) + "-" +
                              std::to_string(range_end) + "/" +
                              std::to_string(body_.size()) + "\r\n"
-                         "Content-Length: " + std::to_string(slice_len) +
+                         "Content-Length: " + std::to_string(actual) +
                          "\r\nConnection: close\r\n\r\n" +
                          body_.substr(static_cast<std::size_t>(range_start),
-                                      static_cast<std::size_t>(slice_len)));
+                                      static_cast<std::size_t>(actual)));
             } else {
                 send_all(conn,
                          "HTTP/1.1 200 OK\r\n"
@@ -732,6 +686,7 @@ private:
 
     std::string body_;
     std::string hash_list_;
+    bool range_short_ = false;
     int listen_fd_ = -1;
     uint16_t port_ = 0;
     std::thread thread_;
@@ -890,4 +845,119 @@ TEST_F(IncrementalDownloadTest, CompareMissingLocalDownloadsEverything) {
     const std::string out_path = testDir_ + "/fresh_out.bin";
     ASSERT_TRUE(downloader.downloadChanged(diff, out_path));
     EXPECT_EQ(read_file(out_path), content);
+}
+
+// ============================================================================
+// 覆盖率批次 O：解析容错与失败路由收口
+// ============================================================================
+
+// 行尾 \r 与首尾空白的裁剪路径（CRLF 哈希列表）
+TEST_F(IncrementalDownloadTest, ParseHashListTrimsCRLFAndPadding) {
+    const std::string hash_hex(64, 'a');
+    const std::string text =
+        "# algorithm: sha256\r\n   " + hash_hex + " \t\r\n";
+    const auto chunks = IncrementalDownloader::parseHashList(text, 100, "sha256");
+    ASSERT_EQ(chunks.size(), std::size_t{1});
+    EXPECT_EQ(chunks[0].hash, hash_hex);
+    EXPECT_EQ(chunks[0].offset, 0u);
+    EXPECT_EQ(chunks[0].size, 100u);
+    EXPECT_FALSE(chunks[0].changed);
+}
+
+// 零分块 → 列表无效（元数据 chunkSize: 0 被 v>0 守卫忽略，
+// defaultChunkSize=0 且元数据不覆盖时直达零分块校验）
+TEST_F(IncrementalDownloadTest, ParseHashListRejectsZeroChunkSize) {
+    const std::string text =
+        "# falcon-hash-list v1\r\n# chunkSize: 0\r\n# algorithm: sha256\r\n" +
+        std::string(64, 'a');
+    // 元数据 0 被忽略，默认值生效 → 合法
+    EXPECT_EQ(IncrementalDownloader::parseHashList(text, 100, "sha256").size(),
+              std::size_t{1});
+    // 默认值 0 且无有效覆盖 → 零分块校验拒绝
+    EXPECT_TRUE(IncrementalDownloader::parseHashList(text, 0, "sha256").empty());
+}
+
+// 未知哈希算法：EVP_get_digestbyname 失败 → 哈希空串，compare 优雅降级
+TEST_F(IncrementalDownloadTest, CompareUnknownHashAlgorithmDegradesGracefully) {
+    const std::string local = createTestFile("bogus_alg.bin", 2048);
+    IncrementalDownloader downloader;
+    IncrementalDownloader::Options options;
+    options.hashAlgorithm = "no-such-digest";
+    const FileDiff diff =
+        downloader.compare(local, "http://127.0.0.1:1/remote.bin", options);
+    EXPECT_GT(diff.localSize, 0u);
+    EXPECT_TRUE(diff.chunks.empty());
+}
+
+// 目录不可读（POSIX 下 fopen 目录成功而 read 必败）→ 读取错误干净中断
+#ifndef _WIN32
+TEST_F(IncrementalDownloadTest, GenerateHashListDirectoryReadFailsCleanly) {
+    IncrementalDownloader downloader;
+    const auto chunks = downloader.generateHashList(
+        std::filesystem::temp_directory_path().string(), 512);
+    EXPECT_TRUE(chunks.empty());
+}
+#endif
+
+// 远程哈希列表非法（算法元数据与请求不一致）→ 回退全量下载建议
+TEST_F(IncrementalDownloadTest, CompareInvalidRemoteHashListFallsBackToFullDownload) {
+    const std::string local = createTestFile("invalid_list.bin", 2048);
+
+    IncrementalTestServer server;
+    // sha512 元数据 vs 请求 sha256 → 解析为空
+    ASSERT_TRUE(server.start(
+        std::string(2048, '\0'),
+        "# falcon-hash-list v1\r\n# chunkSize: 1024\r\n# algorithm: sha512\r\n"
+        "# fileSize: 2048\r\n# chunks: 2\r\n" + std::string(128, 'a') + "\r\n"));
+
+    IncrementalDownloader downloader;
+    IncrementalDownloader::Options options;
+    options.chunkSize = 1024;
+    options.hashAlgorithm = "sha256";
+    const FileDiff diff = downloader.compare(
+        local,
+        "http://127.0.0.1:" + std::to_string(server.port()) + "/file.bin", options);
+    EXPECT_TRUE(diff.chunks.empty());
+    EXPECT_EQ(diff.remoteSize, 0u);
+}
+
+// Range 服务器短传（Content-Length 与实际一致但尺寸不足）→ 尺寸不匹配 → 干净失败
+TEST_F(IncrementalDownloadTest, DownloadChangedRangeShortServerFailsCleanly) {
+    const std::string remote_content = make_content(2048, 5);
+    const std::string remote_path = testDir_ + "/range_short_remote.bin";
+    {
+        std::ofstream f(remote_path, std::ios::binary);
+        f.write(remote_content.data(),
+                static_cast<std::streamsize>(remote_content.size()));
+    }
+    IncrementalDownloader generator;
+    const auto chunks = generator.generateHashList(remote_path, 1024);
+
+    IncrementalTestServer server;
+    server.set_range_short(true);
+    ASSERT_TRUE(server.start(
+        remote_content,
+        IncrementalDownloader::serializeHashList(chunks, 1024, "sha256", 2048)));
+
+    const std::string old_content = make_content(2048, 6);
+    const std::string local_path = createTestFile("range_short_local.bin", 2048);
+    {
+        std::ofstream f(local_path, std::ios::binary);
+        f.write(old_content.data(),
+                static_cast<std::streamsize>(old_content.size()));
+    }
+
+    IncrementalDownloader downloader;
+    IncrementalDownloader::Options options;
+    options.chunkSize = 1024;
+    options.hashAlgorithm = "sha256";
+    const FileDiff diff = downloader.compare(
+        local_path,
+        "http://127.0.0.1:" + std::to_string(server.port()) + "/file.bin", options);
+    ASSERT_FALSE(diff.chunks.empty());
+    ASSERT_GT(diff.totalChanged, 0u);
+
+    const std::string out_path = testDir_ + "/range_short_out.bin";
+    EXPECT_FALSE(downloader.downloadChanged(diff, out_path));
+    EXPECT_FALSE(std::filesystem::exists(out_path));
 }

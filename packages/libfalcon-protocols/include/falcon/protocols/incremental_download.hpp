@@ -225,12 +225,6 @@ private:
      */
     bool http_get(const std::string& url, std::string& out);
 
-    /**
-     * @brief 合并文件
-     */
-    bool mergeFile(const std::string& localPath,
-                  const std::vector<std::vector<uint8_t>>& changedChunks,
-                  const std::vector<ChunkInfo>& chunkInfo);
 };
 
 } // namespace falcon

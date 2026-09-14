@@ -1056,6 +1056,21 @@ TEST(FileHashStress, MultipleAlgorithmSwitching) {
     remove_test_file(path);
 }
 
+// 覆盖率批次 O：未知算法枚举的防御路径
+TEST(FileHashTest, CalculateUnknownAlgorithmFailsGracefully) {
+    SKIP_NO_OPENSSL();
+    // switch 无 default：未知枚举 → md_type 为空 → 获取哈希算法失败防御
+    const std::string path = create_test_file("unknown_alg.bin", "falcon");
+    EXPECT_TRUE(
+        FileHasher::calculate(path, static_cast<HashAlgorithm>(99)).empty());
+    remove_test_file(path);
+}
+
+TEST(FileHashTest, GetHashLengthUnknownAlgorithmDefaultsTo64) {
+    EXPECT_EQ(FileHasher::get_hash_length(static_cast<HashAlgorithm>(99)),
+              std::size_t{64});
+}
+
 //==============================================================================
 // 主函数
 //==============================================================================

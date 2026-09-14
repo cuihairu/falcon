@@ -2,6 +2,32 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-14 - 覆盖率批次 O：incremental_download 46 → 11 + file_hash 23 → 12 + OpenSSL 宏 PUBLIC 化
+- **修复公共头 ODR 隐患**：`FALCON_USE_OPENSSL`/`FALCON_ENABLE_
+  OPENSSL` 从 falcon_protocols 的 PRIVATE 改 PUBLIC——
+  http_commands.hpp 等公共头按宏条件声明成员，消费方 TU 必须
+  与库同布局；同时修复 13 个 FileHash 测试因测试 TU 看不到宏而
+  运行时 skip 的问题（全量 ctest skip 60 → 11，余量设计内）
+- **删除死代码 mergeFile**（49 行）：private 零生产调用方，唯
+  一"消费者"是被整块注释的测试
+- incremental_download.cpp gcov miss **46 → 11**：6 新用例
+  （CRLF 行裁剪/零分块两态/未知哈希算法降级/无效远程哈希列表
+  回退/Range 短传干净失败/目录读失败）挂 `falcon_protocols_
+  tests`；file_hash.cpp **23 → 12**：未知算法枚举防御（switch
+  无 default → md_type 空 → OpenSSL 对 null 安全）+
+  get_hash_length default
+- 剩余定性：EVP 注入防御 ×17、curl OOM ×2、阈值日志 ×1、环境
+  不可达 ×4、downloadRange 零尺寸路径（memcpy(dst,nullptr,0)
+  UB，记录潜在缺陷不覆盖）
+- **全包覆盖率（批次 C 同款 gcovr 口径）：行 81.2% / 函数
+  94.5% / 分支 44.5%**（批次 N 81.0/94.3/44.3）；全量 ctest
+  1938 零失败；新增 8 用例 cov + ASan 双绿
+- Windows CI 修复（c7feabc）：http_handler_edges_test.cpp 补
+  _WIN32 适配块（批次 G 漏 guard，MSVC C1083）
+- 测量备忘：**多 target 编译水分**——同一 .cpp 编进多个 target
+  时单份 gcov miss 虚高（daemon/config.cpp 54 → OR 合并 13），
+  矿点表使用前按双 gcda OR 合并口径复核
+
 ### 2026-09-14 - 覆盖率批次 N：segment_downloader.cpp 76 → 11 miss + 死代码清理
 - **删除匿名命名空间死函数** `generate_random_suffix`（零调用）
   与 `format_bytes`（唯一"引用"在注释里），22 miss 行出账；全
