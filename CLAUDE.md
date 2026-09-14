@@ -2,6 +2,28 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-14 - 覆盖率批次 F：ftp_plugin.cpp 135 → 3 miss（占位测试重写 + weak stub 链接陷阱）
+- **缺口定性**：135/146 miss = 零真实测试——旧 ftp_handler_test.cpp
+  55 个用例全是断言字符串字面量的占位测试，唯一真实的 registry 测
+  试长期 GTEST_SKIP
+- **weak stub 链接陷阱**（registry 0 注册根因，nm 实证）：core 的
+  weak 空 stub 与 protocols 的真实实现分属两个对象；GNU ld 归档一
+  次扫描下，不引用任何 protocols 符号的二进制（falcon_ftp_tests）
+  真实实现对象从未拉入，空 stub 生效 → load_builtin_handlers() 0
+  注册。daemon 因 RPC 引用 describe_builtin_protocols 强符号免疫。
+  测试侧引用强符号收口，Skip 变真断言
+- 测试基建：新 `mock_ftp_server.hpp`（storage 包 mock 复制 + RETR/
+  REST/慢发/一次性失败扩展）；55 占位 → 20 真实用例（cov+ASan 双
+  绿）：SIZE 探测语义（curl 对 SIZE 550 在 RETR 前即弃——命令序
+  列 dump 实证）、端到端下载、REST 续传、瞬态失败重试（含 1s 退
+  避下界）、重试耗尽、rename 失败不假报完成、慢发进度记账越过
+  200ms 节流窗、暂停中止（CURLE_ABORTED_BY_CALLBACK）、proxy 凭据
+  生效性
+- 覆盖率批次 F 收口：ftp_plugin.cpp gcov miss **135 → 3**（行
+  97.26%），剩余全为 OOM throw/write_callback 防御等不可测项；
+  全包（批次 C 同款 gcovr 口径）行 78.9% / 函数 91.5% / 分支
+  42.9%（78.3/90.9/42.6 → 涨幅 0.6/0.6/0.3 点）
+
 ### 2026-09-14 - 覆盖率批次 E：bittorrent_plugin.cpp 187 → 7 miss + 四缺陷修复
 - **magnet infoHash off-by-one**：`"xt=urn:btih:"` 是 12 字符，旧
   代码 `pos + 11` 截取——magnet 任务 infoHash 恒带前导冒号（

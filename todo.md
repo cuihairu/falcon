@@ -1639,4 +1639,59 @@ can_handle 等显示未覆盖。修复：全量重建 → 清全部 gcda → 重
 **后续批次（真实缺口）：** ftp_plugin 135 → http_handler 82 →
 task_manager 78。
 
+### 2026-09-14 覆盖率批次 F（ftp_plugin.cpp 135 → 3 miss：占位测试重写 + weak stub 链接陷阱）
+
+**缺口定性（测量先行）：** 135/146 miss = 整个文件未执行——不是
+局部缺口而是"零真实测试"。旧 `ftp_handler_test.cpp` 55 个用例全
+是自说自话的占位测试（断言字符串字面量 `EXPECT_TRUE(true)` 式，
+不触达产品代码）；唯一真实的 registry 测试长期 GTEST_SKIP。
+
+**weak stub 链接陷阱（registry 0 注册的根因，nm 实证）：**
+- core 的 `builtin_protocol_handlers_stub.cpp` 提供 weak 空实现，
+  真实实现编译进独立对象 `falcon_builtin_protocol_handlers`（宏
+  从 falcon_protocols 镜像，CMake 层闭合）
+- GNU ld 归档**一次扫描**语义：`falcon_ftp_tests` 只用 core API、
+  不引用任何 protocols 符号 → 处理 protocols 归档时无未定义引用
+  → 真实实现对象**从未拉入**；core 拉入 protocol_registry.o 后其
+  未定义引用由 core 内的 weak stub 解析（nm 显示 `W`）→ 空 stub
+  生效 → load_builtin_handlers() 0 注册 → 测试跳过
+- daemon/CLI 生产免疫：RPC 层引用 `describe_builtin_protocols`
+  强符号把真实对象拉入（nm 显示 `T`，强胜弱）；但任何不碰该符号
+  的新消费方都会静默 0 注册——脆弱机制，记录在案
+- 测试侧收口：registry 测试显式引用
+  `describe_builtin_protocols()`（本来就该断言注册结果），Skip 变
+  真断言；重写后全部测试二进制 nm 验证强定义在场
+
+**测试基建：** 新 `tests/unit/mock_ftp_server.hpp`（自 storage 包
+mock 复制 + 下载语义扩展，storage 侧不动）：RETR 按 set_file_
+content 应答、REST 续传偏移、一次性/永久命令失败（重试语义）、
+分块慢发（暂停窗口）；控制协议命令逐条记录供断言。
+
+**测试重写（55 占位 → 20 真实用例，cov + ASan 双绿）：**
+- SIZE 探测：成功（213 → total_size）/ 未知文件 throw——curl 对
+  SIZE 550 判 "Remote file not found"，**RETR 之前即弃**（命令序
+  列 dump 实证，第一版测试预期因此翻正）
+- 下载端到端：RETR 落盘逐字节一致 + rename 发布 + tmp 消失 +
+  Completed；curl 选项黑盒（verify_ssl=false/timeout/限速）
+- 断点续传：预置 .falcon.tmp → REST 偏移断言 + app 拼接成品
+- 重试：瞬态 RETR 失败后恢复（恰 2 次 RETR + retry_delay=1s 指数
+  退避时长下界断言）；重试耗尽 throw；SIZE 探测失败两轮探测零
+  RETR 快速失败
+- 失败收口：输出目录打不开 → FileIOException（零 RETR，先于网络
+  阶段）；成品路径被目录占用 → rename 失败 throw、状态保持
+  Pending 绝不假报完成、temp 保留
+- 慢发进度记账：越过 progress_callback 200ms 节流窗，
+  downloaded/total 真实更新；暂停中止（回调返回 1 →
+  CURLE_ABORTED_BY_CALLBACK → 静默返回，tmp 保留为断点）；
+  cancel 先行跳过；resume 重启；proxy + 凭据生效性（无人监听
+  代理必败 + 流量从未直连）
+
+**覆盖率（批次 F 收口）：ftp_plugin.cpp gcov miss 135 → 3（行
+97.26%）**，剩余为 curl_easy_init OOM throw×2 + write_callback
+`!is_open()` 防御（回调时 file 必开着）——全部不可测项。全包
+（批次 C 同款 gcovr 口径）：**行 78.9% / 函数 91.5% / 分支 42.9%**
+（批次 E 78.3/90.9/42.6；净涨 0.6/0.6/0.3 点）。
+
+**后续批次（真实缺口）：** http_handler 82 → task_manager 78。
+
 
