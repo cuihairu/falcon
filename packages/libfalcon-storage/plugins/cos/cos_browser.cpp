@@ -323,6 +323,10 @@ public:
         curl_easy_setopt(curl_, CURLOPT_HEADERFUNCTION, HeaderCallback);
         curl_easy_setopt(curl_, CURLOPT_HEADERDATA, &header_map);
 
+        // 连接与传输超时，防止 TLS 握手等场景无限挂起
+        curl_easy_setopt(curl_, CURLOPT_CONNECTTIMEOUT, 10L);
+        curl_easy_setopt(curl_, CURLOPT_TIMEOUT, 30L);
+
         CURLcode res = curl_easy_perform(curl_);
 
         if (header_list) {
