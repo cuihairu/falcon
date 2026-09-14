@@ -8,11 +8,14 @@
 #include <falcon/storage/ftp_browser.hpp>
 #include <falcon/logger.hpp>
 
-#include <falcon/logger.hpp>
 #include <curl/curl.h>
 #include <sstream>
 #include <algorithm>
 #include <cctype>
+#include <map>
+#include <ctime>
+#include <cstdlib>
+#include <cstdint>
 
 namespace falcon {
 
@@ -49,6 +52,12 @@ public:
 
         host_ = url.substr(host_start, host_end - host_start);
 
+        // 剥离内嵌的 userinfo（ftp://user:pass@host 的凭据不属于 host）
+        size_t at_pos = host_.find('@');
+        if (at_pos != std::string::npos) {
+            host_ = host_.substr(at_pos + 1);
+        }
+
         if (host_end < url.length()) {
             current_path_ = url.substr(host_end);
         }
@@ -60,7 +69,21 @@ public:
         }
     }
 
-    std::string build_url(const std::string& path = "") {
+    /// 把传入 path 按与 build_url 相同的语义解析为服务器绝对路径
+    /// （列举行的 res.path 归属此前用的是 current_path_ 而非实际列举
+    /// 的目录，path 参数与当前目录不一致时路径全错）
+    std::string resolve_path(const std::string& path) const {
+        if (path.empty()) return normalize_path(current_path_);
+        if (path[0] == '/') return normalize_path(path);
+        return normalize_path(current_path_ + "/" + path);
+    }
+
+    std::string parent_of(const std::string& path) const {
+        size_t pos = path.find_last_of('/');
+        return pos == std::string::npos ? std::string() : path.substr(0, pos);
+    }
+
+    std::string build_url(const std::string& path = "", bool is_dir = true) {
         std::string url = "ftp://";
 
         // 添加用户名密码（如果有）
@@ -75,16 +98,11 @@ public:
         url += host_;
 
         // 添加路径
-        std::string full_path = current_path_;
-        if (!path.empty()) {
-            if (path[0] == '/') {
-                full_path = path;
-            } else {
-                full_path = normalize_path(current_path_ + "/" + path);
-            }
-        }
+        std::string full_path = resolve_path(path);
 
-        if (full_path.empty() || full_path.back() != '/') {
+        // 目录操作补尾部斜杠；文件操作（DELE/RMD/SIZE 等）必须不带，
+        // 否则服务器按目录解析必失败
+        if (is_dir && (full_path.empty() || full_path.back() != '/')) {
             full_path += "/";
         }
 
@@ -93,12 +111,29 @@ public:
         return url;
     }
 
+    void apply_ssl_option(const std::string& value) {
+        std::string v = value;
+        std::transform(v.begin(), v.end(), v.begin(), ::tolower);
+        if (v == "false" || v == "0" || v == "none" || v == "off") {
+            curl_easy_setopt(curl_, CURLOPT_USE_SSL, CURLUSESSL_NONE);
+        } else if (v == "control") {
+            curl_easy_setopt(curl_, CURLOPT_USE_SSL, CURLUSESSL_CONTROL);
+        } else if (v == "all" || v == "true" || v == "1") {
+            curl_easy_setopt(curl_, CURLOPT_USE_SSL, CURLUSESSL_ALL);
+        }
+        // 其他值保持构造时的 CURLUSESSL_TRY
+    }
+
     std::string perform_list(const std::string& url) {
         curl_easy_setopt(curl_, CURLOPT_URL, url.c_str());
         curl_easy_setopt(curl_, CURLOPT_WRITEFUNCTION, WriteCallback);
 
         std::string response;
         curl_easy_setopt(curl_, CURLOPT_WRITEDATA, &response);
+
+        // test_connection/写操作在复用的 handle 上残留 NOBODY=1 会让
+        // LIST 收不到任何数据（连接之后列举恒空）——每次显式清设
+        curl_easy_setopt(curl_, CURLOPT_NOBODY, 0L);
 
         // 使用LIST命令
         curl_easy_setopt(curl_, CURLOPT_CUSTOMREQUEST, "LIST");
@@ -114,7 +149,8 @@ public:
 
     std::vector<RemoteResource> parse_ftp_listing(
         const std::string& listing,
-        const ListOptions& options) {
+        const ListOptions& options,
+        const std::string& base_dir) {
 
         std::vector<RemoteResource> resources;
         std::istringstream iss(listing);
@@ -125,7 +161,7 @@ public:
             if (line.empty() || line.find("total") == 0) continue;
 
             // 解析每行
-            RemoteResource res = parse_ftp_line(line);
+            RemoteResource res = parse_ftp_line(line, base_dir);
             if (!res.name.empty()) {
                 // 应用过滤器
                 if (apply_filter(res, options)) {
@@ -140,7 +176,51 @@ public:
         return resources;
     }
 
-    RemoteResource parse_ftp_line(const std::string& line) {
+    /// days_from_civil（Howard Hinnant 算法）：y/m/d → 自 1970-01-01 的
+    /// 天数，纯整数 UTC 算术，跨平台且不受本地时区影响
+    static int64_t days_from_civil(int64_t y, int64_t m, int64_t d) {
+        y -= m <= 2;
+        const int64_t era = (y >= 0 ? y : y - 399) / 400;
+        const int64_t yoe = y - era * 400;                      // [0, 399]
+        const int64_t doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+        const int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        return era * 146097 + doe - 719468;
+    }
+
+    /// 解析 Unix ls 的时间字段为 unix 秒字符串（与其他浏览器的
+    /// modified_time 格式一致）：一年内文件是 "Mon DD HH:MM"（年份缺省
+    /// 按当前 UTC 年近似），更早文件是 "Mon DD YYYY"；失败返回空串
+    static std::string parse_ls_time(const std::string& month, const std::string& day,
+                                     const std::string& tail) {
+        static const std::map<std::string, int> kMonths = {
+            {"Jan", 1}, {"Feb", 2}, {"Mar", 3}, {"Apr", 4}, {"May", 5}, {"Jun", 6},
+            {"Jul", 7}, {"Aug", 8}, {"Sep", 9}, {"Oct", 10}, {"Nov", 11}, {"Dec", 12}};
+
+        auto mit = kMonths.find(month);
+        if (mit == kMonths.end()) return "";
+
+        int mday = std::atoi(day.c_str());
+        if (mday <= 0 || mday > 31) return "";
+
+        int64_t secs;
+        size_t colon = tail.find(':');
+        if (colon != std::string::npos) {
+            std::time_t now = std::time(nullptr);
+            std::tm* utc = std::gmtime(&now);
+            int64_t year = utc ? utc->tm_year + 1900 : 1970;
+            int hour = std::atoi(tail.substr(0, colon).c_str());
+            int minute = std::atoi(tail.substr(colon + 1).c_str());
+            secs = days_from_civil(year, mit->second, mday) * 86400
+                   + hour * 3600 + minute * 60;
+        } else {
+            int64_t year = std::atoi(tail.c_str());
+            if (year <= 1900) return "";
+            secs = days_from_civil(year, mit->second, mday) * 86400;
+        }
+        return std::to_string(secs);
+    }
+
+    RemoteResource parse_ftp_line(const std::string& line, const std::string& base_dir) {
         RemoteResource res;
 
         // Unix风格FTP列表
@@ -187,13 +267,10 @@ public:
         // 大小
         iss >> res.size;
 
-        // 月份
-        iss >> token;
-
-        // 日期
-        iss >> token;
-        std::string time_str;
-        iss >> time_str;
+        // 时间字段（此前读了但丢弃，modified_time 恒空）
+        std::string month_str, day_str, tail_str;
+        iss >> month_str >> day_str >> tail_str;
+        res.modified_time = parse_ls_time(month_str, day_str, tail_str);
 
         // 名称（包含空格）
         std::string rest;
@@ -214,8 +291,8 @@ public:
             }
         }
 
-        // 构建完整路径
-        res.path = normalize_path(current_path_ + "/" + res.name);
+        // 构建完整路径（归属实际列举的目录，而非当前工作目录）
+        res.path = normalize_path(base_dir + "/" + res.name);
 
         return res;
     }
@@ -271,12 +348,15 @@ public:
         } else if (options.sort_by == "modified_time") {
             std::sort(resources.begin(), resources.end(),
                 [&](const RemoteResource& a, const RemoteResource& b) {
+                    if (options.sort_desc) {
+                        return a.modified_time > b.modified_time;
+                    }
                     return a.modified_time < b.modified_time;
                 });
         }
     }
 
-    std::string normalize_path(const std::string& path) {
+    static std::string normalize_path(const std::string& path) {
         std::string result = path;
 
         // 替换\\为/
@@ -298,29 +378,38 @@ public:
         return result;
     }
 
-    bool test_connection() {
-        std::string test_url = build_url();
-        curl_easy_setopt(curl_, CURLOPT_URL, test_url.c_str());
+    /// NOBODY 探测类请求（连接测试/SIZE/QUOTE 控制命令）的统一 perform：
+    /// 显式挂接本次调用的接收缓冲并清掉残留的 CUSTOMREQUEST。此前复用
+    /// 的 handle 残留 perform_list 的 WRITEDATA（指向已销毁的局部
+    /// string），NOBODY 应答触发 WriteCallback 即 stack-use-after-return
+    CURLcode perform_nobody(const std::string& url) {
+        std::string sink;
+        curl_easy_setopt(curl_, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl_, CURLOPT_WRITEFUNCTION, WriteCallback);
+        curl_easy_setopt(curl_, CURLOPT_WRITEDATA, &sink);
+        curl_easy_setopt(curl_, CURLOPT_CUSTOMREQUEST, nullptr);
         curl_easy_setopt(curl_, CURLOPT_NOBODY, 1L);
 
         CURLcode res = curl_easy_perform(curl_);
-        return res == CURLE_OK;
+
+        curl_easy_setopt(curl_, CURLOPT_NOBODY, 0L);
+        return res;
+    }
+
+    bool test_connection() {
+        return perform_nobody(build_url()) == CURLE_OK;
     }
 
     bool remove_recursive(const std::string& path) {
-        // 递归删除实现（简化版）
         ListOptions options;
-        options.recursive = true;
-        std::vector<RemoteResource> contents = parse_ftp_listing(
-            perform_list(build_url(path)), options);
+        std::string base = resolve_path(path);
+        auto contents = parse_ftp_listing(perform_list(build_url(path)), options, base);
 
         for (const auto& item : contents) {
-            std::string item_path = path + "/" + item.name;
-
             if (item.is_directory()) {
-                remove_recursive(item_path);
+                remove_recursive(item.path);
             } else {
-                remove(item_path);
+                remove(item.path);
             }
         }
 
@@ -328,14 +417,15 @@ public:
     }
 
     bool remove(const std::string& path) {
-        std::string url = build_url(path);
+        // 先列父目录拿到条目类型（目录 RMD / 文件 DELE）
+        std::string parent = parent_of(path);
+        std::string name = path.substr(path.find_last_of('/') + 1);
 
         RemoteResource info;
         ListOptions options;
-        auto contents = parse_ftp_listing(perform_list(build_url(
-            path.substr(0, path.find_last_of('/')))), options);
+        auto contents = parse_ftp_listing(
+            perform_list(build_url(parent)), options, resolve_path(parent));
 
-        std::string name = path.substr(path.find_last_of('/') + 1);
         for (const auto& res : contents) {
             if (res.name == name) {
                 info = res;
@@ -343,18 +433,42 @@ public:
             }
         }
 
-        curl_easy_setopt(curl_, CURLOPT_URL, url.c_str());
+        // DELE/RMD 走 QUOTE 下发：CUSTOMREQUEST 会让 curl 先 CWD 进目标
+        // 路径再发命令，删除尚未发生 CWD 就已经失败
+        std::string cmd =
+            std::string(info.is_directory() ? "RMD " : "DELE ") + resolve_path(path);
+        return perform_control_commands({cmd}, parent);
+    }
 
-        if (info.is_directory()) {
-            // 删除目录（需要支持RMD命令）
-            curl_easy_setopt(curl_, CURLOPT_CUSTOMREQUEST, "RMD");
-        } else {
-            // 删除文件
-            curl_easy_setopt(curl_, CURLOPT_CUSTOMREQUEST, "DELE");
+    /// 以父目录为传输锚点执行控制命令（QUOTE 语义：登录后、传输阶段
+    /// 前，任一命令被服务器拒绝即整体失败）。MKD/DELE/RMD/RNFR/RNTO
+    /// 这类操作不能塞 CUSTOMREQUEST——curl 会先 CWD 进目标路径再发命令，
+    /// 目标尚不存在（MKD）或即将消失（DELE/RMD）时 CWD 必然失败
+    bool perform_control_commands(const std::vector<std::string>& cmds,
+                                  const std::string& anchor_path) {
+        struct curl_slist* commands = nullptr;
+        for (const auto& c : cmds) {
+            commands = curl_slist_append(commands, c.c_str());
         }
 
-        CURLcode res = curl_easy_perform(curl_);
-        return res == CURLE_OK;
+        curl_easy_setopt(curl_, CURLOPT_QUOTE, commands);
+        CURLcode res = perform_nobody(build_url(anchor_path));
+        curl_easy_setopt(curl_, CURLOPT_QUOTE, nullptr);
+        curl_slist_free_all(commands);
+
+        if (res != CURLE_OK) {
+            FALCON_LOG_ERROR("FTP control command failed: {}", curl_easy_strerror(res));
+            return false;
+        }
+        return true;
+    }
+
+    bool perform_rename(const std::string& old_path, const std::string& new_path) {
+        // RNFR/RNTO 必须是两条独立的 FTP 命令按序下发；此前把整串
+        // "RNFR a\r\nRNTO b" 塞进 CUSTOMREQUEST，协议上就是一条非法命令
+        std::string rnfr = "RNFR " + resolve_path(old_path);
+        std::string rnto = "RNTO " + resolve_path(new_path);
+        return perform_control_commands({rnfr, rnto}, parent_of(old_path));
     }
 
     static size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* userp) {
@@ -405,6 +519,18 @@ bool FTPBrowser::connect(const std::string& url,
     // 解析URL获取主机信息
     p_impl_->parse_url(url);
 
+    // endpoint 选项覆盖主机（host[:port]，与其他浏览器保持一致）
+    it = options.find("endpoint");
+    if (it != options.end() && !it->second.empty()) {
+        p_impl_->host_ = it->second;
+    }
+
+    // TLS 强度选项（none/control/all，缺省保持构造时的 try）
+    it = options.find("ssl");
+    if (it != options.end() && !it->second.empty()) {
+        p_impl_->apply_ssl_option(it->second);
+    }
+
     // 测试连接
     return p_impl_->test_connection();
 }
@@ -420,12 +546,12 @@ std::vector<RemoteResource> FTPBrowser::list_directory(
     std::string list_url = p_impl_->build_url(path);
     std::string listing = p_impl_->perform_list(list_url);
 
-    return p_impl_->parse_ftp_listing(listing, options);
+    return p_impl_->parse_ftp_listing(listing, options, p_impl_->resolve_path(path));
 }
 
 RemoteResource FTPBrowser::get_resource_info(const std::string& path) {
-    std::vector<RemoteResource> resources = list_directory(
-        path.substr(0, path.find_last_of('/')));
+    std::string parent = p_impl_->parent_of(path);
+    std::vector<RemoteResource> resources = list_directory(parent);
 
     std::string name = path.substr(path.find_last_of('/') + 1);
     for (const auto& res : resources) {
@@ -439,31 +565,30 @@ RemoteResource FTPBrowser::get_resource_info(const std::string& path) {
     info.path = path;
     info.name = name;
 
-    // 使用SIZE命令获取大小
-    std::string size_url = p_impl_->build_url(path);
-    curl_easy_setopt(p_impl_->curl_, CURLOPT_URL, size_url.c_str());
-    curl_easy_setopt(p_impl_->curl_, CURLOPT_NOBODY, 1L);
-
-    CURLcode res = curl_easy_perform(p_impl_->curl_);
-    if (res == CURLE_OK) {
-        curl_off_t size = -1;
-        curl_easy_getinfo(p_impl_->curl_, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &size);
-        info.size = size >= 0 ? static_cast<uint64_t>(size) : 0;
-        info.type = ResourceType::File;
+    // 使用SIZE命令获取大小（NOBODY 探测统一走 perform_nobody，
+    // 不复用 perform_list 残留的 WRITEDATA）
+    CURLcode res = p_impl_->perform_nobody(
+        p_impl_->build_url(path, /*is_dir=*/false));
+    if (res != CURLE_OK) {
+        // 父目录列举与 SIZE 双双失败：资源不存在（exists 以 name
+        // 非空判定，恒真条件会让幽灵路径也报"存在"）
+        info.name.clear();
+        return info;
     }
+
+    curl_off_t size = -1;
+    curl_easy_getinfo(p_impl_->curl_, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &size);
+    info.size = size >= 0 ? static_cast<uint64_t>(size) : 0;
+    info.type = ResourceType::File;
 
     return info;
 }
 
 bool FTPBrowser::create_directory(const std::string& path, [[maybe_unused]] bool recursive) {
-    std::string url = p_impl_->build_url(path);
-
-    // 使用MKD命令创建目录
-    curl_easy_setopt(p_impl_->curl_, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(p_impl_->curl_, CURLOPT_CUSTOMREQUEST, "MKD");
-
-    CURLcode res = curl_easy_perform(p_impl_->curl_);
-    return res == CURLE_OK;
+    // MKD 经 QUOTE 下发并以父目录为锚点（CUSTOMREQUEST 会先 CWD 进
+    // 尚不存在的目标目录）；recursive 参数暂不支持级联建父目录
+    return p_impl_->perform_control_commands(
+        {"MKD " + p_impl_->resolve_path(path)}, p_impl_->parent_of(path));
 }
 
 bool FTPBrowser::remove(const std::string& path, bool recursive) {
@@ -474,17 +599,7 @@ bool FTPBrowser::remove(const std::string& path, bool recursive) {
 }
 
 bool FTPBrowser::rename(const std::string& old_path, const std::string& new_path) {
-    std::string old_url = p_impl_->build_url(old_path);
-    std::string new_url = p_impl_->build_url(new_path);
-
-    // 使用RNFR命令重命名
-    std::string command = "RNFR " + old_url + "\r\nRNTO " + new_url;
-
-    curl_easy_setopt(p_impl_->curl_, CURLOPT_URL, old_url.c_str());
-    curl_easy_setopt(p_impl_->curl_, CURLOPT_CUSTOMREQUEST, command.c_str());
-
-    CURLcode res = curl_easy_perform(p_impl_->curl_);
-    return res == CURLE_OK;
+    return p_impl_->perform_rename(old_path, new_path);
 }
 
 bool FTPBrowser::copy([[maybe_unused]] const std::string& source_path,

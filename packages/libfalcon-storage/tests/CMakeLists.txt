@@ -52,6 +52,7 @@ if(FALCON_ENABLE_RESOURCE_BROWSER)
         unit/resource_browser_utils_test.cpp
         unit/resource_browsers_test.cpp
         unit/s3_browser_mock_test.cpp
+        unit/ftp_browser_mock_test.cpp
         unit/storage_isolation_test.cpp
     )
 
