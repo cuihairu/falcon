@@ -2296,6 +2296,59 @@ request_group 系 106 / resource_search 47（WebCrawler 泄漏已
   抖动串行复跑过）；ASan storage 359 + drives 146 全绿（1 例
   PerformanceLargeBatch 墙钟断言并行抖动 5.8s→串行 3.5s，非回归）
 
-**批次 R 候选（##### 铁账，多 target OR 合并口径复核后推进）：**
-request_group 系 106 / http_commands 176（TLS 防御与 OOM 为主）/
-cloud_storage_plugin 55 行存根（方案 A：manager 只读插件访问器）。
+### 批次 R 收口（2026-09-15）：request_group 31 → 2 + cloud_storage_plugin 75 → 20 + http_commands 145 → 135（三文件 94 行收敛 + WS 测试挂死缺陷修复）
+- **27 新用例三树绿**（cov 2010 + ASan 三套件 894 用例零告警）：
+  protocols 侧 `request_group_test.cpp` +13（URL→文件名推导边界
+  （query 剥离/空段回退 download）、自定义目录拼接、socks5 代理
+  init 拒绝、resume 控制文件三态校验失败放弃断点（url 不一致/
+  临时文件小于记录进度）、控制文件写失败容忍（内存追踪照常）、
+  路径辅助守卫、Manager add 守卫（null/重复 id）+ 调度丢弃与
+  resume 孤儿补插队往返）；`http_commands_edges_test.cpp` +8
+  （零字节下载、>1MB 响应头终止、拆分计划 1 段回退单连接、
+  chunked 大小行四变体帧错误（CR-pending+非 LF / CR-pending+LF
+  补齐后无效 hex / 同缓冲 CR+非 LF / 同缓冲完整 CRLF+无效 hex）、
+  **32MB 突发-静默-再突发 NEED_RETRY 旗舰**——execute 尾部
+  update_progress + 回队 + 速度计算分支全链）；drives 侧
+  `cloud_storage_coverage_test.cpp` +6（经新增 plugins() 只读访
+  问器：注册序视图 13 插件、Lanzou/Baidu/Aliyun/Quark 四件套存
+  根离线直调、轻量基类经子类指针驱动、6 平台 display_name 经
+  无效链接错误路径 surfaced）
+- **NEED_RETRY 可测化方法论**：阻塞 send 的剧本服务器会把发送
+  节奏同步到客户端排水速度（背压恒小，64×64KB 轮上限永不触发）
+  ——**深灌 + 客户端直写**才构成确定性触发：服务器每段 16MB 快
+  速预灌（快于客户端 recv+落盘排水）、`enable_disk_cache=false`
+  拖慢客户端，内核积压单调增长 → 单次 execute 必然读满 64 轮让
+  出；静默 1200ms 后第二段再让出时距命令构造 >1s，顺带覆盖
+  update_progress 速度计算分支
+- **生产 API**：CloudStorageManager 新增 `plugins()` 只读访问器
+  （指针生命周期归管理器，可驱动接口方法不可 delete）——批次 M
+  遗留的「管理器不暴露插件指针 ⇒ 四件套存根 55 行不可达」经此
+  打通离线直调面
+- **修复 WsServerTest 断言失败即挂死缺陷**（全量 ctest 实证：
+  负载下进度通知 5s 未到 → ASSERT 提前返回 → release() 漏调 →
+  BlockingHandler 无界 cv_.wait → 析构 join 卡死 1:59:16）：
+  cv_.wait 改 wait_for(30s)（TwoStageHandler 同款防御），一次
+  修复覆盖全部四处 release-after-ASSERT 用法；flake 仍会红但
+  不再无限挂
+- 剩余定性（三文件 157 行）：request_group 2（create_initial_
+  command 内层兜底——init() 三条失败路径全自带 set_status
+  (FAILED)，结构性不可达）；cloud_storage 20（init_patterns
+  map 初始化伪影 ×12 + quota 返回字面量伪影 ×6（断言通过即执
+  行铁证）+ 第二循环已识别平台防御 ×2）；http_commands 135
+  （TLS/SSL 防御 ×12、OOM ×12、WANT_WRITE 时序 ×4、send 失败
+  ×4、磁盘写失败防御 ×6（2289 同类）、结构不可达防御与 private
+  可见性 ×~30、2065-2076 第二完成收口（download_complete_ 全部
+  置位点伴随 receive_data 返回 OK，2091 同轮收口先行，入口检查
+  恒假）、多行语句伪影 ×若干）
+- **多 target 编译水分已排除**（三文件各仅一份库 target gcda）
+- **覆盖率（批次 C 同款 gcovr 口径）：行 82.4% / 函数 96.3% /
+  分支 45.9%**（批次 Q 81.9/94.9/45.5 → +0.5/+1.4/+0.4）；全量
+  ctest **2010 清单仅 2 例并行抖动失败（DownloadEngineTest.
+  ResumeTask / TaskManagerPriorityTest.PriorityDequeueOrder，
+  串行复跑即过）**；ASan protocols 717 +
+  drives 152 + daemon_rpc 25 全绿
+
+**批次 S 候选（##### 铁账，多 target OR 合并口径复核后推进）：**
+daemon config.cpp（多 target 水分，OR 合并后 13）/ 其余按矿点
+分布表重新勘矿（批次 R 后 http_commands 剩余均为定性项，无新
+矿）。

@@ -14,7 +14,12 @@
 #include <gtest/gtest.h>
 #include <falcon/protocols/request_group.hpp>
 #include <falcon/protocols/download_engine_v2.hpp>
+#include <falcon/protocols/resume_control.hpp>
+#include <atomic>
+#include <filesystem>
+#include <fstream>
 #include <memory>
+#include <string>
 #include <vector>
 
 using namespace falcon;
@@ -912,6 +917,231 @@ TEST(RequestGroupManTest, PurgeFinishedGroupsReclaimsAndKeepsPaused) {
 
     // 回收后调度队列不含悬垂指针：WAITING 组仍可被激活计数看到
     EXPECT_EQ(manager.waiting_count(), 2);  // 组 4（WAITING）+ 组 5（PAUSED）
+}
+
+//==============================================================================
+// 离线路径收口（覆盖率批次 R）：输出路径推导 / 门禁 / 续传校验 / 调度守卫
+//==============================================================================
+
+namespace {
+
+std::string make_unique_temp_dir(const std::string& tag) {
+    static std::atomic<int> seq{0};
+    const auto dir = std::filesystem::path(std::filesystem::temp_directory_path()) /
+                     ("falcon_rg_" + tag + "_" + std::to_string(seq.fetch_add(1)));
+    std::filesystem::create_directories(dir);
+    return dir.string();
+}
+
+} // namespace
+
+// URL 文件名推导：查询串不落入文件名
+TEST(RequestGroupCovR, DeriveFilenameStripsUrlQuery) {
+    DownloadOptions options;
+    options.output_directory = make_unique_temp_dir("query");
+
+    RequestGroup group(1, {"http://127.0.0.1:1/pkg.tar.gz?sig=abc"}, options);
+    ASSERT_TRUE(group.init());
+
+    const std::filesystem::path out(group.download_task()->output_path());
+    EXPECT_EQ(out.filename().string(), "pkg.tar.gz");
+}
+
+// URL 以 '?' 段收尾时推导结果为空 → 回退默认名 "download"
+TEST(RequestGroupCovR, DeriveFilenameEmptySegmentFallsBackToDownload) {
+    DownloadOptions options;
+    options.output_directory = make_unique_temp_dir("emptyname");
+
+    RequestGroup group(2, {"http://127.0.0.1:1/?q=1"}, options);
+    ASSERT_TRUE(group.init());
+
+    const std::filesystem::path out(group.download_task()->output_path());
+    EXPECT_EQ(out.filename().string(), "download");
+}
+
+// 自定义目录 + 相对文件名 → 目录拼接（而非丢弃目录）
+TEST(RequestGroupCovR, CustomDirJoinsRelativeFilename) {
+    const std::string dir = make_unique_temp_dir("custdir");
+    DownloadOptions options;
+    options.output_directory = dir;
+    options.output_filename = "custom.bin";
+
+    RequestGroup group(3, {"http://127.0.0.1:1/anything.bin"}, options);
+    ASSERT_TRUE(group.init());
+
+    EXPECT_EQ(std::filesystem::path(group.download_task()->output_path()),
+              std::filesystem::path(dir) / "custom.bin");
+}
+
+// 代理门禁：socks 系列在 init 阶段明确失败，不静默直连
+TEST(RequestGroupCovR, InitRejectsUnsupportedProxy) {
+    DownloadOptions options;
+    options.proxy = "socks5://127.0.0.1:1080";
+
+    RequestGroup group(4, {"http://127.0.0.1:1/f.bin"}, options);
+    EXPECT_FALSE(group.init());
+    EXPECT_EQ(group.status(), RequestGroupStatus::FAILED);
+    EXPECT_NE(group.error_message().find("代理"), std::string::npos);
+    ASSERT_NE(group.download_task(), nullptr);
+    EXPECT_EQ(group.download_task()->status(), TaskStatus::Failed);
+}
+
+// init 失败经 create_initial_command 收口：命令为空、组保持 FAILED
+TEST(RequestGroupCovR, CreateInitialCommandNullWhenInitFails) {
+    DownloadOptions options;
+    options.proxy = "https://127.0.0.1:8443";
+
+    RequestGroup group(5, {"http://127.0.0.1:1/f.bin"}, options);
+    ASSERT_FALSE(group.init());
+    EXPECT_EQ(group.create_initial_command(), nullptr);
+    EXPECT_EQ(group.status(), RequestGroupStatus::FAILED);
+}
+
+// 单段模式（未建立分段跟踪）的段完成查询恒真
+TEST(RequestGroupCovR, FinishSegmentSingleSegmentModeReturnsTrue) {
+    RequestGroup group(6, {"http://127.0.0.1:1/f.bin"}, {});
+    EXPECT_TRUE(group.finish_segment(true));
+    EXPECT_TRUE(group.finish_segment(false));
+}
+
+// 输出路径辅助方法在任务未初始化时返回空串
+TEST(RequestGroupCovR, PathHelpersGuardWithoutDownloadTask) {
+    RequestGroup group(7, {"http://127.0.0.1:1/f.bin"}, {});
+    EXPECT_EQ(group.temp_file_path(), "");
+    EXPECT_EQ(group.control_file_path(), "");
+
+    group.set_temp_extension(".falcon.tmp");
+    EXPECT_EQ(group.temp_file_path(), "");  // 仍无任务对象
+
+    DownloadOptions options;
+    options.output_directory = make_unique_temp_dir("pathhelpers");
+    options.output_filename = "f.bin";
+    RequestGroup inited(8, {"http://127.0.0.1:1/f.bin"}, options);
+    inited.set_temp_extension(".falcon.tmp");
+    ASSERT_TRUE(inited.init());
+    ASSERT_NE(inited.download_task(), nullptr);
+    EXPECT_EQ(inited.temp_file_path(),
+              inited.download_task()->output_path() + ".falcon.tmp");
+    EXPECT_EQ(inited.control_file_path(),
+              inited.download_task()->output_path() + ".falcon.ctrl");
+}
+
+// 跨会话恢复校验：控制文件 URL 与任务不一致 → 放弃续传并删除控制文件
+TEST(RequestGroupCovR, ResumeLoadUrlMismatchAbandonsResume) {
+    const std::string dir = make_unique_temp_dir("urlmismatch");
+    DownloadOptions options;
+    options.output_directory = dir;
+    options.output_filename = "file.bin";
+
+    const std::string out = (std::filesystem::path(dir) / "file.bin").string();
+    const std::string ctrl = out + ".falcon.ctrl";
+    const std::string temp = out + ".falcon.tmp";
+    {
+        std::ofstream f(temp, std::ios::binary);
+        f << std::string(50, 'x');
+    }
+    ResumeControl control;
+    control.url = "http://other.example/file.bin";  // 与任务 URL 不一致
+    control.total = 100;
+    control.segments = {ResumeSegment{/*offset=*/0, /*length=*/100, /*downloaded=*/50}};
+    ASSERT_TRUE(save_resume_control(ctrl, control));
+
+    RequestGroup group(9, {"http://127.0.0.1:1/file.bin"}, options);
+    group.set_temp_extension(".falcon.tmp");
+    ASSERT_TRUE(group.init());  // init 内校验失败 → 放弃续传，按全新下载继续
+    EXPECT_FALSE(std::filesystem::exists(ctrl));
+    EXPECT_FALSE(group.has_resume_state());
+}
+
+// 跨会话恢复校验：临时文件尺寸低于已记录进度 → 数据未完整落盘，放弃续传
+TEST(RequestGroupCovR, ResumeLoadTempSizeBelowProgressAbandonsResume) {
+    const std::string dir = make_unique_temp_dir("sizemismatch");
+    DownloadOptions options;
+    options.output_directory = dir;
+    options.output_filename = "file.bin";
+
+    const std::string out = (std::filesystem::path(dir) / "file.bin").string();
+    const std::string ctrl = out + ".falcon.ctrl";
+    const std::string temp = out + ".falcon.tmp";
+    {
+        std::ofstream f(temp, std::ios::binary);
+        f << std::string(10, 'x');  // 低于控制文件记录的 500 字节进度
+    }
+    ResumeControl control;
+    control.url = "http://127.0.0.1:1/file.bin";
+    control.total = 1000;
+    control.segments = {ResumeSegment{/*offset=*/0, /*length=*/1000, /*downloaded=*/500}};
+    ASSERT_TRUE(save_resume_control(ctrl, control));
+
+    RequestGroup group(10, {"http://127.0.0.1:1/file.bin"}, options);
+    group.set_temp_extension(".falcon.tmp");
+    ASSERT_TRUE(group.init());
+    EXPECT_FALSE(std::filesystem::exists(ctrl));
+    EXPECT_FALSE(group.has_resume_state());
+}
+
+// 控制文件初版写入失败（路径被目录占位）只降级为无断点，不中断下载
+TEST(RequestGroupCovR, BeginResumeTrackingToleratesControlSaveFailure) {
+    const std::string dir = make_unique_temp_dir("savectrl");
+    DownloadOptions options;
+    options.output_directory = dir;
+    options.output_filename = "file.bin";
+
+    RequestGroup group(11, {"http://127.0.0.1:1/file.bin"}, options);
+    group.set_temp_extension(".falcon.tmp");
+    ASSERT_TRUE(group.init());
+
+    const std::string ctrl = group.control_file_path();
+    std::filesystem::create_directories(ctrl);  // 目录占位 → 写入必败
+    group.begin_resume_tracking("http://127.0.0.1:1/file.bin", 1000,
+                                "etag-1", "yesterday",
+                                {ResumeSegment{/*offset=*/0, /*length=*/1000,
+                                               /*downloaded=*/0}});
+    EXPECT_TRUE(std::filesystem::is_directory(ctrl));  // 写失败，占位目录原样
+    EXPECT_TRUE(group.has_resume_state());  // 内存追踪照常建立
+}
+
+// 无续传状态时多分段恢复是幂等空操作
+TEST(RequestGroupCovR, PrepareResumedMultiSegmentNoopWithoutResume) {
+    RequestGroup group(12, {"http://127.0.0.1:1/f.bin"}, {});
+    group.prepare_resumed_multi_segment();
+    EXPECT_FALSE(group.is_multi_segment());
+}
+
+// 管理器守卫：空指针与重复 id 拒绝入库
+TEST(RequestGroupManCovR, AddRejectsNullAndDuplicateId) {
+    RequestGroupMan manager(4);
+    manager.add_request_group(nullptr);
+
+    auto first = std::make_unique<RequestGroup>(
+        42, std::vector<std::string>{"http://127.0.0.1:1/a.bin"}, DownloadOptions{});
+    auto* raw = first.get();
+    manager.add_request_group(std::move(first));
+    ASSERT_EQ(manager.find_group(42), raw);
+
+    auto duplicate = std::make_unique<RequestGroup>(
+        42, std::vector<std::string>{"http://127.0.0.1:1/b.bin"}, DownloadOptions{});
+    manager.add_request_group(std::move(duplicate));
+    EXPECT_EQ(manager.find_group(42), raw);  // 仍是先注册的组
+}
+
+// 调度守卫：排队期间被外部置为非等待态的组被调度循环丢弃出队（仍留在
+// 组表）；此后 resume 将这个“孤儿”重新入队（两个队列都不在的补插路径）
+TEST(RequestGroupManCovR, FillDropsStaleGroupAndResumeRequeuesOrphan) {
+    RequestGroupMan manager(4);
+    auto group = std::make_unique<RequestGroup>(
+        9, std::vector<std::string>{"http://127.0.0.1:1/f.bin"}, DownloadOptions{});
+    auto* raw = group.get();
+    manager.add_request_group(std::move(group));
+    ASSERT_EQ(manager.waiting_count(), 1u);
+
+    raw->set_status(RequestGroupStatus::FAILED);  // 排队期间的外部扰动
+    manager.fill_request_group_from_reserver(nullptr);
+    EXPECT_EQ(manager.find_group(9), raw);  // 组表保留
+    EXPECT_EQ(manager.waiting_count(), 0u);  // 已被丢弃出队
+
+    EXPECT_TRUE(manager.resume_group(9));
+    EXPECT_EQ(manager.waiting_count(), 1u);  // 重新入队
 }
 
 //==============================================================================

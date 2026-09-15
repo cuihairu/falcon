@@ -1126,4 +1126,13 @@ std::vector<CloudExtractionResult> CloudStorageManager::batch_extract(
     return results;
 }
 
+std::vector<ICloudStoragePlugin*> CloudStorageManager::plugins() const {
+    std::vector<ICloudStoragePlugin*> view;
+    view.reserve(p_impl->plugins_.size());
+    for (auto& plugin : p_impl->plugins_) {
+        view.push_back(plugin.get());
+    }
+    return view;
+}
+
 } // namespace falcon

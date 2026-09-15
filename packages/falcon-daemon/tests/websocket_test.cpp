@@ -355,7 +355,11 @@ public:
         }
         {
             std::unique_lock<std::mutex> lock(mutex_);
-            cv_.wait(lock, [this] { return released_.load(); });
+            // 有界等待（TwoStageHandler 同款防御）：测试断言失败会提前
+            // 返回、漏掉 release()，无界等待把一次普通 flake 拖成析构
+            // join 永久卡死（负载下曾实测挂死 2 小时）
+            cv_.wait_for(lock, std::chrono::seconds(30),
+                         [this] { return released_.load(); });
         }
         task->set_status(TaskStatus::Completed);
     }

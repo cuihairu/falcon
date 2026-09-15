@@ -2,6 +2,37 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-15 - 覆盖率批次 R：request_group 31 → 2 + cloud_storage_plugin 75 → 20 + http_commands 145 → 135（NEED_RETRY 可测化 + WS 测试挂死修复）
+- **27 新用例三树绿**（cov + ASan，protocols 717 / drives 152 /
+  daemon_rpc 25）：request_group 13（URL→文件名推导、socks5 代
+  理拒、resume 控制文件三态校验、Manager 调度丢弃与孤儿补插
+  队）；http_commands_edges 8（零字节下载、超大响应头、拆分计
+  划回退单连接、chunked 大小行四变体帧错误、**32MB 突发-静默-
+  再突发 NEED_RETRY 全链**——64×64KB 轮上限让出 + execute 尾部
+  update_progress 速度计算分支）；cloud_storage 6（经新增
+  `CloudStorageManager::plugins()` 只读访问器离线直调四件套存根
+  与 display_name 错误路径）
+- **NEED_RETRY 可测化方法论**：阻塞 send 剧本服务器把节奏同步
+  到客户端排水（背压恒小永不触发轮上限）——**深灌（每段 16MB
+  预灌）+ 客户端直写（enable_disk_cache=false）** 构成内核积压
+  单调增长，单次 execute 确定性读满 64 轮；静默 >1s 后再让出顺
+  带覆盖速度计算分支
+- **修复 WsServerTest 断言失败即挂死**（全量 ctest 实证：负载下
+  通知 5s 未到 → ASSERT 提前返回 → release() 漏调 → 无界
+  cv_.wait → 析构 join 卡死 1:59:16）：BlockingHandler 的
+  cv_.wait 改 wait_for(30s)（TwoStageHandler 同款），一处修复
+  覆盖全部四处 release-after-ASSERT 用法——flake 仍会红但不再
+  无限挂
+- 测量级发现：execute 的 2065-2076 第二完成收口结构性不可达
+  （download_complete_ 全部置位点伴随 receive_data 返回 OK，
+  2091 同轮收口先行，入口检查恒假）；cloud_storage 剩余 20 行
+  全为 map/quota 初始化字面量的 gcc 行归属伪影（断言通过即执
+  行铁证）+ 2 行结构不可达防御
+- **全包覆盖率（批次 C 同款 gcovr 口径）：行 82.4% / 函数
+  96.3% / 分支 45.9%**（批次 Q 81.9/94.9/45.5）；全量 ctest
+  2010 清单仅 2 例既有并行抖动（DownloadEngineTest.ResumeTask /
+  TaskManagerPriorityTest.PriorityDequeueOrder，串行复跑即过）
+
 ### 2026-09-14 - 覆盖率批次 Q：resource_browser 系 75 → 9 + resource_search.cpp 47 → 9（detail 提升重构）
 - **24 新用例双树绿**（cov + ASan，全量 ctest 1983 零失败）：storage
   侧 resource_browser_edges_test.cpp 17 用例（工厂注册边界与运行时

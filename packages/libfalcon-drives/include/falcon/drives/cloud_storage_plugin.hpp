@@ -209,6 +209,14 @@ public:
         const std::map<std::string, std::string>& passwords = {}
     );
 
+    /**
+     * @brief 已注册插件的只读视图（按注册顺序，含默认与自定义插件）
+     *
+     * 指针生命周期归管理器所有，管理器析构前保持有效；所有权不变，
+     * 调用方可驱动插件接口方法但不得 delete。
+     */
+    std::vector<ICloudStoragePlugin*> plugins() const;
+
 private:
     class Impl;
     std::unique_ptr<Impl> p_impl;

@@ -1913,6 +1913,372 @@ TEST(DownloadEngineV2Edges, ProxyRstAfterConnectFails) {
     std::filesystem::remove_all(dir, rm_ec);
 }
 
+//==============================================================================
+// 批次 R：零字节/超大响应头/多段回退/chunked 大小行变体/NEED_RETRY 让出链
+//==============================================================================
+
+/// Content-Length: 0：EOF 即完成证据（length_==0），receive_data 置
+/// 完成并返回 OK，execute 同轮收口（关 fd + 完成组），成品为空文件
+TEST(DownloadEngineV2Edges, ZeroByteDownloadCompletes) {
+    ScriptableServer server;
+    ASSERT_TRUE(server.start());
+    server.script({serve_http(200, "", "")});
+
+    const std::string dir = temp_dir_for("zerolen");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options = base_options(out_path);
+    const TaskId task_id = engine.add_download(
+        server.http_url("/f.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    EdgesEngineRunner runner(engine);
+    ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
+    EXPECT_EQ(group->status(), RequestGroupStatus::COMPLETED)
+        << group->error_message();
+
+    runner.shutdown_and_join();
+    server.stop();
+
+    EXPECT_TRUE(read_file_content(out_path).empty());
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+/// 响应头超 1MB 仍无终止空行（裸 LF 行永不构成头终止）：解析终止，
+/// 组 FAILED，不产生成品
+TEST(DownloadEngineV2Edges, OversizedResponseHeadersFails) {
+    ScriptableServer server;
+    ASSERT_TRUE(server.start());
+    std::string garbage;
+    garbage.reserve(1100u * 1024u);
+    while (garbage.size() < 1100u * 1024u) {
+        garbage += "x: y\n";
+    }
+    server.script({serve_raw(garbage, "")});
+
+    const std::string dir = temp_dir_for("bighdr");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options = base_options(out_path);
+    const TaskId task_id = engine.add_download(
+        server.http_url("/f.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    EdgesEngineRunner runner(engine);
+    ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
+    EXPECT_EQ(group->status(), RequestGroupStatus::FAILED)
+        << "超过 1MB 的响应头必须终止解析";
+
+    runner.shutdown_and_join();
+    server.stop();
+
+    EXPECT_FALSE(std::filesystem::exists(out_path));
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+/// 拆分计划不足两段（content/min_segment_size = 1）：多段门禁内部
+/// 回退单连接，成品逐字节一致
+TEST(DownloadEngineV2Edges, SegmentPlanTooSmallFallsBackToSingleConnection) {
+    const std::string body = make_body(1500);
+
+    ScriptableServer server;
+    ASSERT_TRUE(server.start());
+    server.script({serve_http(200, "Accept-Ranges: bytes\r\n", body)});
+
+    const std::string dir = temp_dir_for("segplan1");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options = base_options(out_path);
+    options.max_connections = 4;
+    options.min_segment_size = 1024;  // 1500/1024 = 1 段 → 拆分不可行
+    const TaskId task_id = engine.add_download(
+        server.http_url("/f.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    EdgesEngineRunner runner(engine);
+    ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
+    EXPECT_EQ(group->status(), RequestGroupStatus::COMPLETED)
+        << group->error_message();
+
+    runner.shutdown_and_join();
+    server.stop();
+
+    EXPECT_EQ(read_file_content(out_path), body);
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+/// 大小行 CR 单独到达后，下批首字节非 LF：帧错误 → FAILED
+TEST(DownloadEngineV2Edges, ChunkedSizeLineCrPendingThenGarbageFails) {
+    ScriptableServer server;
+    ASSERT_TRUE(server.start());
+    server.script({chunked_parts(
+        {"4\r\nabcd\r\n", "5\r", "Z\r\n0\r\n\r\n"}, 120)});
+
+    const std::string dir = temp_dir_for("chunkcrsz");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options = base_options(out_path);
+    const TaskId task_id = engine.add_download(
+        server.http_url("/f.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    EdgesEngineRunner runner(engine);
+    ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
+    EXPECT_EQ(group->status(), RequestGroupStatus::FAILED)
+        << "大小行 CR 后非 LF 必须判帧错误";
+
+    runner.shutdown_and_join();
+    server.stop();
+
+    EXPECT_TRUE(read_file_content(out_path).empty());
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+/// 大小行 CR 单独到达、LF 补齐后十六进制大小无效：帧错误 → FAILED
+TEST(DownloadEngineV2Edges, ChunkedSizeLineCrPendingInvalidHexFails) {
+    ScriptableServer server;
+    ASSERT_TRUE(server.start());
+    server.script({chunked_parts(
+        {"4\r\nabcd\r\n", "ZZ\r", "\n0\r\n\r\n"}, 120)});
+
+    const std::string dir = temp_dir_for("chunkcrhex");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options = base_options(out_path);
+    const TaskId task_id = engine.add_download(
+        server.http_url("/f.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    EdgesEngineRunner runner(engine);
+    ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
+    EXPECT_EQ(group->status(), RequestGroupStatus::FAILED)
+        << "CR 补齐 LF 后的无效十六进制大小必须判帧错误";
+
+    runner.shutdown_and_join();
+    server.stop();
+
+    EXPECT_TRUE(read_file_content(out_path).empty());
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+/// 同缓冲内大小行 CR 后非 LF（CRLF 未拆开）：帧错误 → FAILED
+TEST(DownloadEngineV2Edges, ChunkedSizeLineCrFollowedByGarbageSameBufferFails) {
+    ScriptableServer server;
+    ASSERT_TRUE(server.start());
+    server.script({chunked_parts(
+        {"4\r\nabcd\r\n5\rX0\r\n\r\n"}, 120)});
+
+    const std::string dir = temp_dir_for("chunkszcrx");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options = base_options(out_path);
+    const TaskId task_id = engine.add_download(
+        server.http_url("/f.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    EdgesEngineRunner runner(engine);
+    ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
+    EXPECT_EQ(group->status(), RequestGroupStatus::FAILED)
+        << "同缓冲大小行 CR 后非 LF 必须判帧错误";
+
+    runner.shutdown_and_join();
+    server.stop();
+
+    EXPECT_TRUE(read_file_content(out_path).empty());
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+/// 同缓冲内大小行 CRLF 完整但十六进制大小无效：帧错误 → FAILED
+TEST(DownloadEngineV2Edges, ChunkedSizeLineInvalidHexSameBufferFails) {
+    ScriptableServer server;
+    ASSERT_TRUE(server.start());
+    server.script({chunked_parts(
+        {"4\r\nabcd\r\nZZ\r\n0\r\n\r\n"}, 120)});
+
+    const std::string dir = temp_dir_for("chunkszhex");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options = base_options(out_path);
+    const TaskId task_id = engine.add_download(
+        server.http_url("/f.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    EdgesEngineRunner runner(engine);
+    ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
+    EXPECT_EQ(group->status(), RequestGroupStatus::FAILED)
+        << "同缓冲无效十六进制大小必须判帧错误";
+
+    runner.shutdown_and_join();
+    server.stop();
+
+    EXPECT_TRUE(read_file_content(out_path).empty());
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+/// 灌入-静默-再灌入服务器：头部后先灌 first_burst 字节，静默 gap_ms
+/// 再灌余量。配合客户端直写（enable_disk_cache=false，每轮 recv+落盘
+/// 远慢于服务器灌入），内核积压单调增长，单次 execute 必然读满 64 轮
+/// 触发 NEED_RETRY——静默后的再灌入让再次让出发生在 1s 之后，顺带
+/// 覆盖 update_progress 的速度计算分支
+ConnHandler burst_silence_burst(Bytes total, Bytes first_burst, int gap_ms) {
+    return [total, first_burst, gap_ms](int conn, ScriptableServer& srv) {
+        std::string request;
+        if (!read_headers_plain(conn, request)) return;
+        srv.record_target(request_target_of(request));
+
+        std::string unit(4096, '\0');
+        for (std::size_t i = 0; i < unit.size(); ++i) {
+            unit[i] = static_cast<char>((i * 31 + 7) & 0xFF);
+        }
+        std::string burst;
+        burst.reserve(256 * 1024);
+        while (burst.size() < 256 * 1024) {
+            burst += unit;
+        }
+
+        std::string head = "HTTP/1.1 200 OK\r\nContent-Length: " +
+                           std::to_string(total) +
+                           "\r\nConnection: close\r\n\r\n";
+        if (!send_all_plain(conn, head.data(), head.size())) return;
+
+        auto send_n = [&](Bytes n) {
+            while (n > 0) {
+                const std::size_t chunk = static_cast<std::size_t>(
+                    std::min<Bytes>(burst.size(), n));
+                if (!send_all_plain(conn, burst.data(), chunk)) return false;
+                n -= chunk;
+            }
+            return true;
+        };
+        if (!send_n(first_burst)) return;
+        std::this_thread::sleep_for(std::chrono::milliseconds(gap_ms));
+        (void)send_n(total - first_burst);
+    };
+}
+
+/// 32MB 突发-静默-再突发：每段 16MB 深灌（积压单调增长），读满
+/// 64×64KB=4MB 主动让出（NEED_RETRY，execute 尾部 update_progress +
+/// 回队）；静默 1200ms 后的第二段让出距命令构造已超 1s，速度计算
+/// 分支执行——最终成品逐块一致
+TEST(DownloadEngineV2Edges, BurstSilenceBurstNeedRetryYieldsAndCompletes) {
+    constexpr Bytes kTotal = Bytes{32u} * 1024u * 1024u;
+    constexpr Bytes kFirstBurst = Bytes{16u} * 1024u * 1024u;
+
+    ScriptableServer server;
+    ASSERT_TRUE(server.start());
+    server.script({burst_silence_burst(kTotal, kFirstBurst, 1200)});
+
+    const std::string dir = temp_dir_for("burstretry");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    config.enable_disk_cache = false;  // 直写拖慢客户端，制造内核积压
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options = base_options(out_path);
+    const TaskId task_id = engine.add_download(
+        server.http_url("/f.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    EdgesEngineRunner runner(engine);
+    ASSERT_TRUE(wait_group_terminal(engine, group, 60000));
+    ASSERT_EQ(group->status(), RequestGroupStatus::COMPLETED)
+        << group->error_message();
+
+    runner.shutdown_and_join();
+    server.stop();
+
+    std::string unit(4096, '\0');
+    for (std::size_t i = 0; i < unit.size(); ++i) {
+        unit[i] = static_cast<char>((i * 31 + 7) & 0xFF);
+    }
+    const std::string data = read_file_content(out_path);
+    ASSERT_EQ(data.size(), static_cast<std::size_t>(kTotal));
+    for (const Bytes off : {Bytes{0}, kFirstBurst - 4096, kFirstBurst,
+                            kTotal - 4096}) {
+        EXPECT_EQ(data.substr(static_cast<std::size_t>(off), 4096), unit)
+            << "偏移 " << off << " 处的 4KB 块不一致";
+    }
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
 #endif  // FALCON_ENABLE_OPENSSL
 
 } // namespace
