@@ -2348,7 +2348,70 @@ request_group 系 106 / resource_search 47（WebCrawler 泄漏已
   串行复跑即过）**；ASan protocols 717 +
   drives 152 + daemon_rpc 25 全绿
 
-**批次 S 候选（##### 铁账，多 target OR 合并口径复核后推进）：**
-daemon config.cpp（多 target 水分，OR 合并后 13）/ 其余按矿点
-分布表重新勘矿（批次 R 后 http_commands 剩余均为定性项，无新
-矿）。
+### 批次 S 收口（2026-09-15）：六小文件 64 行真矿清账（config/dispatcher 归零，resume/password/poll/epoll 收敛至不可测定性线）
+- **31 新用例三树绿**（cov 全量 ctest **2043 清单 100% 通过
+  零抖动** + ASan 三套件 421/734/27 零告警）：
+  - daemon `config_test.cpp` +10：非 rpc 节的「节非 object」
+    （daemon=5 / storage="x" / download=[]）与各节键类型错误
+    （rpc.allow_origin_all / daemon.pid_file / daemon.working_
+    dir / daemon.log_file / storage.task_db_path / download.
+    max_overall_speed_limit / download.http_engine）——config.cpp
+    13 → **0**
+  - core `event_dispatcher_test.cpp` +4：dispatch_sync（未 start
+    也直接派发、不经队列）/ get_listener_count（add/remove/clear
+    计数）/ clear_listeners（清除后不再投递）/ is_running（生命
+    周期三态）——四个公开方法此前**全库零调用**（既有
+    DispatchSyncDoesNotQueue 名字误导：实测的是关异步后
+    dispatch() 的同步路径）——20 → **0**
+  - core `password_manager_test.cpp` +3：HOME 为空时
+    password_hash_path 返回相对路径 ".falcon/.password_hash"
+    （ScopedChdir 沙箱 + ScopedEnvVar("HOME","") 断言哈希落
+    cwd）；无回调 prompt_password 控制台分支（istringstream 替
+    换 cin.rdbuf，POSIX termios 块无条件执行全量覆盖）；
+    generate_password(1, false, true) 第二轮 required_sets 入口
+    命中长度 break——16 → 2
+  - protocols `request_group_test.cpp` +14（ResumeControlCovS）：
+    save 空 path / save 父目录缺失（ofstream tmp 创建失败）/
+    load garbage 行（split 无 '='）/ total 空值 / total=12abc
+    （consumed != size）/ total=abc / segments=abc / seg 三字段
+    / 缺 total / total=0（187 三条件）/ segments=2 实际 1 段
+    （190）/ body CRLF 裁剪成功 + 全 CRLF 魔数拒绝对照 /
+    remove 空 path no-op——16 → 2
+  - protocols `event_poll_test.cpp` +1 / `event_poll_poll_
+    test.cpp` +2：epoll add 成功后关 fd 再 modify（EPOLL_CTL_
+    MOD 得 EBADF）；poll 对已关正整数 fd 的 fcntl(F_GETFL) 探
+    测失败（区别于 -1 的 EINVAL 路径）；双注册单就绪时静默 fd
+    的 revents==0 跳过（poll 返回恰 1、回调恰 1 次）——
+    epoll 15→14 / poll 11→9
+- **测量级发现**：resume 控制文件的 \r 裁剪（load 132 行）只作
+  用于 body 行——魔数比较（122 行）先于裁剪，完整 CRLF 文件被
+  魔数直接拒绝；这是严格语义而非缺陷（save 端 binary 模式恒写
+  LF），测试以成功/拒绝对照对固化
+- 剩余 29 行全部定性（不可测）：password 2（RAND_bytes 失败，
+  无注入点）/ resume 2（save 写中途失败）/ epoll 14（create1
+  失败 ×2、epoll_fd_<0 结构分支 ×4、EINTR ×2、等待失败 ×2、
+  remove-wait 间未知 fd 竞态 ×3）/ poll 9（nfds_t 超量需 20 亿
+  fd ×2、EINTR ×2、poll 失败 ×2、未知 fd ×3）
+- **多 target 编译水分排除**：daemon/config.cpp 双 target（tests
+  与 main_integration）OR 合并口径复核 0
+- **覆盖率（批次 C 同款 gcovr 口径）：行 82.7% / 函数 96.7% /
+  分支 46.1%**（批次 R 82.4/96.3/45.9 → +0.3/+0.4/+0.2）
+
+**批次 T 候选（##### 铁账行号已在手，待细读定性）：**
+- `download_engine_v2.cpp` 23（57, 69, 186, 195, 205, 275, 368,
+  381, 498-499, 546, 578, 585, 769, 772, 791-792, 840-841,
+  896-897, 901-902）
+- `json_rpc_client.cpp` 23（57, 73, 109, 119, 130, 148-149,
+  157-158, 201-233 连串）
+- `download_engine.cpp` 17（37, 66, 110, 115, 119, 125, 153,
+  164, 167, 179, 365-367, 369-370, 372, 381）
+- `v2_http_download_adapter.cpp` 16（67-70, 77, 81, 102, 107,
+  118, 120, 124-126, 129-131）
+- `daemon/daemon.cpp` 16（48, 66, 123-125, 129, 134-136,
+  142-144, 147, 680-681, 688）
+- daemon `src/main.cpp` 16（188-189, 245, 255-256, 273, 341,
+  352-353, 385, 452, 471, 480, 486, 490, 497；dump 匹配须用
+  `src/main.cpp`——路径为 packages/falcon-daemon/src/main.cpp，
+  子串 "daemon/main.cpp" 不命中）
+- 行号来自批次 S 全量 ctest 后的新 gcda（2043 清单采集），
+  直接可信；初判：多为网络注入 / 线程时序 / 平台分支

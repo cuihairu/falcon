@@ -2,6 +2,34 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-15 - 覆盖率批次 S：config 13→0 + event_dispatcher 20→0 + resume_control 16→2 + password_manager 16→2 + event_poll 3 行收敛（六小文件 64 行真矿清账）
+- **31 新用例三树绿**（cov 全量 ctest **2043 清单 100% 通过零抖动**
+  + ASan 三套件 421/734/27 零告警）：daemon config 10（非 rpc 节
+  的「节非 object」×3 与各节键类型错误 ×7——此前只测过 rpc 节的
+  两种失败形态）；core dispatcher 4（dispatch_sync /
+  clear_listeners / get_listener_count / is_running 四个全库零
+  调用公开方法——既有 DispatchSyncDoesNotQueue 实测的是关异步后
+  dispatch() 的同步路径，并非 dispatch_sync 本身）；core
+  password 3（HOME 空时哈希文件落 cwd 兜底、无回调控制台分支、
+  length=1 的 required_sets 提前 break）；protocols
+  request_group 14（resume 控制文件 save/load 解析边界：空
+  path/父目录缺失/garbage 行/total 空值-半数字-非数字/segments
+  非数字/seg 四元组缺字段/缺 total/零 total/段数不符/CRLF 容错
+  与魔数拒绝对照/remove 空 path no-op）；protocols event_poll 3
+  （epoll 对已关 fd 的 MOD 得 EBADF、poll 对已关正整数 fd 的
+  fcntl 探测失败、双注册单就绪时 revents==0 跳过）
+- **测量级发现**：resume 控制文件的 \r 裁剪只作用于 body 行——
+  魔数比较先于裁剪，完整 CRLF 文件被魔数直接拒绝（严格语义，
+  测试以「魔数 LF + body CRLF 成功 / 全 CRLF 拒绝」对照固化）；
+  prompt_password 的 POSIX termios 分支无条件执行（tcgetattr 失
+  败仅忽略返回值），cin.rdbuf 替换即可全量覆盖
+- 剩余全部定性（六文件 29 行不可测）：password 2（RAND_bytes
+  失败注入）；resume 2（写中途失败）；epoll 14（create1 失败 ×2、
+  实例未创建结构分支、EINTR/等待失败、未知 fd 竞态）；poll 9
+  （nfds_t 超量、EINTR、poll 失败、未知 fd 竞态）
+- **全包覆盖率（批次 C 同款 gcovr 口径）：行 82.7% / 函数
+  96.7% / 分支 46.1%**（批次 R 82.4/96.3/45.9）
+
 ### 2026-09-15 - 覆盖率批次 R：request_group 31 → 2 + cloud_storage_plugin 75 → 20 + http_commands 145 → 135（NEED_RETRY 可测化 + WS 测试挂死修复）
 - **27 新用例三树绿**（cov + ASan，protocols 717 / drives 152 /
   daemon_rpc 25）：request_group 13（URL→文件名推导、socks5 代

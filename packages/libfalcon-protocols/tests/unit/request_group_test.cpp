@@ -16,6 +16,7 @@
 #include <falcon/protocols/download_engine_v2.hpp>
 #include <falcon/protocols/resume_control.hpp>
 #include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -1142,6 +1143,157 @@ TEST(RequestGroupManCovR, FillDropsStaleGroupAndResumeRequeuesOrphan) {
 
     EXPECT_TRUE(manager.resume_group(9));
     EXPECT_EQ(manager.waiting_count(), 1u);  // 重新入队
+}
+
+//==============================================================================
+// 批次 S：resume 控制文件 save/load 解析边界
+//==============================================================================
+
+namespace {
+
+std::string write_resume_file(const std::string& tag, const std::string& content) {
+    static std::atomic<unsigned long long> seq{0};
+    const auto path = std::filesystem::path(std::filesystem::temp_directory_path()) /
+        ("falcon_rc_" + tag + "_" + std::to_string(seq.fetch_add(1)));
+    {
+        std::ofstream out(path, std::ios::binary);
+        out << content;
+    }
+    return path.string();
+}
+
+struct ResumeTempFile {
+    std::string path;
+    explicit ResumeTempFile(std::string p) : path(std::move(p)) {}
+    ~ResumeTempFile() { std::error_code ec; std::filesystem::remove(path, ec); }
+};
+
+falcon::ResumeControl sample_control() {
+    falcon::ResumeControl ctrl;
+    ctrl.url = "http://example.com/file.bin";
+    ctrl.total = 100;
+    ctrl.segments.push_back({0, 100, 0});
+    return ctrl;
+}
+
+} // namespace
+
+TEST(ResumeControlCovS, SaveRejectsEmptyPath) {
+    EXPECT_FALSE(falcon::save_resume_control("", sample_control()));
+}
+
+// 临时文件落在不存在的父目录下：ofstream 创建失败
+TEST(ResumeControlCovS, SaveFailsWhenParentDirectoryMissing) {
+    const std::string path =
+        make_unique_temp_dir("rcmiss") + "/no/such/dir/x.falcon.ctrl";
+    EXPECT_FALSE(falcon::save_resume_control(path, sample_control()));
+}
+
+// 魔数之后出现既非 seg= 前缀也非 key=value 的行
+TEST(ResumeControlCovS, LoadRejectsGarbageLine) {
+    const ResumeTempFile file(write_resume_file(
+        "garbage", "falcon-resume-v1\ngarbage\n"));
+    falcon::ResumeControl ctrl;
+    EXPECT_FALSE(falcon::load_resume_control(file.path, ctrl));
+}
+
+TEST(ResumeControlCovS, LoadRejectsEmptyTotalValue) {
+    const ResumeTempFile file(write_resume_file(
+        "emptytotal", "falcon-resume-v1\ntotal=\n"));
+    falcon::ResumeControl ctrl;
+    EXPECT_FALSE(falcon::load_resume_control(file.path, ctrl));
+}
+
+TEST(ResumeControlCovS, LoadRejectsPartialNumericTotal) {
+    const ResumeTempFile file(write_resume_file(
+        "partialtotal", "falcon-resume-v1\ntotal=12abc\n"));
+    falcon::ResumeControl ctrl;
+    EXPECT_FALSE(falcon::load_resume_control(file.path, ctrl));
+}
+
+TEST(ResumeControlCovS, LoadRejectsNonNumericTotal) {
+    const ResumeTempFile file(write_resume_file(
+        "badtotal", "falcon-resume-v1\ntotal=abc\n"));
+    falcon::ResumeControl ctrl;
+    EXPECT_FALSE(falcon::load_resume_control(file.path, ctrl));
+}
+
+TEST(ResumeControlCovS, LoadRejectsNonNumericSegments) {
+    const ResumeTempFile file(write_resume_file(
+        "badsegments", "falcon-resume-v1\ntotal=100\nsegments=abc\n"));
+    falcon::ResumeControl ctrl;
+    EXPECT_FALSE(falcon::load_resume_control(file.path, ctrl));
+}
+
+// seg= 行缺第四个字段（已落盘字节数）
+TEST(ResumeControlCovS, LoadRejectsMalformedSegLine) {
+    const ResumeTempFile file(write_resume_file(
+        "badseg", "falcon-resume-v1\ntotal=100\nsegments=1\nseg=0 100 50\n"));
+    falcon::ResumeControl ctrl;
+    EXPECT_FALSE(falcon::load_resume_control(file.path, ctrl));
+}
+
+TEST(ResumeControlCovS, LoadRejectsMissingTotal) {
+    const ResumeTempFile file(write_resume_file(
+        "nototal", "falcon-resume-v1\nurl=http://example.com/f\n"
+                   "segments=1\nseg=0 0 100 0\n"));
+    falcon::ResumeControl ctrl;
+    EXPECT_FALSE(falcon::load_resume_control(file.path, ctrl));
+}
+
+TEST(ResumeControlCovS, LoadRejectsZeroTotal) {
+    const ResumeTempFile file(write_resume_file(
+        "zerototal", "falcon-resume-v1\ntotal=0\nsegments=1\nseg=0 0 0 0\n"));
+    falcon::ResumeControl ctrl;
+    EXPECT_FALSE(falcon::load_resume_control(file.path, ctrl));
+}
+
+TEST(ResumeControlCovS, LoadRejectsSegmentCountMismatch) {
+    const ResumeTempFile file(write_resume_file(
+        "segmismatch",
+        "falcon-resume-v1\ntotal=100\nsegments=2\nseg=0 0 60 0\n"));
+    falcon::ResumeControl ctrl;
+    EXPECT_FALSE(falcon::load_resume_control(file.path, ctrl));
+}
+
+// body 行 CRLF：载入时逐行裁掉 \r 后正常解析（魔数行必须是纯 LF——
+// 魔数比较先于 \r 裁剪，完整 CRLF 文件被魔数拒绝是实现的严格语义）
+TEST(ResumeControlCovS, LoadAcceptsCrlfLineEndings) {
+    const ResumeTempFile file(write_resume_file(
+        "crlf",
+        "falcon-resume-v1\n"
+        "url=http://example.com/file.bin\r\n"
+        "total=100\r\n"
+        "etag=\r\n"
+        "last_modified=\r\n"
+        "segments=1\r\n"
+        "seg=0 0 100 0\r\n"));
+
+    falcon::ResumeControl ctrl;
+    ASSERT_TRUE(falcon::load_resume_control(file.path, ctrl));
+    EXPECT_EQ(ctrl.url, "http://example.com/file.bin");
+    EXPECT_EQ(ctrl.total, falcon::Bytes{100});
+    ASSERT_EQ(ctrl.segments.size(), 1u);
+    EXPECT_EQ(ctrl.segments[0].offset, falcon::Bytes{0});
+    EXPECT_EQ(ctrl.segments[0].length, falcon::Bytes{100});
+}
+
+TEST(ResumeControlCovS, RemoveEmptyPathIsNoOp) {
+    falcon::remove_resume_control("");  // 不崩溃即通过
+    SUCCEED();
+}
+
+// 对照：魔数行本身带 \r 时魔数不匹配（裁剪只作用于 body 行）
+TEST(ResumeControlCovS, LoadRejectsCrlfMagicLine) {
+    const ResumeTempFile file(write_resume_file(
+        "crlfmagic",
+        "falcon-resume-v1\r\n"
+        "url=http://example.com/file.bin\r\n"
+        "total=100\r\n"
+        "segments=1\r\n"
+        "seg=0 0 100 0\r\n"));
+    falcon::ResumeControl ctrl;
+    EXPECT_FALSE(falcon::load_resume_control(file.path, ctrl));
 }
 
 //==============================================================================

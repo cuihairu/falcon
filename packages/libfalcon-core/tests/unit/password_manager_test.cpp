@@ -5,10 +5,18 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cctype>
 #include <cstdlib>
 #include <filesystem>
+#include <sstream>
 #include <string>
 #include <thread>
+
+#if defined(_WIN32)
+#include <direct.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -559,6 +567,89 @@ TEST(PasswordGenerationUniqueness, UniqueWithDifferentParams) {
     // 参数不同，密码应该不同
     EXPECT_NE(p1, p2);
     EXPECT_NE(p2, p3);
+}
+
+//==============================================================================
+// 批次 S：HOME 兜底 / 控制台分支 / 极短生成
+//==============================================================================
+
+/// 临时切换进程工作目录（析构恢复）；构造失败（current_path/chdir 报错）
+/// 时 ok() 为 false 且析构不动作
+class ScopedChdir {
+public:
+    explicit ScopedChdir(const std::filesystem::path& dir) {
+        std::error_code ec;
+        old_ = std::filesystem::current_path(ec);
+        if (ec) {
+            return;
+        }
+#if defined(_WIN32)
+        ok_ = ::_chdir(dir.string().c_str()) == 0;
+#else
+        ok_ = ::chdir(dir.string().c_str()) == 0;
+#endif
+    }
+
+    ~ScopedChdir() {
+        if (ok_) {
+#if defined(_WIN32)
+            ::_chdir(old_.string().c_str());
+#else
+            ::chdir(old_.string().c_str());
+#endif
+        }
+    }
+
+    ScopedChdir(const ScopedChdir&) = delete;
+    ScopedChdir& operator=(const ScopedChdir&) = delete;
+
+    bool ok() const { return ok_; }
+
+private:
+    std::filesystem::path old_;
+    bool ok_ = false;
+};
+
+// password_hash_path 在 HOME 为空时返回相对路径 ".falcon/.password_hash"
+// ——哈希文件落在当前工作目录下
+TEST(PasswordManagerFallback, HashFallsBackToCwdWhenHomeEmpty) {
+    auto sandbox = unique_temp_dir("falcon_pw_cwd_");
+    ScopedEnvVar scoped_home("HOME", "");
+    ScopedChdir chdir_guard(sandbox);
+    ASSERT_TRUE(chdir_guard.ok());
+
+    {
+        falcon::PasswordManager pm;
+        EXPECT_TRUE(pm.set_master_password("GoodPass1!"));
+    }
+
+    EXPECT_TRUE(std::filesystem::exists(sandbox / ".falcon" / ".password_hash"));
+
+    std::error_code ec;
+    std::filesystem::remove_all(sandbox, ec);
+}
+
+// 无回调时走控制台分支：tcgetattr/tcsetattr 对非 tty 的失败被忽略，
+// getline 从替换后的 cin 缓冲读取（POSIX termios 分支整体覆盖）
+TEST(PasswordManagerFallback, PromptWithoutCallbackReadsStdin) {
+    falcon::PasswordManager pm;
+
+    std::istringstream input("typed-secret\n");
+    std::streambuf* old_buf = std::cin.rdbuf(input.rdbuf());
+    const std::string result = pm.prompt_password("Enter: ");
+    std::cin.rdbuf(old_buf);
+
+    EXPECT_EQ(result, "typed-secret");
+}
+
+// length=1 时 required_sets 第二轮入口即命中"已达长度"break
+TEST(PasswordManagerFallback, LengthOneStopsFillingRequiredSets) {
+    falcon::PasswordManager pm;
+
+    const auto password = pm.generate_password(1, false, true);
+
+    ASSERT_EQ(password.size(), 1u);
+    EXPECT_TRUE(std::isalpha(static_cast<unsigned char>(password[0])));
 }
 
 //==============================================================================

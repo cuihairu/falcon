@@ -310,4 +310,100 @@ TEST(ConfigTest, DefaultConfigFileUnderConfigDir) {
     EXPECT_EQ(path, falcon::daemon::get_default_config_dir() + "/daemon.json");
 }
 
+//==============================================================================
+// 批次 S：非 rpc 节的「节非 object」与各节键类型错误
+//（此前只测过 rpc 节的这两种失败形态）
+//==============================================================================
+
+TEST(ConfigTest, DaemonSectionNotObjectFails) {
+    const TempFile file(write_config(R"({ "daemon": 5 })"));
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    EXPECT_FALSE(result.ok);
+    EXPECT_NE(result.error.find("'daemon' section must be an object"),
+              std::string::npos);
+}
+
+TEST(ConfigTest, StorageSectionNotObjectFails) {
+    const TempFile file(write_config(R"({ "storage": "x" })"));
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    EXPECT_FALSE(result.ok);
+    EXPECT_NE(result.error.find("'storage' section must be an object"),
+              std::string::npos);
+}
+
+TEST(ConfigTest, DownloadSectionNotObjectFails) {
+    const TempFile file(write_config(R"({ "download": [] })"));
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    EXPECT_FALSE(result.ok);
+    EXPECT_NE(result.error.find("'download' section must be an object"),
+              std::string::npos);
+}
+
+TEST(ConfigTest, RpcAllowOriginAllTypeMismatchFails) {
+    const TempFile file(write_config(R"({ "rpc": { "allow_origin_all": "yes" } })"));
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    EXPECT_FALSE(result.ok);
+    EXPECT_NE(result.error.find("invalid type for key 'allow_origin_all'"),
+              std::string::npos);
+}
+
+TEST(ConfigTest, DaemonPidFileTypeMismatchFails) {
+    const TempFile file(write_config(R"({ "daemon": { "pid_file": 123 } })"));
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    EXPECT_FALSE(result.ok);
+    EXPECT_NE(result.error.find("invalid type for key 'pid_file'"),
+              std::string::npos);
+}
+
+TEST(ConfigTest, DaemonWorkingDirTypeMismatchFails) {
+    const TempFile file(write_config(R"({ "daemon": { "working_dir": true } })"));
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    EXPECT_FALSE(result.ok);
+    EXPECT_NE(result.error.find("invalid type for key 'working_dir'"),
+              std::string::npos);
+}
+
+TEST(ConfigTest, DaemonLogFileTypeMismatchFails) {
+    const TempFile file(write_config(R"({ "daemon": { "log_file": [] } })"));
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    EXPECT_FALSE(result.ok);
+    EXPECT_NE(result.error.find("invalid type for key 'log_file'"),
+              std::string::npos);
+}
+
+TEST(ConfigTest, StorageTaskDbTypeMismatchFails) {
+    const TempFile file(write_config(R"({ "storage": { "task_db_path": 42 } })"));
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    EXPECT_FALSE(result.ok);
+    EXPECT_NE(result.error.find("invalid type for key 'task_db_path'"),
+              std::string::npos);
+}
+
+TEST(ConfigTest, DownloadSpeedLimitTypeMismatchFails) {
+    const TempFile file(
+        write_config(R"({ "download": { "max_overall_speed_limit": "fast" } })"));
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    EXPECT_FALSE(result.ok);
+    EXPECT_NE(result.error.find("invalid type for key 'max_overall_speed_limit'"),
+              std::string::npos);
+}
+
+TEST(ConfigTest, DownloadHttpEngineTypeMismatchFails) {
+    const TempFile file(write_config(R"({ "download": { "http_engine": 7 } })"));
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    EXPECT_FALSE(result.ok);
+    EXPECT_NE(result.error.find("invalid type for key 'http_engine'"),
+              std::string::npos);
+}
+
 } // namespace

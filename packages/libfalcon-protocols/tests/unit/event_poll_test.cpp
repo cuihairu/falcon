@@ -1023,6 +1023,27 @@ TEST(EventPollPlatform, EPollSpecificBehavior) {
     CLOSE_SOCKET(fd0);
     CLOSE_SOCKET(fd1);
 }
+
+// 批次 S：add_event 成功后关闭 fd 再 modify——epoll_ctl(MOD) 对已关
+// fd 返回 EBADF，命中 modify 的错误分支（"实例未创建"分支不可测：
+// epoll_create1 在构造内几乎不失败，无法经公开 API 构造）
+TEST(EventPollPlatform, EPollModifyClosedFdFails) {
+    auto poll = EventPoll::create();
+    ASSERT_NE(poll, nullptr);
+
+    auto [fd0, fd1] = create_socket_pair();
+    ASSERT_GE(fd0, 0);
+    ASSERT_GE(fd1, 0);
+
+    auto callback = [](int, int, void*) {};
+    EXPECT_TRUE(poll->add_event(fd0, static_cast<int>(IOEvent::READ), callback));
+
+    CLOSE_SOCKET(fd0);
+    EXPECT_FALSE(poll->modify_event(fd0, static_cast<int>(IOEvent::WRITE)));
+    EXPECT_NE(poll->get_error()[0], '\0');
+
+    CLOSE_SOCKET(fd1);
+}
 #endif
 
 #if defined(_WIN32)

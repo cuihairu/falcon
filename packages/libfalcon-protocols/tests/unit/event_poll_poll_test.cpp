@@ -504,3 +504,61 @@ TEST(EventsToStringTest, UnknownBitsIgnored) {
     // 未定义的位不产生输出
     EXPECT_EQ(events_to_string(static_cast<int>(IOEvent::READ) | 0x100), "READ");
 }
+
+//==============================================================================
+// 批次 S：已关闭正整数 fd 的注册探测 / 无事件 fd 的跳过
+//==============================================================================
+
+// POSIX 分支 add_event 以 fcntl(F_GETFL) 探测 fd 有效性：
+// 已关闭的正整数 fd 返回 EBADF 而非 EINVAL，命中 fcntl 失败分支
+#ifndef _WIN32
+TEST(PollEventPollTest, AddEventWithClosedPositiveFdFails) {
+    PollEventPoll poll_impl;
+    EventPoll& poll = poll_impl;
+
+    const int fd = ::open("/dev/null", O_RDONLY);
+    ASSERT_GE(fd, 0);
+    ::close(fd);
+
+    auto callback = [](int, int, void*) {};
+    EXPECT_FALSE(poll.add_event(fd, static_cast<int>(IOEvent::READ), callback));
+    EXPECT_NE(poll.get_error()[0], '\0');
+    EXPECT_EQ(poll.size(), 0U);
+}
+#endif
+
+// 两个已注册 fd 中只有一个就绪：poll 返回 1，静默 fd 的
+// revents==0 被跳过，不触发回调
+TEST(PollEventPollTest, PollSkipsIdleFdWhileOtherReady) {
+    PollEventPoll poll_impl;
+    EventPoll& poll = poll_impl;
+
+    auto [a0, a1] = make_socket_pair_nb();
+    auto [b0, b1] = make_socket_pair_nb();
+    ASSERT_GE(a0, 0);
+    ASSERT_GE(a1, 0);
+    ASSERT_GE(b0, 0);
+    ASSERT_GE(b1, 0);
+
+    std::atomic<int> callback_count{0};
+    auto callback = [&](int, int, void*) { callback_count++; };
+
+    EXPECT_TRUE(poll.add_event(a0, static_cast<int>(IOEvent::READ), callback));
+    EXPECT_TRUE(poll.add_event(b0, static_cast<int>(IOEvent::READ), callback));
+
+    // 只向 a1 写：a0 就绪，b0 保持静默
+    const char message[] = "wake";
+#ifdef _WIN32
+    ASSERT_GT(send(a1, message, static_cast<int>(sizeof(message)), 0), 0);
+#else
+    ASSERT_GT(write(a1, message, sizeof(message)), 0);
+#endif
+
+    EXPECT_EQ(poll.poll(200), 1);
+    EXPECT_EQ(callback_count.load(), 1);
+
+    CLOSE_SOCKET(a0);
+    CLOSE_SOCKET(a1);
+    CLOSE_SOCKET(b0);
+    CLOSE_SOCKET(b1);
+}

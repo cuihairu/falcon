@@ -339,3 +339,80 @@ TEST(EventDispatcherTest, PerformanceHighThroughput) {
     EXPECT_GT(dispatcher.get_processed_count(), 0u);
 }
 
+//==============================================================================
+// 批次 S：dispatch_sync / clear_listeners / get_listener_count / is_running
+//（四个公开方法此前全库零调用——既有 DispatchSyncDoesNotQueue 实测的是
+// 关闭异步后 dispatch() 的同步路径，并非 dispatch_sync 方法本身）
+//==============================================================================
+
+// dispatch_sync 不经队列、不看 running_：未 start 时也在调用线程内
+// 直接派发给全部监听器
+TEST(EventDispatcherTest, DispatchSyncDeliversImmediatelyWithoutStart) {
+    falcon::EventDispatcherConfig config;
+    config.enable_async_dispatch = false;
+
+    falcon::EventDispatcher dispatcher(config);
+    CountingListener listener;
+    dispatcher.add_listener(&listener);
+
+    dispatcher.dispatch_sync(std::make_shared<falcon::StatusChangedEvent>(
+        1, falcon::TaskStatus::Pending, falcon::TaskStatus::Downloading));
+
+    EXPECT_EQ(listener.status_changed.load(), 1);
+    EXPECT_EQ(dispatcher.get_queue_size(), 0u);
+    EXPECT_GE(dispatcher.get_processed_count(), 1u);
+}
+
+TEST(EventDispatcherTest, ListenerCountTracksAddRemoveClear) {
+    falcon::EventDispatcherConfig config;
+    falcon::EventDispatcher dispatcher(config);
+
+    EXPECT_EQ(dispatcher.get_listener_count(), 0u);
+
+    auto listener1 = std::make_unique<CountingListener>();
+    auto listener2 = std::make_unique<CountingListener>();
+    dispatcher.add_listener(listener1.get());
+    dispatcher.add_listener(listener2.get());
+    EXPECT_EQ(dispatcher.get_listener_count(), 2u);
+
+    dispatcher.remove_listener(listener1.get());
+    EXPECT_EQ(dispatcher.get_listener_count(), 1u);
+
+    dispatcher.clear_listeners();
+    EXPECT_EQ(dispatcher.get_listener_count(), 0u);
+}
+
+TEST(EventDispatcherTest, ClearListenersStopsDelivery) {
+    falcon::EventDispatcherConfig config;
+    config.enable_async_dispatch = false;
+
+    falcon::EventDispatcher dispatcher(config);
+    CountingListener listener;
+    dispatcher.add_listener(&listener);
+    dispatcher.clear_listeners();
+    dispatcher.start();
+
+    dispatcher.dispatch_status_changed(
+        1, falcon::TaskStatus::Pending, falcon::TaskStatus::Downloading);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    EXPECT_EQ(listener.total(), 0);
+
+    dispatcher.stop();
+}
+
+TEST(EventDispatcherTest, IsRunningReflectsLifecycle) {
+    falcon::EventDispatcherConfig config;
+    config.enable_async_dispatch = true;
+    config.thread_pool_size = 1;
+
+    falcon::EventDispatcher dispatcher(config);
+    EXPECT_FALSE(dispatcher.is_running());
+
+    dispatcher.start();
+    EXPECT_TRUE(dispatcher.is_running());
+
+    dispatcher.stop(true);
+    EXPECT_FALSE(dispatcher.is_running());
+}
+
