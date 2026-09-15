@@ -55,9 +55,12 @@
 #endif
 
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <csignal>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -144,7 +147,18 @@ bool send_all_plain(int conn, const char* data, std::size_t size) {
                               static_cast<std::size_t>(size - sent),
                               MSG_NOSIGNAL);
 #endif
-        if (n <= 0) return false;
+        if (n <= 0) {
+            // 失败现场证据：错误码区分「对端已关连接」（EPIPE/ECONNRESET，
+            // 客户端先失败）与「发送超时」（ETIMEDOUT/EAGAIN，服务端自己卡）
+#ifdef _WIN32
+            std::fprintf(stderr, "[edges] send 失败: wsa=%d sent=%zu/%zu\n",
+                         ::WSAGetLastError(), sent, size);
+#else
+            std::fprintf(stderr, "[edges] send 失败: errno=%d(%s) sent=%zu/%zu\n",
+                         errno, std::strerror(errno), sent, size);
+#endif
+            return false;
+        }
         sent += static_cast<std::size_t>(n);
     }
     return true;
@@ -2189,11 +2203,19 @@ TEST(DownloadEngineV2Edges, ChunkedSizeLineInvalidHexSameBufferFails) {
 /// 再灌余量。配合客户端直写（enable_disk_cache=false，每轮 recv+落盘
 /// 远慢于服务器灌入），内核积压单调增长，单次 execute 必然读满 64 轮
 /// 触发 NEED_RETRY——静默后的再灌入让再次让出发生在 1s 之后，顺带
-/// 覆盖 update_progress 的速度计算分支
-ConnHandler burst_silence_burst(Bytes total, Bytes first_burst, int gap_ms) {
-    return [total, first_burst, gap_ms](int conn, ScriptableServer& srv) {
+/// 覆盖 update_progress 的速度计算分支。sent_out 非空时记录服务端
+/// 成功发出的字节总数（失败鉴证：区分「服务端没发完（客户端先失败
+/// 杀流）」与「服务端发完仍失败（截断）」）
+ConnHandler burst_silence_burst(Bytes total, Bytes first_burst, int gap_ms,
+                                std::shared_ptr<std::atomic<Bytes>> sent_out =
+                                    {}) {
+    return [total, first_burst, gap_ms,
+            sent_out](int conn, ScriptableServer& srv) {
         std::string request;
-        if (!read_headers_plain(conn, request)) return;
+        if (!read_headers_plain(conn, request)) {
+            std::fprintf(stderr, "[edges] burst: 读请求头失败\n");
+            return;
+        }
         srv.record_target(request_target_of(request));
 
         std::string unit(4096, '\0');
@@ -2206,16 +2228,22 @@ ConnHandler burst_silence_burst(Bytes total, Bytes first_burst, int gap_ms) {
             burst += unit;
         }
 
+        auto note = [&](Bytes n) {
+            if (sent_out) sent_out->fetch_add(n);
+        };
+
         std::string head = "HTTP/1.1 200 OK\r\nContent-Length: " +
                            std::to_string(total) +
                            "\r\nConnection: close\r\n\r\n";
         if (!send_all_plain(conn, head.data(), head.size())) return;
+        note(static_cast<Bytes>(head.size()));
 
         auto send_n = [&](Bytes n) {
             while (n > 0) {
                 const std::size_t chunk = static_cast<std::size_t>(
                     std::min<Bytes>(burst.size(), n));
                 if (!send_all_plain(conn, burst.data(), chunk)) return false;
+                note(static_cast<Bytes>(chunk));
                 n -= chunk;
             }
             return true;
@@ -2233,10 +2261,15 @@ ConnHandler burst_silence_burst(Bytes total, Bytes first_burst, int gap_ms) {
 TEST(DownloadEngineV2Edges, BurstSilenceBurstNeedRetryYieldsAndCompletes) {
     constexpr Bytes kTotal = Bytes{32u} * 1024u * 1024u;
     constexpr Bytes kFirstBurst = Bytes{16u} * 1024u * 1024u;
+    // 服务端视角证据：断言失败时输出「服务端已发 / 落盘文件大小 /
+    // 组记账进度」三方数据，用于区分服务端发送失败（客户端先死杀流）
+    // 与服务端发完仍失败（客户端 EOF 截断/写盘失败）
+    const auto server_sent = std::make_shared<std::atomic<Bytes>>(0);
 
     ScriptableServer server;
     ASSERT_TRUE(server.start());
-    server.script({burst_silence_burst(kTotal, kFirstBurst, 1200)});
+    server.script(
+        {burst_silence_burst(kTotal, kFirstBurst, 1200, server_sent)});
 
     const std::string dir = temp_dir_for("burstretry");
     std::filesystem::create_directories(dir);
@@ -2257,8 +2290,25 @@ TEST(DownloadEngineV2Edges, BurstSilenceBurstNeedRetryYieldsAndCompletes) {
 
     EdgesEngineRunner runner(engine);
     ASSERT_TRUE(wait_group_terminal(engine, group, 60000));
-    ASSERT_EQ(group->status(), RequestGroupStatus::COMPLETED)
-        << group->error_message();
+    {
+        // V2 数据落在 <最终名>.falcon.tmp（temp_extension 默认值），
+        // 失败时最终名可能不存在——两个路径都查
+        std::error_code size_ec;
+        const auto out_size =
+            std::filesystem::file_size(out_path, size_ec);
+        const std::string tmp_size_str = [&] {
+            std::error_code ec;
+            const auto sz = std::filesystem::file_size(
+                out_path + ".falcon.tmp", ec);
+            return ec ? std::string("n/a") : std::to_string(sz);
+        }();
+        ASSERT_EQ(group->status(), RequestGroupStatus::COMPLETED)
+            << group->error_message() << " [server_sent="
+            << server_sent->load() << " out_size="
+            << (size_ec ? std::string("n/a") : std::to_string(out_size))
+            << " tmp_size=" << tmp_size_str << " group_downloaded="
+            << group->downloaded_bytes() << "]";
+    }
 
     runner.shutdown_and_join();
     server.stop();
@@ -2268,11 +2318,13 @@ TEST(DownloadEngineV2Edges, BurstSilenceBurstNeedRetryYieldsAndCompletes) {
         unit[i] = static_cast<char>((i * 31 + 7) & 0xFF);
     }
     const std::string data = read_file_content(out_path);
-    ASSERT_EQ(data.size(), static_cast<std::size_t>(kTotal));
+    ASSERT_EQ(data.size(), static_cast<std::size_t>(kTotal))
+        << "[server_sent=" << server_sent->load() << "]";
     for (const Bytes off : {Bytes{0}, kFirstBurst - 4096, kFirstBurst,
                             kTotal - 4096}) {
         EXPECT_EQ(data.substr(static_cast<std::size_t>(off), 4096), unit)
-            << "偏移 " << off << " 处的 4KB 块不一致";
+            << "偏移 " << off << " 处的 4KB 块不一致 [server_sent="
+            << server_sent->load() << "]";
     }
 
     std::error_code rm_ec;
