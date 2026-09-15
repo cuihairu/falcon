@@ -36,17 +36,10 @@
 using namespace falcon::search;
 using falcon::search::detail::apply_selector_field;
 using falcon::search::detail::parse_html_by_selectors;
-
-namespace falcon {
-namespace search {
-namespace detail {
-// resource_search.cpp 中定义但未在头文件导出，这里前向声明以便直接测试
-size_t parse_size(const std::string& size_str);
-} // namespace detail
-} // namespace search
-} // namespace falcon
-
+using falcon::search::detail::parse_magnet_link;
 using falcon::search::detail::parse_size;
+using falcon::search::detail::url_decode;
+using falcon::search::detail::validate_url;
 
 namespace {
 
@@ -980,5 +973,110 @@ TEST_F(ResourceSearchCovNetTest, SearchUnavailableServerYieldsNoResults) {
     SearchQuery query;
     query.keyword = "offline";
     auto results = manager.search_all(query);
+    EXPECT_TRUE(results.empty());
+}
+
+// ============================================================================
+// detail 提升函数补充覆盖（validate_url / parse_magnet_link / url_decode）
+// ============================================================================
+
+TEST(ResourceSearchCovDetailTest, ValidateUrlPrefixWhitelist) {
+    EXPECT_FALSE(validate_url(""));
+    EXPECT_TRUE(validate_url("magnet:?xt=urn:btih:" + std::string(40, 'a')));
+    EXPECT_TRUE(validate_url("http://example.com/file.iso"));
+    EXPECT_TRUE(validate_url("https://example.com/file.iso"));
+    EXPECT_TRUE(validate_url("ftp://ftp.example.com/file.iso"));
+
+    // 前缀白名单之外的 scheme 一律拒绝。
+    EXPECT_FALSE(validate_url("ed2k://|file|name|1024|deadbeef|/"));
+    EXPECT_FALSE(validate_url("thunder://QUFodHRw"));
+    // "https" 开头但非 "https:" 前缀同样拒绝。
+    EXPECT_FALSE(validate_url("httpsfake"));
+    EXPECT_FALSE(validate_url("plain-string"));
+}
+
+TEST(ResourceSearchCovDetailTest, ParseMagnetLinkExtractsHashAndDecodesName) {
+    const std::string magnet =
+        "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"
+        "&dn=Ubuntu%2024.04%20LTS&tr=http%3A%2F%2Ftracker.example%2Fannounce";
+
+    const auto result = parse_magnet_link(magnet);
+    EXPECT_EQ(result.url, magnet);
+    EXPECT_EQ(result.type, "magnet");
+    EXPECT_EQ(result.hash, "0123456789abcdef0123456789abcdef01234567");
+    // dn 仅取到下一个 '&'，tr 参数不参与标题。
+    EXPECT_EQ(result.title, "Ubuntu 24.04 LTS");
+}
+
+TEST(ResourceSearchCovDetailTest, ParseMagnetLinkToleratesMissingFields) {
+    // 非 40 位十六进制的 btih 不匹配 hash 正则。
+    const auto bare = parse_magnet_link("magnet:?xt=urn:btih:zzzz");
+    EXPECT_EQ(bare.type, "magnet");
+    EXPECT_EQ(bare.hash, "");
+    EXPECT_EQ(bare.title, "");
+
+    // 只有显示名也能出结果：'+' 转空格、%2F 解码为 '/'。
+    const auto named = parse_magnet_link("magnet:?dn=big+file%2Fiso");
+    EXPECT_EQ(named.hash, "");
+    EXPECT_EQ(named.title, "big file/iso");
+}
+
+TEST(ResourceSearchCovDetailTest, UrlDecodeKeepsInvalidEscapesAndTrailingPercent) {
+    // 非法十六进制转义原样保留。
+    EXPECT_EQ(url_decode("100%zz"), "100%zz");
+    // 结尾孤立 '%' 与 '%' 后仅剩一个字符均原样保留。
+    EXPECT_EQ(url_decode("abc%"), "abc%");
+    EXPECT_EQ(url_decode("a%2"), "a%2");
+    // 普通字符串原样往返。
+    EXPECT_EQ(url_decode("no escapes here"), "no escapes here");
+}
+
+// ============================================================================
+// GenericSearchProvider 过滤排序 / 空 URL 快速返回
+// ============================================================================
+
+TEST_F(ResourceSearchCovNetTest, ProviderFilterSortsBySizeAndTrimsToLimit) {
+    TempFile config(build_engine_config(server_.base_url(), "/search", "json", {}));
+    ResourceSearchManager manager;
+    ASSERT_TRUE(manager.load_config(config.path()));
+
+    SearchQuery query;
+    query.keyword = "sort";
+    query.sort_by = "size";
+    query.sort_desc = true;
+    query.limit = 2;
+
+    // provider 层排序（区别于 manager 的全局排序）：size 降序后截断到 limit。
+    auto results = manager.search_providers(query, {"LocalEngine"});
+    ASSERT_EQ(results.size(), 2u);
+    EXPECT_EQ(results[0].title, "Big Pack");
+    EXPECT_EQ(results[1].title, "Ubuntu 24.04 ISO");
+}
+
+TEST_F(ResourceSearchCovNetTest, ProviderFilterSortFallbackKeyUsesConfidence) {
+    TempFile config(build_engine_config(server_.base_url(), "/search", "json", {}));
+    ResourceSearchManager manager;
+    ASSERT_TRUE(manager.load_config(config.path()));
+
+    SearchQuery query;
+    query.keyword = "sort";
+    query.sort_by = "confidence";  // size/seeds 之外的兜底排序键
+
+    // JSON 响应不带 confidence 字段（全 0），排序稳定且全部保留。
+    auto results = manager.search_providers(query, {"LocalEngine"});
+    ASSERT_EQ(results.size(), 3u);
+}
+
+TEST(ResourceSearchCovEmptyUrlTest, ProviderEmptySearchUrlReturnsBeforeRequest) {
+    // base_url 与 search_path 均为空 => build_search_url 返回空串，
+    // search() 在发起任何网络请求之前提前返回（离线安全）。
+    TempFile config(build_engine_config("", "", "json", {}));
+    ResourceSearchManager manager;
+    ASSERT_TRUE(manager.load_config(config.path()));
+    ASSERT_EQ(manager.get_providers().size(), 1u);
+
+    SearchQuery query;
+    query.keyword = "anything";
+    auto results = manager.search_providers(query, {"LocalEngine"});
     EXPECT_TRUE(results.empty());
 }

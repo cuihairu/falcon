@@ -234,6 +234,18 @@ void apply_selector_field(SearchResult& result,
 /// 基于种子数和文件大小计算置信度（0.0-1.0）
 double calculate_confidence(const SearchResult& result);
 
+/// 人类可读大小文本解析（"1.5GB" 等单位后缀，无法解析返回 0）
+size_t parse_size(const std::string& size_str);
+
+/// URL 前缀白名单校验（magnet:/http:/https:/ftp:）
+bool validate_url(const std::string& url);
+
+/// magnet: 链接解析（btih 40 位十六进制哈希 + dn 显示名经 url_decode）
+SearchResult parse_magnet_link(const std::string& magnet_url);
+
+/// 百分号解码（'+' 转空格；非法或截断的转义原样保留）
+std::string url_decode(const std::string& str);
+
 } // namespace detail
 
 } // namespace search

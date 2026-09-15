@@ -51,6 +51,7 @@ if(FALCON_ENABLE_RESOURCE_BROWSER)
     add_executable(falcon_storage_tests
         unit/resource_browser_utils_test.cpp
         unit/resource_browsers_test.cpp
+        unit/resource_browser_edges_test.cpp
         unit/s3_browser_mock_test.cpp
         unit/ftp_browser_mock_test.cpp
         unit/storage_isolation_test.cpp

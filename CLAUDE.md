@@ -2,6 +2,38 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-14 - 覆盖率批次 Q：resource_browser 系 75 → 9 + resource_search.cpp 47 → 9（detail 提升重构）
+- **24 新用例双树绿**（cov + ASan，全量 ctest 1983 零失败）：storage
+  侧 resource_browser_edges_test.cpp 17 用例（工厂注册边界与运行时
+  is_supported 探测 PRIVATE 宏、format_tree 树枝/收尾分支与
+  max_depth、format_table 的 ls 风格 d/-/l 标识、format_custom 列
+  选择与 15 字符分隔线、normalize_path 盘符与相对 ".." 实现语义、
+  join_path 空侧/盘符根、get_parent_path 根与裸名、is_valid_path
+  控制字符与 tab/DEL 边界）；drives 侧 resource_search_coverage_
+  test.cpp +7（validate_url 前缀白名单、parse_magnet_link 哈希与
+  dn 解码、url_decode 非法转义容错、provider 层 filter 排序与截
+  断、空 URL 请求前快速返回）
+- **detail 提升重构**（仓库既有 detail 模式，生产行为零变化）：
+  resource_search.cpp 的 validate_url/url_decode/parse_magnet_link
+  提升到 detail 命名空间（头文件补声明，含漏声明的 parse_size，
+  测试前向声明块删除）；**删除 NoCrawlerTag 孤儿构造函数**（零引
+  用死代码）；**删除 set_headers 死防御 if**（headers_ 单调用点，
+  curl_slist_free_all 对 NULL 安全）
+- **三个测量级发现**：① ISearchProvider::validate_url/get_details
+  生产全库零调用方（grep core/cli/daemon/desktop/drives 实证，
+  Manager 不转发）——实现体结构不可达，属接口完整性方法；②
+  normalize_path 对相对路径组件也前置 "/"（"a/b/.." → "/a"、
+  "../x" → "/../x"、唯一特例 "a/.." → "."）——测试忠于实现并注
+  释说明；③ is_valid_path 的 `<32` 检查不含 DEL(0x7f)
+- 剩余 18 行全部定性：resource_search 9（curl OOM ×1 + 接口零调
+  用方 ×8）；resource_browser 7 行归属伪影（并列实参计数矛盾铁
+  证：调用行 8 命中 + lambda 行 28 命中 + info 实参行 #####）；
+  utils 2 死代码/不可达（join_path 162 恒假条件、get_parent_path
+  197 与盘符分支矛盾）
+- **全包覆盖率（批次 C 同款 gcovr 口径）：行 81.9% / 函数 94.9% /
+  分支 45.5%**（批次 P 81.4/94.4/45.1）；1 例 WsRpcClientEdge/
+  PerformanceLargeBatch 并行抖动串行复跑即过（两树各 1 例）
+
 ### 2026-09-14 - 覆盖率批次 P：json_rpc_server.cpp 68 → 15 miss（RPC 分发边界 + WebSocket 协议路径）
 - **21 新用例三文件**（cov + ASan 双绿，全量 ctest 1958 零失败，
   新增 21 条）：RPC 分发层参数形状与"合法 gid 无任务"变体全簇

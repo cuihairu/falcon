@@ -2245,7 +2245,57 @@ request_group 系 106 / resource_search 47（WebCrawler 泄漏已
   ctest **1958 = 1947 通过 + 11 设计内 skip，零失败**；新增 21
   用例 cov + ASan 双绿（daemon RPC 三套件 44 用例 ASan 零告警）
 
-**批次 Q 候选（##### 铁账，多 target OR 合并口径复核后推进）：**
-resource_browser 系 153 / request_group 系 106 / resource_search
-47 / cloud_storage_plugin 55 行存根（方案 A：manager 只读插件
-访问器）/ http_commands 176（TLS 防御与 OOM 为主）。
+### 批次 Q 收口（2026-09-14）：resource_browser 系 75 → 9 + resource_search.cpp 47 → 9（格式化器/路径工具边界 + detail 提升重构）
+- **24 新用例双树绿**（cov + ASan）：storage 侧 `resource_browser_
+  edges_test.cpp` 17 用例三套件——BrowserFactoryEdges 4（默认工厂
+  全建（s3 直断言 + crypto 五协议运行时 is_supported 守卫，PRIVATE
+  宏对测试 TU 不可见）、available 有序且描述非空、create_from_url
+  空 scheme/无 scheme nullptr、注册边界（空 protocol 拒/null 工厂
+  拒/工厂产出 nullptr 仍注册成功））、BrowserFormatterEdges 5
+  （format_tree 首行 base_path + 树枝字节转义常量（MSVC 源码编码
+  防御）+ 收尾分支、max_depth>0 首层仍打印、format_table ls 风格
+  d/-/l 类型标识、format_custom 五列 + 15 字符分隔线 + modified
+  截 15 字符、symlink→other/未知列 "-"/空列表仅表头）、
+  BrowserUtilsEdges 8（is_valid_path 控制字符（tab 放行、\x1f 拒
+  ，DEL 0x7f 不在 <32 范围）、normalize_path 盘符与相对 ".." 保留
+  （实现语义：所有组件前置 "/"，"a/b/.."→"/a"、../x→"/../x"、
+  a/..→"." 特例）、join_path 空侧/绝对名/盘符根无额外分隔符、
+  get_parent_path 尾斜杠/裸名 "."/根、get_filename 尾斜杠剥离）
+- drives 侧 `resource_search_coverage_test.cpp` +7 + **detail 提升
+  重构**（仓库既有 detail 模式）：validate_url/url_decode/
+  parse_magnet_link 提升到 detail 命名空间（头文件补声明，含此前
+  漏声明的 parse_size——测试前向声明块删除）；**删除 NoCrawlerTag
+  孤儿构造函数**（零引用死代码）；**删除 set_headers 死防御 if**
+  （headers_ 单调用点，curl_slist_free_all 对 NULL 安全）。用例：
+  validate_url 前缀白名单（magnet/http/https/ftp 放行 + ed2k/
+  thunder/"httpsfake" 拒绝）、parse_magnet_link 40 位 btih 哈希 +
+  dn%20 解码 + tr 不入标题 + 非 40 hex 不匹配、url_decode 非法转
+  义与截断 % 原样保留、provider 层 filter size 降序 + limit 截断
+  （经 search_providers 直达 provider 输出，区别于 manager 全局排
+  序）、sort_by 兜底键走 confidence 分支、空 base_url+search_path
+  在发起请求前提前返回（离线安全）
+- 剩余定性（三文件合计 18 行）：
+  - resource_search 9：curl_easy_init OOM throw ×1；接口零调用方
+    ×8（validate_url 转发 2 + get_details 主体 6——ISearchProvider
+    方法生产全库零调用方，grep core/cli/daemon/desktop/drives 实
+    证，Manager 不转发，结构不可达）
+  - resource_browser 7：gcc 行归属伪影 ×7（50/54/57/60/63/66 六行
+    register_browser 的 info 字面量实参行 + 218 lambda 赋值行——
+    并列实参计数矛盾铁证：调用行命中 8 + lambda 行命中 28 + info
+    行 #####；lambda 体 219-234 全命中且 print_tree 调用成功无
+    bad_function_call ⇒ 赋值必执行）
+  - resource_browser_utils 2：join_path 162 死代码（147 执行后
+    back 恒 ∈ {'/','\\',':'} ⇒ 161 条件恒假）+ get_parent_path
+    197 不可达（end==2 ⇒ 最后分隔符在 index 1 ⇒ path[1] 是分隔
+    符，与 ==':' 矛盾）
+- 多 target 编译水分已排除（三文件各仅一份库 target gcda；ASan
+  树无 gcda）
+- **覆盖率（批次 Q 收口，批次 C 同款 gcovr 口径）：行 81.9% /
+  函数 94.9% / 分支 45.5%**（批次 P 81.4/94.4/45.1 → +0.5/+0.5/
+  +0.4）；全量 ctest **1983 零失败**（1 例 WsRpcClientEdge 并行
+  抖动串行复跑过）；ASan storage 359 + drives 146 全绿（1 例
+  PerformanceLargeBatch 墙钟断言并行抖动 5.8s→串行 3.5s，非回归）
+
+**批次 R 候选（##### 铁账，多 target OR 合并口径复核后推进）：**
+request_group 系 106 / http_commands 176（TLS 防御与 OOM 为主）/
+cloud_storage_plugin 55 行存根（方案 A：manager 只读插件访问器）。

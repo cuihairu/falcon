@@ -146,6 +146,64 @@ std::vector<SearchResult> parse_html_by_selectors(const std::string& html,
     return results;
 }
 
+/// URL 前缀白名单校验（ISearchProvider::validate_url 的实现逻辑）
+bool validate_url(const std::string& url) {
+    if (url.empty()) return false;
+
+    // 检查URL格式
+    if (url.find("magnet:") == 0 ||
+        url.find("http:") == 0 ||
+        url.find("https:") == 0 ||
+        url.find("ftp:") == 0) {
+        return true;
+    }
+
+    return false;
+}
+
+std::string url_decode(const std::string& str) {
+    std::string result;
+    for (size_t i = 0; i < str.size(); ++i) {
+        if (str[i] == '%' && i + 2 < str.size()) {
+            int value;
+            std::istringstream is(str.substr(i + 1, 2));
+            if (is >> std::hex >> value) {
+                result += char(value);
+                i += 2;
+            } else {
+                result += str[i];
+            }
+        } else if (str[i] == '+') {
+            result += ' ';
+        } else {
+            result += str[i];
+        }
+    }
+    return result;
+}
+
+SearchResult parse_magnet_link(const std::string& magnet_url) {
+    SearchResult result;
+    result.url = magnet_url;
+    result.type = "magnet";
+
+    // 解析magnet链接中的信息
+    std::regex hash_regex("btih:([a-fA-F0-9]{40})");
+    std::regex name_regex("dn=([^&]+)");
+    std::regex tr_regex("tr=([^&]+)");
+
+    std::smatch match;
+    if (std::regex_search(magnet_url, match, hash_regex)) {
+        result.hash = match[1].str();
+    }
+
+    if (std::regex_search(magnet_url, match, name_regex)) {
+        result.title = url_decode(match[1].str());
+    }
+
+    return result;
+}
+
 } // namespace detail
 
 /**
@@ -227,10 +285,8 @@ public:
         }
         curl_easy_setopt(curl_, CURLOPT_HTTPHEADER, chunk);
 
-        // 保存chunk以便后续清理
-        if (headers_) {
-            curl_slist_free_all(headers_);
-        }
+        // 保存chunk以便析构统一清理（curl_slist_free_all 对空指针安全）
+        curl_slist_free_all(headers_);
         headers_ = chunk;
     }
 
@@ -272,12 +328,6 @@ public:
         crawler_->set_headers(config_.headers);
     }
 
-    /// 测试与离线解析用：仅初始化配置，不创建 WebCrawler
-    /// 通过此构造函数创建的实例不可调用 search() 等需要网络的方法
-    struct NoCrawlerTag {};
-    GenericSearchProvider(const SearchEngineConfig& config, NoCrawlerTag)
-        : config_(config), crawler_(nullptr) {}
-
     std::string name() const override {
         return config_.name;
     }
@@ -315,17 +365,7 @@ public:
     }
 
     bool validate_url(const std::string& url) override {
-        if (url.empty()) return false;
-
-        // 检查URL格式
-        if (url.find("magnet:") == 0 ||
-            url.find("http:") == 0 ||
-            url.find("https:") == 0 ||
-            url.find("ftp:") == 0) {
-            return true;
-        }
-
-        return false;
+        return detail::validate_url(url);
     }
 
     SearchResult get_details(const std::string& url) override {
@@ -334,7 +374,7 @@ public:
 
         // 对于magnet链接，解析基本信息
         if (url.find("magnet:") == 0) {
-            result = parse_magnet_link(url);
+            result = detail::parse_magnet_link(url);
         }
 
         return result;
@@ -529,28 +569,6 @@ private:
         return results;
     }
 
-    SearchResult parse_magnet_link(const std::string& magnet_url) {
-        SearchResult result;
-        result.url = magnet_url;
-        result.type = "magnet";
-
-        // 解析magnet链接中的信息
-        std::regex hash_regex("btih:([a-fA-F0-9]{40})");
-        std::regex name_regex("dn=([^&]+)");
-        std::regex tr_regex("tr=([^&]+)");
-
-        std::smatch match;
-        if (std::regex_search(magnet_url, match, hash_regex)) {
-            result.hash = match[1].str();
-        }
-
-        if (std::regex_search(magnet_url, match, name_regex)) {
-            result.title = url_decode(match[1].str());
-        }
-
-        return result;
-    }
-
     static double calculate_confidence(const SearchResult& result) {
         return detail::calculate_confidence(result);
     }
@@ -581,27 +599,6 @@ private:
             start_pos += to.length();
         }
         return str;
-    }
-
-    std::string url_decode(const std::string& str) {
-        std::string result;
-        for (size_t i = 0; i < str.size(); ++i) {
-            if (str[i] == '%' && i + 2 < str.size()) {
-                int value;
-                std::istringstream is(str.substr(i + 1, 2));
-                if (is >> std::hex >> value) {
-                    result += char(value);
-                    i += 2;
-                } else {
-                    result += str[i];
-                }
-            } else if (str[i] == '+') {
-                result += ' ';
-            } else {
-                result += str[i];
-            }
-        }
-        return result;
     }
 
     static size_t parse_size(const std::string& size_str) {
