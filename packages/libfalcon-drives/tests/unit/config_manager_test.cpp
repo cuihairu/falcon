@@ -671,4 +671,241 @@ TEST(ConfigManagerTest, ImportMalformedPayloadVariants) {
     EXPECT_TRUE(cm.search_configs("no-name").empty());
 }
 
+// ============================================================================
+// sqlite 失败注入与深层路径（覆盖率批次 T）：EXCLUSIVE 锁（写 step BUSY）、
+// DROP 表（prepare "no such table"）、直连篡改（坏 JSON 容错）、空密码
+// initialize、import 深层 catch。WAL 模式下读不阻塞：锁用例的读类方法
+// 照常成功，只有写 step 撞 BUSY——与 TaskStorage 的锁语义不同。
+// ============================================================================
+
+namespace {
+
+// 第二连接持 BEGIN EXCLUSIVE 写锁（RAII：析构关闭连接自动回滚释放）
+class ExclusiveLocker {
+public:
+    explicit ExclusiveLocker(const std::string& db_path) {
+        if (sqlite3_open(db_path.c_str(), &db_) == SQLITE_OK) {
+            char* err = nullptr;
+            locked_ = sqlite3_exec(db_, "BEGIN EXCLUSIVE;", nullptr, nullptr, &err) == SQLITE_OK;
+            sqlite3_free(err);
+        }
+    }
+    ~ExclusiveLocker() {
+        if (db_) sqlite3_close(db_);
+    }
+    ExclusiveLocker(const ExclusiveLocker&) = delete;
+    ExclusiveLocker& operator=(const ExclusiveLocker&) = delete;
+    bool locked() const { return locked_; }
+
+private:
+    sqlite3* db_ = nullptr;
+    bool locked_ = false;
+};
+
+} // namespace
+
+// 无主密码 initialize：默认空密码被强度检查拒绝（<8 字符）——源码里
+// 「master_password_ 为空则 authenticated_=false 后返回 true」的收尾分支
+// 因此结构性不可达（强度检查与空密码互斥），固化该语义
+TEST(ConfigManagerTest, InitializeWithoutMasterPasswordFails) {
+    auto dir = unique_temp_dir("falcon_cfg_nopass_");
+    const auto db = (dir / "config.db").string();
+
+    falcon::ConfigManager cm;
+    EXPECT_FALSE(cm.initialize(db));
+    // 未初始化 manager：一切读写被认证门拒绝
+    EXPECT_TRUE(cm.list_cloud_configs().empty());
+    EXPECT_TRUE(cm.search_configs().empty());
+    falcon::CloudStorageConfig out{};
+    EXPECT_FALSE(cm.get_cloud_config("any", out));
+}
+
+// 全新 DELETE-journal 库被第二连接持 EXCLUSIVE 写锁：initialize 的
+// PRAGMA journal_mode（DELETE→WAL 转换需独占，非致命继续）与建表 exec
+//（致命）双双撞 BUSY，最终失败返回
+TEST(ConfigManagerTest, InitializeFailsWhileDbLockedExclusively) {
+    auto dir = unique_temp_dir("falcon_cfg_lockinit_");
+    const auto db = (dir / "config.db").string();
+
+    ExclusiveLocker locker(db);  // open 即创建空库并上写锁
+    ASSERT_TRUE(locker.locked());
+
+    falcon::ConfigManager cm;
+    EXPECT_FALSE(cm.initialize(db, "Master123!"));
+}
+
+// DROP 两表后 schema cookie 变化：首条语句的 prepare_v2 吞掉一次
+// SQLITE_SCHEMA 自动重编（该语句走各自的失败收口），其后各方法命中
+// 自己的 prepare 失败分支。save 作牺牲位（其 prepare 失败行同为验证目标）
+TEST(ConfigManagerTest, MethodsFailWhenTablesDropped) {
+    auto dir = unique_temp_dir("falcon_cfg_drop_");
+    const auto db = (dir / "config.db").string();
+
+    falcon::ConfigManager cm;
+    ASSERT_TRUE(cm.initialize(db, "Master123!"));
+    ASSERT_TRUE(cm.save_cloud_config(make_config("alpha", "s3", "AK", "SK")));
+
+    ASSERT_TRUE(exec_sql(db, "DROP TABLE master; DROP TABLE configs;"));
+
+    // 牺牲位兼目标：INSERT prepare 吞重编后如实撞 "no such table"
+    EXPECT_FALSE(cm.save_cloud_config(make_config("beta", "s3", "AK", "SK")));
+    // verify 提前 return 不撤销 authenticated_：其后方法的认证门仍短路
+    EXPECT_FALSE(cm.verify_master_password("Master123!"));
+    falcon::CloudStorageConfig out{};
+    EXPECT_FALSE(cm.get_cloud_config("alpha", out));
+    EXPECT_FALSE(cm.delete_cloud_config("alpha"));
+    EXPECT_TRUE(cm.list_cloud_configs().empty());
+    EXPECT_TRUE(cm.search_configs().empty());
+    EXPECT_TRUE(cm.search_configs("s3").empty());
+    EXPECT_FALSE(cm.update_cloud_config("alpha", make_config("alpha", "s3", "AK", "SK")));
+}
+
+// update 改名撞 name UNIQUE 约束：select 段成功读到行、UPDATE step 返回
+// SQLITE_CONSTRAINT，走 step 失败分支如实返回 false 且原数据不受影响
+TEST(ConfigManagerTest, UpdateFailsOnDuplicateTargetName) {
+    auto dir = unique_temp_dir("falcon_cfg_dupname_");
+    const auto db = (dir / "config.db").string();
+
+    falcon::ConfigManager cm;
+    ASSERT_TRUE(cm.initialize(db, "Master123!"));
+    ASSERT_TRUE(cm.save_cloud_config(make_config("alpha", "s3", "AK1", "SK1")));
+    ASSERT_TRUE(cm.save_cloud_config(make_config("beta", "s3", "AK2", "SK2")));
+
+    EXPECT_FALSE(cm.update_cloud_config("alpha", make_config("beta", "s3", "AK1", "SK1")));
+
+    EXPECT_EQ(cm.list_cloud_configs().size(), 2u);
+    falcon::CloudStorageConfig out{};
+    EXPECT_TRUE(cm.get_cloud_config("alpha", out));
+    EXPECT_EQ(out.access_key, "AK1");
+}
+
+// WAL 库上第二连接持 EXCLUSIVE 写锁：读旧快照照常成功，写 step 一律 BUSY
+TEST(ConfigManagerTest, WriteMethodsFailWhileDbLockedExclusively) {
+    auto dir = unique_temp_dir("falcon_cfg_lockwrite_");
+    const auto db = (dir / "config.db").string();
+
+    falcon::ConfigManager cm;
+    ASSERT_TRUE(cm.initialize(db, "Master123!"));
+    ASSERT_TRUE(cm.save_cloud_config(make_config("alpha", "s3", "AK", "SK")));
+
+    {
+        ExclusiveLocker locker(db);
+        ASSERT_TRUE(locker.locked());
+
+        EXPECT_FALSE(cm.save_cloud_config(make_config("beta", "s3", "AK", "SK")));
+        EXPECT_FALSE(cm.delete_cloud_config("alpha"));
+        // select 段读旧快照成功、UPDATE step 撞 BUSY
+        EXPECT_FALSE(cm.update_cloud_config("alpha", make_config("alpha", "s3", "AK", "SK")));
+
+        // WAL 读不阻塞：查询照常
+        EXPECT_EQ(cm.list_cloud_configs().size(), 1u);
+    }
+
+    // 释放锁后写入恢复
+    EXPECT_TRUE(cm.save_cloud_config(make_config("beta", "s3", "AK", "SK")));
+    EXPECT_EQ(cm.list_cloud_configs().size(), 2u);
+}
+
+// 库内 extra 列坏 JSON（外部篡改/旧版本残留）：search 与 get 必须吞掉
+// 解析异常，该行以默认空 extra 返回而不是向上传播
+TEST(ConfigManagerTest, SearchAndGetTolerateMalformedExtraJson) {
+    auto dir = unique_temp_dir("falcon_cfg_badextra_");
+    const auto db = (dir / "config.db").string();
+
+    falcon::ConfigManager cm;
+    ASSERT_TRUE(cm.initialize(db, "Master123!"));
+    ASSERT_TRUE(cm.save_cloud_config(make_config("alpha", "s3", "AK", "SK")));
+    ASSERT_TRUE(exec_sql(db, "UPDATE configs SET extra='{bad' WHERE name='alpha';"));
+
+    auto results = cm.search_configs("");
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_EQ(results[0].name, "alpha");
+    EXPECT_TRUE(results[0].extra.empty());
+
+    falcon::CloudStorageConfig out{};
+    ASSERT_TRUE(cm.get_cloud_config("alpha", out));
+    EXPECT_TRUE(out.extra.empty());
+}
+
+// 解密后的明文不是 JSON：parse 异常必须吞掉并失败返回
+TEST(ConfigManagerTest, ImportRejectsNonJsonPlaintext) {
+    auto dir = unique_temp_dir("falcon_cfg_nonjson_");
+    const auto db = (dir / "config.db").string();
+    const auto payload_path = (dir / "payload.bin").string();
+
+    falcon::ConfigManager cm;
+    ASSERT_TRUE(cm.initialize(db, "Master123!"));
+    ASSERT_TRUE(write_file(payload_path, make_export_payload("{bad json", "Export123!")));
+    EXPECT_FALSE(cm.import_configs(payload_path, "Export123!"));
+}
+
+// extra 为 object 但 value 非 string：get<map<string,string>> 抛类型错误，
+// 该字段落回默认空 map、条目照常导入
+TEST(ConfigManagerTest, ImportToleratesNonStringExtraValues) {
+    auto dir = unique_temp_dir("falcon_cfg_extra_type_");
+    const auto db = (dir / "config.db").string();
+    const auto payload_path = (dir / "payload.bin").string();
+
+    falcon::ConfigManager cm;
+    ASSERT_TRUE(cm.initialize(db, "Master123!"));
+    ASSERT_TRUE(write_file(
+        payload_path,
+        make_export_payload(
+            "{\"configs\":[{\"name\":\"typed\",\"provider\":\"s3\","
+            "\"extra\":{\"count\":123},\"access_key\":\"AK\",\"secret_key\":\"SK\"}]}",
+            "Export123!")));
+    EXPECT_TRUE(cm.import_configs(payload_path, "Export123!"));
+
+    falcon::CloudStorageConfig out{};
+    ASSERT_TRUE(cm.get_cloud_config("typed", out));
+    EXPECT_EQ(out.access_key, "AK");
+    EXPECT_TRUE(out.extra.empty());
+}
+
+// configs 表被 DROP（master 保留）：import 解密解析成功但逐条 save 撞
+// 表缺失，必须失败返回而不是假报导入成功
+TEST(ConfigManagerTest, ImportFailsWhenConfigsTableDropped) {
+    auto dir = unique_temp_dir("falcon_cfg_dropimport_");
+    const auto db = (dir / "config.db").string();
+    const auto payload_path = (dir / "payload.bin").string();
+
+    falcon::ConfigManager cm;
+    ASSERT_TRUE(cm.initialize(db, "Master123!"));
+    ASSERT_TRUE(exec_sql(db, "DROP TABLE configs;"));
+
+    // 牺牲位：让 schema cache 失效落到文件真身，import 内部的 save
+    // 才能稳定命中失败路径
+    EXPECT_FALSE(cm.save_cloud_config(make_config("alpha", "s3", "AK", "SK")));
+
+    ASSERT_TRUE(write_file(
+        payload_path,
+        make_export_payload(
+            "{\"configs\":[{\"name\":\"alpha\",\"provider\":\"s3\","
+            "\"access_key\":\"AK\",\"secret_key\":\"SK\"}]}",
+            "Export123!")));
+    EXPECT_FALSE(cm.import_configs(payload_path, "Export123!"));
+}
+
+// configs 被同名视图替代：SELECT 段读视图成功拿到行，UPDATE 语句在
+// prepare 阶段被 sqlite 拒绝（cannot modify a view）——update 的第二个
+// prepare 失败分支
+TEST(ConfigManagerTest, UpdateFailsWhenConfigsIsAView) {
+    auto dir = unique_temp_dir("falcon_cfg_view_");
+    const auto db = (dir / "config.db").string();
+
+    falcon::ConfigManager cm;
+    ASSERT_TRUE(cm.initialize(db, "Master123!"));
+    ASSERT_TRUE(cm.save_cloud_config(make_config("alpha", "s3", "AK", "SK")));
+
+    ASSERT_TRUE(exec_sql(
+        db,
+        "DROP TABLE configs; "
+        "CREATE VIEW configs AS SELECT id, 'alpha' AS name, 's3' AS provider, "
+        "'' AS access_key, '' AS secret_key, '' AS region, '' AS bucket, "
+        "'' AS endpoint, '' AS custom_domain, '' AS extra, "
+        "0 AS created_at, 0 AS updated_at FROM master;"));
+
+    EXPECT_FALSE(cm.update_cloud_config("alpha", make_config("alpha", "s3", "AK", "SK")));
+}
+
 #endif

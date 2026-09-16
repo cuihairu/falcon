@@ -337,7 +337,10 @@ private:
             body = body_;
         }
 
-        if (path == "/missing") {
+        if (path == "/missing" ||
+            (path == "/bait" && method == "GET")) {
+            // /bait：HEAD 放行、GET 404——探测通过后失败才发生在数据面
+            // （V2 组 FAILED 路径而非 HEAD 探测层）
             static const char kNotFound[] = "HTTP/1.1 404 Not Found\r\n"
                                             "Content-Length: 0\r\n"
                                             "Connection: close\r\n\r\n";
@@ -649,6 +652,136 @@ TEST_P(V2HttpAdapterEquivalence, CancelDuringTransfer) {
     EXPECT_EQ(task->status(), TaskStatus::Cancelled);
     EXPECT_FALSE(std::filesystem::exists(out_path))
         << "取消后成品不得发布";
+
+    server.stop();
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+// HEAD 探测通过、GET 数据面 404：失败发生在引擎任务组内（区别于
+// NotFoundPropagatesAsFailure 的 HEAD 层失败）——适配器轮询观察到组
+// FAILED → sync_final_progress 后 throw 组错误消息（V1 worker catch
+// 统一收口 Failed）
+TEST_P(V2HttpAdapterEquivalence, MidDownloadFailurePropagatesGroupError) {
+    const std::string body = make_body(64 * 1024);
+    AdapterTestServer server;
+    ASSERT_TRUE(server.start());
+    server.set_body(body);
+
+    const std::string dir = temp_dir_for("bait");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    DownloadOptions options;
+    options.output_filename = out_path;
+    options.max_connections = 1;
+    options.max_retries = 0;
+
+    HttpHandler handler;
+    RecordingListener listener;
+    auto task = make_task(6, server.url("/bait"), out_path, options);
+    task->set_listener(&listener);
+    task->set_status(TaskStatus::Downloading);
+
+    EXPECT_FALSE(download_via_worker(handler, task, &listener));
+    EXPECT_EQ(task->status(), TaskStatus::Failed);
+    EXPECT_FALSE(task->error_message().empty());
+    EXPECT_FALSE(std::filesystem::exists(out_path))
+        << "失败后半成品不得顶最终名";
+
+    server.stop();
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+// 同一 V2 引擎实例内的暂停→恢复（不经停机排水重建——区别于
+// PauseResumeCycle 的 shutdown_and_join 路径）：恢复的 download() 里
+// find_group 命中 PAUSED 组 → resume_task 续跑断点（而非重新注入）
+TEST_P(V2HttpAdapterEquivalence, PauseResumeWithinSameEngine) {
+    const std::string body = make_body(512 * 1024);
+    AdapterTestServer server;
+    ASSERT_TRUE(server.start());
+    server.set_body(body);
+
+    const std::string dir = temp_dir_for("sameengine");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    DownloadOptions options;
+    options.output_filename = out_path;
+    options.max_connections = 1;
+    options.max_retries = 0;
+    options.progress_interval_ms = 50;
+
+    HttpHandler handler;
+    RecordingListener listener;
+    auto task = make_task(7, server.url("/slow.bin"), out_path, options);
+    task->set_listener(&listener);
+    task->set_status(TaskStatus::Downloading);
+
+    std::thread downloader(
+        [&] { (void)download_via_worker(handler, task, &listener); });
+
+    ASSERT_TRUE(wait_for([&] { return task->downloaded_bytes() > 0; }, 15000));
+    handler.pause(task);
+    downloader.join();
+    EXPECT_EQ(task->status(), TaskStatus::Paused);
+
+    // 引擎与 PAUSED 组保持存活（无停机排水）：resume 在同实例内续跑
+    task->set_status(TaskStatus::Downloading);  // resume 重新调度
+    EXPECT_TRUE(download_via_worker(handler, task, &listener));
+    EXPECT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(read_file_content(out_path), body)
+        << "同引擎续跑后成品必须逐字节一致";
+
+    server.stop();
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+// V2 引擎侧 pause_all（不经 V1 handler.pause——V1 任务状态仍是
+// Downloading）：适配器轮询观察到组 PAUSED 分支 → V1 状态对齐 Paused
+// 后挂起（run 正常返回，非异常收口）
+TEST_P(V2HttpAdapterEquivalence, EnginePauseAllAlignsV1Status) {
+    if (!v2()) {
+        GTEST_SKIP() << "V1 curl 数据面无 V2 引擎任务组";
+    }
+
+    const std::string body = make_body(512 * 1024);
+    AdapterTestServer server;
+    ASSERT_TRUE(server.start());
+    server.set_body(body);
+
+    const std::string dir = temp_dir_for("enginepause");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    DownloadOptions options;
+    options.output_filename = out_path;
+    options.max_connections = 1;
+    options.max_retries = 0;
+    options.progress_interval_ms = 50;
+
+    HttpHandler handler;
+    RecordingListener listener;
+    auto task = make_task(8, server.url("/slow.bin"), out_path, options);
+    task->set_listener(&listener);
+    task->set_status(TaskStatus::Downloading);
+
+    std::thread downloader(
+        [&] { (void)download_via_worker(handler, task, &listener); });
+
+    ASSERT_TRUE(wait_for([&] { return task->downloaded_bytes() > 0; }, 15000));
+    V2EngineHost::instance().engine()->pause_all();
+    downloader.join();
+
+    // 组 PAUSED 分支：V1 状态被适配器对齐为 Paused（run 正常返回）
+    EXPECT_EQ(task->status(), TaskStatus::Paused);
+    EXPECT_FALSE(std::filesystem::exists(out_path))
+        << "暂停后成品不得发布";
 
     server.stop();
     std::error_code rm_ec;

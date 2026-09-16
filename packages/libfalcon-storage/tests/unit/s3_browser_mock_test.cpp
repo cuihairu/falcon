@@ -441,6 +441,24 @@ TEST_F(S3BrowserMockTest, GetQuotaInfoEmptyOnBadResponse) {
     EXPECT_TRUE(quota.empty());
 }
 
+TEST_F(S3BrowserMockTest, GetQuotaInfoToleratesMalformedJson) {
+    server_ = std::make_unique<MockS3Server>(
+        [](const std::string&, const std::string& path) {
+            if (path.find("quota") != std::string::npos) {
+                // 200 + 非法 JSON：解析异常必须被吞掉，quota 保持空
+                return MockS3Server::Response{200, "{corrupted"};
+            }
+            return defaultReply("", path);
+        });
+    ASSERT_TRUE(server_->start());
+
+    S3Browser browser;
+    ASSERT_TRUE(connectBrowser(browser));
+
+    auto quota = browser.get_quota_info();
+    EXPECT_TRUE(quota.empty());
+}
+
 //==============================================================================
 // 过滤/排序/URL 边缘补充
 //==============================================================================

@@ -566,6 +566,34 @@ TEST_F(JsonRpcStorageTest, UnpauseAllSyncsPausedTasksToStorage) {
     }
 }
 
+TEST_F(JsonRpcStorageTest, UnpauseSyncsResumedTaskToStorage) {
+    json add = call("aria2.addUri", json::array({json::array({"test://unpause-one.bin"})}));
+    ASSERT_TRUE(add.contains("result")) << add.dump();
+    const std::string gid = add["result"].get<std::string>();
+    const auto id = static_cast<falcon::TaskId>(std::stoull(gid, nullptr, 16));
+    wait_until_active(id);
+
+    ASSERT_TRUE(call("aria2.pause", json::array({gid})).contains("result"));
+    auto record = storage_->get_task(id);
+    ASSERT_TRUE(record.has_value());
+    EXPECT_EQ(record->status, falcon::TaskStatus::Paused);
+
+    // 单任务 unpause：resume 成功后按引擎当前状态落库（区别于 unpauseAll
+    // 的批量收集路径）
+    json resumed = call("aria2.unpause", json::array({gid}));
+    ASSERT_TRUE(resumed.contains("result")) << resumed.dump();
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    for (;;) {
+        record = storage_->get_task(id);
+        ASSERT_TRUE(record.has_value());
+        if (record->status != falcon::TaskStatus::Paused) break;
+        ASSERT_LT(std::chrono::steady_clock::now(), deadline)
+            << "storage status stuck at Paused after unpause";
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+}
+
 TEST_F(JsonRpcStorageTest, TellWaitingIncludesStorageOnlyRecords) {
     // 引擎侧 Paused 任务 + storage 侧引擎没有的遗留记录，tellWaiting 取并集
     auto task = engine_.add_task("test://engine-waiting.bin");

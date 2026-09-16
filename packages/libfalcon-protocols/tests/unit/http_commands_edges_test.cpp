@@ -746,6 +746,63 @@ ConnHandler tls_partial_headers_then_shutdown(std::string partial_headers) {
     };
 }
 
+/// TLS 半截 body 后注入非法 record（TLS 层外裸发未知类型字节）：
+/// 客户端 SSL_read 的 record 层解析失败 → SSL_ERROR_SSL 硬失败
+/// （区别于干净关闭的 ZERO_RETURN 与底层断连的 SYSCALL——两者按
+/// EOF 交给截断判定，协议违规直接判败）
+ConnHandler tls_partial_body_then_garbage_record(std::string headers,
+                                                 std::string partial_body) {
+    return [headers = std::move(headers),
+            partial = std::move(partial_body)](int conn,
+                                               ScriptableServer& srv) {
+        SSL* ssl = SSL_new(srv.tls_ctx());
+        if (!ssl) return;
+        SSL_set_fd(ssl, conn);
+        if (SSL_accept(ssl) != 1) {
+            SSL_free(ssl);
+            ERR_clear_error();
+            return;
+        }
+        std::string request;
+        char buf[4096];
+        while (request.find("\r\n\r\n") == std::string::npos &&
+               request.size() < 64 * 1024) {
+            const int n = SSL_read(ssl, buf, sizeof(buf));
+            if (n <= 0) {
+                SSL_free(ssl);
+                ERR_clear_error();
+                return;
+            }
+            request.append(buf, static_cast<std::size_t>(n));
+        }
+        srv.record_target(request_target_of(request));
+
+        auto write_all = [ssl](const std::string& data) {
+            std::size_t sent = 0;
+            while (sent < data.size()) {
+                const int n = SSL_write(ssl, data.data() + sent,
+                                        static_cast<int>(data.size() - sent));
+                if (n <= 0) {
+                    ERR_clear_error();
+                    return false;
+                }
+                sent += static_cast<std::size_t>(n);
+            }
+            return true;
+        };
+        (void)write_all(headers);
+        (void)write_all(partial);
+        // 直接 SSL_free（不发 close_notify）——TLS 会话废弃；随后在
+        // 原始 socket 上注入未知 record 类型 0xff：对端 SSL_read 在
+        // record 层即报 SSL_ERROR_SSL（协议违规，非 EOF 语义）。
+        // TCP 有序保证垃圾字节先于框架收尾的 FIN 到达对端
+        SSL_free(ssl);
+        ERR_clear_error();
+        static const char kGarbageRecord[] = "\xff\xff\xff\xff\xff";
+        (void)send_all_plain(conn, kGarbageRecord, sizeof(kGarbageRecord) - 1);
+    };
+}
+
 #endif  // FALCON_ENABLE_OPENSSL
 
 //==============================================================================
@@ -1798,6 +1855,56 @@ TEST(DownloadEngineV2Edges, TlsPartialHeadersCleanCloseFails) {
     std::filesystem::remove_all(dir, rm_ec);
 }
 
+/// TLS 数据阶段收到非法 record（协议违规）：SSL_read 得
+/// SSL_ERROR_SSL 硬失败——与 ZERO_RETURN/SYSCALL 的 EOF 语义分流，
+/// 直接按传输错误收口（区别于截断判定路径）
+TEST(DownloadEngineV2Edges, TlsGarbageRecordFails) {
+    const std::string body = make_body(96 * 1024);
+
+    const std::string dir = temp_dir_for("tlsgarbage");
+    std::filesystem::create_directories(dir);
+    const std::string key_path =
+        (std::filesystem::path(dir) / "key.pem").string();
+    const std::string cert_path =
+        (std::filesystem::path(dir) / "cert.pem").string();
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    ScriptableServer server;
+    ASSERT_TRUE(server.start());
+    ASSERT_TRUE(server.enable_tls(key_path, cert_path));
+    server.script({tls_partial_body_then_garbage_record(
+        "HTTP/1.1 200 OK\r\nContent-Length: " + std::to_string(body.size()) +
+            "\r\nConnection: close\r\n\r\n",
+        body.substr(0, 4096))});
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options = base_options(out_path);
+    options.verify_ssl = false;
+    const TaskId task_id = engine.add_download(
+        "https://localhost:" + std::to_string(server.port()) + "/f.bin",
+        options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    EdgesEngineRunner runner(engine);
+    ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
+    EXPECT_EQ(group->status(), RequestGroupStatus::FAILED)
+        << "协议违规（非法 record）必须按硬失败收口";
+
+    runner.shutdown_and_join();
+    server.stop();
+
+    EXPECT_TRUE(read_file_content(out_path).empty());
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
 /// TLS 多分段：段 1 连接在 TLS 握手前被服务器裸关（无 TLS 字节）→
 /// 握手失败经段失败收口（finish_segment + 组 FAILED）聚合终态；段 0
 /// 的下载命令在体延迟到达后唤醒，观察到组已 FAILED 静默退出，不覆
@@ -1920,6 +2027,51 @@ TEST(DownloadEngineV2Edges, ProxyRstAfterConnectFails) {
 
     runner.shutdown_and_join();
     server.stop();
+
+    EXPECT_TRUE(read_file_content(out_path).empty());
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+/// 代理场景 + 空 authority 目标 URL（http:///empty.bin）：连接阶段只
+/// 解析代理地址（目标 host 延迟），absolute-form 请求行原样发代理；
+/// 代理回 302 + 非绝对 Location → resolve_redirect_location 从请求
+/// URL 提取的 authority 为空 → 解析失败按失败收口（不发起跟随连接）
+TEST(DownloadEngineV2Edges, ProxyRedirectFromEmptyAuthorityUrlFails) {
+    ScriptableServer server;
+    ASSERT_TRUE(server.start());
+    server.script({serve_http(302, "Location: /moved.bin\r\n", "")});
+
+    const std::string dir = temp_dir_for("proxyemptyauth");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options = base_options(out_path);
+    options.proxy = server.proxy_url_for_edges();
+    const TaskId task_id = engine.add_download("http:///empty.bin", options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    EdgesEngineRunner runner(engine);
+    ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
+    EXPECT_EQ(group->status(), RequestGroupStatus::FAILED)
+        << "空 authority 的重定向基准 URL 必须按失败收口";
+
+    runner.shutdown_and_join();
+    server.stop();
+
+    // 恰一次连接（跟随未发起），请求行为 absolute-form 原样透传
+    EXPECT_EQ(server.connection_count(), 1);
+    const auto targets = server.request_targets();
+    ASSERT_EQ(targets.size(), 1u);
+    EXPECT_EQ(targets.front(), "http:///empty.bin");
 
     EXPECT_TRUE(read_file_content(out_path).empty());
 

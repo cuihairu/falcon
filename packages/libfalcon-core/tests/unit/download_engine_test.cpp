@@ -5,8 +5,10 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <thread>
@@ -667,6 +669,112 @@ TEST(DownloadEngineTest, ConcurrentTaskStart) {
     // 验证所有任务都被处理
     auto all_tasks = engine.get_all_tasks();
     EXPECT_GE(all_tasks.size(), 0u);
+}
+
+//==============================================================================
+// 覆盖率批次 T：构造配置消费 / add_task_as_id 防御 / 文件名推导变体 /
+// 输出目录创建失败
+//==============================================================================
+
+// EngineConfig 构造参数生效；global_speed_limit 同时驱动构造期日志的
+// format_bytes 短值路径（500 < 1024 → unit==0 早返回 "500 B"）
+TEST(DownloadEngineTest, ConfiguredConstructorAppliesSpeedLimit) {
+    falcon::EngineConfig cfg;
+    cfg.global_speed_limit = 500;
+    falcon::DownloadEngine engine(cfg);
+
+    EXPECT_EQ(engine.get_global_speed_limit(), falcon::BytesPerSecond{500});
+}
+
+// add_task_as_id 四防御：空 URL / 无 handler 抛异常；id 已被占用返回
+// nullptr；注入大 id 成功后计数器被 CAS 推高（后续自动分配绝不回退）
+TEST(DownloadEngineTest, AddTaskAsIdDefenses) {
+    falcon::DownloadEngine engine;
+    engine.register_handler(std::make_unique<TestProtocolHandler>());
+
+    // 空 URL → InvalidURLException
+    EXPECT_THROW(
+        static_cast<void>(engine.add_task_as_id(1, "", falcon::DownloadOptions{})),
+        falcon::InvalidURLException);
+    // 无 handler 的 URL → UnsupportedProtocolException
+    EXPECT_THROW(static_cast<void>(engine.add_task_as_id(
+                     1, "noscheme", falcon::DownloadOptions{})),
+                 falcon::UnsupportedProtocolException);
+
+    // id 已被占用 → nullptr（不抛异常）
+    auto existing =
+        engine.add_task("test://example.com/file.bin", falcon::DownloadOptions{});
+    ASSERT_NE(existing, nullptr);
+    auto clash = engine.add_task_as_id(
+        existing->id(), "test://example.com/other.bin", falcon::DownloadOptions{});
+    EXPECT_EQ(clash, nullptr);
+
+    // 注入 id=100 成功后，自动分配的下一个 id 必然被推到 100 之上
+    constexpr falcon::TaskId injected_id = 100;
+    auto injected = engine.add_task_as_id(
+        injected_id, "test://example.com/injected.bin", falcon::DownloadOptions{});
+    ASSERT_NE(injected, nullptr);
+    EXPECT_EQ(injected->id(), injected_id);
+
+    auto next = engine.add_task("test://example.com/next.bin", falcon::DownloadOptions{});
+    ASSERT_NE(next, nullptr);
+    EXPECT_GT(next->id(), injected_id);
+}
+
+// 输出文件名三变体：显式文件名 + 无自定义目录时原样使用（不拼目录）；
+// URL 推导剥除 query 串；剥除后为空回退 "download"
+TEST(DownloadEngineTest, OutputFilenameVariants) {
+    falcon::DownloadEngine engine;
+    engine.register_handler(std::make_unique<TestProtocolHandler>());
+
+    {
+        falcon::DownloadOptions options;
+        options.output_filename = "custom.bin";
+        auto task = engine.add_task("test://example.com/path/file.bin", options);
+        ASSERT_NE(task, nullptr);
+        EXPECT_EQ(task->output_path(), "custom.bin");
+    }
+    {
+        auto task = engine.add_task("test://h/pkg.bin?sig=1", falcon::DownloadOptions{});
+        ASSERT_NE(task, nullptr);
+        EXPECT_EQ(task->output_path(), "pkg.bin");
+    }
+    {
+        auto task = engine.add_task("test://h/?q=1", falcon::DownloadOptions{});
+        ASSERT_NE(task, nullptr);
+        EXPECT_EQ(task->output_path(), "download");
+    }
+}
+
+// create_directory=true 时输出目录创建失败 → FileIOException
+// （output_directory 指向普通文件，以其为 parent 的 create_directories 必败）
+TEST(DownloadEngineTest, CreateDirectoryFailureThrows) {
+    static std::atomic<int> seq{0};
+    falcon::DownloadEngine engine;
+    engine.register_handler(std::make_unique<TestProtocolHandler>());
+
+    // 唯一临时目录（并行运行互不干扰），blocker 为普通文件占位
+    const auto dir = std::filesystem::temp_directory_path() /
+                     ("falcon_engine_mkdir_fail_" + std::to_string(seq.fetch_add(1)));
+    std::filesystem::create_directories(dir);
+    const auto blocker = dir / "blocker";
+    {
+        std::ofstream out(blocker);
+        out << "x";
+    }
+    ASSERT_TRUE(std::filesystem::is_regular_file(blocker));
+
+    falcon::DownloadOptions options;
+    options.output_directory = blocker.string();
+    options.output_filename = "out.bin";
+    options.create_directory = true;
+
+    EXPECT_THROW(
+        static_cast<void>(engine.add_task("test://example.com/file.bin", options)),
+        falcon::FileIOException);
+
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
 }
 
 // Disabled: get_statistics not available in DownloadEngine

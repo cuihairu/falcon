@@ -390,8 +390,12 @@ int main(int argc, char* argv[]) {
         };
 
 #ifdef FALCON_HAS_SQLITE3
-        // shutdown() 返回后监听器不再访问 storage，之后可安全析构 task_storage
-        auto stop_persistence = [&task_listener]() { task_listener->shutdown(); };
+        // shutdown() 返回后监听器不再访问 storage，之后可安全析构 task_storage。
+        // 坏库降级路径 task_storage 已 reset，listener 未创建，停机回调必须判空
+        // ——否则空 unique_ptr 裸调 shutdown() 使 daemon 停机挂死/崩溃
+        auto stop_persistence = [&task_listener]() {
+            if (task_listener) task_listener->shutdown();
+        };
 #else
         auto stop_persistence = []() {};
 #endif

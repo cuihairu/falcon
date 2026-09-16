@@ -172,6 +172,16 @@ TEST(ProtocolRegistryTest, GetNonExistentPlugin) {
     EXPECT_EQ(manager.get_handler_for_url("nonexistent://test"), nullptr);
 }
 
+// 空指针注册防御：静默忽略而非解引用崩溃
+TEST(ProtocolRegistryTest, RegisterNullHandlerIsIgnored) {
+    falcon::ProtocolRegistry manager;
+
+    manager.register_handler(nullptr);
+
+    EXPECT_TRUE(manager.supported_protocols().empty());
+    EXPECT_EQ(manager.get_handler("any"), nullptr);
+}
+
 // Note: Unload functionality removed from ProtocolRegistry
 // Handlers are designed to be registered once and remain for the lifetime
 // TEST(ProtocolRegistryTest, UnloadNonExistentHandler) {

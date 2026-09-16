@@ -81,6 +81,20 @@ TEST_F(TaskStorageListenerTest, PausePersists) {
     EXPECT_EQ(record->status, TaskStatus::Paused);
 }
 
+TEST_F(TaskStorageListenerTest, CancelledPersistsAndClearsErrorCache) {
+    auto id = storage_->create_task(make_record(107));
+    ASSERT_NE(id, falcon::INVALID_TASK_ID);
+
+    // 先缓存一条错误消息，Cancelled 分支必须把它清掉（终态无错误语义）
+    listener_->on_error(id, "transient network error");
+    listener_->on_status_changed(id, TaskStatus::Downloading, TaskStatus::Cancelled);
+
+    auto record = storage_->get_task(id);
+    ASSERT_TRUE(record.has_value());
+    EXPECT_EQ(record->status, TaskStatus::Cancelled);
+    EXPECT_TRUE(record->error_message.empty());
+}
+
 TEST_F(TaskStorageListenerTest, CompletedMarksTerminalState) {
     auto id = storage_->create_task(make_record(103));
     ASSERT_NE(id, falcon::INVALID_TASK_ID);

@@ -675,7 +675,13 @@ void DaemonManager::redirect_stdio() {
             if (log_fd >= 0) {
                 dup2(log_fd, STDOUT_FILENO);
                 dup2(log_fd, STDERR_FILENO);
-                close(log_fd);
+                // close(0/1/2) 后新打开的文件恰好落在被关的 fd 上
+                // （/dev/null 得 0，log 得 1）：无条件 close 会误关
+                // STDOUT——daemon 模式下所有 stdout 日志（INFO 及以下）
+                // write(1) 得 EBADF 静默丢弃，log 文件只剩 stderr 输出
+                if (log_fd > STDERR_FILENO) {
+                    close(log_fd);
+                }
             } else {
                 dup2(fd, STDOUT_FILENO);
                 dup2(fd, STDERR_FILENO);

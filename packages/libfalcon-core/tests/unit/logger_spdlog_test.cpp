@@ -128,6 +128,108 @@ TEST_F(LoggerSpdlogTest, FalconLoggerIsNamedFalcon) {
     EXPECT_FALSE(::falcon::falcon_logger()->sinks().empty());
 }
 
+// to_spdlog_level 全枚举往返 + 越界枚举的兜底返回（switch 穿透防御）
+TEST_F(LoggerSpdlogTest, ToSpdlogLevelFullEnumAndInvalidFallback) {
+    EXPECT_EQ(::falcon::to_spdlog_level(::falcon::LogLevel::Off), spdlog::level::off);
+    EXPECT_EQ(::falcon::to_spdlog_level(::falcon::LogLevel::Error), spdlog::level::err);
+    EXPECT_EQ(::falcon::to_spdlog_level(::falcon::LogLevel::Warn), spdlog::level::warn);
+    EXPECT_EQ(::falcon::to_spdlog_level(::falcon::LogLevel::Info), spdlog::level::info);
+    EXPECT_EQ(::falcon::to_spdlog_level(::falcon::LogLevel::Debug), spdlog::level::debug);
+    EXPECT_EQ(::falcon::to_spdlog_level(::falcon::LogLevel::Trace), spdlog::level::trace);
+    // 非法枚举值（内存损坏/反序列化脏数据防御）：default 返回 info
+    EXPECT_EQ(::falcon::to_spdlog_level(static_cast<::falcon::LogLevel>(99)),
+              spdlog::level::info);
+}
+
+// FalconConsoleSink 直接驱动：六个级别 tag + off 兜底 tag 都走真实
+// sink_it_ 输出路径；base_sink::flush() 触发 flush_()（双通道 fflush）
+TEST_F(LoggerSpdlogTest, ConsoleSinkEmitsAllLevelTagsAndFlushes) {
+    auto sink = std::make_shared<::falcon::FalconConsoleSink>();
+    sink->set_level(spdlog::level::trace);
+    spdlog::logger direct("console-direct", sink);
+    direct.set_level(spdlog::level::trace);
+
+    // 覆盖 level_tag 的 trace/critical/off 三个冷门分支
+    // （trace/critical 在 falcon 生产代码中从不使用；off 经显式 log 注入）
+    direct.log(spdlog::level::trace, "tag-trace");
+    direct.log(spdlog::level::debug, "tag-debug");
+    direct.log(spdlog::level::info, "tag-info");
+    direct.log(spdlog::level::warn, "tag-warn");
+    direct.log(spdlog::level::err, "tag-error");
+    direct.log(spdlog::level::critical, "tag-critical");
+    direct.log(spdlog::level::off, "tag-off");
+
+    // 空载荷消息：sink_it_ 的 payload.size() == 0 分支（只输出 tag + 换行）
+    direct.log(spdlog::level::info, "");
+
+    // base_sink::flush() 公开入口 → flush_() override
+    sink->flush();
+    SUCCEED();
+}
+
+// log_* 函数级门禁（不经过 FALCON_LOG_* 宏的快速判断）：
+// 全局级别抬到 Off 后 info/debug/warn/error 四函数在入口提前 return
+TEST_F(LoggerSpdlogTest, LogFunctionsGateBeforeReachingSink) {
+    ::falcon::set_log_level(::falcon::LogLevel::Off);
+    ::falcon::log_info("gated info");
+    ::falcon::log_debug("gated debug");
+    ::falcon::log_warn("gated warn");
+    ::falcon::log_error("gated error");
+    EXPECT_FALSE(sink_contains("gated"));
+
+    // 恢复 Trace 后 FMT 门函数族四链全走（log_infof/debugf/warnf/errorf
+    // → format_log_message → log_* → spdlog）
+    ::falcon::set_log_level(::falcon::LogLevel::Trace);
+    ::falcon::detail::log_infof("infof {} {}", "a", 1);
+    ::falcon::detail::log_debugf("debugf {}", std::string("b"));
+    ::falcon::detail::log_warnf("warnf {}", 2.5);
+    ::falcon::detail::log_errorf("errorf {}", "c");
+    EXPECT_TRUE(sink_contains("infof a 1"));
+    EXPECT_TRUE(sink_contains("debugf b"));
+    EXPECT_TRUE(sink_contains("warnf 2.5"));
+    EXPECT_TRUE(sink_contains("errorf c"));
+}
+
+// format_log_message 分支矩阵（含 to_log_string 各重载）：
+// 零参数/常规替换/占位符过剩/参数过剩/未闭合 '{'/char* 与 null 指针
+TEST(LoggerFormatMessage, CoversAllBranchShapes) {
+    namespace d = ::falcon::detail;
+    using std::string;
+
+    // 零参数：format 原样返回（if constexpr 空参数包分支）
+    EXPECT_EQ(d::format_log_message("plain"), "plain");
+
+    // 常规替换：const char* / std::string / int（三种 to_log_string 路径）
+    EXPECT_EQ(d::format_log_message("a={} b={} c={}", "x", string("y"), 42),
+              "a=x b=y c=42");
+
+    // 占位符多于参数：第二个 {} 无参可用，原样保留
+    EXPECT_EQ(d::format_log_message("{} {}", "only"), "only {}");
+
+    // 参数多于占位符：尾部追加（result 非空时补空格分隔）
+    EXPECT_EQ(d::format_log_message("head", 1, 2), "head 1 2");
+    // 空 format：首个多余参数不加前导空格
+    EXPECT_EQ(d::format_log_message("", 7), "7");
+    // result 尾字符恰为空格：不重复补
+    EXPECT_EQ(d::format_log_message("x ", 7), "x 7");
+
+    // 未闭合 '{'（无 '}'）：按普通字符逐个输出，参数仍走尾部追加
+    EXPECT_EQ(d::format_log_message("a { b", "v"), "a { b v");
+
+    // to_log_string 显式变体：char*（非 const）/ 两个 null 指针形态 /
+    // 数值模板实例 / string 特化
+    char buf[4] = {'c', 'h', 'p', '\0'};
+    char* ptr = buf;
+    EXPECT_EQ(d::to_log_string(ptr), "chp");
+    char* null_ptr = nullptr;
+    EXPECT_EQ(d::to_log_string(null_ptr), "(null)");
+    const char* null_const = nullptr;
+    EXPECT_EQ(d::to_log_string(null_const), "(null)");
+    EXPECT_EQ(d::to_log_string(12345), "12345");
+    EXPECT_EQ(d::to_log_string(string("str")), "str");
+    EXPECT_EQ(d::format_log_message("p={}", ptr), "p=chp");
+}
+
 } // namespace
 
 #else

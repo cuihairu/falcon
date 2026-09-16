@@ -15,6 +15,9 @@
 #include <filesystem>
 #include <fstream>
 #include <cstdio>
+#include <unistd.h>
+
+#include <sqlite3.h>
 
 namespace {
 
@@ -532,5 +535,165 @@ TEST_F(TaskStorageTest, MoveSemantics) {
 }
 
 } // anonymous namespace
+
+// ============================================================================
+// 文件库专属：外部直连篡改/加锁触发的 sqlite 失败路径（内存库无法第二连接）
+// ============================================================================
+
+namespace {
+
+/// 临时文件库目录（进程内唯一名，测完清理）
+class ScopedDbDir {
+public:
+    ScopedDbDir() {
+        path_ = std::filesystem::temp_directory_path() /
+                ("falcon_ts_busy_" + std::to_string(::getpid()) + "_" +
+                 std::to_string(counter_++));
+        std::filesystem::create_directories(path_);
+    }
+    ~ScopedDbDir() {
+        std::error_code ec;
+        std::filesystem::remove_all(path_, ec);
+    }
+    std::filesystem::path db_path() const { return path_ / "tasks.db"; }
+
+private:
+    static inline unsigned long long counter_ = 0;
+    std::filesystem::path path_;
+};
+
+TaskRecord file_test_record() {
+    TaskRecord record;
+    record.url = "https://example.com/file.zip";
+    record.output_path = "/tmp/file.zip";
+    record.status = TaskStatus::Pending;
+    record.total_bytes = 4096;
+    return record;
+}
+
+} // namespace
+
+// 第二连接持 BEGIN EXCLUSIVE 事务：TaskStorage 的每个 CRUD/统计方法在
+// prepare/step 上撞 SQLITE_BUSY，必须走各自的失败返回并记录 last_error
+TEST(TaskStorageFileTest, MethodsFailWhileDbLockedExclusively) {
+    ScopedDbDir dir;
+    TaskStorageConfig config;
+    config.db_path = dir.db_path().string();
+    config.enable_wal_mode = false;
+    config.busy_timeout_ms = 10;  // 锁期间各方法快速失败，不拖慢测试
+    TaskStorage storage(config);
+    ASSERT_TRUE(storage.initialize());
+    const TaskId id = storage.create_task(file_test_record());
+    ASSERT_NE(INVALID_TASK_ID, id);
+
+    sqlite3* locker = nullptr;
+    ASSERT_EQ(SQLITE_OK, sqlite3_open(dir.db_path().string().c_str(), &locker));
+    char* errmsg = nullptr;
+    ASSERT_EQ(SQLITE_OK,
+              sqlite3_exec(locker, "BEGIN EXCLUSIVE;", nullptr, nullptr, &errmsg))
+        << (errmsg ? errmsg : "");
+    sqlite3_free(errmsg);
+
+    const TaskRecord record = file_test_record();
+    EXPECT_EQ(INVALID_TASK_ID, storage.create_task(record));
+    EXPECT_FALSE(storage.get_task(id).has_value());
+    EXPECT_FALSE(storage.update_task(id, record));
+    EXPECT_FALSE(storage.delete_task(id));
+    EXPECT_FALSE(storage.task_exists(id));
+    EXPECT_TRUE(storage.list_tasks().empty());
+    EXPECT_TRUE(storage.get_tasks_by_status(TaskStatus::Pending).empty());
+    EXPECT_TRUE(storage.get_active_tasks().empty());
+    EXPECT_EQ(0, storage.count_tasks_by_status(TaskStatus::Pending));
+    EXPECT_EQ(0, storage.count_all_tasks());
+    EXPECT_FALSE(storage.get_max_task_id().has_value());
+    EXPECT_FALSE(storage.update_progress(id, 1, 0.5, 1));
+    EXPECT_FALSE(storage.update_status(id, TaskStatus::Paused));
+    EXPECT_FALSE(storage.mark_completed(id));
+    EXPECT_FALSE(storage.mark_failed(id, "boom"));
+    EXPECT_FALSE(storage.delete_all_tasks());
+    EXPECT_FALSE(storage.vacuum());
+    EXPECT_EQ(0, storage.cleanup_completed_tasks(7));
+    EXPECT_FALSE(storage.get_last_error().empty());
+
+    sqlite3_close(locker);  // 释放锁后库必须完好可用
+    EXPECT_TRUE(storage.task_exists(id));
+    EXPECT_EQ(1, storage.count_all_tasks());
+}
+
+// 库内 options_json 非法（外部篡改/旧版本残留）：list 读回必须吞掉解析
+// 异常，该行以默认 options 返回而不是向上传播
+TEST(TaskStorageFileTest, ListTasksToleratesMalformedOptionsJson) {
+    ScopedDbDir dir;
+    TaskStorageConfig config;
+    config.db_path = dir.db_path().string();
+    config.enable_wal_mode = false;
+    TaskStorage storage(config);
+    ASSERT_TRUE(storage.initialize());
+    const TaskId id = storage.create_task(file_test_record());
+    ASSERT_NE(INVALID_TASK_ID, id);
+
+    sqlite3* raw = nullptr;
+    ASSERT_EQ(SQLITE_OK, sqlite3_open(dir.db_path().string().c_str(), &raw));
+    char* errmsg = nullptr;
+    ASSERT_EQ(SQLITE_OK,
+              sqlite3_exec(raw, "UPDATE tasks SET options_json = '{bad json';",
+                           nullptr, nullptr, &errmsg))
+        << (errmsg ? errmsg : "");
+    sqlite3_free(errmsg);
+    sqlite3_close(raw);
+
+    const auto tasks = storage.list_tasks();
+    ASSERT_EQ(1u, tasks.size());
+    EXPECT_EQ(id, tasks[0].id);
+    // 解析失败吞掉异常，options 落回默认构造值（而非崩溃/丢行）
+    EXPECT_EQ(falcon::DownloadOptions{}.max_connections,
+              tasks[0].options.max_connections);
+}
+
+// 第二连接 DROP TABLE 后 schema cookie 变化：TaskStorage 连接下次 prepare
+// 强制重读 schema 得 "no such table" —— 覆盖各方法 prepare 失败分支
+TEST(TaskStorageFileTest, AllMethodsFailWhenTableDropped) {
+    ScopedDbDir dir;
+    TaskStorageConfig config;
+    config.db_path = dir.db_path().string();
+    config.enable_wal_mode = false;
+    TaskStorage storage(config);
+    ASSERT_TRUE(storage.initialize());
+    const TaskId id = storage.create_task(file_test_record());
+    ASSERT_NE(INVALID_TASK_ID, id);
+
+    sqlite3* raw = nullptr;
+    ASSERT_EQ(SQLITE_OK, sqlite3_open(dir.db_path().string().c_str(), &raw));
+    char* errmsg = nullptr;
+    ASSERT_EQ(SQLITE_OK,
+              sqlite3_exec(raw, "DROP TABLE tasks;", nullptr, nullptr, &errmsg))
+        << (errmsg ? errmsg : "");
+    sqlite3_free(errmsg);
+    sqlite3_close(raw);
+
+    const TaskRecord record = file_test_record();
+    // 首条语句的 prepare_v2 会吞掉一次 SQLITE_SCHEMA 自动重编并走 step
+    // 失败收口，因此先用一条查询让 schema cache 失效落到文件真身，
+    // 其后 create/get 才能命中各自的 prepare 失败分支
+    EXPECT_FALSE(storage.task_exists(id));
+    EXPECT_FALSE(storage.get_task(id).has_value());
+    EXPECT_EQ(INVALID_TASK_ID, storage.create_task(record));
+    EXPECT_FALSE(storage.update_task(id, record));
+    EXPECT_FALSE(storage.delete_task(id));
+    EXPECT_FALSE(storage.task_exists(id));
+    EXPECT_TRUE(storage.list_tasks().empty());
+    EXPECT_TRUE(storage.get_tasks_by_status(TaskStatus::Pending).empty());
+    EXPECT_TRUE(storage.get_active_tasks().empty());
+    EXPECT_EQ(0, storage.count_tasks_by_status(TaskStatus::Pending));
+    EXPECT_EQ(0, storage.count_all_tasks());
+    EXPECT_FALSE(storage.get_max_task_id().has_value());
+    EXPECT_FALSE(storage.update_progress(id, 1, 0.5, 1));
+    EXPECT_FALSE(storage.update_status(id, TaskStatus::Paused));
+    EXPECT_FALSE(storage.mark_completed(id));
+    EXPECT_FALSE(storage.mark_failed(id, "boom"));
+    EXPECT_EQ(0, storage.cleanup_completed_tasks(7));
+    // vacuum 不引用 tasks 表，schema 损坏下仍可成功——不在此例断言
+    EXPECT_NE(std::string::npos, storage.get_last_error().find("no such table"));
+}
 
 #endif // FALCON_HAS_SQLITE3

@@ -30,6 +30,10 @@
 #include <optional>
 #include <poll.h>
 #include <sstream>
+
+#ifdef FALCON_HAS_SQLITE3
+#include <sqlite3.h>
+#endif
 #include <string>
 #include <thread>
 #include <vector>
@@ -84,6 +88,17 @@ bool wait_until(Pred pred, int timeout_ms = kStartTimeoutMs) {
 
 bool contains(const std::string& haystack, const std::string& needle) {
     return haystack.find(needle) != std::string::npos;
+}
+
+int count_occurrences(const std::string& haystack, const std::string& needle) {
+    if (needle.empty()) return 0;
+    int count = 0;
+    std::size_t pos = 0;
+    while ((pos = haystack.find(needle, pos)) != std::string::npos) {
+        ++count;
+        pos += needle.size();
+    }
+    return count;
 }
 
 bool daemon_binary_available() {
@@ -1203,6 +1218,350 @@ TEST_F(MainIntegrationTest, HttpEngineV2PauseRestartResumeCompletes) {
     EXPECT_EQ(read_file_bytes(final_path), payload);
     EXPECT_FALSE(file_exists(final_path + ".falcon.tmp"));
     EXPECT_FALSE(file_exists(final_path + ".falcon.ctrl"));
+}
+
+// ===========================================================================
+// 覆盖率批次 T：main.cpp 启动/重载/恢复边界（真实二进制 E2E）
+// ===========================================================================
+
+// 非法 --http-engine 值：报错退出（不会静默回落 v1）
+TEST_F(MainIntegrationTest, HttpEngineInvalidValueExitsOne) {
+    auto r = run_wait({"--no-conf", "--enable-rpc=false", "--http-engine", "v3"}, 15000);
+    ASSERT_FALSE(r.timed_out) << r.out << r.err;
+    EXPECT_EQ(r.exit_code, 1);
+    EXPECT_NE(r.err.find("expected \"v1\" or \"v2\""), std::string::npos) << r.err;
+}
+
+// 配置文件的 max_overall_speed_limit 在启动时应用到引擎
+TEST_F(MainIntegrationTest, DownloadSpeedLimitAppliedAtStartup) {
+    TempDirGuard tmp(make_temp_dir());
+    const std::string conf = tmp.path + "/daemon.json";
+    const uint16_t port = pick_free_port();
+    ASSERT_NE(port, 0);
+    {
+        std::ofstream out(conf);
+        out << "{\"rpc\":{\"enabled\":true,\"host\":\"127.0.0.1\",\"port\":" << port
+            << ",\"secret\":\"spd-token\"},"
+            << "\"download\":{\"max_overall_speed_limit\":2048}}";
+    }
+
+    Proc p;
+    ASSERT_TRUE(proc_start(p, {"--conf-path", conf}, ""));
+    ASSERT_TRUE(wait_until([&] {
+        poll_drain(p, 20);
+        return tcp_connect(port);
+    }, 8000));
+
+    const auto resp = http_post(port, make_rpc_body(
+        "aria2.getGlobalOption", "[\"token:spd-token\"]"));
+    ASSERT_TRUE(resp.has_value());
+    EXPECT_TRUE(contains(http_body(*resp), "\"max-overall-download-limit\":\"2048\""))
+        << *resp;
+
+    proc_signal(p, SIGTERM);
+    EXPECT_TRUE(proc_finish(p, 8000));
+    EXPECT_EQ(exit_code_of(p), 0);
+}
+
+// SIGHUP 热更 max_overall_speed_limit（引擎 setter 运行时可调项）
+TEST_F(MainIntegrationTest, SighupSpeedLimitHotReload) {
+    TempDirGuard tmp(make_temp_dir());
+    const std::string conf = tmp.path + "/daemon.json";
+    const uint16_t port = pick_free_port();
+    ASSERT_NE(port, 0);
+    const auto write_conf = [&](int limit) {
+        std::ofstream out(conf);
+        out << "{\"rpc\":{\"enabled\":true,\"host\":\"127.0.0.1\",\"port\":" << port
+            << ",\"secret\":\"spd-reload\"},"
+            << "\"download\":{\"max_overall_speed_limit\":" << limit << "}}";
+    };
+    write_conf(1024);
+
+    Proc p;
+    ASSERT_TRUE(proc_start(p, {"--conf-path", conf}, ""));
+    ASSERT_TRUE(wait_until([&] {
+        poll_drain(p, 20);
+        return tcp_connect(port);
+    }, 8000));
+
+    write_conf(4096);
+    ASSERT_EQ(::kill(p.pid, SIGHUP), 0);
+    bool applied = false;
+    for (int i = 0; i < 250 && !applied; ++i) {
+        poll_drain(p, 20);
+        const auto probe = http_post(port, make_rpc_body(
+            "aria2.getGlobalOption", "[\"token:spd-reload\"]"));
+        applied = probe.has_value() &&
+                  contains(http_body(*probe), "\"max-overall-download-limit\":\"4096\"");
+        if (!applied) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    EXPECT_TRUE(applied) << "speed limit never updated after SIGHUP";
+
+    proc_signal(p, SIGTERM);
+    EXPECT_TRUE(proc_finish(p, 8000));
+    EXPECT_EQ(exit_code_of(p), 0);
+}
+
+// task db 损坏（非 SQLite 文件）：daemon 降级为无持久化继续服务，而非退出
+TEST_F(MainIntegrationTest, TaskStorageCorruptDbDegradesGracefully) {
+    TempDirGuard tmp(make_temp_dir());
+    const std::string db = tmp.path + "/tasks.db";
+    {
+        std::ofstream out(db, std::ios::binary);
+        out << std::string(256, '\x7f');
+    }
+    const uint16_t port = pick_free_port();
+    ASSERT_NE(port, 0);
+
+    Proc p;
+    ASSERT_TRUE(proc_start(p, {"--no-conf", "--enable-rpc",
+                              "--rpc-listen-port", std::to_string(port),
+                              "--task-db", db},
+                           ""));
+    ASSERT_TRUE(wait_until([&] {
+        poll_drain(p, 20);
+        return tcp_connect(port);
+    }, 8000));
+
+    // RPC 照常服务（无持久化，不影响查询方法）
+    const auto resp = http_post(port, make_rpc_body("aria2.getVersion", "[]"));
+    ASSERT_TRUE(resp.has_value()) << "daemon unusable after storage failure";
+    EXPECT_TRUE(contains(http_body(*resp), "0.1.0")) << *resp;
+
+    proc_signal(p, SIGTERM);
+    EXPECT_TRUE(proc_finish(p, 8000));
+    poll_drain(p, 200);
+    EXPECT_EQ(exit_code_of(p), 0);
+    EXPECT_NE(p.err.find("Failed to initialize task storage"), std::string::npos)
+        << p.err;
+}
+
+// 直连 task db 预置一条 Downloading 记录（模拟上次运行被 kill -9）：
+// 重启恢复循环必须对活动状态任务自动 start_task
+#ifdef FALCON_HAS_SQLITE3
+TEST_F(MainIntegrationTest, RestoreDownloadingTaskAutoStarts) {
+    TempDirGuard tmp(make_temp_dir());
+    const std::string db = tmp.path + "/tasks.db";
+    const uint16_t port = pick_free_port();
+    ASSERT_NE(port, 0);
+
+    // 先用一个短命进程建库（含表结构）：RPC 端口就绪即证明 initialize
+    // 已完成建表，随后优雅停机（exit 0，无残留 journal）
+    {
+        const uint16_t seed_port = pick_free_port();
+        ASSERT_NE(seed_port, 0);
+        Proc seeder;
+        ASSERT_TRUE(proc_start(seeder, {"--no-conf", "--enable-rpc",
+                                        "--rpc-listen-port", std::to_string(seed_port),
+                                        "--task-db", db},
+                               ""));
+        ASSERT_TRUE(wait_until([&] {
+            poll_drain(seeder, 20);
+            return tcp_connect(seed_port);
+        }, 8000));
+        proc_signal(seeder, SIGTERM);
+        EXPECT_TRUE(proc_finish(seeder, 8000));
+    }
+    {
+        sqlite3* raw = nullptr;
+        ASSERT_EQ(sqlite3_open(db.c_str(), &raw), SQLITE_OK);
+        char* err = nullptr;
+        const long long now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::system_clock::now().time_since_epoch())
+                                   .count();
+        const std::string sql =
+            "INSERT INTO tasks (id, url, output_path, status, progress,"
+            " total_bytes, downloaded_bytes, speed, error_message,"
+            " options_json, created_at, updated_at)"
+            " VALUES (7, 'http://127.0.0.1:9/killed-mid-download.bin',"
+            " '" + tmp.path + "/killed-mid-download.bin', 2, 0.1,"
+            " 1024, 100, 0, NULL, '{}', " +
+            std::to_string(now) + ", " + std::to_string(now) + ");";
+        const int rc = sqlite3_exec(raw, sql.c_str(), nullptr, nullptr, &err);
+        const std::string exec_err = err ? err : "";
+        sqlite3_free(err);
+        sqlite3_close(raw);
+        ASSERT_EQ(rc, SQLITE_OK) << exec_err;
+    }
+
+    Proc p;
+    ASSERT_TRUE(proc_start(p, {"--no-conf", "--enable-rpc",
+                              "--rpc-listen-port", std::to_string(port),
+                              "--task-db", db},
+                           ""));
+    ASSERT_TRUE(wait_until([&] {
+        poll_drain(p, 20);
+        return tcp_connect(port);
+    }, 8000));
+
+    // 恢复记录可见（引擎优先，storage 回落兜底）
+    const auto resp = http_post(port, make_rpc_body(
+        "aria2.tellStatus", "[\"0000000000000007\"]"));
+    ASSERT_TRUE(resp.has_value()) << *resp;
+    EXPECT_TRUE(contains(http_body(*resp), "killed-mid-download")) << *resp;
+
+    poll_drain(p, 300);
+    // INFO 日志走 stdout（logger 约定：WARN 及以上才进 stderr）
+    EXPECT_NE(p.out.find("Restored task"), std::string::npos) << p.out;
+
+    proc_signal(p, SIGTERM);
+    EXPECT_TRUE(proc_finish(p, 8000));
+    EXPECT_EQ(exit_code_of(p), 0);
+}
+#endif  // FALCON_HAS_SQLITE3
+
+// SIGHUP 改不可热更项（监听/引擎开关/task db/守护化）逐项告警
+// "restart required"；未知节告警进 warnings 循环
+TEST_F(MainIntegrationTest, SighupRestartRequiredAndUnknownKeyWarnings) {
+    TempDirGuard tmp(make_temp_dir());
+    const std::string conf = tmp.path + "/daemon.json";
+    const std::string db = tmp.path + "/tasks.db";
+    const uint16_t port = pick_free_port();
+    ASSERT_NE(port, 0);
+
+    {
+        std::ofstream out(conf);
+        out << "{\"rpc\":{\"enabled\":true,\"host\":\"127.0.0.1\",\"port\":" << port
+            << ",\"secret\":\"rr-token\"},"
+            << "\"storage\":{\"task_db_path\":\"" << db << "\"},"
+            << "\"download\":{\"http_engine\":\"v1\"}}";
+    }
+
+    Proc p;
+    ASSERT_TRUE(proc_start(p, {"--conf-path", conf}, ""));
+    ASSERT_TRUE(wait_until([&] {
+        poll_drain(p, 20);
+        return tcp_connect(port);
+    }, 8000));
+
+    // 四项不可热更 + 未知节一把改
+    {
+        std::ofstream out(conf);
+        out << "{\"rpc\":{\"enabled\":true,\"host\":\"127.0.0.1\",\"port\":" << (port + 1)
+            << ",\"secret\":\"rr-token\"},"
+            << "\"storage\":{\"task_db_path\":\"" << tmp.path << "/moved.db\"},"
+            << "\"download\":{\"http_engine\":\"v2\"},"
+            << "\"daemon\":{\"pid_file\":\"" << tmp.path << "/other.pid\"},"
+            << "\"whatever\":{\"x\":1}}";
+    }
+    ASSERT_EQ(::kill(p.pid, SIGHUP), 0);
+
+    bool saw_all = false;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!saw_all && std::chrono::steady_clock::now() < deadline) {
+        poll_drain(p, 100);
+        const int n_restart = count_occurrences(p.err, "restart required");
+        saw_all = n_restart >= 4 &&
+                  contains(p.err, "unknown config section");
+        if (!saw_all) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    EXPECT_TRUE(saw_all) << "stderr: " << p.err;
+
+    // 监听未变（仅告警）：原端口继续服务
+    const auto resp = http_post(port, make_rpc_body(
+        "aria2.getVersion", "[\"token:rr-token\"]"));
+    ASSERT_TRUE(resp.has_value());
+    EXPECT_TRUE(contains(http_body(*resp), "0.1.0")) << *resp;
+
+    proc_signal(p, SIGTERM);
+    EXPECT_TRUE(proc_finish(p, 8000));
+    EXPECT_EQ(exit_code_of(p), 0);
+}
+
+// --daemon 不带 --pid-file：默认 pid 路径（/tmp/falcon-daemon.pid）被采用，
+// 但 create_pid_file 未置位——守护化不落 pid 文件，daemon 仍正常运行。
+// 孙进程 PID 无人转发（无 pid 文件可读），从 log 文件的启动行提取
+// （"Daemon started successfully (PID: N)"；logger 每条消息立即 flush，
+// 孙进程启动后毫秒级可见）。该行出现在 stdout 上，同时回归
+// redirect_stdio 的 fd 顺序缺陷：旧实现 close(0/1/2) 后打开的 log 文件
+// 恰好落在 STDOUT_FILENO 上，末尾无条件 close(log_fd) 把 stdout 关掉
+// ——daemon 模式下所有 INFO 日志 write(1) 得 EBADF 静默丢弃，log 文件
+// 只剩 stderr（WARN+）输出、启动正常时恒为空
+TEST_F(MainIntegrationTest, DaemonModeDefaultPidFileUsed) {
+    TempDirGuard tmp(make_temp_dir());
+    const std::string log_file = tmp.path + "/default-pid-daemon.log";
+
+    Proc p;
+    ASSERT_TRUE(proc_start(p, {"--no-conf",
+                              "--daemon",
+                              "--working-dir", tmp.path,
+                              "--log-file", log_file,
+                              "--task-db", tmp.path + "/tasks.db",
+                              "--enable-rpc=false"},
+                           ""));
+
+    // 直接子进程 daemonize 后 _exit(0)
+    EXPECT_TRUE(proc_finish(p, 8000));
+    EXPECT_EQ(exit_code_of(p), 0);
+
+    // 孙进程的启动行落盘后提取 PID
+    const std::string pid_marker = "Daemon started successfully (PID: ";
+    pid_t daemon_pid = -1;
+    ASSERT_TRUE(wait_until([&] {
+        const std::string log = read_file_bytes(log_file);
+        const auto pos = log.find(pid_marker);
+        if (pos == std::string::npos) return false;
+        daemon_pid = static_cast<pid_t>(
+            std::atoi(log.c_str() + pos + pid_marker.size()));
+        return daemon_pid > 0;
+    }, 8000)) << "startup line never appeared in log file";
+    EXPECT_NE(daemon_pid, ::getpid());
+    EXPECT_NE(daemon_pid, p.pid);
+    EXPECT_EQ(::kill(daemon_pid, 0), 0);
+
+    // 正常停机（孙进程孤儿化由 init 收割，轮询 ESRCH）
+    EXPECT_EQ(::kill(daemon_pid, SIGTERM), 0);
+    const auto gone = wait_until([&] {
+        return ::kill(daemon_pid, 0) != 0 && errno == ESRCH;
+    }, 10000);
+    EXPECT_TRUE(gone) << "default-pid daemon did not exit after SIGTERM";
+
+    // 停机收尾日志同样进 log 文件（stdout/stderr 双通道核对）
+    const std::string log = read_file_bytes(log_file);
+    EXPECT_TRUE(contains(log, pid_marker +
+                                  std::to_string(static_cast<long>(daemon_pid)) + ")"))
+        << log;
+}
+
+// 传输中的活动任务收到 SIGTERM：停机排水循环（pause_all 后的轮询）参与
+// 收尾，进程仍干净退出 exit 0
+TEST_F(MainIntegrationTest, ShutdownDrainsActiveDownloadTask) {
+    const std::string payload = make_payload(2 * 1024 * 1024);
+    RangeFileServer server("/drain.bin", payload, 20);  // 慢发留出停机窗口
+    ASSERT_TRUE(server.start());
+
+    TempDirGuard tmp(make_temp_dir());
+    const std::string db = tmp.path + "/tasks.db";
+    const uint16_t port = pick_free_port();
+    ASSERT_NE(port, 0);
+
+    Proc p;
+    ASSERT_TRUE(proc_start(p, {"--no-conf", "--enable-rpc",
+                              "--rpc-listen-port", std::to_string(port),
+                              "--task-db", db},
+                           ""));
+    ASSERT_TRUE(wait_until([&] {
+        poll_drain(p, 20);
+        return tcp_connect(port);
+    }, 8000));
+
+    const std::string params =
+        "[[\"" + server.url() + "\"],{\"dir\":\"" + tmp.path + "\"}]";
+    const auto add = http_post(port, make_rpc_body("aria2.addUri", params));
+    ASSERT_TRUE(add.has_value()) << "no addUri response";
+    const std::string gid = json_string_field(http_body(*add), "result");
+    ASSERT_FALSE(gid.empty()) << *add;
+
+    // 等下载真正进行中（进度 > 0）再停机
+    ASSERT_TRUE(wait_until([&] {
+        const auto st = http_post(port,
+            make_rpc_body("aria2.tellStatus", "[\"" + gid + "\"]"));
+        return st && contains(http_body(*st), "\"status\":\"active\"");
+    }, 10000)) << "task never became active";
+
+    proc_signal(p, SIGTERM);
+    EXPECT_TRUE(proc_finish(p, 15000)) << "shutdown hung with active task";
+    EXPECT_EQ(exit_code_of(p), 0) << p.err;
 }
 
 } // namespace

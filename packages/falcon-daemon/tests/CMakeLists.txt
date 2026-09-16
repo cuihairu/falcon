@@ -204,6 +204,12 @@ if(NOT WIN32)
             Threads::Threads
     )
 
+    # 直连 task db 预置恢复记录的用例需要 sqlite3（缺失时该用例跳过）
+    if(SQLite3_FOUND)
+        target_link_libraries(falcon_daemon_main_tests PRIVATE SQLite::SQLite3)
+        target_compile_definitions(falcon_daemon_main_tests PRIVATE FALCON_HAS_SQLITE3)
+    endif()
+
     target_compile_features(falcon_daemon_main_tests PRIVATE cxx_std_17)
 
     target_compile_definitions(falcon_daemon_main_tests PRIVATE

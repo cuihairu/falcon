@@ -2,6 +2,63 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-16 - 覆盖率批次 T+U：行 82.7% → 94.9%（daemon 启动/停机边界 + 四库冷门残矿 + V2 适配器收口）+ redirect_stdio fd 顺序缺陷修复
+- **49 新用例，cov 全量 ctest 2096 清单 100% 通过（exit 0 零失败）
+  + ASan protocols 736 零告警**：
+  - daemon main_integration 8（非法 --http-engine 报错退出、限速启动
+    生效 + SIGHUP 热更、坏 task db 降级继续服务不退出、直连 db 预置
+    Downloading 记录重启自动 start、SIGHUP 不可热更项 4×"restart
+    required" + 未知节告警、--daemon 默认 pid 路径不落盘（从 log 文件
+    启动行提取孙进程 PID）、传输中 SIGTERM 排水干净退出）；rpc
+    client 6 + coverage 1 + storage 1 + listener 1 + task_storage 3 +
+    ws 帧边界 2
+  - core 9：download_engine 4（构造器限速生效、add_task_as_id 冲突
+    防御、输出名变体、建目录失败抛异常）；protocol_registry 1（null
+    handler 注册忽略）；logger_spdlog 4（to_spdlog_level 全枚举 + 非法
+    兜底、FalconConsoleSink 六级别 tag 直驱 + flush 双通道、log_*
+    函数级门禁 + FMT 四链、format_log_message 分支矩阵含 null 指针
+    双形态与未闭合 '{'）
+  - drives config_manager 10（无主密码初始化拒绝、库独占锁下读写
+    失败、删表/改视图后全方法失败、重名 update、坏 extra JSON 容
+    错、导入非 JSON 明文拒绝、非 string extra 值容错）
+  - storage 三 browser mock 各 1（kodo stat 坏 JSON 容错、s3 配额坏
+    JSON 容错、upyun 非数字 size 判目录）
+  - protocols 5：v2_http_adapter 3 参数化（HEAD 放行 GET 404 的组错
+    误传播、同引擎 PAUSED 组 resume 续跑、引擎侧 pause_all 的 V1 状
+    态对齐——V1 参数化侧设计内 skip）；http_commands_edges 2（**TLS
+    垃圾 record 硬失败**——服务器 SSL_free 后在原始 socket 裸发未知
+    record 类型，客户端 SSL_read 得 SSL_ERROR_SSL 协议违规路径，与
+    ZERO_RETURN/SYSCALL 的 EOF 语义分流；**代理空 authority 重定向
+    失败**——`http:///x` 经 absolute-form 原样透传代理，302 非绝对
+    Location 的基准 URL 提取空 authority 按失败收口，恰 1 次连接 +
+    请求行透传断言）
+- **两个生产缺陷修复（daemon）**：① redirect_stdio 的 fd 顺序缺陷——
+  close(0/1/2) 后打开的 log 文件恰好落在 STDOUT_FILENO 上，末尾无条
+  件 close(log_fd) 把 stdout 关掉，daemon 模式全部 INFO 日志 write(1)
+  得 EBADF 静默丢弃（log 文件只剩 stderr 输出）；补 `log_fd >
+  STDERR_FILENO` 守卫，DaemonModeDefaultPidFileUsed 从 log 提取 PID
+  的断言同时回归此缺陷。② stop_persistence 判空——坏库降级路径
+  task_listener 未创建，停机回调裸调 shutdown() 即崩溃
+- **三个测量级定性发现（http_commands.cpp 调用图铁证）**：①
+  write_to_segment 越界丢弃分支（2314-2318）**结构不可达**——
+  check_completion 在 receive_data 循环内每次写入后同轮判定收满即
+  return OK，write_to_segment 永远不会在 downloaded ≥ length 时被进
+  入（防御代码）；② SSL_write 失败分支（1090-1097）**时序不可达**——
+  execute 的 TLS_HANDSHAKING case 握手完成同轮 fallthrough 立即发
+  送，客户端 SSL_connect 完成（收到服务器 Finished）后 SSL_write
+  先于服务器的 RST 到达网络；③ verify_ssl 失败在握手层先拒，
+  833-840 的 post-handshake 检查永不到达
+- **98% 行覆盖结构性不可达的定量分解**（官方 gcovr 口径 16561 行 →
+  98% 预算 miss ≤331，实际 miss 841）：header 实例水分 212 行
+  （csv/print-summary 把每个 TU 的 header 实例行拼接计数，logger.hpp
+  127 + thread_pool.hpp 31 + 其余小头——测试 TU 被排除、未测 TU 的
+  内联展开必然 miss）+ 历史批次逐一定性不可测 .cpp ≈630 行
+  （curl/sqlite/EVP OOM 注入防御、Windows 平台分支、gcc 行归属伪
+  影、时序竞态窗口、同轮短路结构不可达、接口零调用方），212+630≈841
+  与实测自洽
+- **全包覆盖率（批次 C 同款 gcovr 口径）：行 94.9% / 函数 98.6% /
+  分支 53.7%**（批次 S 82.7/96.7/46.1，涨幅 +12.2/+1.9/+7.6）
+
 ### 2026-09-15 - 覆盖率批次 S：config 13→0 + event_dispatcher 20→0 + resume_control 16→2 + password_manager 16→2 + event_poll 3 行收敛（六小文件 64 行真矿清账）
 - **31 新用例三树绿**（cov 全量 ctest **2043 清单 100% 通过零抖动**
   + ASan 三套件 421/734/27 零告警）：daemon config 10（非 rpc 节

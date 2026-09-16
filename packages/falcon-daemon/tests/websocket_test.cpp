@@ -560,6 +560,36 @@ TEST(WsProtocolTest, FrameParserRejectsOrphanContinuation) {
     EXPECT_TRUE(parser.error());
 }
 
+TEST(WsProtocolTest, EncodeFrameUses64BitExtendedLength) {
+    // payload ≥ 65536：长度走 127 + 8 字节大端（服务端帧，不掩码）
+    const std::string payload(70000, 'x');
+    const std::string frame =
+        falcon::daemon::rpc::ws_encode_frame(falcon::daemon::rpc::WS_OP_BINARY,
+                                             payload);
+    ASSERT_GE(frame.size(), 10u);
+    EXPECT_EQ(0x82u, static_cast<unsigned char>(frame[0]));  // FIN|binary
+    EXPECT_EQ(127u, static_cast<unsigned char>(frame[1]));
+    std::uint64_t n = 0;
+    for (int i = 0; i < 8; ++i) {
+        n = (n << 8) | static_cast<unsigned char>(frame[2 + i]);
+    }
+    EXPECT_EQ(payload.size(), n);
+    EXPECT_EQ(0u, frame.compare(10, payload.size(), payload));
+}
+
+TEST(WsProtocolTest, FrameParserRejectsNewDataDuringFragmentation) {
+    WsFrameParser parser;
+    // 未结束的 text 分片后直接出现新数据帧（而非 continuation）：协议违规
+    const std::string part = raw_server_frame(0, WS_OP_TEXT, false, "Hel");
+    parser.feed(part.data(), part.size());
+    EXPECT_FALSE(parser.error());
+
+    const std::string rogue = raw_server_frame(1, WS_OP_TEXT, false, "new");
+    parser.feed(rogue.data(), rogue.size());
+    EXPECT_TRUE(parser.error());
+    EXPECT_TRUE(parser.pop_messages().empty());
+}
+
 // ============================================================================
 // 回环集成测试
 // ============================================================================

@@ -235,6 +235,25 @@ TEST(KodoBrowserMockTest, GetResourceInfoParsesStatResponse) {
     EXPECT_EQ(info.mime_type, "text/markdown");
 }
 
+TEST(KodoBrowserMockTest, GetResourceInfoToleratesMalformedStatJson) {
+    auto server = make_server([](const std::string& method, const std::string& path) {
+        if (method == "GET" && path.rfind("/stat/", 0) == 0) {
+            // 200 + 非法 JSON：解析异常必须被吞掉，信息字段保持默认
+            return MockServer::Response{200, "<<not-json>>"};
+        }
+        return MockServer::Response{200, "{}"};
+    });
+    ASSERT_NE(server, nullptr);
+
+    KodoBrowser browser;
+    ASSERT_TRUE(connect_kodo(browser, server->base_url()));
+
+    auto info = browser.get_resource_info("docs/readme.md");
+    EXPECT_EQ(info.name, "readme.md");
+    EXPECT_EQ(info.size, 0u);
+    EXPECT_TRUE(info.etag.empty());
+}
+
 TEST(KodoBrowserMockTest, ExistsFollowsStatResult) {
     auto server = make_server([](const std::string& method, const std::string&) {
         return method == "GET" ? MockServer::Response{200, "{}"}

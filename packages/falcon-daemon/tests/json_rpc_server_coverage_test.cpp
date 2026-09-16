@@ -1565,4 +1565,24 @@ TEST_F(JsonRpcCoverageTest, TruncatedRequestHeadersCloseConnection) {
     EXPECT_TRUE(resp->empty());
 }
 
+TEST_F(JsonRpcCoverageTest, UpdateAuthRotatesSecretAtRuntime) {
+    start_server();
+    // 初始无 secret：匿名请求可用
+    EXPECT_TRUE(call("aria2.getGlobalStat", json::array()).contains("result"));
+
+    // 运行时轮换（SIGHUP 热更的编程入口）
+    server_->update_auth("rotated-secret", true);
+
+    auto denied = call("aria2.getGlobalStat", json::array());
+    ASSERT_TRUE(denied.contains("error")) << denied.dump();
+    EXPECT_EQ(denied["error"]["code"], -32001) << denied.dump();
+
+    json with_token = {{"jsonrpc", "2.0"},
+                       {"id", 1},
+                       {"method", "aria2.getGlobalStat"},
+                       {"params", json::array({"token:rotated-secret"})}};
+    auto ok = roundtrip(with_token);
+    EXPECT_TRUE(ok.contains("result")) << ok.dump();
+}
+
 } // namespace

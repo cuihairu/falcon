@@ -138,6 +138,27 @@ TEST(UpyunBrowserMockTest, ListDirectoryParsesTextLines) {
     EXPECT_TRUE(has_request(server->requests(), "GET", "/docs/"));
 }
 
+TEST(UpyunBrowserMockTest, ListDirectoryTreatsNonNumericSizeAsDirectory) {
+    // 又拍真实语义：目录行的 size 列可为 "N"——stoull 抛异常须落入
+    // 「视为目录」分支而非向上传播
+    auto server = make_server([](const std::string& method, const std::string& path) {
+        if (method == "GET" && path == "/docs/") {
+            return MockServer::Response{200, "sub\tN\tN\t1700000001\n"};
+        }
+        return MockServer::Response{200, ""};
+    });
+    ASSERT_NE(server, nullptr);
+
+    UpyunBrowser browser;
+    ASSERT_TRUE(connect_upyun(browser, server->base_url()));
+
+    auto resources = browser.list_directory("docs/", ListOptions{});
+    ASSERT_EQ(resources.size(), 1u);
+    EXPECT_EQ(resources[0].name, "sub");
+    EXPECT_TRUE(resources[0].is_directory());
+    EXPECT_EQ(resources[0].size, 0u);
+}
+
 TEST(UpyunBrowserMockTest, ListRecursiveDescendsIntoSubdirectories) {
     auto server = make_server([](const std::string& method, const std::string& path) {
         if (method == "GET" && path == "/docs/") {
