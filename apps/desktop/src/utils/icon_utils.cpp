@@ -11,6 +11,7 @@
 
 #include <QApplication>
 #include <QFile>
+#include <QIconEngine>
 #include <QPainter>
 #include <QPixmapCache>
 #include <QSvgRenderer>

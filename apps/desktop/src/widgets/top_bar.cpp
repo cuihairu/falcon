@@ -7,10 +7,11 @@
 
 #include "top_bar.hpp"
 
-#include "icon_utils.hpp"
+#include "../utils/icon_utils.hpp"
 
 #include <QHBoxLayout>
 #include <QMouseEvent>
+#include <QWindow>
 
 namespace falcon::desktop {
 

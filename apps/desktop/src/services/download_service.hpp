@@ -68,6 +68,10 @@ public:
     void apply_global_settings(std::size_t max_concurrent_tasks,
                                std::size_t global_speed_limit_bytes);
 
+    /// 请求立即刷一轮快照（顶栏手动刷新）。线程安全；worker 忙碌时
+    /// 只置位，由下一轮循环消化（天然合并）。
+    void request_refresh();
+
 signals:
     /// 每轮轮询推送全量任务快照（GUI 线程接收）
     void tasks_refreshed(const std::vector<falcon::daemon::rpc::TaskSnapshot>& tasks);
@@ -83,9 +87,7 @@ signals:
 private:
     void enqueue(std::function<void()>&& job);
     void notify_worker();
-    /// 后端事件回调（daemon 通知到达）：请求立即刷一轮快照。
-    /// 线程安全；worker 忙碌时只置位，由下一轮循环消化（天然合并）。
-    void request_refresh();
+    /// 后端事件回调（daemon 通知到达）走 request_refresh()
     void worker_loop();
     /// 与上一轮快照对比，发出完成/失败事件
     void publish_transitions(const std::vector<falcon::daemon::rpc::TaskSnapshot>& tasks);

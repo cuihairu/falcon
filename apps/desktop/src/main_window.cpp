@@ -26,6 +26,7 @@
 #include <QApplication>
 #include <QEvent>
 #include <QMouseEvent>
+#include <QWindow>
 #include <QDir>
 #include <QDesktopServices>
 #include <QFileInfo>

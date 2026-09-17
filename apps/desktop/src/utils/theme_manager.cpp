@@ -13,6 +13,7 @@
 #include <QApplication>
 #include <QFile>
 #include <QPalette>
+#include <QStyle>
 #include <QStyleFactory>
 
 namespace falcon::desktop {
