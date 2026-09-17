@@ -278,14 +278,17 @@ private:
     }
 
     static void set_socket_timeout(int conn, int seconds) {
+#ifdef _WIN32
+        // Winsock 的 SO_RCVTIMEO/SO_SNDTIMEO 取 DWORD 毫秒而非 timeval
+        // （传 timeval 会被按前 4 字节解读为 N 毫秒，兜底超时形同虚设）
+        const DWORD ms = static_cast<DWORD>(seconds) * 1000u;
+        (void)setsockopt(conn, SOL_SOCKET, SO_RCVTIMEO,
+                         reinterpret_cast<const char*>(&ms), sizeof(ms));
+        (void)setsockopt(conn, SOL_SOCKET, SO_SNDTIMEO,
+                         reinterpret_cast<const char*>(&ms), sizeof(ms));
+#else
         timeval tv{};
         tv.tv_sec = seconds;
-#ifdef _WIN32
-        (void)setsockopt(conn, SOL_SOCKET, SO_RCVTIMEO,
-                         reinterpret_cast<const char*>(&tv), sizeof(tv));
-        (void)setsockopt(conn, SOL_SOCKET, SO_SNDTIMEO,
-                         reinterpret_cast<const char*>(&tv), sizeof(tv));
-#else
         (void)setsockopt(conn, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
         (void)setsockopt(conn, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 #endif
