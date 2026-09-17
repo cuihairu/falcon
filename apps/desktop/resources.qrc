@@ -1,6 +1,36 @@
 <RCC>
     <qresource prefix="/styles">
-        <file>resources/styles/main.qss</file>
+        <file>resources/styles/fluent_light.qss</file>
+        <file>resources/styles/fluent_dark.qss</file>
+    </qresource>
+    <qresource prefix="/icons">
+        <file>resources/icons/minus.svg</file>
+        <file>resources/icons/square.svg</file>
+        <file>resources/icons/restore.svg</file>
+        <file>resources/icons/x.svg</file>
+        <file>resources/icons/pause.svg</file>
+        <file>resources/icons/play.svg</file>
+        <file>resources/icons/trash-2.svg</file>
+        <file>resources/icons/folder.svg</file>
+        <file>resources/icons/folder-open.svg</file>
+        <file>resources/icons/folder-plus.svg</file>
+        <file>resources/icons/download.svg</file>
+        <file>resources/icons/upload.svg</file>
+        <file>resources/icons/cloud.svg</file>
+        <file>resources/icons/settings.svg</file>
+        <file>resources/icons/search.svg</file>
+        <file>resources/icons/layout-grid.svg</file>
+        <file>resources/icons/list.svg</file>
+        <file>resources/icons/plus.svg</file>
+        <file>resources/icons/refresh-cw.svg</file>
+        <file>resources/icons/link.svg</file>
+        <file>resources/icons/more-horizontal.svg</file>
+        <file>resources/icons/arrow-up.svg</file>
+        <file>resources/icons/arrow-down.svg</file>
+        <file>resources/icons/check-circle-2.svg</file>
+        <file>resources/icons/alert-circle.svg</file>
+        <file>resources/icons/clock.svg</file>
+        <file>resources/icons/file.svg</file>
     </qresource>
     <qresource prefix="/i18n">
         <file>i18n/falcon_desktop_zh_CN.qm</file>

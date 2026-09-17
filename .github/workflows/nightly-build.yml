@@ -73,6 +73,7 @@ jobs:
             libsqlite3-dev \
             libssl-dev \
             qt6-base-dev \
+            qt6-svg-dev \
             patchelf \
             wget
 
@@ -254,7 +255,7 @@ jobs:
           # 显式声明要部署的 Qt 模块（分号分隔，与 desktop 链接的组件
           # 一致；core/gui 为依赖闭包基座一并声明）。系统 qmake 下自动
           # 检测本应可用，显式声明保留作确定性兜底
-          export EXTRA_QT_MODULES="core;gui;widgets;network;concurrent"
+          export EXTRA_QT_MODULES="core;gui;widgets;network;concurrent;svg"
 
           # 使用 linuxdeploy 打包（qt 插件与 appimage 输出同一调用，官方
           # 推荐用法；拆成两次调用会把 qt 部署孤立在输出轮次之外）

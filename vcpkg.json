@@ -33,6 +33,10 @@
             "concurrent"
           ],
           "platform": "!linux"
+        },
+        {
+          "name": "qtsvg",
+          "platform": "!linux"
         }
       ]
     }

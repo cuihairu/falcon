@@ -1,0 +1,646 @@
+/* ============================================================
+   Falcon Desktop · Fluent Dark
+   token: window #202020 · card #2b2b2b · text #ffffff
+          text-secondary #c8c8c8 · text-disabled #6e6e6e
+          accent #4cc2ff (hover #47b1e8 / pressed #003e6b)
+          accent 上文字 #1b1b1b · divider #383838
+          hover rgba(255,255,255,15) · danger #c42b1c
+   与 fluent_light.qss 严格成对:新增/删除规则必须同步两份。
+   ============================================================ */
+
+/* ---------- 0. 通用基底 ----------
+   QWidget 不设背景:容器透明继承父级;背景只在窗口根与
+   明确的表面类控件上给出。 */
+QWidget {
+    color: #ffffff;
+    font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system,
+                 "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 14px;
+}
+
+QMainWindow, QDialog {
+    background-color: #202020;
+}
+
+#centralWidget {
+    background-color: #202020;
+}
+
+QLabel {
+    background: transparent;
+    color: #ffffff;
+}
+
+/* ---------- 1. 控件通用 ---------- */
+
+/* 次级按钮(Fluent 标准 4px 圆角、细边框、深底) */
+QPushButton {
+    background-color: #333333;
+    color: #ffffff;
+    border: 1px solid #4d4d4d;
+    border-radius: 4px;
+    padding: 6px 14px;
+    min-height: 14px;
+}
+
+QPushButton:hover {
+    background-color: rgba(255, 255, 255, 15);
+}
+
+QPushButton:pressed {
+    background-color: rgba(255, 255, 255, 28);
+}
+
+QPushButton:focus {
+    border-color: #4cc2ff;
+}
+
+QPushButton:disabled {
+    background-color: #2b2b2b;
+    color: #6e6e6e;
+    border-color: #383838;
+}
+
+/* 主按钮:每组操作唯一 accent 实底(dark 下 accent 变亮,文字转深) */
+QPushButton#primaryButton {
+    background-color: #4cc2ff;
+    color: #1b1b1b;
+    border: none;
+    border-radius: 4px;
+    padding: 7px 16px;
+    font-weight: 600;
+}
+
+QPushButton#primaryButton:hover {
+    background-color: #47b1e8;
+}
+
+QPushButton#primaryButton:pressed {
+    background-color: #003e6b;
+    color: #ffffff;
+}
+
+QPushButton#primaryButton:disabled {
+    background-color: #333333;
+    color: #6e6e6e;
+}
+
+/* ghost 工具钮:透明底,悬停浅灰 */
+QPushButton#toolButton {
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    padding: 6px 10px;
+    color: #c8c8c8;
+}
+
+QPushButton#toolButton:hover {
+    background-color: rgba(255, 255, 255, 15);
+    color: #ffffff;
+}
+
+QPushButton#toolButton:pressed {
+    background-color: rgba(255, 255, 255, 28);
+}
+
+/* 表格行内图标钮 / 卡片操作钮 */
+QPushButton#rowActionButton,
+QPushButton#cardActionButton {
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    min-width: 0;
+    padding: 4px;
+}
+
+QPushButton#rowActionButton:hover,
+QPushButton#cardActionButton:hover {
+    background-color: rgba(255, 255, 255, 15);
+}
+
+QPushButton#rowActionButton:pressed,
+QPushButton#cardActionButton:pressed {
+    background-color: rgba(255, 255, 255, 28);
+}
+
+QPushButton#rowActionButton:disabled,
+QPushButton#cardActionButton:disabled {
+    background: transparent;
+}
+
+/* 窗口控制钮:无边框贴边,close 悬停红(亮暗同值) */
+QPushButton#windowButton,
+QPushButton#closeButton {
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    min-width: 0;
+    padding: 0;
+}
+
+QPushButton#windowButton:hover {
+    background-color: rgba(255, 255, 255, 20);
+}
+
+QPushButton#windowButton:pressed {
+    background-color: rgba(255, 255, 255, 32);
+}
+
+QPushButton#closeButton:hover {
+    background-color: #c42b1c;
+}
+
+QPushButton#closeButton:pressed {
+    background-color: #b02c1c;
+}
+
+/* ---------- 2. 输入控件 ---------- */
+
+QLineEdit {
+    background-color: #333333;
+    color: #ffffff;
+    border: 1px solid #4d4d4d;
+    border-radius: 4px;
+    padding: 6px 10px;
+    selection-background-color: #4cc2ff;
+    selection-color: #1b1b1b;
+}
+
+QLineEdit:focus {
+    border-color: #4cc2ff;
+}
+
+QLineEdit:disabled {
+    background-color: #2b2b2b;
+    color: #6e6e6e;
+    border-color: #383838;
+}
+
+QLineEdit#searchEdit {
+    padding: 7px 12px;
+    border-radius: 4px;
+}
+
+QComboBox {
+    background-color: #333333;
+    color: #ffffff;
+    border: 1px solid #4d4d4d;
+    border-radius: 4px;
+    padding: 6px 28px 6px 10px;
+}
+
+QComboBox:hover {
+    background-color: rgba(255, 255, 255, 15);
+}
+
+QComboBox:focus {
+    border-color: #4cc2ff;
+}
+
+QComboBox:disabled {
+    color: #6e6e6e;
+    border-color: #383838;
+}
+
+QComboBox::drop-down {
+    border: none;
+    width: 24px;
+}
+
+QComboBox QAbstractItemView {
+    background-color: #2b2b2b;
+    color: #ffffff;
+    border: 1px solid #383838;
+    selection-background-color: rgba(255, 255, 255, 15);
+    selection-color: #ffffff;
+    outline: none;
+}
+
+QSpinBox {
+    background-color: #333333;
+    color: #ffffff;
+    border: 1px solid #4d4d4d;
+    border-radius: 4px;
+    padding: 5px 8px;
+}
+
+QSpinBox:focus {
+    border-color: #4cc2ff;
+}
+
+QCheckBox {
+    background: transparent;
+    color: #ffffff;
+    spacing: 8px;
+}
+
+QCheckBox:disabled {
+    color: #6e6e6e;
+}
+
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+}
+
+QCheckBox::indicator:unchecked {
+    image: url(data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+PHJlY3QgeD0iMC41IiB5PSIwLjUiIHdpZHRoPSIxNSIgaGVpZ2h0PSIxNSIgcng9IjMiIGZpbGw9IiMyYjJiMmIiIHN0cm9rZT0iIzZlNmU2ZSIvPjwvc3ZnPg==);
+}
+
+QCheckBox::indicator:checked {
+    image: url(data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+PHJlY3Qgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2IiByeD0iMyIgZmlsbD0iIzRjYzJmZiIvPjxwYXRoIGQ9Ik00IDguNWwyLjggMi44TDEyIDUuNSIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMWIxYjFiIiBzdHJva2Utd2lkdGg9IjEuOCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+PC9zdmc+);
+}
+
+QGroupBox {
+    background-color: #2b2b2b;
+    border: 1px solid #383838;
+    border-radius: 8px;
+    margin-top: 14px;
+    padding: 10px 6px 6px 6px;
+    font-size: 14px;
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 12px;
+    top: 2px;
+    padding: 0 4px;
+    color: #c8c8c8;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+/* ---------- 3. 菜单与提示 ---------- */
+
+QMenu {
+    background-color: #2b2b2b;
+    color: #ffffff;
+    border: 1px solid #383838;
+    border-radius: 8px;
+    padding: 4px;
+}
+
+QMenu::item {
+    padding: 7px 24px 7px 12px;
+    border-radius: 4px;
+    background: transparent;
+}
+
+QMenu::item:selected {
+    background-color: rgba(255, 255, 255, 15);
+}
+
+QMenu::item:disabled {
+    color: #6e6e6e;
+}
+
+QMenu::separator {
+    height: 1px;
+    background-color: #383838;
+    margin: 4px 8px;
+}
+
+QToolTip {
+    background-color: #2b2b2b;
+    color: #ffffff;
+    border: 1px solid #383838;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+}
+
+/* ---------- 4. 表格与滚动条 ---------- */
+
+QTableWidget, QTableView {
+    background-color: transparent;
+    alternate-background-color: transparent;
+    border: none;
+    gridline-color: transparent;
+    outline: none;
+    selection-background-color: rgba(255, 255, 255, 28);
+    selection-color: #ffffff;
+}
+
+#taskTable::item {
+    height: 56px;
+    border: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 10);
+    padding: 4px 8px;
+}
+
+#taskTable::item:hover {
+    background-color: rgba(255, 255, 255, 15);
+}
+
+#taskTable::item:selected {
+    background-color: rgba(255, 255, 255, 28);
+}
+
+QHeaderView {
+    background: transparent;
+    border: none;
+}
+
+QHeaderView::section {
+    background-color: transparent;
+    color: #c8c8c8;
+    padding: 8px;
+    border: none;
+    border-bottom: 1px solid #383838;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+QTableCornerButton::section {
+    background: transparent;
+    border: none;
+}
+
+QScrollBar:vertical {
+    background: transparent;
+    width: 10px;
+    margin: 2px;
+}
+
+QScrollBar::handle:vertical {
+    background-color: rgba(255, 255, 255, 60);
+    border-radius: 3px;
+    min-height: 32px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background-color: rgba(255, 255, 255, 90);
+}
+
+QScrollBar:horizontal {
+    background: transparent;
+    height: 10px;
+    margin: 2px;
+}
+
+QScrollBar::handle:horizontal {
+    background-color: rgba(255, 255, 255, 60);
+    border-radius: 3px;
+    min-width: 32px;
+}
+
+QScrollBar::handle:horizontal:hover {
+    background-color: rgba(255, 255, 255, 90);
+}
+
+QScrollBar::add-line, QScrollBar::sub-line {
+    width: 0;
+    height: 0;
+}
+
+QScrollBar::add-page, QScrollBar::sub-page {
+    background: transparent;
+}
+
+/* ---------- 5. 进度指示 ---------- */
+
+QProgressBar {
+    background-color: rgba(255, 255, 255, 20);
+    border: none;
+    border-radius: 2px;
+    min-height: 4px;
+    text-align: center;
+    color: transparent;
+}
+
+QProgressBar::chunk {
+    background-color: #4cc2ff;
+    border-radius: 2px;
+}
+
+#taskProgressBar {
+    min-height: 6px;
+    border-radius: 3px;
+    font-size: 11px;
+    color: #c8c8c8;
+}
+
+#taskProgressBar::chunk {
+    border-radius: 3px;
+}
+
+#cardProgressBar {
+    min-height: 4px;
+}
+
+/* ---------- 6. 顶栏 ---------- */
+
+#topBar {
+    background-color: #202020;
+    border-bottom: 1px solid #383838;
+}
+
+#brandMark {
+    background-color: #4cc2ff;
+    color: #1b1b1b;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 700;
+}
+
+#brandTitle {
+    background: transparent;
+    color: #ffffff;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+#brandSubtitle {
+    background: transparent;
+    color: #c8c8c8;
+    font-size: 12px;
+}
+
+/* ---------- 7. 侧栏 ---------- */
+
+#sideBar {
+    background-color: #202020;
+    border-right: 1px solid #383838;
+}
+
+QPushButton#navTab {
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    padding: 9px 12px;
+    text-align: left;
+    color: #c8c8c8;
+}
+
+QPushButton#navTab:hover {
+    background-color: rgba(255, 255, 255, 15);
+    color: #ffffff;
+}
+
+QPushButton#navTab:checked {
+    background-color: #3d3d3d;
+    color: #ffffff;
+    font-weight: 600;
+}
+
+QLabel#sectionLabel {
+    background: transparent;
+    color: #c8c8c8;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+#sideBarFooter {
+    background: transparent;
+    border-top: 1px solid #383838;
+}
+
+#sidebarStatValue {
+    background: transparent;
+    color: #ffffff;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+#sidebarStatLabel {
+    background: transparent;
+    color: #c8c8c8;
+    font-size: 12px;
+}
+
+/* ---------- 8. 状态栏 ---------- */
+
+#statusBar {
+    background-color: #202020;
+    border-top: 1px solid #383838;
+}
+
+#statusBarLabel {
+    background: transparent;
+    color: #c8c8c8;
+    font-size: 12px;
+}
+
+/* ---------- 9. 下载页 ---------- */
+
+#downloadHero {
+    background-color: #2b2b2b;
+    border: 1px solid #383838;
+    border-radius: 8px;
+}
+
+#heroEyebrow {
+    background: transparent;
+    color: #4cc2ff;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+#heroTitle {
+    background: transparent;
+    color: #ffffff;
+    font-size: 20px;
+    font-weight: 600;
+}
+
+#heroDescription {
+    background: transparent;
+    color: #c8c8c8;
+}
+
+#downloadToolbar {
+    background: transparent;
+}
+
+#summaryCard {
+    background-color: #2b2b2b;
+    border: 1px solid #383838;
+    border-radius: 8px;
+}
+
+#summaryValue {
+    background: transparent;
+    color: #ffffff;
+    font-size: 24px;
+    font-weight: 600;
+}
+
+#summaryCaption {
+    background: transparent;
+    color: #c8c8c8;
+    font-size: 12px;
+}
+
+#taskCard {
+    background-color: #2b2b2b;
+    border: 1px solid #383838;
+    border-radius: 8px;
+}
+
+#taskCard:hover {
+    border-color: #5a5a5a;
+}
+
+#cardFileName {
+    background: transparent;
+    color: #ffffff;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+#cardInfoLabel {
+    background: transparent;
+    color: #c8c8c8;
+    font-size: 12px;
+}
+
+#gridScrollArea,
+QScrollArea#gridScrollArea > QWidget > QWidget {
+    background: transparent;
+    border: none;
+}
+
+#emptyStateTitle {
+    background: transparent;
+    color: #c8c8c8;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+#emptyStateBody {
+    background: transparent;
+    color: #6e6e6e;
+    font-size: 12px;
+}
+
+/* ---------- 10. 页面标题(P4 各页接入) ---------- */
+
+#pageTitle {
+    background: transparent;
+    color: #ffffff;
+    font-size: 20px;
+    font-weight: 600;
+}
+
+#sectionTitle {
+    background: transparent;
+    color: #ffffff;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+/* ---------- 11. 通用杂项 ---------- */
+
+#headerLabel {
+    background: transparent;
+    color: #ffffff;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+#separatorLine {
+    background-color: #383838;
+    border: none;
+    max-height: 1px;
+}

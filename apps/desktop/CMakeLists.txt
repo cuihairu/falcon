@@ -32,8 +32,9 @@ if(NOT TARGET BZip2::BZip2)
   endif()
 endif()
 
-# 查找 Qt6
-find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network Concurrent)
+# 查找 Qt6(Svg 为 REQUIRED:内嵌 SVG 图标系统经 QSvgRenderer 渲染,
+# 缺依赖在 configure 期报错好过运行时图标全空)
+find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network Concurrent Svg)
 find_package(Qt6 OPTIONAL_COMPONENTS LinguistTools)
 
 # 设置输出目录
@@ -54,6 +55,7 @@ set(SOURCES
     src/utils/url_detector.cpp
     src/utils/clipboard_monitor.cpp
     src/utils/theme_manager.cpp
+    src/utils/icon_utils.cpp
     src/services/storage_service.cpp
     src/services/search_service.cpp
     src/services/download_backend.cpp
@@ -63,7 +65,6 @@ set(SOURCES
 
 # 头文件
 set(HEADERS
-    src/styles.hpp
     src/main_window.hpp
     src/widgets/top_bar.hpp
     src/widgets/status_bar.hpp
@@ -76,6 +77,8 @@ set(HEADERS
     src/utils/url_detector.hpp
     src/utils/clipboard_monitor.hpp
     src/utils/theme_manager.hpp
+    src/utils/theme_tokens.hpp
+    src/utils/icon_utils.hpp
     src/services/storage_service.hpp
     src/services/search_service.hpp
     src/services/download_backend.hpp
@@ -123,6 +126,7 @@ target_link_libraries(falcon-desktop PRIVATE
     Qt6::Widgets
     Qt6::Network
     Qt6::Concurrent
+    Qt6::Svg
     Falcon::core
     Falcon::protocols
     Falcon::storage

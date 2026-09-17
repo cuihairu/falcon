@@ -1,15 +1,19 @@
 /**
  * @file theme_manager.hpp
  * @brief 主题管理器
+ *
+ * 样式表来自 resources/styles/fluent_light.qss / fluent_dark.qss(qrc),
+ * 应用时同步设置 QPalette(未覆盖控件融合)与 icon_utils 当前主题
+ * (themed 图标换色)。
+ *
  * @author Falcon Team
- * @date 2026-04-22
+ * @date 2026-09-17
  */
 
 #pragma once
 
 #include <QObject>
 #include <QString>
-#include <QPalette>
 
 namespace falcon::desktop {
 
@@ -50,12 +54,12 @@ public:
     void toggle_theme();
 
     /**
-     * @brief 获取当前主题的样式表
+     * @brief 获取指定主题的样式表(qrc 加载,结果缓存)
      */
-    QString get_stylesheet() const;
+    QString stylesheet(ThemeType theme) const;
 
     /**
-     * @brief 应用样式表到应用
+     * @brief 应用样式表到应用(QPalette + QSS + 图标主题同步)
      */
     void apply_stylesheet();
 
@@ -66,15 +70,14 @@ public:
 
 signals:
     /**
-     * @brief 主题改变信号
+     * @brief 主题改变信号(仅主题实际变化时发射)
      */
     void theme_changed(ThemeType theme);
 
 private:
-    QString load_light_theme() const;
-    QString load_dark_theme() const;
-
     ThemeType current_theme_;
+    mutable QString light_cache_;
+    mutable QString dark_cache_;
 };
 
 } // namespace falcon::desktop

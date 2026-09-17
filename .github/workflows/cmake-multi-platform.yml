@@ -243,7 +243,8 @@ jobs:
             libcurl4-openssl-dev \
             libsqlite3-dev \
             libgl1-mesa-dev \
-            qt6-base-dev
+            qt6-base-dev \
+            qt6-svg-dev
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
