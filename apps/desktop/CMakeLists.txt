@@ -101,11 +101,10 @@ if(WIN32 AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows/app.rc")
   list(APPEND SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows/app.rc")
 endif()
 
-# 添加资源到可执行文件
-qt_add_resources(falcon-desktop ${RESOURCES})
-
-# 创建可执行文件
-add_executable(falcon-desktop ${SOURCES} ${HEADERS} ${UI_FILES})
+# 创建可执行文件(resources.qrc 进 sources 由 AUTORCC 编入——资源必须在
+# add_executable 之后再挂:此前 qt_add_resources 在此之前调用是无效调用,
+# 资源从未进过二进制,运行时 QSS/图标读取全部落空)
+add_executable(falcon-desktop ${SOURCES} ${HEADERS} ${UI_FILES} ${RESOURCES})
 
 # Translations (optional; requires Qt Linguist Tools)
 set(TRANSLATION_TS_FILES
@@ -144,6 +143,31 @@ target_link_libraries(falcon-desktop PRIVATE falcon_daemon_rpc_client)
 # 后端层测试（纯 C++，无需 Qt；见 tests/CMakeLists.txt）
 if(FALCON_BUILD_TESTS)
     add_subdirectory(tests)
+endif()
+
+# 离屏 UI 截图沙盒（默认 OFF，见 dev/ui_sandbox.cpp）：无显示环境下
+# QT_QPA_PLATFORM=offscreen 渲染各页面并保存 png，供设计验收/视觉回归
+option(FALCON_BUILD_UI_SANDBOX "Build offscreen UI screenshot sandbox" OFF)
+if(FALCON_BUILD_UI_SANDBOX)
+  set(SANDBOX_SOURCES ${SOURCES})
+  list(REMOVE_ITEM SANDBOX_SOURCES src/main.cpp)
+  # resources.qrc 进 sources 交给 AUTORCC(与主程序同源样式/图标;
+  # qrc 已不引用构建产物 .qm,无 translations 构建顺序耦合)
+  add_executable(falcon-ui-sandbox
+      ${SANDBOX_SOURCES} ${HEADERS} dev/ui_sandbox.cpp ${RESOURCES})
+  target_include_directories(falcon-ui-sandbox PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(falcon-ui-sandbox PRIVATE
+      Qt6::Core
+      Qt6::Widgets
+      Qt6::Network
+      Qt6::Concurrent
+      Qt6::Svg
+      Falcon::core
+      Falcon::protocols
+      Falcon::storage
+      falcon_daemon_rpc_client
+  )
 endif()
 
 # 安装目标（macOS 使用手动打包，跳过 install）

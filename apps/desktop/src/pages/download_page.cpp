@@ -86,14 +86,14 @@ void DownloadPage::setup_ui()
 
     // 创建表格视图
     create_task_table();
-    main_layout->addWidget(task_table_);
+    main_layout->addWidget(task_table_, 1);
 
-    // 创建网格视图（初始隐藏）
+    // 创建网格视图（初始隐藏）；与表格互斥显示，同占剩余空间——
+    // 无 stretch 时 QScrollArea 初始 sizeHint 近 0，网格视口被压扁卡片裁剪
     create_task_grid();
-    main_layout->addWidget(grid_container_);
+    main_layout->addWidget(grid_container_, 1);
     grid_container_->hide();
 
-    main_layout->addStretch(1);
     update_empty_state();
 }
 
@@ -1089,8 +1089,12 @@ void DownloadPage::sync_task_grid()
     int row = 0;
     constexpr int kColumns = 3;  // 每行显示3个卡片
 
-    for (auto it = task_records_.cbegin(); it != task_records_.cend(); ++it) {
-        const TaskRecord& record = it.value();
+    // QHash 迭代无序——按任务 id 排序保证卡片顺序稳定(与表格视图一致)
+    QList<qulonglong> ids = task_records_.keys();
+    std::sort(ids.begin(), ids.end());
+
+    for (qulonglong id : ids) {
+        const TaskRecord& record = task_records_[id];
         if (!should_show(record.snapshot)) {
             continue;
         }
@@ -1098,7 +1102,7 @@ void DownloadPage::sync_task_grid()
         // 创建任务卡片
         auto* card = create_task_card(record);
         if (card) {
-            card->setProperty("taskId", QVariant::fromValue<qulonglong>(it.key()));
+            card->setProperty("taskId", QVariant::fromValue<qulonglong>(id));
             grid_layout_->addWidget(card, row, column);
 
             ++column;

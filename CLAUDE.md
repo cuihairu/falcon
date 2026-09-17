@@ -2,6 +2,30 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-17 - 桌面资源链路致命缺陷修复（资源从未编入二进制）+ 离屏 UI 截图沙盒
+- **资源从未编入二进制**(离屏截图首跑曝光,上一轮 UI 重做的遗留):
+  `qt_add_resources` 在 add_executable 之前调用是无效调用且 resources.qrc
+  从未进 target sources → AUTORCC 不触发,任何平台二进制里都没有资源;
+  CI 三平台绿掩盖(编译不查资源),运行时 QSS/图标读取全部落空仅
+  WARNING——Fluent 样式与图标实际从未生效。另有两层:qrc 的 prefix 与
+  file 相对路径叠加成双层前缀与代码读取路径不一致(全部 file 加 alias
+  收口);qrc 引用构建产物 .qm 在无 LinguistTools 环境构建顺序死锁
+  (删 /i18n 节,翻译保持 exe 旁回落软依赖)。修复后 resources.qrc 进
+  两个 target sources 交 AUTORCC。教训:`rcc --list` 只列磁盘路径,
+  资源树形态须探针程序 QDir(":/") 递归实证
+- **网格视图两处真实缺陷**(沙盒截图曝光):下载页主布局视图容器无
+  stretch + 尾部 addStretch 吃光剩余空间 → QScrollArea 初始 sizeHint
+  近 0,网格视口被压扁卡片只露顶部;改表格/网格 stretch=1 互斥占满。
+  sync_task_grid 按 QHash 迭代无序 → 卡片顺序每次切换抖动;按 task id
+  排序
+- **离屏 UI 截图沙盒**(`FALCON_BUILD_UI_SANDBOX`,默认 OFF):
+  apps/desktop/dev/ui_sandbox.cpp 离屏渲染主窗布局 × 亮暗两主题 ×
+  5 视图 = 10 张 png,供无显示环境设计验收/视觉回归(可挂 CI 出快照);
+  本机以 aqtinstall 官方 Qt 6.10.3(6.10 起 Linux 架构名
+  linux_gcc_64,qtsvg 已是基础归档)+ 双前缀 CMAKE_PREFIX_PATH
+  (官方 Qt 在前 + build-ci vcpkg_installed 在后、不用 vcpkg toolchain
+  防 manifest 接管)完整编译桌面应用与沙盒
+
 ### 2026-09-17 - 桌面 UI 结构性重做（Fluent/Win11 设计体系 + 内嵌 Lucide SVG 图标 + 无边框窗口修复）
 - **根因诊断**：三套互相矛盾的样式并存（theme_manager.cpp 978 行内联 QSS
   唯一生效、styles.hpp 396 行死代码、main.qss 220 行编入 qrc 从未加载），

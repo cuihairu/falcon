@@ -1,38 +1,35 @@
 <RCC>
     <qresource prefix="/styles">
-        <file>resources/styles/fluent_light.qss</file>
-        <file>resources/styles/fluent_dark.qss</file>
+        <file alias="fluent_light.qss">resources/styles/fluent_light.qss</file>
+        <file alias="fluent_dark.qss">resources/styles/fluent_dark.qss</file>
     </qresource>
     <qresource prefix="/icons">
-        <file>resources/icons/minus.svg</file>
-        <file>resources/icons/square.svg</file>
-        <file>resources/icons/restore.svg</file>
-        <file>resources/icons/x.svg</file>
-        <file>resources/icons/pause.svg</file>
-        <file>resources/icons/play.svg</file>
-        <file>resources/icons/trash-2.svg</file>
-        <file>resources/icons/folder.svg</file>
-        <file>resources/icons/folder-open.svg</file>
-        <file>resources/icons/folder-plus.svg</file>
-        <file>resources/icons/download.svg</file>
-        <file>resources/icons/upload.svg</file>
-        <file>resources/icons/cloud.svg</file>
-        <file>resources/icons/settings.svg</file>
-        <file>resources/icons/search.svg</file>
-        <file>resources/icons/layout-grid.svg</file>
-        <file>resources/icons/list.svg</file>
-        <file>resources/icons/plus.svg</file>
-        <file>resources/icons/refresh-cw.svg</file>
-        <file>resources/icons/link.svg</file>
-        <file>resources/icons/more-horizontal.svg</file>
-        <file>resources/icons/arrow-up.svg</file>
-        <file>resources/icons/arrow-down.svg</file>
-        <file>resources/icons/check-circle-2.svg</file>
-        <file>resources/icons/alert-circle.svg</file>
-        <file>resources/icons/clock.svg</file>
-        <file>resources/icons/file.svg</file>
-    </qresource>
-    <qresource prefix="/i18n">
-        <file>i18n/falcon_desktop_zh_CN.qm</file>
+        <file alias="minus.svg">resources/icons/minus.svg</file>
+        <file alias="square.svg">resources/icons/square.svg</file>
+        <file alias="restore.svg">resources/icons/restore.svg</file>
+        <file alias="x.svg">resources/icons/x.svg</file>
+        <file alias="pause.svg">resources/icons/pause.svg</file>
+        <file alias="play.svg">resources/icons/play.svg</file>
+        <file alias="trash-2.svg">resources/icons/trash-2.svg</file>
+        <file alias="folder.svg">resources/icons/folder.svg</file>
+        <file alias="folder-open.svg">resources/icons/folder-open.svg</file>
+        <file alias="folder-plus.svg">resources/icons/folder-plus.svg</file>
+        <file alias="download.svg">resources/icons/download.svg</file>
+        <file alias="upload.svg">resources/icons/upload.svg</file>
+        <file alias="cloud.svg">resources/icons/cloud.svg</file>
+        <file alias="settings.svg">resources/icons/settings.svg</file>
+        <file alias="search.svg">resources/icons/search.svg</file>
+        <file alias="layout-grid.svg">resources/icons/layout-grid.svg</file>
+        <file alias="list.svg">resources/icons/list.svg</file>
+        <file alias="plus.svg">resources/icons/plus.svg</file>
+        <file alias="refresh-cw.svg">resources/icons/refresh-cw.svg</file>
+        <file alias="link.svg">resources/icons/link.svg</file>
+        <file alias="more-horizontal.svg">resources/icons/more-horizontal.svg</file>
+        <file alias="arrow-up.svg">resources/icons/arrow-up.svg</file>
+        <file alias="arrow-down.svg">resources/icons/arrow-down.svg</file>
+        <file alias="check-circle-2.svg">resources/icons/check-circle-2.svg</file>
+        <file alias="alert-circle.svg">resources/icons/alert-circle.svg</file>
+        <file alias="clock.svg">resources/icons/clock.svg</file>
+        <file alias="file.svg">resources/icons/file.svg</file>
     </qresource>
 </RCC>

@@ -2,6 +2,36 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-17 - 资源链路致命缺陷修复 + 网格视图两缺陷 + 离屏截图沙盒
+- **资源从未编入二进制**(离屏截图首跑曝光的三重缺陷,上一轮 UI 重做的
+  遗留):① `qt_add_resources(falcon-desktop ...)` 在 add_executable 之前
+  调用(无效调用)且 resources.qrc 从未进 target sources → AUTORCC 不
+  触发,**任何平台的二进制里都没有资源**——CI 三平台绿掩盖(编译不查
+  资源),运行时 `:/styles/*.qss` 与 `:/icons/*.svg` 读取全部落空仅
+  WARNING,Fluent 样式与图标实际从未生效;② resources.qrc 的 prefix 与
+  file 相对路径叠加成双层前缀(`:/styles/resources/styles/x.qss`),与
+  代码读取路径 `:/styles/x.qss` 不一致——即便编入也读不到;③ qrc 引用
+  构建产物 .qm 造成构建顺序死锁(无 LinguistTools 的环境
+  "No rule to make target .qm")
+- **修复**:删无效调用,resources.qrc 进两个 target 的 sources 交
+  AUTORCC;全部 file 加 `alias=basename` 收口资源内路径;qrc 删 /i18n 节
+  (main.cpp:46 对 qrc 加载失败本有 exe 旁回落,翻译保持软依赖)。
+  验证手段:`rcc --list` 只列磁盘路径,资源树形态须写探针程序
+  `QDir(":/")` 递归列出——UTF-16BE 名字数组 strings 不可见
+- **网格视图两处真实缺陷**(沙盒截图曝光):主布局 task_table_/
+  grid_container_ 无 stretch + 尾部 addStretch 吃光剩余空间 →
+  QScrollArea 初始 sizeHint 近 0,网格视口被压扁、卡片只露顶部
+  (表格靠自身 sizeHint 侥幸可用);改两视图 stretch=1 互斥占满,
+  删尾部 stretch。sync_task_grid 按 QHash 迭代无序 → 每次切换卡片
+  顺序抖动;按 task id 排序(与表格视图一致)
+- **离屏截图沙盒**(`FALCON_BUILD_UI_SANDBOX`,默认 OFF):
+  dev/ui_sandbox.cpp 按 MainWindow 布局组装真实组件(TopBar/SideBar/
+  四页面/StatusBar)注入演示任务,`QT_QPA_PLATFORM=offscreen` 下亮暗
+  两主题 × 5 视图 = 10 张 png;切页经侧栏按钮真实 click(信号 +
+  QButtonGroup 选中态同步),不用真 MainWindow(引擎/网络/托盘零
+  副作用);snap 前 processEvents + sendPostedEvents(LayoutRequest)
+  保证布局收敛。供无显示环境设计验收/视觉回归,可挂 CI 出快照
+
 ### 2026-09-17 - UI 结构性重做（Fluent 体系 + Lucide 图标 + 无边框窗口）
 - **样式收口**：删除 theme_manager.cpp 978 行内联 QSS、styles.hpp（死代码）、
   main.qss（编入 qrc 从未加载）三套矛盾样式；新增 fluent_light.qss /
