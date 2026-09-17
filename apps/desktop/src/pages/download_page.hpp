@@ -63,6 +63,10 @@ public:
     void update_tasks(const std::vector<falcon::daemon::rpc::TaskSnapshot>& tasks);
     void set_view_mode(DownloadViewMode mode);
     void set_display_style(TaskDisplayStyle style);
+    /// 顶栏搜索框回车 → 按文件名过滤当前视图（空串清除过滤）
+    void set_text_filter(const QString& text);
+    /// 顶栏视图切换 → 表格/网格互切（与页内按钮共用同一状态）
+    void toggle_display_style();
 
 signals:
     void new_task_requested();
@@ -152,6 +156,9 @@ private:
 
     // 显示样式
     TaskDisplayStyle display_style_;
+
+    // 文件名过滤词（顶栏搜索框，空串 = 不过滤）
+    QString text_filter_;
 
     // 网格视图组件
     QWidget* grid_container_;      // 网格视图容器

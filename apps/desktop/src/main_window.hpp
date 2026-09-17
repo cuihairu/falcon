@@ -51,6 +51,20 @@ public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override;
 
+protected:
+    /** 窗口最大化状态变化时同步顶栏按钮图标(最大化/还原) */
+    void changeEvent(QEvent* event) override;
+
+    /**
+     * @brief qApp 级事件过滤器:无边框窗口 8 向边缘缩放
+     *
+     * 必须挂在 qApp 上——中央控件(表格/滚动区)会吞掉自身鼠标事件,
+     * MainWindow 的 mousePressEvent 收不到;而对单个子控件装过滤器
+     * 只拦发给该对象的事件,拦不到孙子辈。谓词保持廉价
+     * (isWidgetType → window()==this → 非最大化)。
+     */
+    bool eventFilter(QObject* obj, QEvent* event) override;
+
 public slots:
     void open_url(const QString& url);
 
@@ -102,6 +116,9 @@ private:
     void save_settings() const;
     void apply_settings_to_runtime();
 
+    /** 命中窗口边缘 6px 缩放带时返回对应边(无边框窗口 resize 光标与拖拽判定) */
+    Qt::Edges resize_edge_for(const QPoint& global_pos) const;
+
     // 顶部工具栏
     TopBar* top_bar_;
 
@@ -136,6 +153,9 @@ private:
 
     // 最近一轮任务快照的 URL 映射（错误通知里显示文件名用）
     QHash<qulonglong, QString> task_url_by_id_;
+
+    // 边缘缩放光标当前是否由本类设置(true 才在离开边缘带时恢复箭头)
+    bool resize_cursor_active_ = false;
 
     // 页面索引
     enum PageIndex {

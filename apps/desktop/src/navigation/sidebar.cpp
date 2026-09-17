@@ -1,6 +1,6 @@
 /**
  * @file sidebar.cpp
- * @brief Sidebar implementation (Xunlei-style)
+ * @brief Sidebar implementation (Fluent style)
  * @author Falcon Team
  * @date 2026-04-15
  */
@@ -22,20 +22,18 @@ constexpr int kItemSpacing = 6;
 SideBar::SideBar(QWidget* parent)
     : QWidget(parent)
     , main_layout_(nullptr)
-    , my_download_label_(nullptr)
-    , my_download_tabs_(new QButtonGroup(this))
+    , nav_group_(new QButtonGroup(this))
     , downloading_tab_(nullptr)
     , completed_tab_(nullptr)
     , cloud_add_tab_(nullptr)
-    , common_tools_(new QButtonGroup(this))
     , library_button_(nullptr)
     , third_party_button_(nullptr)
     , recycle_bin_button_(nullptr)
     , private_space_label_(nullptr)
-    , private_space_tools_(new QButtonGroup(this))
     , private_downloading_button_(nullptr)
     , private_completed_button_(nullptr)
 {
+    nav_group_->setExclusive(true);
     setup_ui();
 }
 
@@ -71,23 +69,30 @@ void SideBar::setup_ui()
     footer_layout->setContentsMargins(14, 14, 14, 14);
     footer_layout->setSpacing(4);
 
-    footer_value_ = new QLabel(tr("12"), footer_card_);
+    footer_value_ = new QLabel(tr("0"), footer_card_);
     footer_value_->setObjectName("sidebarStatValue");
     footer_layout->addWidget(footer_value_);
 
-    footer_label_ = new QLabel(tr("当前队列任务"), footer_card_);
+    footer_label_ = new QLabel(tr("当前活跃任务"), footer_card_);
     footer_label_->setObjectName("sidebarStatLabel");
     footer_layout->addWidget(footer_label_);
 
     main_layout_->addWidget(footer_card_);
 }
 
-QPushButton* SideBar::create_nav_button(const QString& text, QButtonGroup* group, int id)
+void SideBar::set_queue_count(int count)
+{
+    if (footer_value_) {
+        footer_value_->setText(QString::number(count));
+    }
+}
+
+QPushButton* SideBar::create_nav_button(const QString& text)
 {
     auto* button = new QPushButton(text, this);
     button->setObjectName("navTab");
     button->setCheckable(true);
-    group->addButton(button, id);
+    nav_group_->addButton(button);
     return button;
 }
 
@@ -109,18 +114,18 @@ void SideBar::create_download_section()
     tabs_layout->setSpacing(kItemSpacing);
     main_layout_->addLayout(tabs_layout);
 
-    downloading_tab_ = create_nav_button(tr("下载中"), my_download_tabs_, 0);
+    downloading_tab_ = create_nav_button(tr("下载中"));
     downloading_tab_->setChecked(true);
     tabs_layout->addWidget(downloading_tab_);
     connect(downloading_tab_, &QPushButton::clicked, this, &SideBar::downloadingTabClicked);
     connect(downloading_tab_, &QPushButton::clicked, this, &SideBar::downloadClicked);
 
-    completed_tab_ = create_nav_button(tr("已完成"), my_download_tabs_, 1);
+    completed_tab_ = create_nav_button(tr("已完成"));
     tabs_layout->addWidget(completed_tab_);
     connect(completed_tab_, &QPushButton::clicked, this, &SideBar::completedTabClicked);
     connect(completed_tab_, &QPushButton::clicked, this, &SideBar::downloadClicked);
 
-    cloud_add_tab_ = create_nav_button(tr("云添加"), my_download_tabs_, 2);
+    cloud_add_tab_ = create_nav_button(tr("云添加"));
     tabs_layout->addWidget(cloud_add_tab_);
     connect(cloud_add_tab_, &QPushButton::clicked, this, &SideBar::cloudAddTabClicked);
     connect(cloud_add_tab_, &QPushButton::clicked, this, &SideBar::downloadClicked);
@@ -132,15 +137,15 @@ void SideBar::create_space_section()
     tools_layout->setSpacing(kItemSpacing);
     main_layout_->addLayout(tools_layout);
 
-    library_button_ = create_nav_button(tr("资源发现"), common_tools_, 0);
+    library_button_ = create_nav_button(tr("资源发现"));
     tools_layout->addWidget(library_button_);
     connect(library_button_, &QPushButton::clicked, this, &SideBar::discoveryClicked);
 
-    third_party_button_ = create_nav_button(tr("云盘空间"), common_tools_, 1);
+    third_party_button_ = create_nav_button(tr("云盘空间"));
     tools_layout->addWidget(third_party_button_);
     connect(third_party_button_, &QPushButton::clicked, this, &SideBar::cloudClicked);
 
-    recycle_bin_button_ = create_nav_button(tr("偏好设置"), common_tools_, 2);
+    recycle_bin_button_ = create_nav_button(tr("偏好设置"));
     tools_layout->addWidget(recycle_bin_button_);
     connect(recycle_bin_button_, &QPushButton::clicked, this, &SideBar::settingsClicked);
 
@@ -152,11 +157,11 @@ void SideBar::create_space_section()
     space_layout->setSpacing(kItemSpacing);
     main_layout_->addLayout(space_layout);
 
-    private_downloading_button_ = create_nav_button(tr("隐私下载"), private_space_tools_, 0);
+    private_downloading_button_ = create_nav_button(tr("隐私下载"));
     space_layout->addWidget(private_downloading_button_);
     connect(private_downloading_button_, &QPushButton::clicked, this, &SideBar::downloadClicked);
 
-    private_completed_button_ = create_nav_button(tr("隐私完成"), private_space_tools_, 1);
+    private_completed_button_ = create_nav_button(tr("隐私完成"));
     space_layout->addWidget(private_completed_button_);
     connect(private_completed_button_, &QPushButton::clicked, this, &SideBar::downloadClicked);
 }

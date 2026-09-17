@@ -7,6 +7,7 @@
 
 #include "cloud_page.hpp"
 #include "../services/storage_service.hpp"
+#include "../utils/icon_utils.hpp"
 #include <falcon/storage/resource_browser.hpp>
 
 #include <QVBoxLayout>
@@ -59,12 +60,9 @@ void CloudPage::setup_ui()
     main_layout->setContentsMargins(24, 24, 24, 24);
     main_layout->setSpacing(16);
 
-    // 页面标题
+    // 页面标题(字号/字重由 QSS #pageTitle 统一管控)
     auto* title_label = new QLabel(tr("Cloud"), this);
-    auto title_font = title_label->font();
-    title_font.setPointSize(20);
-    title_font.setBold(true);
-    title_label->setFont(title_font);
+    title_label->setObjectName("pageTitle");
     main_layout->addWidget(title_label);
 
     // 创建堆叠窗口用于视图切换
@@ -105,12 +103,9 @@ void CloudPage::create_storage_selector()
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(12);
 
-    // 标题
+    // 标题(字号/字重由 QSS #sectionTitle 统一管控)
     auto* title_label = new QLabel(tr("Cloud Storage"), left_panel_);
-    auto section_font = title_label->font();
-    section_font.setPointSize(14);
-    section_font.setBold(true);
-    title_label->setFont(section_font);
+    title_label->setObjectName("sectionTitle");
     layout->addWidget(title_label);
 
     // 存储类型选择
@@ -174,18 +169,18 @@ void CloudPage::create_storage_selector()
 
     // 连接按钮
     connect_button_ = new QPushButton(tr("Connect"), left_panel_);
-    connect_button_->setIcon(style()->standardIcon(QStyle::SP_DialogApplyButton));
+    connect_button_->setIcon(icons::themed(icons::Id::CheckCircle, icons::ColorRole::Accent));
     connect_button_->setCursor(Qt::PointingHandCursor);
     layout->addWidget(connect_button_);
 
     disconnect_button_ = new QPushButton(tr("Disconnect"), left_panel_);
     disconnect_button_->setEnabled(false);
-    disconnect_button_->setIcon(style()->standardIcon(QStyle::SP_DialogCancelButton));
+    disconnect_button_->setIcon(icons::themed(icons::Id::X, icons::ColorRole::TextSecondary));
     disconnect_button_->setCursor(Qt::PointingHandCursor);
     layout->addWidget(disconnect_button_);
 
     save_config_button_ = new QPushButton(tr("Save Config"), left_panel_);
-    save_config_button_->setIcon(style()->standardIcon(QStyle::SP_DialogSaveButton));
+    save_config_button_->setIcon(icons::themed(icons::Id::File, icons::ColorRole::TextSecondary));
     save_config_button_->setCursor(Qt::PointingHandCursor);
     layout->addWidget(save_config_button_);
 
@@ -261,19 +256,19 @@ QWidget* CloudPage::create_toolbar()
     // 导航按钮
     up_button_ = new QPushButton(tr("Up"), toolbar);
     up_button_->setEnabled(false);
-    up_button_->setIcon(style()->standardIcon(QStyle::SP_ArrowUp));
+    up_button_->setIcon(icons::themed(icons::Id::ArrowUp, icons::ColorRole::TextSecondary));
     up_button_->setCursor(Qt::PointingHandCursor);
     layout->addWidget(up_button_);
 
     home_button_ = new QPushButton(tr("Home"), toolbar);
     home_button_->setEnabled(false);
-    home_button_->setIcon(style()->standardIcon(QStyle::SP_DirHomeIcon));
+    home_button_->setIcon(icons::themed(icons::Id::Folder, icons::ColorRole::TextSecondary));
     home_button_->setCursor(Qt::PointingHandCursor);
     layout->addWidget(home_button_);
 
     refresh_button_ = new QPushButton(tr("Refresh"), toolbar);
     refresh_button_->setEnabled(false);
-    refresh_button_->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
+    refresh_button_->setIcon(icons::themed(icons::Id::Refresh, icons::ColorRole::TextSecondary));
     refresh_button_->setCursor(Qt::PointingHandCursor);
     layout->addWidget(refresh_button_);
 
@@ -282,25 +277,25 @@ QWidget* CloudPage::create_toolbar()
     // 操作按钮
     upload_button_ = new QPushButton(tr("Upload"), toolbar);
     upload_button_->setEnabled(false);
-    upload_button_->setIcon(style()->standardIcon(QStyle::SP_ArrowUp));
+    upload_button_->setIcon(icons::themed(icons::Id::Upload, icons::ColorRole::TextSecondary));
     upload_button_->setCursor(Qt::PointingHandCursor);
     layout->addWidget(upload_button_);
 
     download_button_ = new QPushButton(tr("Download"), toolbar);
     download_button_->setEnabled(false);
-    download_button_->setIcon(style()->standardIcon(QStyle::SP_ArrowDown));
+    download_button_->setIcon(icons::themed(icons::Id::Download, icons::ColorRole::TextSecondary));
     download_button_->setCursor(Qt::PointingHandCursor);
     layout->addWidget(download_button_);
 
     new_folder_button_ = new QPushButton(tr("New Folder"), toolbar);
     new_folder_button_->setEnabled(false);
-    new_folder_button_->setIcon(style()->standardIcon(QStyle::SP_FileDialogNewFolder));
+    new_folder_button_->setIcon(icons::themed(icons::Id::FolderPlus, icons::ColorRole::TextSecondary));
     new_folder_button_->setCursor(Qt::PointingHandCursor);
     layout->addWidget(new_folder_button_);
 
     delete_button_ = new QPushButton(tr("Delete"), toolbar);
     delete_button_->setEnabled(false);
-    delete_button_->setIcon(style()->standardIcon(QStyle::SP_TrashIcon));
+    delete_button_->setIcon(icons::themed(icons::Id::Trash, icons::ColorRole::TextSecondary));
     delete_button_->setCursor(Qt::PointingHandCursor);
     layout->addWidget(delete_button_);
 
@@ -403,9 +398,9 @@ void CloudPage::update_file_list_with_data(const QList<RemoteResourceInfo>& reso
         // 名称
         auto* name_item = new QTableWidgetItem(resource.name);
         if (resource.type == "directory") {
-            name_item->setIcon(style()->standardIcon(QStyle::SP_DirIcon));
+            name_item->setIcon(icons::themed(icons::Id::Folder, icons::ColorRole::TextSecondary));
         } else {
-            name_item->setIcon(style()->standardIcon(QStyle::SP_FileIcon));
+            name_item->setIcon(icons::themed(icons::Id::File, icons::ColorRole::TextSecondary));
         }
         file_table_->setItem(row, 0, name_item);
 
@@ -714,18 +709,16 @@ void CloudPage::create_empty_state()
     layout->setAlignment(Qt::AlignCenter);
     layout->setSpacing(24);
 
-    // 云盘图标
+    // 云盘图标(主题感知 SVG,64px)
     auto* icon_label = new QLabel(empty_state_widget_);
-    icon_label->setPixmap(style()->standardIcon(QStyle::SP_DriveNetIcon).pixmap(64, 64));
+    icon_label->setPixmap(icons::themed(icons::Id::Cloud, icons::ColorRole::TextSecondary)
+                              .pixmap(64, 64));
     icon_label->setAlignment(Qt::AlignCenter);
     layout->addWidget(icon_label);
 
-    // 提示文本
+    // 提示文本(字号/字重由 QSS #emptyStateTitle 统一管控)
     auto* title_label = new QLabel(tr("No cloud storage configured"), empty_state_widget_);
-    auto empty_title_font = title_label->font();
-    empty_title_font.setPointSize(16);
-    empty_title_font.setBold(true);
-    title_label->setFont(empty_title_font);
+    title_label->setObjectName("emptyStateTitle");
     title_label->setAlignment(Qt::AlignCenter);
     layout->addWidget(title_label);
 
@@ -738,7 +731,7 @@ void CloudPage::create_empty_state()
 
     // 添加配置按钮
     auto* add_button = new QPushButton(tr("Add Cloud Storage"), empty_state_widget_);
-    add_button->setIcon(style()->standardIcon(QStyle::SP_FileDialogNewFolder));
+    add_button->setIcon(icons::themed(icons::Id::FolderPlus, icons::ColorRole::TextSecondary));
     add_button->setCursor(Qt::PointingHandCursor);
     add_button->setMinimumWidth(200);
     connect(add_button, &QPushButton::clicked, this, [this]() {
@@ -921,9 +914,11 @@ void CloudPage::show_file_properties(int row)
 
     // 设置图标
     if (is_folder) {
-        msg_box.setIconPixmap(style()->standardIcon(QStyle::SP_DirIcon).pixmap(48, 48));
+        msg_box.setIconPixmap(icons::themed(icons::Id::Folder, icons::ColorRole::TextSecondary)
+                                  .pixmap(48, 48));
     } else {
-        msg_box.setIconPixmap(style()->standardIcon(QStyle::SP_FileIcon).pixmap(48, 48));
+        msg_box.setIconPixmap(icons::themed(icons::Id::File, icons::ColorRole::TextSecondary)
+                                  .pixmap(48, 48));
     }
 
     msg_box.exec();
@@ -1064,9 +1059,9 @@ void CloudPage::on_directory_loaded(const QString& config_name, const QString& p
         // 名称
         auto* name_item = new QTableWidgetItem(resource.name);
         if (resource.type == "directory") {
-            name_item->setIcon(style()->standardIcon(QStyle::SP_DirIcon));
+            name_item->setIcon(icons::themed(icons::Id::Folder, icons::ColorRole::TextSecondary));
         } else {
-            name_item->setIcon(style()->standardIcon(QStyle::SP_FileIcon));
+            name_item->setIcon(icons::themed(icons::Id::File, icons::ColorRole::TextSecondary));
         }
         file_table_->setItem(row, 0, name_item);
 

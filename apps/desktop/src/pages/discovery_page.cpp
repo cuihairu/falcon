@@ -7,6 +7,7 @@
 
 #include "discovery_page.hpp"
 #include "../services/search_service.hpp"
+#include "../utils/icon_utils.hpp"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -204,8 +205,8 @@ void DiscoveryPage::create_results_table()
     results_table_->setContextMenuPolicy(Qt::CustomContextMenu);
     results_table_->setAlternatingRowColors(true);
 
-    // 设置列宽
-    results_table_->setColumnWidth(0, 350);  // 标题
+    // 列宽:标题列弹性伸缩跟随窗口,其余列固定内容宽
+    results_table_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
     results_table_->setColumnWidth(1, 100);  // 大小
     results_table_->setColumnWidth(2, 120);  // 来源
     results_table_->setColumnWidth(3, 80);   // 类型
@@ -425,11 +426,15 @@ void DiscoveryPage::show_context_menu(const QPoint& pos)
 {
     QMenu menu(this);
 
-    auto* download_action = menu.addAction(style()->standardIcon(QStyle::SP_ArrowDown), tr("Download"));
-    auto* copy_action = menu.addAction(style()->standardIcon(QStyle::SP_DialogOpenButton), tr("Copy URL"));
-    auto* open_action = menu.addAction(style()->standardIcon(QStyle::SP_DirLinkIcon), tr("Open in Browser"));
+    auto* download_action = menu.addAction(
+        icons::themed(icons::Id::Download, icons::ColorRole::TextSecondary), tr("Download"));
+    auto* copy_action = menu.addAction(
+        icons::themed(icons::Id::Link, icons::ColorRole::TextSecondary), tr("Copy URL"));
+    auto* open_action = menu.addAction(
+        icons::themed(icons::Id::File, icons::ColorRole::TextSecondary), tr("Open in Browser"));
     menu.addSeparator();
-    auto* queue_action = menu.addAction(style()->standardIcon(QStyle::SP_FileDialogListView), tr("Add to Queue"));
+    auto* queue_action = menu.addAction(
+        icons::themed(icons::Id::List, icons::ColorRole::TextSecondary), tr("Add to Queue"));
 
     QAction* action = menu.exec(results_table_->mapToGlobal(pos));
 

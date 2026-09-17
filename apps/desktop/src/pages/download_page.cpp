@@ -6,6 +6,7 @@
  */
 
 #include "download_page.hpp"
+#include "utils/icon_utils.hpp"
 
 #include <QHeaderView>
 #include <QProgressBar>
@@ -19,6 +20,7 @@
 #include <QFrame>
 #include <QFileInfo>
 #include <QSet>
+#include <QToolButton>
 #include <algorithm>
 
 namespace falcon::desktop {
@@ -207,25 +209,21 @@ void DownloadPage::create_header_bar()
 
     refresh_button_ = new QPushButton(tr("刷新列表"), this);
     refresh_button_->setObjectName("toolButton");
-    refresh_button_->setFixedHeight(34);
     connect(refresh_button_, &QPushButton::clicked, this, &DownloadPage::on_refresh_clicked);
     header_layout_->addWidget(refresh_button_);
 
     view_toggle_button_ = new QPushButton(tr("切换分组"), this);
     view_toggle_button_->setObjectName("toolButton");
-    view_toggle_button_->setFixedHeight(34);
     connect(view_toggle_button_, &QPushButton::clicked, this, &DownloadPage::on_view_toggle_clicked);
     header_layout_->addWidget(view_toggle_button_);
 
     style_toggle_button_ = new QPushButton(tr("卡片视图"), this);
     style_toggle_button_->setObjectName("toolButton");
-    style_toggle_button_->setFixedHeight(34);
     connect(style_toggle_button_, &QPushButton::clicked, this, &DownloadPage::on_style_toggle_clicked);
     header_layout_->addWidget(style_toggle_button_);
 
     more_button_ = new QPushButton(tr("批量操作"), this);
     more_button_->setObjectName("toolButton");
-    more_button_->setFixedHeight(34);
     connect(more_button_, &QPushButton::clicked, this, &DownloadPage::on_more_options_clicked);
     header_layout_->addWidget(more_button_);
 }
@@ -257,8 +255,8 @@ void DownloadPage::create_task_table()
     connect(task_table_, &QTableWidget::customContextMenuRequested,
             this, &DownloadPage::show_context_menu);
 
-    // 设置列宽
-    task_table_->setColumnWidth(0, 350);  // 文件名
+    // 列宽:文件名列弹性伸缩跟随窗口,其余列固定内容宽
+    task_table_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
     task_table_->setColumnWidth(1, 180);  // 进度
     task_table_->setColumnWidth(2, 100);  // 大小
     task_table_->setColumnWidth(3, 100);  // 速度
@@ -397,6 +395,12 @@ void DownloadPage::rerender()
 
 bool DownloadPage::should_show(const falcon::daemon::rpc::TaskSnapshot& snapshot) const
 {
+    // 顶栏搜索框过滤(单点入口:表格与网格视图共用本谓词)
+    if (!text_filter_.isEmpty()
+            && !filename_for(snapshot).contains(text_filter_, Qt::CaseInsensitive)) {
+        return false;
+    }
+
     switch (view_mode_) {
         case DownloadViewMode::Downloading:
             return snapshot.status == falcon::TaskStatus::Downloading ||
@@ -463,26 +467,31 @@ void DownloadPage::sync_task_row(const TaskRecord& record)
     status_item->setTextAlignment(Qt::AlignCenter);
     task_table_->setItem(row, 4, status_item);
 
-    // 操作按钮
+    // 操作按钮(图标化;暂停⇄继续按状态切换,click 统一走状态分发)
     auto* actions_widget = new QWidget(this);
     auto* actions_layout = new QHBoxLayout(actions_widget);
     actions_layout->setContentsMargins(4, 0, 4, 0);
     actions_layout->setSpacing(4);
 
-    auto* pause_btn = new QPushButton(tr("暂停"), actions_widget);
+    const bool resumable = record.snapshot.status == falcon::TaskStatus::Paused ||
+                           record.snapshot.status == falcon::TaskStatus::Failed;
+    auto* pause_btn = new QToolButton(actions_widget);
     pause_btn->setObjectName("rowActionButton");
-    pause_btn->setFixedHeight(28);
-    pause_btn->setToolTip(tr("暂停"));
+    pause_btn->setIcon(icons::themed(resumable ? icons::Id::Play : icons::Id::Pause,
+                                     icons::ColorRole::TextSecondary));
+    pause_btn->setAutoRaise(true);
+    pause_btn->setToolTip(resumable ? tr("继续") : tr("暂停"));
     pause_btn->setProperty("taskId", QVariant::fromValue<qulonglong>(key));
-    connect(pause_btn, &QPushButton::clicked, this, &DownloadPage::on_pause_selected);
+    connect(pause_btn, &QToolButton::clicked, this, &DownloadPage::on_pause_selected);
     actions_layout->addWidget(pause_btn);
 
-    auto* delete_btn = new QPushButton(tr("删除"), actions_widget);
+    auto* delete_btn = new QToolButton(actions_widget);
     delete_btn->setObjectName("rowActionButton");
-    delete_btn->setFixedHeight(28);
+    delete_btn->setIcon(icons::themed(icons::Id::Trash, icons::ColorRole::TextSecondary));
+    delete_btn->setAutoRaise(true);
     delete_btn->setToolTip(tr("删除"));
     delete_btn->setProperty("taskId", QVariant::fromValue<qulonglong>(key));
-    connect(delete_btn, &QPushButton::clicked, this, &DownloadPage::on_delete_selected);
+    connect(delete_btn, &QToolButton::clicked, this, &DownloadPage::on_delete_selected);
     actions_layout->addWidget(delete_btn);
 
     task_table_->setCellWidget(row, 5, actions_widget);
@@ -940,19 +949,33 @@ void DownloadPage::set_display_style(TaskDisplayStyle style)
     update_empty_state();
 }
 
+void DownloadPage::set_text_filter(const QString& text)
+{
+    if (text_filter_ == text) {
+        return;
+    }
+    text_filter_ = text;
+
+    // rerender 内部 sync_task_row 按 should_show 双向增删行;
+    // 网格视图在其尾部统一 sync_task_grid
+    rerender();
+}
+
+void DownloadPage::toggle_display_style()
+{
+    set_display_style(display_style_ == TaskDisplayStyle::Table
+                          ? TaskDisplayStyle::Grid
+                          : TaskDisplayStyle::Table);
+
+    // 按钮文字提示点击后切换到的目标视图
+    style_toggle_button_->setText(display_style_ == TaskDisplayStyle::Table
+                                      ? tr("卡片视图")
+                                      : tr("列表视图"));
+}
+
 void DownloadPage::on_style_toggle_clicked()
 {
-    // 切换显示样式
-    switch (display_style_) {
-        case TaskDisplayStyle::Table:
-            set_display_style(TaskDisplayStyle::Grid);
-            style_toggle_button_->setText(tr("列表视图"));
-            break;
-        case TaskDisplayStyle::Grid:
-            set_display_style(TaskDisplayStyle::Table);
-            style_toggle_button_->setText(tr("卡片视图"));
-            break;
-    }
+    toggle_display_style();
 }
 
 void DownloadPage::show_grid_context_menu(const QPoint& pos)
@@ -1093,21 +1116,17 @@ QWidget* DownloadPage::create_task_card(const TaskRecord& record)
 
     auto* card = new QWidget(grid_widget_);
     card->setObjectName("taskCard");
-    card->setFixedSize(280, 140);
+    card->setFixedSize(280, 148);
 
     auto* card_layout = new QVBoxLayout(card);
     card_layout->setContentsMargins(12, 12, 12, 12);
     card_layout->setSpacing(8);
 
-    // 文件名
+    // 文件名(字号/字重由 QSS #cardFileName 统一管控)
     auto* name_label = new QLabel(record.filename, card);
     name_label->setObjectName("cardFileName");
     name_label->setWordWrap(true);
     name_label->setMaximumHeight(40);
-    auto name_font = name_label->font();
-    name_font.setBold(true);
-    name_font.setPointSize(10);
-    name_label->setFont(name_font);
     card_layout->addWidget(name_label);
 
     // 进度条
@@ -1137,32 +1156,36 @@ QWidget* DownloadPage::create_task_card(const TaskRecord& record)
 
     card_layout->addLayout(info_layout);
 
-    // 操作按钮
+    // 操作按钮(图标化)
     auto* actions_layout = new QHBoxLayout();
     actions_layout->setSpacing(8);
 
-    auto* pause_btn = new QPushButton(card);
+    auto* pause_btn = new QToolButton(card);
     pause_btn->setObjectName("cardActionButton");
-    pause_btn->setFixedSize(60, 26);
+    pause_btn->setAutoRaise(true);
     if (snap.status == falcon::TaskStatus::Downloading ||
         snap.status == falcon::TaskStatus::Preparing) {
-        pause_btn->setText(tr("暂停"));
-        connect(pause_btn, &QPushButton::clicked, this,
+        pause_btn->setIcon(icons::themed(icons::Id::Pause, icons::ColorRole::TextSecondary));
+        pause_btn->setToolTip(tr("暂停"));
+        connect(pause_btn, &QToolButton::clicked, this,
                 [this, id = snap.id]() { emit pause_requested(id); });
     } else if (snap.status == falcon::TaskStatus::Paused ||
                snap.status == falcon::TaskStatus::Failed) {
-        pause_btn->setText(tr("继续"));
-        connect(pause_btn, &QPushButton::clicked, this,
+        pause_btn->setIcon(icons::themed(icons::Id::Play, icons::ColorRole::TextSecondary));
+        pause_btn->setToolTip(tr("继续"));
+        connect(pause_btn, &QToolButton::clicked, this,
                 [this, id = snap.id]() { emit resume_requested(id); });
     } else {
         pause_btn->setEnabled(false);
     }
     actions_layout->addWidget(pause_btn);
 
-    auto* delete_btn = new QPushButton(tr("删除"), card);
+    auto* delete_btn = new QToolButton(card);
     delete_btn->setObjectName("cardActionButton");
-    delete_btn->setFixedSize(60, 26);
-    connect(delete_btn, &QPushButton::clicked, this, [this, id = snap.id]() {
+    delete_btn->setAutoRaise(true);
+    delete_btn->setIcon(icons::themed(icons::Id::Trash, icons::ColorRole::TextSecondary));
+    delete_btn->setToolTip(tr("删除"));
+    connect(delete_btn, &QToolButton::clicked, this, [this, id = snap.id]() {
         emit remove_task_requested(id);
     });
     actions_layout->addWidget(delete_btn);

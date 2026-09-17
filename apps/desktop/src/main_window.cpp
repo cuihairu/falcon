@@ -24,6 +24,8 @@
 #include <QHBoxLayout>
 #include <QWidget>
 #include <QApplication>
+#include <QEvent>
+#include <QMouseEvent>
 #include <QDir>
 #include <QDesktopServices>
 #include <QFileInfo>
@@ -38,6 +40,28 @@ namespace falcon::desktop {
 
 namespace {
 constexpr quint16 kIpcPort = 51337;
+// 无边框窗口边缘缩放带宽度(像素)
+constexpr int kResizeEdgeBand = 6;
+
+/** 缩放边组合 → 对应的系统缩放光标形状 */
+Qt::CursorShape cursor_shape_for_edges(Qt::Edges edges)
+{
+    if (edges == (Qt::TopEdge | Qt::LeftEdge)
+            || edges == (Qt::BottomEdge | Qt::RightEdge)) {
+        return Qt::SizeFDiagCursor;
+    }
+    if (edges == (Qt::TopEdge | Qt::RightEdge)
+            || edges == (Qt::BottomEdge | Qt::LeftEdge)) {
+        return Qt::SizeBDiagCursor;
+    }
+    if (edges & (Qt::LeftEdge | Qt::RightEdge)) {
+        return Qt::SizeHorCursor;
+    }
+    if (edges & (Qt::TopEdge | Qt::BottomEdge)) {
+        return Qt::SizeVerCursor;
+    }
+    return Qt::ArrowCursor;
+}
 } // namespace
 
 MainWindow::MainWindow(QWidget* parent)
@@ -74,6 +98,7 @@ MainWindow::MainWindow(QWidget* parent)
 
 MainWindow::~MainWindow()
 {
+    qApp->removeEventFilter(this);
     if (clipboard_monitor_) {
         clipboard_monitor_->stop();
     }
@@ -92,6 +117,7 @@ void MainWindow::setup_ui()
     setWindowFlags(Qt::WindowType::FramelessWindowHint);
 
     resize(1200, 800);
+    setMinimumSize(960, 640);
 
     // 创建中心部件（设置不透明背景，否则窗口会透明）
     auto* central_widget = new QWidget(this);
@@ -124,6 +150,9 @@ void MainWindow::setup_ui()
     // 创建底部状态栏
     status_bar_ = new StatusBar(this);
     main_layout->addWidget(status_bar_);
+
+    // 无边框窗口边缘缩放必须监听 qApp 级事件（见 eventFilter 注释）
+    qApp->installEventFilter(this);
 }
 
 void MainWindow::create_top_bar()
@@ -133,8 +162,33 @@ void MainWindow::create_top_bar()
     connect(top_bar_, &TopBar::minimizeClicked, this, &MainWindow::on_minimize_requested);
     connect(top_bar_, &TopBar::maximizeClicked, this, &MainWindow::on_maximize_requested);
     connect(top_bar_, &TopBar::closeClicked, this, &MainWindow::on_close_requested);
-    connect(top_bar_, &TopBar::refreshClicked, this, []() {
-        // 任务数据由 DownloadService 周期推送，无需手动刷新
+
+    // 搜索框回车 → 按文件名过滤下载页(表格/网格双视图共用)
+    connect(top_bar_, &TopBar::searchRequested, this, [this](const QString& text) {
+        if (download_page_) {
+            download_page_->set_text_filter(text);
+        }
+    });
+
+    // 视图切换 → 下载页表格/网格互切
+    connect(top_bar_, &TopBar::viewToggleClicked, this, [this]() {
+        if (download_page_) {
+            download_page_->toggle_display_style();
+        }
+    });
+
+    // 手动刷新:事件驱动下的兜底(用户感知数据陈旧时)
+    connect(top_bar_, &TopBar::refreshClicked, this, [this]() {
+        if (download_service_) {
+            download_service_->request_refresh();
+        }
+    });
+
+    // 视图切换钮仅对下载页有意义,其他页禁用(避免无效点击)
+    connect(content_stack_, &QStackedWidget::currentChanged, this, [this](int index) {
+        if (top_bar_) {
+            top_bar_->set_view_toggle_enabled(index == PAGE_DOWNLOAD);
+        }
     });
 }
 
@@ -646,6 +700,72 @@ void MainWindow::on_priority_changed(falcon::TaskId id, falcon::TaskPriority pri
     download_service_->set_priority(id, priority);
 }
 
+//==============================================================================
+// 无边框窗口:边缘缩放 + 最大化状态同步
+//==============================================================================
+
+void MainWindow::changeEvent(QEvent* event)
+{
+    if (event->type() == QEvent::WindowStateChange && top_bar_) {
+        // 最大化/还原切换顶栏按钮图标(Square ↔ Restore)
+        top_bar_->set_maximized(isMaximized());
+    }
+    QMainWindow::changeEvent(event);
+}
+
+bool MainWindow::eventFilter(QObject* obj, QEvent* event)
+{
+    const QEvent::Type type = event->type();
+    if (type == QEvent::MouseMove || type == QEvent::MouseButtonPress) {
+        auto* widget = qobject_cast<QWidget*>(obj);
+        // 只关心本窗口内的控件;菜单/tooltip/combo 弹窗是独立顶层窗口,
+        // window() 比较天然排除。缩放仅在非最大化时生效。
+        if (widget && widget->window() == static_cast<QWidget*>(this) && !isMaximized()) {
+            const auto* mouse = static_cast<QMouseEvent*>(event);
+            const Qt::Edges edges = resize_edge_for(mouse->globalPosition().toPoint());
+            if (edges != 0) {
+                if (type == QEvent::MouseButtonPress
+                        && mouse->button() == Qt::LeftButton && windowHandle()) {
+                    windowHandle()->startSystemResize(edges);
+                    return true;
+                }
+                if (type == QEvent::MouseMove) {
+                    setCursor(cursor_shape_for_edges(edges));
+                    resize_cursor_active_ = true;
+                    return false;
+                }
+            } else if (type == QEvent::MouseMove && resize_cursor_active_) {
+                // 仅在曾设过缩放光标时恢复,避免覆盖子控件自己的光标
+                // (如 QLineEdit 的 IBeam)
+                setCursor(Qt::ArrowCursor);
+                resize_cursor_active_ = false;
+            }
+        }
+    }
+    return QMainWindow::eventFilter(obj, event);
+}
+
+Qt::Edges MainWindow::resize_edge_for(const QPoint& global_pos) const
+{
+    const QPoint local = mapFromGlobal(global_pos);
+    const QRect frame = rect();
+
+    Qt::Edges edges;
+    if (local.x() <= kResizeEdgeBand) {
+        edges |= Qt::LeftEdge;
+    }
+    if (local.x() >= frame.width() - kResizeEdgeBand) {
+        edges |= Qt::RightEdge;
+    }
+    if (local.y() <= kResizeEdgeBand) {
+        edges |= Qt::TopEdge;
+    }
+    if (local.y() >= frame.height() - kResizeEdgeBand) {
+        edges |= Qt::BottomEdge;
+    }
+    return edges;
+}
+
 void MainWindow::on_minimize_requested()
 {
     showMinimized();
@@ -691,13 +811,16 @@ void MainWindow::on_tasks_refreshed(const std::vector<falcon::daemon::rpc::TaskS
 
 void MainWindow::on_stats_refreshed(falcon::daemon::rpc::GlobalStats stats)
 {
-    if (!status_bar_) {
-        return;
+    if (status_bar_) {
+        status_bar_->set_download_speed(static_cast<uint64_t>(stats.download_speed));
+        status_bar_->set_task_counts(static_cast<int>(stats.active_tasks),
+                                     static_cast<int>(stats.stopped_tasks));
     }
 
-    status_bar_->set_download_speed(static_cast<uint64_t>(stats.download_speed));
-    status_bar_->set_task_counts(static_cast<int>(stats.active_tasks),
-                                 static_cast<int>(stats.stopped_tasks));
+    // 侧栏底部统计卡:真实活跃任务数(替代此前的硬编码假数据)
+    if (side_bar_) {
+        side_bar_->set_queue_count(static_cast<int>(stats.active_tasks));
+    }
 }
 
 void MainWindow::on_task_add_failed(const QString& url, const QString& reason)
