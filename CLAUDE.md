@@ -2,6 +2,49 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-17 - 桌面 UI 结构性重做（Fluent/Win11 设计体系 + 内嵌 Lucide SVG 图标 + 无边框窗口修复）
+- **根因诊断**：三套互相矛盾的样式并存（theme_manager.cpp 978 行内联 QSS
+  唯一生效、styles.hpp 396 行死代码、main.qss 220 行编入 qrc 从未加载），
+  亮暗两套规则集严重不对齐（dark 缺 navTab/taskTable、light 缺
+  QScrollBar/QDialog）；无边框窗口零拖动/缩放实现；窗口控制钮 "_"/"[ ]"/"X"
+  文字钮吃通用按钮 QSS 与 setFixedSize 冲突；TopBar/StatusBar 大量零连接
+  死按钮；侧栏三组 QButtonGroup 互不排他；footer 假数据 "12" 与
+  "Preview UI" 徽章；18 处 QStyle::standardIcon 与文字按钮混杂
+- **Fluent 设计地基**：fluent_light.qss / fluent_dark.qss 严格成对编写
+  （11 节，选择器经脚本与代码 setObjectName 双向校验零死选择器），
+  theme_tokens.hpp 语义色 token 单一事实源（QPalette + Fusion 基座与 QSS
+  同源）；删除 styles.hpp 与 main.qss
+- **内嵌图标系统**：27 个 Lucide v0.294.0 SVG（ISC）入 qrc，
+  QSvgRenderer 渲染 + currentColor 替换着色；TokenIconEngine（QIconEngine
+  子类）绘制时取当前主题 token——换肤后已存在的按钮图标自动换色；
+  QPixmapCache 按 id/色/尺寸/DPR 缓存。Qt6::Svg 转 REQUIRED，CI apt 加
+  qt6-svg-dev、vcpkg 加 qtsvg(!linux)、nightly EXTRA_QT_MODULES 补 svg
+  （漏掉 = AppImage 编译不报错运行时崩）
+- **无边框窗口 chrome**：TopBar 空白区 startSystemMove 拖动 + 双击最大化；
+  qApp 级 eventFilter 实现 8 向边缘缩放（6px 感应带 + startSystemResize +
+  方向光标；必须 qApp 级——中央控件吞自身鼠标事件、单控件 filter 拦不到
+  孙辈；谓词 window()==this 天然排除菜单/tooltip 独立窗口）；窗口钮图标
+  化（Minus/Square↔Restore/X，changeEvent 同步最大化状态）；最小尺寸
+  960×640
+- **交互诚实化**：TopBar 搜索框接通下载任务过滤（DownloadPage::
+  set_text_filter 单点 should_show，表格/网格双视图生效）、视图切换钮接通
+  toggle_display_style（非下载页禁用）、刷新钮接通 request_refresh（从
+  private 提升 public——线程安全置位语义，后端回调本就从外部线程调用）；
+  StatusBar 删 4 个零连接按钮/信号与 detection badge；侧栏三组合一 exclusive
+  nav_group_（选中态与页面一致）；footer 显示真实活跃任务数
+- **各页 Fluent 化**：18 处 standardIcon → 主题感知 SVG；行内"暂停/删除"
+  文字钮与卡片操作钮图标化（保留 taskId property 机制）；表格文件名列
+  Stretch 伸缩；删 4 处 setFixedHeight(34) 与 3 处硬编码字体（收口到
+  #pageTitle/#sectionTitle/#emptyStateTitle/#cardFileName）
+- **CI 首轮曝光五类编译错**：src/widgets/ 下裸相对名 include 找不到
+  icon_utils.hpp（改 ../utils/ 路径）；QIcon/QStyle/QWindow 仅前向声明导致
+  TokenIconEngine override 失效与 startSystemResize 不可用（补
+  QIconEngine/QStyle/QWindow 完整 include）；本机无 Qt6 无法预编译，
+  此类错误靠 CI QT6 job 收敛
+- 三平台 Qt6 编译全绿（run 35247334598），falcon_desktop_backend_tests
+  零风险（backend 层零改动）；手工验收项：拖动/8 向缩放/双击最大化/亮暗
+  切换图标换色/搜索过滤/列伸缩
+
 ### 2026-09-17 - 覆盖率批次 V：行 94.9% → 95.1%（V2 引擎命令防御直调 + 多段超时清理/多段 pause→resume abandon + 四云官方域名兜底）
 - **11 新用例，cov 全量 ctest 2106 清单 100% 通过（exit 0 零失败）
   + ASan 11 新用例零告警**；miss 841 → 816（净收敛 25 行）：

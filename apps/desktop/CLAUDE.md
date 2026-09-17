@@ -2,6 +2,30 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-17 - UI 结构性重做（Fluent 体系 + Lucide 图标 + 无边框窗口）
+- **样式收口**：删除 theme_manager.cpp 978 行内联 QSS、styles.hpp（死代码）、
+  main.qss（编入 qrc 从未加载）三套矛盾样式；新增 fluent_light.qss /
+  fluent_dark.qss **严格成对编写**（改一份必须同步另一份，11 节同构）+
+  theme_tokens.hpp 语义色 token（QPalette 与 QSS 同源）+ icon_utils
+  （TokenIconEngine 绘制时取当前主题色，换肤自动换图标颜色）；QSS 选择器
+  只认代码真实 objectName（双向脚本校验）
+- **图标系统**：resources/icons/ 27 个 Lucide SVG（stroke="currentColor"），
+  `icons::themed(Id, ColorRole)` 返回主题感知 QIcon；Qt6::Svg 为 REQUIRED
+  依赖（vcpkg qtsvg / apt qt6-svg-dev / nightly EXTRA_QT_MODULES 三处同步）
+- **无边框窗口**：TopBar mousePressEvent→startSystemMove、双击→最大化；
+  MainWindow qApp 级 eventFilter + resize_edge_for（6px 边缘带 8 向缩放，
+  必须挂 qApp——中央控件吞事件）；changeEvent 同步 TopBar set_maximized
+  （Square↔Restore 图标）
+- **交互修复**：TopBar 搜索→DownloadPage::set_text_filter（should_show
+  单点过滤）、视图切换→toggle_display_style（DownloadService::
+  request_refresh 从 private 提升 public 供刷新钮用）；SideBar 三组
+  QButtonGroup 合并单一 exclusive nav_group_、set_queue_count 吃真实
+  stats；StatusBar 死按钮全删
+- **教训**：src/widgets/ 下的文件 include src/utils/ 头必须用
+  "../utils/xxx.hpp"（相对 include 只找同目录）；QIconEngine/QWindow/QStyle
+  使用前必须完整 include（QIcon 前向声明不够，override 全部失效）
+- 三平台 Qt6 CI 全绿（run 35247334598）
+
 ### 2026-09-12 - Daemon 事件流驱动（WebSocket 通知接入）
 - `DaemonRpcBackend` 从 HTTP `JsonRpcClient` 切换到 `WebSocketRpcClient`
   （daemon 新增的 WS JSON-RPC 客户端）：与 daemon 维持单条 WebSocket
