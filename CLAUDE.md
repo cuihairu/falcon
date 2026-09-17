@@ -2,6 +2,61 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-17 - 覆盖率批次 V：行 94.9% → 95.1%（V2 引擎命令防御直调 + 多段超时清理/多段 pause→resume abandon + 四云官方域名兜底）
+- **11 新用例，cov 全量 ctest 2106 清单 100% 通过（exit 0 零失败）
+  + ASan 11 新用例零告警**；miss 841 → 816（净收敛 25 行）：
+  - protocols http_commands_coverage 3（HttpResponseCommand/
+    HttpDownloadCommand 的 execute(nullptr) 防御直调——handle_result
+    纯状态机不触 engine 可安全断言 FAILED；set_global_speed_limit(0)
+    的"全局限速: 取消"日志分支）
+  - run_test 1（task_id=999 的抛异常命令——find_group 失败的
+    fail_group_of_command 无组收口 + 引擎存活）
+  - edges 2（**多段段命令超时清理**——段 1 连接读头后挂死 8s 内
+    poll 等 EOF（客户端 sweep 关 fd 即 break，不拖 server.stop()），
+    timeout_seconds=1 任务级超时 → cleanup_completed_commands 复用
+    fail_group_of_command 的 is_multi_segment 分支 finish_segment(
+    false)，既有黑洞用例全是单连接任务；**localhost 域名下载**——
+    resolve_host 成功路径 + 事件唤醒重入，成品逐字节一致）
+  - pause 2（**重试窗口内暂停**——端口 1 连接拒绝 + retry_delay
+    3600s，HttpRetryCommand 以 NEED_RETRY 回队轮询期间 pause_task，
+    下一轮 execute 入口 PAUSED 守卫静默收口，组保持 PAUSED 无错误
+    消息；**多段 pause→resume abandon**——恢复初始连接带断点
+    Range 收 206 → determine_download_strategy 经 has_resume_state
+    进 schedule_resume_download → is_multi_segment 防御触发 abandon_
+    resume + 全新无 Range 下载；路径铁证：resume 后新连接数增量 >
+    Range 连接数增量 ⇒ 存在无 Range 全新初始连接，与单连接续传的
+    "恢复连接必带 Range"可区分）
+  - storage 3（kodo/cos/upyun connect 无 endpoint/api_domain 的官方
+    域名兜底分支——rs.qbox.me 真实 401/{bucket}-{appid}.cos.ap-test
+    .myqcloud.com DNS 失败/v0.api.upyun.com 兜底赋值+官方域名拼接，
+    一个用例双收兜底与拼接两处，URL 拼接先于请求故覆盖与请求结果
+    无关）
+- **六项撤销定性（写测试前核对访问性/调用图，铁证齐全）**：①
+  thread_pool.hpp:47 submit-after-stop throw——stopped_ 唯一置位点
+  在析构（thread_pool.cpp 全文），无公开 stop 方法 → 无合法调用
+  窗口（UAF）；② notify_segment_failure 的 engine-null 防御（1158-
+  1166）——private 方法且调用者恒传有效 engine；③ handle_redirect
+  的 engine-null 防御（1554）——同上（编译期 private 访问错误实证，
+  撤销已写用例；execute 开头 null 防御先 return，1296 调用点 engine
+  恒非空）；④ window_recovery_point 381 的 `return {}`——调用点
+  守卫（total>=task_limit / speed_window_bytes_>=limit）+ prune 同
+  步递减 total → samples.empty() 组合不可达；⑤ download_engine_v2
+  .cpp:769 状态守卫出口行——需 PAUSED 组挂起命令逃脱 sweep 存活到
+  超时清理，与"sweep 正确收走"不变量互斥（`if (!group) return;`
+  实际在 760-761 且已被异常命令路径覆盖）；⑥ http_commands 1976-
+  1978 FAILED 守卫 + daemon 683-694 放弃（低价值/进程级）
+- **一项未命中（诚实记录）**：http_commands.cpp:690 resolved_ip_
+  缓存命中——localhost 回环连接首次 connect 立即成功，无
+  EINPROGRESS 挂起→事件唤醒的二次 execute 重入；同用例的
+  resolve_host 成功路径已收（引擎日志"localhost 解析为 127.0.0.1"
+  铁证）
+- **98% 结构性不可达定量更新**：miss 816 = header 实例水分 ~212
+  （logger.hpp 127 + thread_pool.hpp 31 为主，跨 TU 内联展开必然
+  miss）+ 历史逐批定性不可测 .cpp ~604（OOM 注入/平台分支/伪影/
+  竞态/结构不可达/官方域名深层分支）；可测矿点至此收尽，**95.1%
+  为当前口径收口值**（行 95.1% / 函数 98.6% / 分支 53.9%，批次
+  C 同款 gcovr 两树合并口径）
+
 ### 2026-09-16 - 覆盖率批次 T+U：行 82.7% → 94.9%（daemon 启动/停机边界 + 四库冷门残矿 + V2 适配器收口）+ redirect_stdio fd 顺序缺陷修复
 - **49 新用例，cov 全量 ctest 2096 清单 100% 通过（exit 0 零失败）
   + ASan protocols 736 零告警**：

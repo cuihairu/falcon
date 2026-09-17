@@ -111,6 +111,18 @@ TEST(UpyunBrowserMockTest, ConnectFailsWhenServerUnreachable) {
     EXPECT_FALSE(connect_upyun(browser, "http://127.0.0.1:1"));
 }
 
+/// 批次 V：无自定义 api_domain——connect 的 options 处理落到默认值
+/// 兜底（"v0.api.upyun.com"），build_url 随之走官方域名分支（https://
+/// {bucket}.v0.api.upyun.com）。无签名的 /usage/ 探测被拒（401）或网
+/// 络不可达，connect 以失败收口；一个用例同时覆盖兜底赋值与官方域名
+/// 拼接两处路径（均先于请求发生）
+TEST(UpyunBrowserMockTest, ConnectWithoutApiDomainFallsBackToDefaultAndFails) {
+    UpyunBrowser browser;
+    // 空 options（无凭据无 api_domain）：默认域名兜底 + 真实网络只读
+    // 探测，无副作用
+    EXPECT_FALSE(browser.connect("upyun://" + std::string(kBucket), {}));
+}
+
 //==============================================================================
 // 列举
 //==============================================================================

@@ -1761,6 +1761,118 @@ TEST(DownloadEngineV2Edges, MalformedHeaderBareLfLineSkipped) {
 }
 
 //==============================================================================
+// 批次 V：多段段命令超时清理 / 域名解析缓存
+//==============================================================================
+
+/// 多段任务的段连接挂死：任务级超时（1s）清理收口走 fail_group_of_
+/// command 的多段分支（finish_segment(false) + 组 FAILED）——既有黑
+/// 洞服务器用例均为单连接任务，多段组经超时路径的段失败聚合此前从未
+/// 执行
+TEST(DownloadEngineV2Edges, MultiSegmentStuckSegmentTimeoutFailsGroup) {
+    const std::string body = make_body(128 * 1024);
+
+    ScriptableServer server;
+    ASSERT_TRUE(server.start());
+    server.script({
+        serve_http(200, "Accept-Ranges: bytes\r\n", body),  // 初始连接：段 0
+        [](int conn, ScriptableServer& srv) {
+            // 段 1 连接：读请求头后挂住不应答——直到对端断开（超时清
+            // 理收走 fd 后 recv 得 EOF）或 8s 兜底，保证 server.stop()
+            // 的 join 不被无谓拖长
+            std::string request;
+            (void)read_headers_plain(conn, request);
+            srv.record_target(request_target_of(request));
+            char buf[256];
+            const auto deadline =
+                std::chrono::steady_clock::now() + std::chrono::seconds(8);
+            while (std::chrono::steady_clock::now() < deadline) {
+                struct pollfd pfd;
+                pfd.fd = conn;
+                pfd.events = POLLIN;
+                pfd.revents = 0;
+                if (POLL(&pfd, 1, 200) > 0) {
+                    if (::recv(conn, buf, sizeof(buf), 0) <= 0) break;
+                }
+            }
+        }});
+
+    const std::string dir = temp_dir_for("segstuck");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options = base_options(out_path);
+    options.max_connections = 2;
+    options.min_segment_size = 32 * 1024;
+    options.timeout_seconds = 1;  // 任务级超时：挂起段命令 1s 被清理
+    const TaskId task_id = engine.add_download(
+        server.http_url("/f.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    EdgesEngineRunner runner(engine);
+    ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
+    EXPECT_EQ(group->status(), RequestGroupStatus::FAILED)
+        << "挂死段命令经超时清理必须把组收口为 FAILED";
+
+    runner.shutdown_and_join();
+    server.stop();
+
+    EXPECT_TRUE(read_file_content(out_path).empty());
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+/// 域名主机（localhost → 127.0.0.1）：初始连接的 resolve_host 成功
+/// 并缓存 resolved_ip_；非阻塞 connect 的 EINPROGRESS 挂起由 socket
+/// 事件唤醒，命令重入 connect_socket 时 inet_pton 对域名失败、命中
+/// 缓存直接复用首次解析结果（既有用例全部使用 IP 字面量，解析分支
+/// 与缓存路径从未执行）
+TEST(DownloadEngineV2Edges, LocalhostHostnameDownloadResolvesAndCompletes) {
+    const std::string body = make_body(64 * 1024);
+
+    ScriptableServer server;
+    ASSERT_TRUE(server.start());
+    server.script({serve_http(200, "Accept-Ranges: bytes\r\n", body)});
+
+    const std::string dir = temp_dir_for("localhost");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options = base_options(out_path);
+    const TaskId task_id = engine.add_download(
+        "http://localhost:" + std::to_string(server.port()) + "/f.bin",
+        options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    EdgesEngineRunner runner(engine);
+    ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
+    ASSERT_EQ(group->status(), RequestGroupStatus::COMPLETED)
+        << group->error_message();
+
+    runner.shutdown_and_join();
+    server.stop();
+
+    EXPECT_EQ(read_file_content(out_path), body);
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+//==============================================================================
 // TLS 错误路径与代理 CONNECT 失败（需 OpenSSL）
 //==============================================================================
 

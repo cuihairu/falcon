@@ -1411,3 +1411,41 @@ TEST_F(HttpCommandsCoverageTest, EndToEndMultiSegmentDownload) {
     // 文件内容完整且按偏移正确拼装
     EXPECT_EQ(read_file_content(out_path), body);
 }
+
+//==============================================================================
+// 批次 V：命令 null 防御直调 + 限速取消日志
+//==============================================================================
+
+/// 响应命令的 engine-null 防御：execute(nullptr) 在触达任何引擎状态前
+/// 收口 ERROR_OCCURRED（handle_result 纯状态机，不依赖 engine）
+TEST_F(HttpCommandsCoverageTest, ResponseExecuteNullEngineFails) {
+    DownloadOptions options;
+    auto request = std::make_shared<HttpRequest>();
+    request->set_url("http://127.0.0.1/file.bin");
+    HttpResponseCommand cmd(1, -1, std::move(request), options);
+
+    EXPECT_TRUE(cmd.execute(nullptr));
+    EXPECT_EQ(cmd.status(), CommandStatus::FAILED);
+}
+
+/// 下载命令的 engine-null 防御：同上，execute 入口在 finish_output 等
+/// 收尾之前先行收口
+TEST_F(HttpCommandsCoverageTest, DownloadExecuteNullEngineFails) {
+    DownloadOptions options;
+    HttpDownloadCommand cmd(1, -1, std::make_shared<HttpResponse>(),
+                            /*segment_id=*/0, /*offset=*/0, /*length=*/0);
+
+    EXPECT_TRUE(cmd.execute(nullptr));
+    EXPECT_EQ(cmd.status(), CommandStatus::FAILED);
+}
+
+/// set_global_speed_limit(0)：取消分支日志（非 0 分支已有用例覆盖，
+/// 0 → "全局限速: 取消" 此前从未执行）
+TEST_F(HttpCommandsCoverageTest, SetGlobalSpeedLimitZeroLogsCancellation) {
+    EngineConfigV2 config;
+    DownloadEngineV2 engine(config);
+
+    engine.set_global_speed_limit(64 * 1024);  // 先设非零（非 0 分支）
+    engine.set_global_speed_limit(0);          // 取消分支（0 → 日志"取消"）
+    engine.set_global_speed_limit(0);          // 幂等重复取消
+}

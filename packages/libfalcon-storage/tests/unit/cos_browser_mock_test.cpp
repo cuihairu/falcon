@@ -111,6 +111,18 @@ TEST(COSBrowserMockTest, ConnectFailsWhenServerUnreachable) {
     EXPECT_FALSE(connect_cos(browser, "http://127.0.0.1:1"));
 }
 
+/// 批次 V：无自定义 endpoint——build_url 落到 COS virtual-host 官方
+/// 域名分支（{bucket}-{app_id}.cos.{region}.myqcloud.com）。region
+/// "ap-test" 不存在 → DNS 解析失败快速收口；URL 拼接先于请求，官方
+/// 域名分支的行覆盖与请求结果无关
+TEST(COSBrowserMockTest, ConnectWithoutEndpointUsesVirtualHostDomainAndFails) {
+    COSBrowser browser;
+    const std::map<std::string, std::string> options = {
+        {"region", "ap-test"}, {"app_id", kAppId}};
+    EXPECT_FALSE(
+        browser.connect("cos://" + std::string(kBucket), options));
+}
+
 //==============================================================================
 // 列举
 //==============================================================================

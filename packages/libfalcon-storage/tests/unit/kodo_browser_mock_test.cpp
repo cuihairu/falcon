@@ -108,6 +108,20 @@ TEST(KodoBrowserMockTest, ConnectFailsWhenServerUnreachable) {
     EXPECT_FALSE(connect_kodo(browser, "http://127.0.0.1:1"));
 }
 
+/// 批次 V：无自定义 endpoint——build_api_url 落到官方域名分支
+/// （rs.qbox.me）拼 URL 后发真实探测请求；无签名的 stat 必被拒绝
+/// （401/612）或网络不可达，connect 以失败收口。URL 拼接先于请求，
+/// 官方域名分支的行覆盖与请求结果无关
+TEST(KodoBrowserMockTest, ConnectWithoutEndpointUsesOfficialDomainAndFails) {
+    KodoBrowser browser;
+    // 只给凭据不给 endpoint：请求发往 http://rs.qbox.me（真实网络，
+    // 只读探测，无副作用）
+    const std::map<std::string, std::string> options = {
+        {"access_key", "ak"}, {"secret_key", "sk"}};
+    EXPECT_FALSE(
+        browser.connect("kodo://" + std::string(kBucket), options));
+}
+
 //==============================================================================
 // 列举
 //==============================================================================

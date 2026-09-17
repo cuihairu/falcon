@@ -580,3 +580,141 @@ TEST(DownloadEngineV2Pause, PauseGroupIdempotentAndTerminalRejected) {
     std::error_code rm_ec;
     std::filesystem::remove_all(dir, rm_ec);
 }
+
+/// 批次 V：重试等待窗口内暂停——HttpRetryCommand 以 NEED_RETRY 回队
+/// 轮询到 retry_delay 到点，期间任务组被暂停：retry 命令下一轮 execute
+/// 的 PAUSED 入口守卫必须静默收口（不再续建重试链），组保持 PAUSED
+/// 而非被改写为 FAILED
+TEST(DownloadEngineV2Pause, PauseDuringRetryDelayWindowKeepsGroupPaused) {
+    // 端口 1 无监听：连接立即拒绝 → 连接失败 → HttpRetryCommand 入队
+    // 等 retry_delay_seconds（3600s 保证窗口不耗尽）
+    const std::string dir = temp_dir_for("retrywait");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "retry.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options;
+    options.output_filename = out_path;
+    options.max_connections = 1;
+    options.max_retries = 2;
+    options.retry_delay_seconds = 3600;
+
+    const TaskId task_id =
+        engine.add_download("http://127.0.0.1:1/wait.bin", options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    EngineRunner runner(engine);
+
+    // 连接拒绝即时发生；留 500ms 让 HttpRetryCommand 完成入队
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    ASSERT_TRUE(engine.pause_task(task_id));
+    ASSERT_TRUE(wait_for(
+        [&] { return group->status() == RequestGroupStatus::PAUSED; }, 5000));
+
+    // retry 命令在下一轮轮询时命中 PAUSED 守卫静默退出；多留窗口确保
+    // 至少一轮 execute 发生，随后停机（PAUSED 视为已安顿）
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    runner.shutdown_and_join();
+
+    EXPECT_EQ(group->status(), RequestGroupStatus::PAUSED)
+        << "重试窗口内暂停不得被改写为终态";
+    EXPECT_TRUE(group->error_message().empty())
+        << "暂停语义非失败，不得遗留错误消息";
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+/// 批次 V：多段任务同引擎 pause→resume——恢复的初始连接带断点 Range
+/// 收到 206 后，determine_download_strategy 经 has_resume_state 进入
+/// schedule_resume_download；组保持 multi_segment 标志触发防御分支：
+/// abandon_resume（丢弃断点）+ 调度全新无 Range 下载。此前该分支的
+/// 唯一入口（同引擎多段任务暂停恢复）从未被测试执行。
+/// 路径铁证：resume 后的连接序列中出现无 Range 的全新初始连接
+/// （单连接续传的恢复连接必带 Range，见 PauseStopsFlow…用例）。
+TEST(DownloadEngineV2Pause, MultiSegmentPauseResumeAbandonsForFreshDownload) {
+    const std::size_t kBodySize = 256 * 1024;
+    const std::string body = make_body(kBodySize);
+    PauseTestServer server;
+    // 0 号连接（多段初始连接，无 Range）慢发留暂停窗口；段连接快发
+    ASSERT_TRUE(server.start(body, 8 * 1024, 15));
+
+    const std::string dir = temp_dir_for("multiresume");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "multi.bin").string();
+    const std::string temp_path = out_path + ".falcon.tmp";
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    config.enable_disk_cache = false;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options;
+    options.output_filename = out_path;
+    options.max_connections = 2;
+    options.max_retries = 0;
+    options.min_segment_size = 64 * 1024;
+
+    const TaskId task_id =
+        engine.add_download(server.url("/multi.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    EngineRunner runner(engine);
+
+    // 推进到多段传输中（临时文件过观察点 = 段 0 慢发推进中）
+    ASSERT_TRUE(wait_for(
+        [&] {
+            std::error_code ec;
+            const auto sz = std::filesystem::file_size(temp_path, ec);
+            return !ec && sz > 32 * 1024;
+        },
+        15000))
+        << "多段下载未在时限内推进到观察点";
+
+    // 暂停：sweep 收走全部连接，断点固化
+    ASSERT_TRUE(engine.pause_task(task_id));
+    ASSERT_TRUE(wait_for(
+        [&] { return group->status() == RequestGroupStatus::PAUSED; }, 5000));
+    ASSERT_TRUE(wait_for([&] { return server.client_swept(); }, 5000));
+
+    // 多段组形成铁证：暂停前已有段连接携带 Range 收到 206
+    const auto ranges_before = server.range_starts_snapshot().size();
+    ASSERT_GT(ranges_before, 0u)
+        << "未观察到段连接 Range——组未进入多段形态，用例前提不成立";
+    const auto accepted_before =
+        static_cast<std::size_t>(server.connections_accepted());
+
+    // 恢复：初始连接带断点 Range → 206 → schedule_resume_download →
+    // is_multi_segment 防御 → abandon → 全新无 Range 下载直至完成
+    ASSERT_TRUE(engine.resume_task(task_id));
+    ASSERT_TRUE(wait_group_terminal(engine, group, 60000));
+    ASSERT_EQ(group->status(), RequestGroupStatus::COMPLETED)
+        << group->error_message();
+
+    runner.shutdown_and_join();
+    server.stop();
+
+    const auto accepted_after =
+        static_cast<std::size_t>(server.connections_accepted());
+    const auto ranges_after = server.range_starts_snapshot().size();
+    EXPECT_GT(accepted_after, accepted_before)
+        << "恢复后必须有新连接（abandon 全新下载）";
+    EXPECT_GT(accepted_after - accepted_before,
+              ranges_after - ranges_before)
+        << "恢复后的新连接中必须存在无 Range 的全新初始连接"
+           "（带 Range 的仅是 abandon 前的断点探测连接）";
+
+    EXPECT_EQ(read_file_content(out_path), body) << "成品逐字节一致";
+    EXPECT_FALSE(std::filesystem::exists(temp_path));
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}

@@ -1532,3 +1532,32 @@ TEST(DownloadEngineV2RunTest, AddDownloadAsHonorsOutputPathOverride) {
     std::filesystem::remove_all(dir);
     server.stop();
 }
+
+/// 批次 V：异常命令携带引擎不认识的 task_id——fail_group_of_command
+/// 的无组防御（find_group 落空直接 return），引擎照常运行退出
+TEST(DownloadEngineV2RunTest, CommandExceptionWithUnknownTaskIdIsIgnored) {
+    DownloadEngineV2 engine(single_slot_config());
+
+    ASSERT_GT(engine.add_download("http://127.0.0.1:1/keepalive.bin",
+                                  keepalive_options()),
+              0);
+
+    auto routine = std::make_unique<CountdownShutdownRoutine>(3);
+    engine.add_routine_command(std::move(routine));
+
+    // task_id=999：引擎内不存在该任务组
+    auto counter = std::make_shared<std::atomic<int>>(0);
+    engine.add_command(
+        std::make_unique<ThrowingCommand>(999, counter, false));
+
+    auto instant_counter = std::make_shared<std::atomic<int>>(0);
+    engine.add_command(std::make_unique<InstantCommand>(instant_counter));
+
+    engine.run();  // 无组防御缺失时此处在 find_group(nullptr) 上崩溃
+
+    EXPECT_EQ(counter->load(), 1);
+    EXPECT_EQ(instant_counter->load(), 1)
+        << "无组异常命令不得影响同轮其他命令";
+    EXPECT_TRUE(engine.is_shutdown_requested());
+    EXPECT_EQ(engine.request_group_man()->find_group(999), nullptr);
+}
