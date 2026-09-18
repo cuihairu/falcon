@@ -147,13 +147,50 @@ constexpr int kSendFlags = 0;  // macOS：无 MSG_NOSIGNAL，SO_NOSIGPIPE 在
                                // socket 级设置（见 create_socket）
 #endif
 
+/// 段级换源的无状态镜像轮转：下一镜像 = uris_ 中 failed_url 的下一个
+///（取模）。failed_url 不在列表（重定向后 URL）时回落主镜像 uris_[0]。
+/// 无需游标成员，不触碰 try_next_uri 的钳位语义
+std::string mirror_after(const RequestGroup& group,
+                         const std::string& failed_url) {
+    const auto& uris = group.uris();
+    if (uris.empty()) {
+        return {};
+    }
+    for (std::size_t i = 0; i < uris.size(); ++i) {
+        if (uris[i] == failed_url) {
+            return uris[(i + 1) % uris.size()];
+        }
+    }
+    return uris.front();
+}
+
 /// 构造连接级重试命令；返回 nullptr 表示不可重试：
-/// - 多连接意图的任务不参与连接级重试（分段失败语义不同，暂不覆盖）
+/// - 多镜像任务（组 uris>1）：换下一镜像重试（不问 max_connections——
+///   多源分发本就意图多连接，小文件不分段时连接失败同样可换源），
+///   预算仍按 retry_count/max_retries 链
+/// - 单 URL 多连接意图的任务不参与连接级重试（分段失败语义不同）
 /// - 已达 max_retries（首连 + max_retries 次重试）
-std::unique_ptr<Command> make_connection_retry(TaskId task_id,
+std::unique_ptr<Command> make_connection_retry(DownloadEngineV2* engine,
+                                               TaskId task_id,
                                                const std::string& url,
                                                const DownloadOptions& options,
                                                int retry_count) {
+    if (engine) {
+        auto* man = engine->request_group_man();
+        auto* group = man ? man->find_group(task_id) : nullptr;
+        if (group && group->uris().size() > 1) {
+            if (retry_count >= static_cast<int>(options.max_retries)) {
+                return nullptr;
+            }
+            const std::string next_url = mirror_after(*group, url);
+            if (next_url.empty()) return nullptr;
+            FALCON_LOG_WARN_STREAM("连接失败，切换镜像重试 ("
+                                  << (retry_count + 1) << "/"
+                                  << options.max_retries << "): " << next_url);
+            return std::make_unique<HttpRetryCommand>(task_id, next_url,
+                                                      options, retry_count + 1);
+        }
+    }
     if (options.max_connections > 1) return nullptr;
     if (retry_count >= static_cast<int>(options.max_retries)) return nullptr;
     FALCON_LOG_WARN_STREAM("连接失败，调度延迟重试 ("
@@ -1140,6 +1177,9 @@ AbstractCommand::ExecutionResult HttpInitiateConnectionCommand::send_http_reques
                                                              range_length_);
     response_cmd->set_retry_count(retry_count_);
     response_cmd->set_redirect_depth(redirect_depth_);
+    if (segment_retry_) {
+        response_cmd->set_segment_retry_routing(true);
+    }
     schedule_next(engine, std::move(response_cmd));
     return ExecutionResult::OK;
 }
@@ -1159,10 +1199,27 @@ void HttpInitiateConnectionCommand::notify_segment_failure(DownloadEngineV2* eng
         return;
     }
     if (has_range_) {
-        // 分段连接：段失败收口（多连接组由段失败聚合终态）
+        // 分段连接：先试段级换源重试（预算内换下一镜像），预算耗尽
+        // 才走既有失败收口（多连接组由段失败聚合终态）
         auto* man = engine->request_group_man();
         auto* group = man ? man->find_group(get_task_id()) : nullptr;
         if (!group) {
+            return;
+        }
+        // 暂停/移除竞态守卫：控制入口已改组状态时不得把 Paused 改写
+        // 成 Failed（参照 fail_group_of_command 的状态守卫）
+        const auto st = group->status();
+        if (st == RequestGroupStatus::PAUSED ||
+            st == RequestGroupStatus::REMOVED) {
+            close_socket_fd(socket_fd_);
+            socket_fd_ = -1;
+            return;
+        }
+        if (HttpSegmentRetryCommand::schedule_retry(
+                engine, get_task_id(), range_segment_id_,
+                range_offset_, range_length_, url_)) {
+            close_socket_fd(socket_fd_);
+            socket_fd_ = -1;
             return;
         }
         group->finish_segment(false);
@@ -1183,8 +1240,8 @@ void HttpInitiateConnectionCommand::notify_segment_failure(DownloadEngineV2* eng
     // 初始连接：先尝试连接级重试（重试期间任务组保持 ACTIVE），
     // 重试耗尽才收口终态——修复此前初始连接失败组无终态的悬空缺陷
     //（任务悬空 Downloading、all_completed 永不成立、run() 无法退出）
-    if (auto retry_cmd = make_connection_retry(get_task_id(), url_, options_,
-                                               retry_count_)) {
+    if (auto retry_cmd = make_connection_retry(engine, get_task_id(), url_,
+                                               options_, retry_count_)) {
         schedule_next(engine, std::move(retry_cmd));
     } else {
         fail_group_terminal(engine, get_task_id(), reason);
@@ -1245,12 +1302,27 @@ bool HttpResponseCommand::execute(DownloadEngineV2* engine) {
     }
 
     auto fail = [&](const std::string& msg, bool retryable = false) {
-        // 连接级失败（对端重置/立即断开等）：单连接任务调度延迟重试，
-        // 任务组保持 ACTIVE 等待重试链。语义性失败（HTTP 状态错误、
-        // 重定向不支持等）重试无价值，直接收口
-        if (retryable) {
-            if (auto retry_cmd = make_connection_retry(get_task_id(), source_url_,
-                                                       options_, retry_count_)) {
+        // 段上下文（分段响应或段 0 重试连接的响应，判定同
+        // determine_download_strategy 的段分支）：先试段级换源重试，
+        // 预算耗尽才走失败收口。段响应拒绝（200 代替 206 等）由此
+        // 换源；暂停恢复的初始连接不在此列（走连接级重试保留恢复语义）
+        const bool in_segment_context =
+            segment_id_ > 0 || segment_retry_routing_;
+        if (in_segment_context) {
+            if (HttpSegmentRetryCommand::schedule_retry(
+                    engine, get_task_id(), segment_id_,
+                    range_offset_, range_length_, source_url_)) {
+                close_socket_fd(socket_fd_);
+                socket_fd_ = -1;
+                return handle_result(ExecutionResult::OK);
+            }
+        } else if (retryable) {
+            // 连接级失败（对端重置/立即断开等）：单连接任务调度延迟
+            // 重试，任务组保持 ACTIVE 等待重试链。语义性失败（HTTP
+            // 状态错误、重定向不支持等）重试无价值，直接收口
+            if (auto retry_cmd = make_connection_retry(engine, get_task_id(),
+                                                       source_url_, options_,
+                                                       retry_count_)) {
                 close_socket_fd(socket_fd_);
                 socket_fd_ = -1;
                 schedule_next(engine, std::move(retry_cmd));
@@ -1589,6 +1661,13 @@ bool HttpResponseCommand::handle_redirect(DownloadEngineV2* engine) {
     auto follow = std::make_unique<HttpInitiateConnectionCommand>(
         get_task_id(), redirect_url, options_);
     follow->set_redirect_depth(redirect_depth_ + 1);
+    // 段连接的 3xx 不再退化为初始响应：跟随连接原样携带段范围（判定
+    // 与 fail 路径的 in_segment_context 一致——段 0 重试连接的跟随同
+    // 样保留）；segment_retry_ 让跟随响应维持段上下文路由与换源资格
+    if (segment_id_ > 0 || segment_retry_routing_) {
+        follow->set_range(segment_id_, range_offset_, range_length_);
+        follow->set_segment_retry(true);
+    }
     schedule_next(engine, std::move(follow));
     return true;
 }
@@ -1615,6 +1694,15 @@ bool HttpResponseCommand::schedule_multi_segment_download(DownloadEngineV2* engi
     auto* group_man = engine->request_group_man();
     auto* group = group_man ? group_man->find_group(get_task_id()) : nullptr;
     if (!group) {
+        return false;
+    }
+
+    // 纵深防御（理论不可达）：组已在多段模式中再次收到初始响应，二次
+    // begin_multi_segment 会重置段计数造成完成判定错乱——拒绝二次分段，
+    // 回退单连接
+    if (group->is_multi_segment()) {
+        FALCON_LOG_WARN_STREAM("多段下载中收到二次分段调度，回退单连接: task="
+                              << get_task_id());
         return false;
     }
 
@@ -1651,17 +1739,23 @@ bool HttpResponseCommand::schedule_multi_segment_download(DownloadEngineV2* engi
                                                         initial_body_,
                                                         /*resumed_bytes=*/0,
                                                         /*truncate_output=*/true,
-                                                        /*chunked=*/false
+                                                        /*chunked=*/false,
+                                                        source_url_
 #ifdef FALCON_ENABLE_OPENSSL
                                                         ,
                                                         /*tls_session=*/tls_session_
 #endif
                                                         ));
 
-    // 段 1..N-1：每段独立连接 + Range 请求
+    // 段 1..N-1：每段独立连接 + Range 请求。多镜像时按段号轮转 URL
+    //（Metalink 阶段2：各段落到不同镜像；单 URL 时 seg_url ==
+    // source_url_，逐字节保持原行为）
     for (std::size_t i = 1; i < plan.size(); ++i) {
+        const std::string seg_url = group->uris().size() > 1
+                                        ? group->uris()[i % group->uris().size()]
+                                        : source_url_;
         auto conn = std::make_unique<HttpInitiateConnectionCommand>(
-            get_task_id(), source_url_, options_);
+            get_task_id(), seg_url, options_);
         conn->set_range(static_cast<SegmentId>(i), plan[i].offset, plan[i].length);
         schedule_next(engine, std::move(conn));
     }
@@ -1682,6 +1776,9 @@ bool HttpResponseCommand::schedule_resume_download(DownloadEngineV2* engine,
         FALCON_LOG_WARN_STREAM("续传响应出现在多段下载中，放弃续传: task="
                               << get_task_id());
         group.abandon_resume();
+        // 重置段跟踪：重启的全新下载若再次分段，二次 begin_multi_segment
+        // 会撞上残留段计数（完成判定错乱的根因）
+        group.reset_multi_segment_tracking();
         schedule_next(engine, std::make_unique<HttpInitiateConnectionCommand>(
                                   get_task_id(), source_url_, options_));
         return true;
@@ -1713,6 +1810,11 @@ bool HttpResponseCommand::schedule_resume_download(DownloadEngineV2* engine,
                               << ", content-range=" << headers_["content-range"]
                               << "），放弃续传: task=" << get_task_id());
         group.abandon_resume();
+        // 同进程 pause→resume 后组保持 multi_segment 状态：abandon 后
+        // 重启的全新下载若再次分段，残留段计数会让完成判定错乱
+        if (group.is_multi_segment()) {
+            group.reset_multi_segment_tracking();
+        }
         // 本连接的响应体起点与全新请求不符，不能复用——重新发起无
         // Range 的全新下载
         schedule_next(engine, std::make_unique<HttpInitiateConnectionCommand>(
@@ -1749,7 +1851,8 @@ bool HttpResponseCommand::schedule_resume_download(DownloadEngineV2* engine,
                                                             initial_body_,
                                                             /*resumed_bytes=*/seg0.downloaded,
                                                             /*truncate_output=*/false,
-                                                            /*chunked=*/false
+                                                            /*chunked=*/false,
+                                                            source_url_
 #ifdef FALCON_ENABLE_OPENSSL
                                                             ,
                                                             /*tls_session=*/tls_session_
@@ -1779,12 +1882,18 @@ void HttpResponseCommand::schedule_remaining_resume_segments(
         if (seg.downloaded >= seg.length) {
             continue;  // 已完成段：prepare_resumed_multi_segment 已预记账
         }
+        // 恢复段与全新段同样轮转镜像；If-Range 是主镜像（uris_[0]，
+        // ETag 的归属者）的验证值——仅当所选 URL 仍为主镜像时附带，
+        // 非主镜像不带（其内容一致性由整文件哈希/206 校验兜底）
+        const std::string seg_url = group.uris().size() > 1
+                                        ? group.uris()[i % group.uris().size()]
+                                        : source_url_;
         auto conn = std::make_unique<HttpInitiateConnectionCommand>(
-            get_task_id(), source_url_, options_);
+            get_task_id(), seg_url, options_);
         conn->set_range(static_cast<SegmentId>(i),
                         seg.offset + seg.downloaded,
                         seg.length - seg.downloaded);
-        if (!if_range.empty()) {
+        if (!if_range.empty() && seg_url == group.uris().front()) {
             conn->set_if_range(if_range);
         }
         schedule_next(engine, std::move(conn));
@@ -1797,10 +1906,14 @@ bool HttpResponseCommand::determine_download_strategy(DownloadEngineV2* engine) 
     auto* group_man = engine->request_group_man();
     auto* group = group_man ? group_man->find_group(get_task_id()) : nullptr;
 
-    // 分段连接（段 1..N-1）的响应：按该段范围调度下载命令，
-    // 不再产生新的分段/连接。断点续传的首个分段响应（初始连接承载
-    // 段 k > 0 的跨会话恢复）在此顺带重建组级分段状态并发起其余分段
-    if (segment_id_ > 0) {
+    // 分段连接（段 1..N-1）与段 0 重试连接（显式标记）的响应：按该段
+    // 范围调度下载命令，不再产生新的分段/连接。断点续传的首个分段
+    // 响应（初始连接承载段 k > 0 的跨会话恢复）在此顺带重建组级分段
+    // 状态并发起其余分段。段 0 重试与暂停恢复的初始连接都带 Range 且
+    // 组处于多段态，从 Range 头无法区分——路由以显式标记为准，恢复
+    // 流程不受影响
+    if (segment_id_ > 0 ||
+        (segment_retry_routing_ && group && group->is_multi_segment())) {
         if (group && group->has_resume_state() && !group->is_multi_segment()) {
             group->prepare_resumed_multi_segment();
             schedule_remaining_resume_segments(engine, *group, segment_id_);
@@ -1816,7 +1929,8 @@ bool HttpResponseCommand::determine_download_strategy(DownloadEngineV2* engine) 
                                                             /*resumed_bytes=*/0,
                                                             /*truncate_output=*/
                                                             false,
-                                                            /*chunked=*/false
+                                                            /*chunked=*/false,
+                                                            source_url_
 #ifdef FALCON_ENABLE_OPENSSL
                                                             ,
                                                             /*tls_session=*/tls_session_
@@ -1857,7 +1971,8 @@ bool HttpResponseCommand::determine_download_strategy(DownloadEngineV2* engine) 
                                                         /*resumed_bytes=*/0,
                                                         /*truncate_output=*/true,
                                                         /*chunked=*/
-                                                        is_chunked_response_
+                                                        is_chunked_response_,
+                                                        source_url_
 #ifdef FALCON_ENABLE_OPENSSL
                                                         ,
                                                         /*tls_session=*/tls_session_
@@ -1928,7 +2043,8 @@ HttpDownloadCommand::HttpDownloadCommand(
     std::string initial_data,
     Bytes resumed_bytes,
     bool truncate_output,
-    bool chunked
+    bool chunked,
+    std::string source_url
 #ifdef FALCON_ENABLE_OPENSSL
     , HttpTlsSessionPtr tls_session
 #endif
@@ -1940,6 +2056,7 @@ HttpDownloadCommand::HttpDownloadCommand(
     , offset_(offset)
     , length_(length)
     , current_offset_(offset)
+    , source_url_(std::move(source_url))
     , downloaded_bytes_(resumed_bytes)
     , initial_data_(std::move(initial_data))
     , truncate_output_(truncate_output)
@@ -2015,10 +2132,13 @@ bool HttpDownloadCommand::execute(DownloadEngineV2* engine) {
         }
         if (!output_) {
             task->set_error("Failed to open output file: " + write_path_);
-            fail_group_on_segment_error(*group, task);
+            const bool failed =
+                fail_group_on_segment_error(engine, *group, task);
             close_socket_fd(socket_fd_);
             socket_fd_ = -1;
-            return handle_result(ExecutionResult::ERROR_OCCURRED);
+            // 重试已接管：按非失败收口（命令完成，重试链继续）
+            return handle_result(failed ? ExecutionResult::ERROR_OCCURRED
+                                        : ExecutionResult::OK);
         }
         file_opened_ = true;
 
@@ -2051,13 +2171,23 @@ bool HttpDownloadCommand::execute(DownloadEngineV2* engine) {
                                    engine);
         if (!initial_ok) {
             task->set_error("Failed to write initial body bytes");
-            fail_group_on_segment_error(*group, task);
+            const bool failed =
+                fail_group_on_segment_error(engine, *group, task);
             close_socket_fd(socket_fd_);
             socket_fd_ = -1;
-            return handle_result(ExecutionResult::ERROR_OCCURRED);
+            return handle_result(failed ? ExecutionResult::ERROR_OCCURRED
+                                        : ExecutionResult::OK);
         }
         initial_data_.clear();
         initial_written_ = true;
+        // 捎带体可能已收满本段（小文件的响应头与响应体常在同一 TCP
+        // 段到达）：立即判定完成，否则落入 receive_data 等更多数据——
+        // keep-alive 服务器下要挂到对端关闭连接才收口。chunked 场景
+        // check_completion 返回 download_complete_（状态机见到终止块
+        // 才置位），不会提前收口
+        if (check_completion()) {
+            download_complete_ = true;
+        }
     } else {
         initial_written_ = true;
     }
@@ -2065,14 +2195,16 @@ bool HttpDownloadCommand::execute(DownloadEngineV2* engine) {
     if (download_complete_) {
         if (!finish_output()) {
             task->set_error("Failed to flush buffered data to disk");
-            fail_group_on_segment_error(*group, task);
+            const bool failed =
+                fail_group_on_segment_error(engine, *group, task);
             close_socket_fd(socket_fd_);
             socket_fd_ = -1;
-            return handle_result(ExecutionResult::ERROR_OCCURRED);
+            return handle_result(failed ? ExecutionResult::ERROR_OCCURRED
+                                        : ExecutionResult::OK);
         }
         close_socket_fd(socket_fd_);
         socket_fd_ = -1;
-        complete_group_if_all_segments_done(*group, task, true);
+        complete_group_if_all_segments_done(engine, *group, task, true);
         return handle_result(ExecutionResult::OK);
     }
 
@@ -2084,21 +2216,24 @@ bool HttpDownloadCommand::execute(DownloadEngineV2* engine) {
         if (task->error_message().empty()) {
             task->set_error("Socket recv failed");
         }
-        fail_group_on_segment_error(*group, task);
-        return handle_result(ExecutionResult::ERROR_OCCURRED);
+        const bool failed = fail_group_on_segment_error(engine, *group, task);
+        return handle_result(failed ? ExecutionResult::ERROR_OCCURRED
+                                    : ExecutionResult::OK);
     }
 
     if (download_complete_) {
         if (!finish_output()) {
             task->set_error("Failed to flush buffered data to disk");
-            fail_group_on_segment_error(*group, task);
+            const bool failed =
+                fail_group_on_segment_error(engine, *group, task);
             close_socket_fd(socket_fd_);
             socket_fd_ = -1;
-            return handle_result(ExecutionResult::ERROR_OCCURRED);
+            return handle_result(failed ? ExecutionResult::ERROR_OCCURRED
+                                        : ExecutionResult::OK);
         }
         close_socket_fd(socket_fd_);
         socket_fd_ = -1;
-        complete_group_if_all_segments_done(*group, task, true);
+        complete_group_if_all_segments_done(engine, *group, task, true);
         return handle_result(ExecutionResult::OK);
     }
 
@@ -2111,14 +2246,16 @@ bool HttpDownloadCommand::execute(DownloadEngineV2* engine) {
 }
 
 void HttpDownloadCommand::complete_group_if_all_segments_done(
-    RequestGroup& group, const DownloadTask::Ptr& task, bool success) {
+    DownloadEngineV2* engine, RequestGroup& group, const DownloadTask::Ptr& task,
+    bool success) {
     if (!success) {
         return;  // 失败路径由 fail_group_on_segment_error 收尾，临时文件保留
     }
 
     // 最终落盘进度上报（finish_output 冲刷了残留缓冲，此刻 downloaded
-    // 与磁盘一致）；未开启续传追踪时为无代价空操作
-    group.report_segment_flushed(segment_id_, downloaded_bytes_);
+    // 与磁盘一致；恢复段按段内绝对坐标）；未开启续传追踪时为无代价
+    // 空操作
+    group.report_segment_flushed(segment_id_, flushed_progress_absolute(group));
 
     // 单段模式：本段结束即任务完成（保持既有行为）；多分段模式：仅当
     // 全部分段结束且无失败时才置完成（失败已在
@@ -2134,7 +2271,7 @@ void HttpDownloadCommand::complete_group_if_all_segments_done(
     // 监听者看到完成时成品必然已就位；改名失败按失败收尾，不会假报
     // COMPLETED
     if (!publish_output(task)) {
-        fail_group_on_segment_error(group, task);
+        fail_group_on_segment_error(engine, group, task);
         return;
     }
     // 成品已发布：续传使命完成，删除控制文件（半成品挂点随之消失）
@@ -2159,11 +2296,27 @@ bool HttpDownloadCommand::publish_output(const DownloadTask::Ptr& task) {
     return true;
 }
 
-void HttpDownloadCommand::fail_group_on_segment_error(RequestGroup& group,
+bool HttpDownloadCommand::fail_group_on_segment_error(DownloadEngineV2* engine,
+                                                      RequestGroup& group,
                                                       const DownloadTask::Ptr& task) {
     // 失败收口固化断点：finish_output 已冲刷残留缓冲，此刻把最终落盘
-    // 进度写进控制文件，重加任务即可从断点继续
-    group.report_segment_flushed(segment_id_, downloaded_bytes_);
+    // 进度（段内绝对坐标）写进控制文件，重加任务/换源重试即可从断点
+    // 继续
+    group.report_segment_flushed(segment_id_, flushed_progress_absolute(group));
+
+    // 组不可失败态（暂停/移除竞态）：不得把 Paused 改写成 Failed
+    const auto st = group.status();
+    if (st == RequestGroupStatus::PAUSED || st == RequestGroupStatus::REMOVED ||
+        st == RequestGroupStatus::COMPLETED || st == RequestGroupStatus::FAILED) {
+        return false;
+    }
+
+    // 段级换源重试（预算内换下一镜像）；预算耗尽才走既有失败收口
+    if (HttpSegmentRetryCommand::schedule_retry(engine, get_task_id(),
+                                                segment_id_, offset_,
+                                                length_, source_url_)) {
+        return false;
+    }
     if (group.is_multi_segment()) {
         group.finish_segment(false);
     }
@@ -2174,6 +2327,7 @@ void HttpDownloadCommand::fail_group_on_segment_error(RequestGroup& group,
     group.set_status(RequestGroupStatus::FAILED);
     task->set_status(TaskStatus::Failed);
     group.save_resume_now();
+    return true;
 }
 
 AbstractCommand::ExecutionResult HttpDownloadCommand::receive_data(DownloadEngineV2* engine) {
@@ -2369,9 +2523,11 @@ bool HttpDownloadCommand::write_to_segment(const char* data,
                 }
             }
             if (flushed_now) {
-                // 直写路径数据已确认落盘：同步上报续传进度（未开启
-                // 追踪时为无代价空操作；缓冲路径在攒满冲刷后上报）
-                group->report_segment_flushed(segment_id_, downloaded_bytes_);
+                // 直写路径数据已确认落盘：同步上报续传进度（恢复段按
+                // 段内绝对坐标；未开启追踪时为无代价空操作；缓冲路径
+                // 在攒满冲刷后上报）
+                group->report_segment_flushed(segment_id_,
+                                              flushed_progress_absolute(*group));
             }
         }
     }
@@ -2389,7 +2545,8 @@ bool HttpDownloadCommand::write_to_segment(const char* data,
             auto* group_man = engine->request_group_man();
             auto* group = group_man ? group_man->find_group(get_task_id()) : nullptr;
             if (group) {
-                group->report_segment_flushed(segment_id_, downloaded_bytes_);
+                group->report_segment_flushed(segment_id_,
+                                              flushed_progress_absolute(*group));
             }
         }
     }
@@ -2427,15 +2584,16 @@ bool HttpDownloadCommand::finish_output() {
 
 void HttpDownloadCommand::prepare_sweep(DownloadEngineV2* engine) {
     // 暂停清扫检查点：冲刷残留缓冲（滞留数据不丢），随后把最终落盘
-    // 进度上报任务组并固化断点——析构路径只冲刷不上报（命令可能比
-    // 引擎后销毁），清扫在引擎线程内执行可以安全触达任务组
+    // 进度（恢复段按段内绝对坐标）上报任务组并固化断点——析构路径只
+    // 冲刷不上报（命令可能比引擎后销毁），清扫在引擎线程内执行可以
+    // 安全触达任务组
     if (!finish_output() || !engine) {
         return;
     }
     auto* group_man = engine->request_group_man();
     auto* group = group_man ? group_man->find_group(get_task_id()) : nullptr;
     if (group) {
-        group->report_segment_flushed(segment_id_, downloaded_bytes_);
+        group->report_segment_flushed(segment_id_, flushed_progress_absolute(*group));
         group->save_resume_now();
     }
 }
@@ -2642,9 +2800,188 @@ bool HttpDownloadCommand::check_completion() {
     return download_complete_;
 }
 
+Bytes HttpDownloadCommand::flushed_progress_absolute(const RequestGroup& group) const {
+    if (!group.has_resume_state()) {
+        return downloaded_bytes_;
+    }
+    const ResumeControl plan = group.resume_plan();
+    if (segment_id_ >= plan.segments.size()) {
+        return downloaded_bytes_;
+    }
+    // 恢复段连接按剩余量请求（offset_ = 段计划起点 + 断点），下载计数
+    // 是剩余量——换算成段计划坐标：绝对进度 = (连接起点 − 段计划起点)
+    // + 本连接已收字节。全新段两起点重合，换算恒等
+    const Bytes seg_start = plan.segments[segment_id_].offset;
+    return (offset_ >= seg_start ? offset_ - seg_start : 0) + downloaded_bytes_;
+}
+
+//==============================================================================
+// HttpSegmentRetryCommand 实现
+//==============================================================================
+
+HttpSegmentRetryCommand::HttpSegmentRetryCommand(
+    TaskId task_id,
+    std::string url,
+    const DownloadOptions& options,
+    SegmentId segment_id,
+    Bytes offset,
+    Bytes length,
+    std::string if_range,
+    int retry_count)
+    : AbstractCommand(task_id)
+    , url_(std::move(url))
+    , options_(options)
+    , segment_id_(segment_id)
+    , offset_(offset)
+    , length_(length)
+    , if_range_(std::move(if_range))
+    , retry_count_(retry_count)
+    , retry_wait_(std::chrono::seconds(options.retry_delay_seconds))
+    , retry_at_(std::chrono::steady_clock::now() + retry_wait_)
+{
+}
+
+bool HttpSegmentRetryCommand::execute(DownloadEngineV2* engine) {
+    // 组消失/已暂停/已终态：静默退出（重试链随之终结；暂停后的恢复
+    // 由 resume 重新调度，不沿旧重试链续跑）
+    if (engine) {
+        auto* group_man = engine->request_group_man();
+        auto* group = group_man ? group_man->find_group(get_task_id()) : nullptr;
+        if (!group || group->status() == RequestGroupStatus::PAUSED ||
+            group->status() == RequestGroupStatus::REMOVED ||
+            group->status() == RequestGroupStatus::COMPLETED ||
+            group->status() == RequestGroupStatus::FAILED) {
+            return handle_result(ExecutionResult::OK);
+        }
+    } else {
+        return handle_result(ExecutionResult::OK);
+    }
+
+    // 未到重试时刻：以 NEED_RETRY 回队轮询（不注册 socket 事件），
+    // 由引擎 poll 节奏驱动到点检查——不阻塞引擎线程
+    if (std::chrono::steady_clock::now() < retry_at_) {
+        return handle_result(ExecutionResult::NEED_RETRY);
+    }
+
+    FALCON_LOG_INFO_STREAM("段 " << segment_id_ << " 换源重试 ("
+                          << retry_count_ << "): " << url_);
+
+    // 重建该段的 Range 连接（响应经 determine_download_strategy 的段
+    // 分支路由——显式标记使段 0 的重试响应与暂停恢复的初始连接区分）
+    auto conn = std::make_unique<HttpInitiateConnectionCommand>(
+        get_task_id(), url_, options_);
+    conn->set_retry_count(retry_count_);
+    conn->set_segment_retry(true);
+    conn->set_range(segment_id_, offset_, length_);
+    if (!if_range_.empty()) {
+        conn->set_if_range(if_range_);
+    }
+    schedule_next(engine, std::move(conn));
+    return handle_result(ExecutionResult::OK);
+}
+
+bool HttpSegmentRetryCommand::schedule_retry(DownloadEngineV2* engine,
+                                             TaskId task_id,
+                                             SegmentId segment_id,
+                                             Bytes plan_offset,
+                                             Bytes plan_length,
+                                             const std::string& failed_url) {
+    if (!engine) {
+        return false;
+    }
+    auto* group_man = engine->request_group_man();
+    auto* group = group_man ? group_man->find_group(task_id) : nullptr;
+    if (!group) {
+        return false;
+    }
+    const auto st = group->status();
+    if (st == RequestGroupStatus::PAUSED || st == RequestGroupStatus::REMOVED ||
+        st == RequestGroupStatus::COMPLETED || st == RequestGroupStatus::FAILED) {
+        return false;
+    }
+    if (!group->is_multi_segment() || group->uris().empty()) {
+        return false;
+    }
+
+    // 预算：每段 options.max_retries 次（首连不计）。计数在这里递增，
+    // 重试命令本身无预算判定——finish_segment 只在预算耗尽时由调用方
+    // 走既有失败收口调用一次
+    const int attempt = group->increment_segment_retry(segment_id);
+    const int max_retries = static_cast<int>(group->options().max_retries);
+    if (attempt > max_retries) {
+        FALCON_LOG_WARN_STREAM("段 " << segment_id << " 换源重试预算耗尽 ("
+                              << max_retries << "): task=" << task_id);
+        return false;
+    }
+
+    // 归一化到段计划坐标：有续传计划以计划为准（恢复段连接的起点是
+    // 断点而非计划起点，不能直接叠加）；无计划时调用方坐标即计划坐标
+    if (group->has_resume_state()) {
+        const auto plan = group->resume_plan();
+        if (segment_id < plan.segments.size()) {
+            plan_offset = plan.segments[segment_id].offset;
+            plan_length = plan.segments[segment_id].length;
+        }
+    }
+    const Bytes progress = group->segment_progress(segment_id);
+    if (progress >= plan_length) {
+        return false;  // 段已收满：无重试意义（防御）
+    }
+
+    const std::string next_url = mirror_after(*group, failed_url);
+    if (next_url.empty()) {
+        return false;
+    }
+
+    // If-Range 是主镜像（uris_[0]，ETag 的归属者）的验证值：轮转结果
+    // 仍为主镜像才附带，非主镜像不带（内容一致性由 206 校验兜底）
+    std::string if_range;
+    if (next_url == group->uris().front() && group->has_resume_state()) {
+        if_range = group->resume_if_range();
+    }
+
+    FALCON_LOG_INFO_STREAM("段 " << segment_id << " 失败，换源重试 "
+                          << attempt << "/" << max_retries << ": " << next_url
+                          << "（断点 " << progress << "/" << plan_length << "）");
+
+    schedule_next(engine, std::make_unique<HttpSegmentRetryCommand>(
+                              task_id, next_url, group->options(), segment_id,
+                              plan_offset + progress, plan_length - progress,
+                              std::move(if_range), attempt));
+    return true;
+}
+
 //==============================================================================
 // HttpRetryCommand 实现
 //==============================================================================
+
+//==============================================================================
+// 超时清理的段级换源重试（C1：段命令超时不连坐整组）
+//==============================================================================
+
+bool HttpDownloadCommand::retry_expired_segment(DownloadEngineV2* engine) {
+    return HttpSegmentRetryCommand::schedule_retry(engine, get_task_id(),
+                                                   segment_id_, offset_,
+                                                   length_, source_url_);
+}
+
+bool HttpResponseCommand::retry_expired_segment(DownloadEngineV2* engine) {
+    return HttpSegmentRetryCommand::schedule_retry(engine, get_task_id(),
+                                                   segment_id_, range_offset_,
+                                                   range_length_, source_url_);
+}
+
+bool HttpInitiateConnectionCommand::retry_expired_segment(DownloadEngineV2* engine) {
+    // 带 Range 的初始连接是恢复/段重试连接（承载第一个未完成段的
+    // 收尾），段级换源语义匹配；无 Range 的全新初始连接走整组失败
+    if (!has_range_) {
+        return false;
+    }
+    return HttpSegmentRetryCommand::schedule_retry(engine, get_task_id(),
+                                                   range_segment_id_,
+                                                   range_offset_,
+                                                   range_length_, url_);
+}
 
 HttpRetryCommand::HttpRetryCommand(
     TaskId task_id,
@@ -2702,6 +3039,13 @@ bool HttpRetryCommand::execute(DownloadEngineV2* engine) {
         auto* group = group_man ? group_man->find_group(get_task_id()) : nullptr;
         if (group) {
             apply_group_resume_range(*next_cmd, *group);
+            // If-Range 是主镜像（uris_[0]，ETag 的归属者）的验证值：
+            // 多镜像轮转后重试连接落在非主镜像时必须剥离（续传内容
+            // 一致性由 206 校验兜底，误带会造成有效续传被拒）
+            if (group->has_resume_state() && !group->uris().empty() &&
+                url_ != group->uris().front()) {
+                next_cmd->set_if_range({});
+            }
         }
         schedule_next(engine, std::move(next_cmd));
     }

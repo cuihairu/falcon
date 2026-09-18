@@ -113,6 +113,19 @@ public:
      */
     virtual void prepare_sweep(DownloadEngineV2* /*engine*/) {}
 
+    /**
+     * @brief 超时清理路径：命令正承载某个段时尝试段级换源重试
+     *
+     * 有段上下文的命令 override（按命令各自携带的段号/范围/来源 URL
+     * 调度段级重试命令），调度成功返回 true——引擎跳过该组的失败
+     * 收口，段由重试链接管；默认无段上下文，返回 false 走既有整组
+     * 失败。仅在 prepare_sweep 冲刷并上报断点之后调用（重试 Range
+     * 依赖最新落盘进度）
+     */
+    virtual bool retry_expired_segment(DownloadEngineV2* /*engine*/) {
+        return false;
+    }
+
 protected:
     explicit Command(TaskId task_id)
         : task_id_(task_id), command_id_(generate_command_id()) {}

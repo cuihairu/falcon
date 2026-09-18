@@ -676,7 +676,6 @@ void DownloadEngineV2::cleanup_completed_commands() {
     };
     std::vector<WaitEntry> waiting;
     std::vector<WaitEntry> expired;
-    std::vector<std::unique_ptr<Command>> dropped;
 
     {
         std::lock_guard<std::mutex> lock(socket_map_mutex_);
@@ -720,13 +719,20 @@ void DownloadEngineV2::cleanup_completed_commands() {
         return;
     }
 
-    // 第二遍：锁内从所有映射中移除，并取出命令所有权以便锁外销毁
+    // 第二遍：锁内从所有映射中移除，并取出命令所有权以便锁外处理
+    struct Dropped {
+        WaitEntry entry;
+        std::unique_ptr<Command> command;
+    };
+    std::vector<Dropped> dropped;
     {
         std::lock_guard<std::mutex> lock(socket_map_mutex_);
         for (const auto& entry : expired) {
+            Dropped d;
+            d.entry = entry;
             auto w_it = waiting_commands_.find(entry.cmd_id);
             if (w_it != waiting_commands_.end()) {
-                dropped.push_back(std::move(w_it->second));
+                d.command = std::move(w_it->second);
                 waiting_commands_.erase(w_it);
             }
             waiting_command_times_.erase(entry.cmd_id);
@@ -734,19 +740,33 @@ void DownloadEngineV2::cleanup_completed_commands() {
             if (entry.fd >= 0) {
                 socket_command_map_.erase(entry.fd);
             }
+            dropped.push_back(std::move(d));
         }
     }
 
-    // 锁外：摘除 EventPoll 监听、关闭 fd（平台 IO 调用不应持锁）、
-    // 把所属任务组标 FAILED，记录日志
-    for (const auto& entry : expired) {
-        if (entry.fd >= 0) {
-            event_poll_->remove_event(entry.fd);
-            close_socket_fd(entry.fd);
+    // 锁外：摘除 EventPoll 监听、关闭 fd（平台 IO 调用不应持锁），
+    // 然后处理落盘状态与组终态
+    for (auto& d : dropped) {
+        if (d.entry.fd >= 0) {
+            event_poll_->remove_event(d.entry.fd);
+            close_socket_fd(d.entry.fd);
         }
-        fail_group_of_command(entry.task_id, "download wait timeout");
-        FALCON_LOG_WARN_STREAM("等待中的命令超时被清理: cmd=" << entry.cmd_id
-                              << ", task=" << entry.task_id);
+        if (d.command) {
+            // 先冲刷写缓冲并上报落盘进度（此前只在暂停清扫路径执行，
+            // 析构冲刷发生在 fail 记账之后会造成断点滞后），随后段
+            // 命令先试段级换源重试——成功则该段由重试链接管，不因
+            // 单段超时连坐整组；预算耗尽/无段上下文才标组 FAILED
+            d.command->prepare_sweep(this);
+            if (d.command->retry_expired_segment(this)) {
+                FALCON_LOG_INFO_STREAM("超时命令所在段已调度换源重试: cmd="
+                                      << d.entry.cmd_id
+                                      << ", task=" << d.entry.task_id);
+                continue;
+            }
+        }
+        fail_group_of_command(d.entry.task_id, "download wait timeout");
+        FALCON_LOG_WARN_STREAM("等待中的命令超时被清理: cmd=" << d.entry.cmd_id
+                              << ", task=" << d.entry.task_id);
     }
     // dropped 在作用域结束时自动销毁命令对象
 }
