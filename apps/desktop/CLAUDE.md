@@ -2,6 +2,50 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-18 - 导航信号重构 + 空壳入口删除 + 统一品牌视觉打磨（qt-ui-design 截图驱动）
+- **三 tab 同界面根因**（不是过滤缺失）：每个 tab 双 connect——具体信号
+  （downloadingTabClicked/completedTabClicked）先发、downloadClicked 后发，
+  而 main_window 的 downloadClicked lambda 无条件 set_view_mode(Downloading)
+  且连接顺序在前 → 覆盖具体 tab 刚设的模式；过滤谓词 should_show 本身完好。
+  重构：删 downloadClicked 信号，三 tab 各只连自己的信号，各 lambda 自带
+  setCurrentIndex + set_view_mode
+- **空壳入口删除**（用户确认）：「云添加」（按 URL 域名筛任务的过滤视图，
+  零后端）与「私人空间」整组（只发 downloadClicked 无任何隐私隔离）整体
+  删除；download_page 删 CloudAdd 枚举与 cloud_domains() 域名表
+- **循环切换按钮 → 页头分段切换器**：view_toggle_button_（循环切换）删除，
+  hero 区新增 #viewSegmented 胶囊（两 checkable QPushButton + exclusive
+  QButtonGroup）；set_view_mode 内 setChecked 单点同步（setChecked 不触发
+  clicked，无递归），与侧栏 tab 双向同步
+- **qt-ui-design 视觉审计落地**（离屏沙盒 12 张截图逐张验收，亮暗 × 6 视图）：
+  ① 字号刻度收口 4 档（12 caption / 14 body / 16 title / 20 page·hero），
+  删 11px（进度条内文字容不下）与 24px，数字展示位 summaryValue 归 20——
+  进度百分比改外置 #progressPctLabel（6px 条高压不下 11px 文字且 chunk 上
+  不可读）；② QGroupBox 标题骑线修复——title 加卡片同色 background 盖住
+  边框线（fieldset legend 形态）；③ navTab 选中态强化——全部 navTab 加
+  border-left: 3px solid transparent 占位防文字跳，checked 换 accent 条 +
+  accent 文字；④ 页面头统一 hero 结构（下载/发现/设置/云盘/AddDialog 五处
+  一致），英文眉题全删（DOWNLOAD CENTER/PREFERENCES/DISCOVERY/NEW TASK），
+  云页 pageTitle 迁移为 downloadHero；⑤ 两 QSS 死选择器清零
+  （heroEyebrow/pageTitle/headerLabel），105 选择器亮暗严格成对（脚本校验）
+- **功能诚实化三连**：① 已完成/已取消任务行的暂停按钮隐藏（原为显示禁用
+  占位 ⏸，两视图一致——终态无暂停语义）；② 发现页 "Type" 表头与详情
+  Title/Size/Source/Type/Date/URL 全量中文化（前轮 MISS），表头统一左对齐
+  （原 stretch 列标题居中悬空观感）；③ 新建下载对话框整体中文化
+  （Add Download Task/Save/File name/Advanced/Cancel/Start 等，User Agent/
+  Referer/Cookies 技术术语保留）
+- **修复 update_action_buttons 死函数**：图标化重构后行按钮变 QToolButton，
+  函数内 qobject_cast<QPushButton*> 恒失败 → 整函数 no-op（假更新的死代码，
+  正是"功能是费的"同类）；整体删除（含 hpp 声明与两处调用）
+- **修复 falcon_desktop_backend_tests 从未编译**：tests/CMakeLists 的
+  include 路径少 src/（`services/download_backend.hpp` 恒找不到），而 CI
+  组合性缺口使目标从未被暴露——全部 `FALCON_BUILD_TESTS=ON` job 均
+  `FALCON_BUILD_DESKTOP=OFF`、desktop job 均 tests OFF；补
+  `${CMAKE_CURRENT_SOURCE_DIR}/../src` 后 6 用例首次真实编译执行（6/6 通过，
+  本机双前缀 CMAKE_PREFIX_PATH = 官方 Qt + build-ci vcpkg_installed 供 GTest）
+- 设置/云盘/发现页全量中文化（~120 处 tr 字符串）；本机验收以
+  falcon-ui-sandbox 截图为准（/tmp/ui_after 12 张），手工项：tab 点击真切换、
+  分段器与侧栏双向同步、终态行无暂停钮
+
 ### 2026-09-18 - Windows 启动先弹终端修复（WIN32_EXECUTABLE 变量名笔误）
 - **现象**:Windows 下启动 falcon-desktop 先弹一个控制台终端再出 GUI
   (nightly PE 头 Subsystem=3 WINDOWS_CONSOLE 实证;正常 GUI 应用应为
@@ -169,7 +213,6 @@ Falcon Desktop 是基于 Qt6 的跨平台桌面下载管理器，采用迅雷风
 │  │      │              │    │                   │   │
 │  │      │ - 下载中     │    │ - DownloadPage    │   │
 │  │      │ - 已完成     │    │ - CloudPage      │   │
-│  │      │ - 云添加     │    │ - DiscoveryPage  │   │
 │  │      │ - 云盘       │    │ - SettingsPage   │   │
 │  │      │ - 发现       │    │                   │   │
 │  │      │ - 设置       │    │                   │   │
@@ -194,15 +237,14 @@ Falcon Desktop 是基于 Qt6 的跨平台桌面下载管理器，采用迅雷风
 ### SideBar
 
 侧边导航栏，提供：
-- 下载中/已完成/云添加切换
-- 云盘、发现、设置导航
+- 下载中/已完成切换 + 云盘/发现/设置导航
 
 ### DownloadPage
 
 下载管理页面，支持：
 - 表格视图（传统列表）
 - 网格视图（卡片布局）
-- 任务过滤（下载中/已完成/云添加）
+- 任务过滤（下载中/已完成，页头分段切换器与侧栏双向同步）
 - 任务操作（暂停/继续/删除）
 
 ### CloudPage

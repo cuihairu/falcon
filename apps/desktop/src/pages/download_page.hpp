@@ -28,8 +28,7 @@ namespace falcon::desktop {
  */
 enum class DownloadViewMode {
     Downloading,   // 下载中
-    Completed,     // 已完成
-    CloudAdd       // 云添加
+    Completed      // 已完成
 };
 
 /**
@@ -79,7 +78,6 @@ signals:
 private slots:
     void on_new_task_clicked();
     void on_refresh_clicked();
-    void on_view_toggle_clicked();
     void on_style_toggle_clicked();  // 切换表格/网格视图
     void on_more_options_clicked();
     void on_pause_selected();
@@ -107,7 +105,6 @@ private:
     void update_header_for_mode();
     void update_summary_cards();
     void update_empty_state();
-    void update_action_buttons();
     void show_context_menu(const QPoint& pos);
     void show_grid_context_menu(const QPoint& pos);  // 网格视图右键菜单
     void rerender();             // 从当前 task_records_ 全量刷新显示
@@ -137,9 +134,12 @@ private:
     QLabel* hero_description_label_ = nullptr;
     QPushButton* new_task_button_;
     QPushButton* refresh_button_;
-    QPushButton* view_toggle_button_;
     QPushButton* style_toggle_button_;  // 切换表格/网格视图
     QPushButton* more_button_;
+    // 页头分段切换器(下载中|已完成),与侧栏 tab 双向同步
+    QWidget* view_segmented_ = nullptr;
+    QPushButton* view_segment_downloading_ = nullptr;
+    QPushButton* view_segment_completed_ = nullptr;
     QLabel* active_summary_value_ = nullptr;
     QLabel* completed_summary_value_ = nullptr;
     QLabel* speed_summary_value_ = nullptr;

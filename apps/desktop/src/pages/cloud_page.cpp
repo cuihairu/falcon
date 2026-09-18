@@ -57,13 +57,25 @@ CloudPage::~CloudPage() = default;
 void CloudPage::setup_ui()
 {
     auto* main_layout = new QVBoxLayout(this);
-    main_layout->setContentsMargins(24, 24, 24, 24);
-    main_layout->setSpacing(16);
+    main_layout->setContentsMargins(18, 18, 18, 18);
+    main_layout->setSpacing(14);
 
-    // 页面标题(字号/字重由 QSS #pageTitle 统一管控)
-    auto* title_label = new QLabel(tr("Cloud"), this);
-    title_label->setObjectName("pageTitle");
-    main_layout->addWidget(title_label);
+    // 页面 hero(标题 + 描述,与其余页面同一套 #downloadHero 结构)
+    auto* hero = new QWidget(this);
+    hero->setObjectName("downloadHero");
+    auto* hero_layout = new QVBoxLayout(hero);
+    hero_layout->setContentsMargins(20, 18, 20, 18);
+    hero_layout->setSpacing(4);
+
+    auto* hero_title = new QLabel(tr("云盘空间"), hero);
+    hero_title->setObjectName("heroTitle");
+    hero_layout->addWidget(hero_title);
+
+    auto* hero_desc = new QLabel(tr("连接对象存储，浏览、上传与管理远端文件。"), hero);
+    hero_desc->setObjectName("heroDescription");
+    hero_layout->addWidget(hero_desc);
+
+    main_layout->addWidget(hero);
 
     // 创建堆叠窗口用于视图切换
     stacked_widget_ = new QStackedWidget(this);
@@ -104,13 +116,13 @@ void CloudPage::create_storage_selector()
     layout->setSpacing(12);
 
     // 标题(字号/字重由 QSS #sectionTitle 统一管控)
-    auto* title_label = new QLabel(tr("Cloud Storage"), left_panel_);
+    auto* title_label = new QLabel(tr("存储配置"), left_panel_);
     title_label->setObjectName("sectionTitle");
     layout->addWidget(title_label);
 
     // 存储类型选择
     auto* type_layout = new QHBoxLayout();
-    auto* type_label = new QLabel(tr("Type:"), left_panel_);
+    auto* type_label = new QLabel(tr("类型:"), left_panel_);
     storage_type_combo_ = new QComboBox(left_panel_);
     for (const auto& browser : falcon::BrowserFactory::available_browsers()) {
         storage_type_combo_->addItem(
@@ -150,7 +162,7 @@ void CloudPage::create_storage_selector()
 
     // 区域
     auto* region_layout = new QHBoxLayout();
-    auto* region_label = new QLabel(tr("Region:"), left_panel_);
+    auto* region_label = new QLabel(tr("区域:"), left_panel_);
     region_edit_ = new QLineEdit(left_panel_);
     region_edit_->setPlaceholderText("us-east-1");
     region_layout->addWidget(region_label);
@@ -168,18 +180,18 @@ void CloudPage::create_storage_selector()
     layout->addStretch();
 
     // 连接按钮
-    connect_button_ = new QPushButton(tr("Connect"), left_panel_);
+    connect_button_ = new QPushButton(tr("连接"), left_panel_);
     connect_button_->setIcon(icons::themed(icons::Id::CheckCircle, icons::ColorRole::Accent));
     connect_button_->setCursor(Qt::PointingHandCursor);
     layout->addWidget(connect_button_);
 
-    disconnect_button_ = new QPushButton(tr("Disconnect"), left_panel_);
+    disconnect_button_ = new QPushButton(tr("断开"), left_panel_);
     disconnect_button_->setEnabled(false);
     disconnect_button_->setIcon(icons::themed(icons::Id::X, icons::ColorRole::TextSecondary));
     disconnect_button_->setCursor(Qt::PointingHandCursor);
     layout->addWidget(disconnect_button_);
 
-    save_config_button_ = new QPushButton(tr("Save Config"), left_panel_);
+    save_config_button_ = new QPushButton(tr("保存配置"), left_panel_);
     save_config_button_->setIcon(icons::themed(icons::Id::File, icons::ColorRole::TextSecondary));
     save_config_button_->setCursor(Qt::PointingHandCursor);
     layout->addWidget(save_config_button_);
@@ -190,7 +202,7 @@ void CloudPage::create_storage_selector()
     connect(save_config_button_, &QPushButton::clicked, this, &CloudPage::save_config);
 
     // 连接状态
-    connection_status_label_ = new QLabel(tr("Disconnected"), left_panel_);
+    connection_status_label_ = new QLabel(tr("未连接"), left_panel_);
     layout->addWidget(connection_status_label_);
 }
 
@@ -207,7 +219,7 @@ void CloudPage::create_file_browser()
 
     // 路径栏
     auto* path_layout = new QHBoxLayout();
-    auto* path_label = new QLabel(tr("Path:"), right_panel_);
+    auto* path_label = new QLabel(tr("路径:"), right_panel_);
     current_path_edit_ = new QLineEdit(right_panel_);
     current_path_edit_->setReadOnly(true);
     current_path_edit_->setText("/");
@@ -219,7 +231,7 @@ void CloudPage::create_file_browser()
     file_table_ = new QTableWidget(right_panel_);
     file_table_->setColumnCount(5);
     file_table_->setHorizontalHeaderLabels({
-        tr("Name"), tr("Size"), tr("Modified"), tr("Type"), tr("Actions")
+        tr("名称"), tr("大小"), tr("修改时间"), tr("类型"), tr("操作")
     });
 
     file_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -254,19 +266,19 @@ QWidget* CloudPage::create_toolbar()
     layout->setSpacing(8);
 
     // 导航按钮
-    up_button_ = new QPushButton(tr("Up"), toolbar);
+    up_button_ = new QPushButton(tr("上级"), toolbar);
     up_button_->setEnabled(false);
     up_button_->setIcon(icons::themed(icons::Id::ArrowUp, icons::ColorRole::TextSecondary));
     up_button_->setCursor(Qt::PointingHandCursor);
     layout->addWidget(up_button_);
 
-    home_button_ = new QPushButton(tr("Home"), toolbar);
+    home_button_ = new QPushButton(tr("根目录"), toolbar);
     home_button_->setEnabled(false);
     home_button_->setIcon(icons::themed(icons::Id::Folder, icons::ColorRole::TextSecondary));
     home_button_->setCursor(Qt::PointingHandCursor);
     layout->addWidget(home_button_);
 
-    refresh_button_ = new QPushButton(tr("Refresh"), toolbar);
+    refresh_button_ = new QPushButton(tr("刷新"), toolbar);
     refresh_button_->setEnabled(false);
     refresh_button_->setIcon(icons::themed(icons::Id::Refresh, icons::ColorRole::TextSecondary));
     refresh_button_->setCursor(Qt::PointingHandCursor);
@@ -275,25 +287,25 @@ QWidget* CloudPage::create_toolbar()
     layout->addStretch();
 
     // 操作按钮
-    upload_button_ = new QPushButton(tr("Upload"), toolbar);
+    upload_button_ = new QPushButton(tr("上传"), toolbar);
     upload_button_->setEnabled(false);
     upload_button_->setIcon(icons::themed(icons::Id::Upload, icons::ColorRole::TextSecondary));
     upload_button_->setCursor(Qt::PointingHandCursor);
     layout->addWidget(upload_button_);
 
-    download_button_ = new QPushButton(tr("Download"), toolbar);
+    download_button_ = new QPushButton(tr("下载"), toolbar);
     download_button_->setEnabled(false);
     download_button_->setIcon(icons::themed(icons::Id::Download, icons::ColorRole::TextSecondary));
     download_button_->setCursor(Qt::PointingHandCursor);
     layout->addWidget(download_button_);
 
-    new_folder_button_ = new QPushButton(tr("New Folder"), toolbar);
+    new_folder_button_ = new QPushButton(tr("新建文件夹"), toolbar);
     new_folder_button_->setEnabled(false);
     new_folder_button_->setIcon(icons::themed(icons::Id::FolderPlus, icons::ColorRole::TextSecondary));
     new_folder_button_->setCursor(Qt::PointingHandCursor);
     layout->addWidget(new_folder_button_);
 
-    delete_button_ = new QPushButton(tr("Delete"), toolbar);
+    delete_button_ = new QPushButton(tr("删除"), toolbar);
     delete_button_->setEnabled(false);
     delete_button_->setIcon(icons::themed(icons::Id::Trash, icons::ColorRole::TextSecondary));
     delete_button_->setCursor(Qt::PointingHandCursor);
@@ -313,7 +325,7 @@ QWidget* CloudPage::create_toolbar()
 
 void CloudPage::create_status_bar()
 {
-    status_label_ = new QLabel(tr("Ready"), right_panel_);
+    status_label_ = new QLabel(tr("就绪"), right_panel_);
 }
 
 void CloudPage::connect_to_storage()
@@ -333,7 +345,7 @@ void CloudPage::connect_to_storage()
 
     // 使用 StorageService 连接
     if (storage_service_->connect_storage(current_config_)) {
-        status_label_->setText(tr("Connecting..."));
+        status_label_->setText(tr("连接中..."));
     }
 }
 
@@ -352,7 +364,7 @@ void CloudPage::disconnect_storage()
     new_folder_button_->setEnabled(false);
     delete_button_->setEnabled(false);
 
-    connection_status_label_->setText(tr("Disconnected"));
+    connection_status_label_->setText(tr("未连接"));
 
     file_table_->setRowCount(0);
     current_path_edit_->clear();
@@ -367,7 +379,7 @@ void CloudPage::refresh_directory()
         return;
     }
 
-    status_label_->setText(tr("Loading..."));
+    status_label_->setText(tr("加载中..."));
 
     // 调用 StorageService 的 list_directory
     storage_service_->list_directory(current_config_name_, current_path_,
@@ -413,11 +425,11 @@ void CloudPage::update_file_list_with_data(const QList<RemoteResourceInfo>& reso
         file_table_->setItem(row, 2, new QTableWidgetItem(resource.modified_time));
 
         // 类型
-        QString type_str = resource.type == "directory" ? tr("Folder") : resource.type;
+        QString type_str = resource.type == "directory" ? tr("文件夹") : resource.type;
         file_table_->setItem(row, 3, new QTableWidgetItem(type_str));
     }
 
-    status_label_->setText(tr("%1 item(s).").arg(resources.size()));
+    status_label_->setText(tr("共 %1 项。").arg(resources.size()));
 }
 
 void CloudPage::enter_directory(int row)
@@ -431,7 +443,7 @@ void CloudPage::enter_directory(int row)
 
     // 检查是否为文件夹
     auto* type_item = file_table_->item(row, 3);
-    if (type_item && type_item->text() == tr("Folder")) {
+    if (type_item && type_item->text() == tr("文件夹")) {
         QString new_path = current_path_;
         if (!new_path.endsWith("/")) {
             new_path += "/";
@@ -475,7 +487,7 @@ void CloudPage::download_file()
 {
     auto selected = file_table_->selectedItems();
     if (selected.isEmpty()) {
-        QMessageBox::warning(this, tr("Notice"), tr("Select a file to download."));
+        QMessageBox::warning(this, tr("提示"), tr("请选择要下载的文件。"));
         return;
     }
 
@@ -488,8 +500,8 @@ void CloudPage::download_file()
     }
 
     // 检查是否为文件夹
-    if (type_item && type_item->text() == tr("Folder")) {
-        QMessageBox::information(this, tr("Notice"), tr("Cannot download folder directly."));
+    if (type_item && type_item->text() == tr("文件夹")) {
+        QMessageBox::information(this, tr("提示"), tr("文件夹不能直接下载。"));
         return;
     }
 
@@ -502,9 +514,9 @@ void CloudPage::download_file()
 
     // 选择保存位置
     QString save_path = QFileDialog::getSaveFileName(
-        this, tr("Save File"),
+        this, tr("保存文件"),
         QDir::homePath() + "/" + file_name,
-        tr("All Files (*.*)")
+        tr("所有文件 (*.*)")
     );
 
     if (save_path.isEmpty()) {
@@ -514,20 +526,20 @@ void CloudPage::download_file()
     // 发起下载请求
     storage_service_->request_download(current_config_name_, remote_path, save_path);
 
-    status_label_->setText(tr("Downloading: %1").arg(file_name));
+    status_label_->setText(tr("正在下载: %1").arg(file_name));
 }
 
 void CloudPage::upload_file()
 {
     if (!is_connected_ || current_config_name_.isEmpty()) {
-        QMessageBox::warning(this, tr("Notice"), tr("Not connected to any storage."));
+        QMessageBox::warning(this, tr("提示"), tr("尚未连接到任何存储。"));
         return;
     }
 
     QString file_path = QFileDialog::getOpenFileName(
-        this, tr("Select a file to upload"),
+        this, tr("选择要上传的文件"),
         QDir::homePath(),
-        tr("All Files (*.*)")
+        tr("所有文件 (*.*)")
     );
 
     if (file_path.isEmpty()) {
@@ -541,18 +553,18 @@ void CloudPage::upload_file()
     }
     remote_path += file_info.fileName();
 
-    status_label_->setText(tr("Uploading: %1").arg(file_info.fileName()));
+    status_label_->setText(tr("正在上传: %1").arg(file_info.fileName()));
 
     // 调用 StorageService 上传
     storage_service_->upload_file(current_config_name_, file_path, remote_path,
         [this, file_info](bool success, const QString& message) {
             QMetaObject::invokeMethod(this, [this, success, message, file_info]() {
                 if (success) {
-                    status_label_->setText(tr("Upload completed: %1").arg(file_info.fileName()));
+                    status_label_->setText(tr("上传完成: %1").arg(file_info.fileName()));
                     refresh_directory();
                 } else {
-                    status_label_->setText(tr("Upload failed: %1").arg(message));
-                    QMessageBox::warning(this, tr("Upload Failed"), message);
+                    status_label_->setText(tr("上传失败: %1").arg(message));
+                    QMessageBox::warning(this, tr("上传失败"), message);
                 }
             }, Qt::QueuedConnection);
         });
@@ -566,14 +578,14 @@ void CloudPage::delete_selected()
 
     auto selected = file_table_->selectedItems();
     if (selected.isEmpty()) {
-        QMessageBox::warning(this, tr("Notice"), tr("Select items first."));
+        QMessageBox::warning(this, tr("提示"), tr("请先选择条目。"));
         return;
     }
 
     int row_count = file_table_->selectedItems().size() / file_table_->columnCount();
     auto reply = QMessageBox::question(
-        this, tr("Confirm Delete"),
-        tr("Delete %1 item(s)?").arg(row_count),
+        this, tr("确认删除"),
+        tr("确定删除这 %1 项吗?").arg(row_count),
         QMessageBox::Yes | QMessageBox::No
     );
 
@@ -602,8 +614,8 @@ void CloudPage::delete_selected()
         remote_path += name;
 
         if (!storage_service_->remove_resource(current_config_name_, remote_path, false)) {
-            QMessageBox::warning(this, tr("Delete Failed"),
-                tr("Failed to delete: %1").arg(name));
+            QMessageBox::warning(this, tr("删除失败"),
+                tr("删除失败: %1").arg(name));
         }
     }
 
@@ -618,8 +630,8 @@ void CloudPage::create_folder()
 
     bool ok;
     QString folder_name = QInputDialog::getText(
-        this, tr("New Folder"),
-        tr("Folder name:"),
+        this, tr("新建文件夹"),
+        tr("文件夹名称:"),
         QLineEdit::Normal,
         "",
         &ok
@@ -631,8 +643,8 @@ void CloudPage::create_folder()
 
     // 验证文件夹名称
     if (folder_name.contains('/') || folder_name.contains('\\')) {
-        QMessageBox::warning(this, tr("Invalid Name"),
-            tr("Folder name cannot contain '/' or '\\'."));
+        QMessageBox::warning(this, tr("名称无效"),
+            tr("文件夹名称不能包含 '/' 或 '\\'"));
         return;
     }
 
@@ -643,11 +655,11 @@ void CloudPage::create_folder()
     folder_path += folder_name;
 
     if (storage_service_->create_directory(current_config_name_, folder_path)) {
-        status_label_->setText(tr("Folder created: %1").arg(folder_name));
+        status_label_->setText(tr("已创建文件夹: %1").arg(folder_name));
         refresh_directory();
     } else {
-        QMessageBox::warning(this, tr("Create Failed"),
-            tr("Failed to create folder: %1").arg(folder_name));
+        QMessageBox::warning(this, tr("创建失败"),
+            tr("创建文件夹失败: %1").arg(folder_name));
     }
 }
 
@@ -659,11 +671,11 @@ void CloudPage::show_context_menu(const QPoint& pos)
 
     QMenu menu(this);
 
-    auto* download_action = menu.addAction(tr("Download"));
-    auto* rename_action = menu.addAction(tr("Rename"));
-    auto* delete_action = menu.addAction(tr("Delete"));
+    auto* download_action = menu.addAction(tr("下载"));
+    auto* rename_action = menu.addAction(tr("重命名"));
+    auto* delete_action = menu.addAction(tr("删除"));
     menu.addSeparator();
-    auto* properties_action = menu.addAction(tr("Properties"));
+    auto* properties_action = menu.addAction(tr("属性"));
 
     QAction* action = menu.exec(file_table_->mapToGlobal(pos));
 
@@ -717,12 +729,12 @@ void CloudPage::create_empty_state()
     layout->addWidget(icon_label);
 
     // 提示文本(字号/字重由 QSS #emptyStateTitle 统一管控)
-    auto* title_label = new QLabel(tr("No cloud storage configured"), empty_state_widget_);
+    auto* title_label = new QLabel(tr("尚未配置云存储"), empty_state_widget_);
     title_label->setObjectName("emptyStateTitle");
     title_label->setAlignment(Qt::AlignCenter);
     layout->addWidget(title_label);
 
-    auto* desc_label = new QLabel(tr("Add a cloud storage configuration to browse and manage your files."), empty_state_widget_);
+    auto* desc_label = new QLabel(tr("添加云存储配置后即可浏览与管理远端文件。"), empty_state_widget_);
     desc_label->setAlignment(Qt::AlignCenter);
     desc_label->setWordWrap(true);
     layout->addWidget(desc_label);
@@ -730,7 +742,7 @@ void CloudPage::create_empty_state()
     layout->addSpacing(16);
 
     // 添加配置按钮
-    auto* add_button = new QPushButton(tr("Add Cloud Storage"), empty_state_widget_);
+    auto* add_button = new QPushButton(tr("添加云存储"), empty_state_widget_);
     add_button->setIcon(icons::themed(icons::Id::FolderPlus, icons::ColorRole::TextSecondary));
     add_button->setCursor(Qt::PointingHandCursor);
     add_button->setMinimumWidth(200);
@@ -780,8 +792,8 @@ void CloudPage::save_config()
 
     // 验证必填字段
     if (config.endpoint.isEmpty() || config.access_key.isEmpty() || config.secret_key.isEmpty()) {
-        QMessageBox::warning(this, tr("Validation Error"),
-            tr("Please fill in the required fields (Endpoint, Access Key, Secret Key)."));
+        QMessageBox::warning(this, tr("校验失败"),
+            tr("请填写必填项（Endpoint、Access Key、Secret Key）。"));
         return;
     }
 
@@ -789,8 +801,8 @@ void CloudPage::save_config()
     for (const auto& saved : saved_configs_) {
         if (saved.name == config.name && saved.endpoint == config.endpoint) {
             QMessageBox::StandardButton reply = QMessageBox::question(this,
-                tr("Config Exists"),
-                tr("A configuration with this name already exists. Overwrite?"),
+                tr("配置已存在"),
+                tr("同名配置已存在，是否覆盖?"),
                 QMessageBox::Yes | QMessageBox::No);
             if (reply == QMessageBox::No) {
                 return;
@@ -807,8 +819,8 @@ void CloudPage::save_config()
     // 持久化配置
     persist_configs();
 
-    QMessageBox::information(this, tr("Success"),
-        tr("Configuration '%1' has been saved.").arg(config.name));
+    QMessageBox::information(this, tr("成功"),
+        tr("配置「%1」已保存。").arg(config.name));
 }
 
 void CloudPage::load_configs()
@@ -879,35 +891,35 @@ void CloudPage::show_file_properties(int row)
     QString type = type_item ? type_item->text() : "-";
 
     // 判断是文件还是文件夹
-    bool is_folder = (type == tr("Folder"));
+    bool is_folder = (type == tr("文件夹"));
 
     // 构建属性信息
     QString info;
     info += "<table border='0' cellpadding='2' cellspacing='0'>";
-    info += "<tr><td colspan='2'><b>" + tr("Name") + ":</b></td></tr>";
+    info += "<tr><td colspan='2'><b>" + tr("名称") + ":</b></td></tr>";
     info += "<tr><td width='20'></td><td>" + name + "</td></tr>";
     info += "<tr><td colspan='2'>&nbsp;</td></tr>";
 
-    info += "<tr><td colspan='2'><b>" + tr("Type") + ":</b></td></tr>";
+    info += "<tr><td colspan='2'><b>" + tr("类型") + ":</b></td></tr>";
     info += "<tr><td width='20'></td><td>" + type + "</td></tr>";
     info += "<tr><td colspan='2'>&nbsp;</td></tr>";
 
-    info += "<tr><td colspan='2'><b>" + tr("Size") + ":</b></td></tr>";
-    info += "<tr><td width='20'></td><td>" + (is_folder ? tr("(Folder)") : size) + "</td></tr>";
+    info += "<tr><td colspan='2'><b>" + tr("大小") + ":</b></td></tr>";
+    info += "<tr><td width='20'></td><td>" + (is_folder ? tr("（文件夹）") : size) + "</td></tr>";
     info += "<tr><td colspan='2'>&nbsp;</td></tr>";
 
-    info += "<tr><td colspan='2'><b>" + tr("Modified") + ":</b></td></tr>";
+    info += "<tr><td colspan='2'><b>" + tr("修改时间") + ":</b></td></tr>";
     info += "<tr><td width='20'></td><td>" + date + "</td></tr>";
     info += "<tr><td colspan='2'>&nbsp;</td></tr>";
 
-    info += "<tr><td colspan='2'><b>" + tr("Location") + ":</b></td></tr>";
+    info += "<tr><td colspan='2'><b>" + tr("位置") + ":</b></td></tr>";
     info += "<tr><td width='20'></td><td>" + current_path_ + "</td></tr>";
 
     info += "</table>";
 
     // 创建对话框
     QMessageBox msg_box(this);
-    msg_box.setWindowTitle(tr("Properties"));
+    msg_box.setWindowTitle(tr("属性"));
     msg_box.setText(name);
     msg_box.setInformativeText(info);
     msg_box.setTextFormat(Qt::RichText);
@@ -945,8 +957,8 @@ void CloudPage::rename_item(int row)
     bool ok = false;
     QString new_name = QInputDialog::getText(
         this,
-        tr("Rename"),
-        tr("Enter new name:"),
+        tr("重命名"),
+        tr("输入新名称:"),
         QLineEdit::Normal,
         old_name,
         &ok
@@ -958,8 +970,8 @@ void CloudPage::rename_item(int row)
 
     // 验证新名称
     if (new_name.contains('/') || new_name.contains('\\') || new_name.contains(':')) {
-        QMessageBox::warning(this, tr("Invalid Name"),
-            tr("The name cannot contain special characters: / \\ :"));
+        QMessageBox::warning(this, tr("名称无效"),
+            tr("名称不能包含特殊字符: / \\ :"));
         return;
     }
 
@@ -978,11 +990,11 @@ void CloudPage::rename_item(int row)
 
     // 调用重命名 API
     if (storage_service_->rename_resource(current_config_name_, old_path, new_path)) {
-        status_label_->setText(tr("Renamed '%1' to '%2'.").arg(old_name, new_name));
+        status_label_->setText(tr("已将「%1」重命名为「%2」。").arg(old_name, new_name));
         refresh_directory();
     } else {
-        QMessageBox::warning(this, tr("Rename Failed"),
-            tr("Failed to rename '%1' to '%2'.").arg(old_name, new_name));
+        QMessageBox::warning(this, tr("重命名失败"),
+            tr("重命名「%1」为「%2」失败。").arg(old_name, new_name));
     }
 }
 
@@ -1005,7 +1017,7 @@ void CloudPage::on_storage_connected(const QString& config_name) {
     new_folder_button_->setEnabled(true);
     delete_button_->setEnabled(true);
 
-    connection_status_label_->setText(tr("Connected"));
+    connection_status_label_->setText(tr("已连接"));
 
     // 切换到浏览器面板
     show_browser_panel();
@@ -1029,7 +1041,7 @@ void CloudPage::on_storage_disconnected(const QString& config_name) {
     new_folder_button_->setEnabled(false);
     delete_button_->setEnabled(false);
 
-    connection_status_label_->setText(tr("Disconnected"));
+    connection_status_label_->setText(tr("未连接"));
 
     file_table_->setRowCount(0);
     current_path_edit_->clear();
@@ -1040,8 +1052,8 @@ void CloudPage::on_storage_disconnected(const QString& config_name) {
 
 void CloudPage::on_storage_error(const QString& config_name, const QString& message) {
     (void)config_name;
-    status_label_->setText(tr("Error: %1").arg(message));
-    QMessageBox::warning(this, tr("Storage Error"), message);
+    status_label_->setText(tr("错误: %1").arg(message));
+    QMessageBox::warning(this, tr("存储错误"), message);
 }
 
 void CloudPage::on_directory_loaded(const QString& config_name, const QString& path,
@@ -1073,11 +1085,11 @@ void CloudPage::on_directory_loaded(const QString& config_name, const QString& p
         file_table_->setItem(row, 2, new QTableWidgetItem(resource.modified_time));
 
         // 类型
-        QString type_str = resource.type == "directory" ? tr("Folder") : resource.type;
+        QString type_str = resource.type == "directory" ? tr("文件夹") : resource.type;
         file_table_->setItem(row, 3, new QTableWidgetItem(type_str));
     }
 
-    status_label_->setText(tr("%1 item(s).").arg(resources.size()));
+    status_label_->setText(tr("共 %1 项。").arg(resources.size()));
 }
 
 } // namespace falcon::desktop

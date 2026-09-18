@@ -67,12 +67,13 @@ void TopBar::setup_ui()
     brand_layout->addLayout(title_stack);
     main_layout->addLayout(brand_layout);
 
-    // 搜索框(回车 → 过滤下载任务)
+    // 搜索框(回车 → 过滤下载任务);限宽,不随窗口无限拉伸
     search_edit_ = new QLineEdit(this);
     search_edit_->setPlaceholderText(tr("过滤下载任务"));
     search_edit_->setObjectName("searchEdit");
     search_edit_->setClearButtonEnabled(true);
     search_edit_->setFixedHeight(34);
+    search_edit_->setMaximumWidth(420);
     connect(search_edit_, &QLineEdit::returnPressed, this, [this]() {
         emit searchRequested(search_edit_->text());
     });

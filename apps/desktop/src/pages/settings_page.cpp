@@ -113,10 +113,10 @@ void SettingsPage::set_action_when_completed(int action)
 void SettingsPage::set_theme_display(bool dark_mode)
 {
     if (current_theme_label_) {
-        current_theme_label_->setText(dark_mode ? tr("Dark") : tr("Light"));
+        current_theme_label_->setText(dark_mode ? tr("深色") : tr("浅色"));
     }
     if (theme_toggle_button_) {
-        theme_toggle_button_->setText(dark_mode ? tr("Switch to Light") : tr("Switch to Dark"));
+        theme_toggle_button_->setText(dark_mode ? tr("切换浅色") : tr("切换深色"));
     }
 }
 
@@ -230,7 +230,7 @@ void SettingsPage::browse_download_dir()
 {
     QString dir = QFileDialog::getExistingDirectory(
         this,
-        tr("Select default download directory"),
+        tr("选择默认下载目录"),
         download_dir_edit_->text(),
         QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks
     );
@@ -326,10 +326,6 @@ QWidget* SettingsPage::create_page_hero()
     layout->setContentsMargins(20, 18, 20, 18);
     layout->setSpacing(4);
 
-    auto* eyebrow = new QLabel(tr("PREFERENCES"), hero);
-    eyebrow->setObjectName("heroEyebrow");
-    layout->addWidget(eyebrow);
-
     auto* title = new QLabel(tr("下载器设置"), hero);
     title->setObjectName("heroTitle");
     layout->addWidget(title);
@@ -344,17 +340,17 @@ QWidget* SettingsPage::create_page_hero()
 
 QWidget* SettingsPage::create_clipboard_section_widget()
 {
-    auto* group = new QGroupBox(tr("Clipboard Monitoring"), this);
+    auto* group = new QGroupBox(tr("剪切板监听"), this);
 
     auto* layout = new QVBoxLayout(group);
     layout->setSpacing(16);
     layout->setContentsMargins(16, 20, 16, 16);
 
     // Enable monitoring checkbox
-    clipboard_monitoring_checkbox_ = new QCheckBox(tr("Enable clipboard monitoring"), this);
+    clipboard_monitoring_checkbox_ = new QCheckBox(tr("自动检测剪切板链接"), this);
 
     auto* desc_label = new QLabel(
-        tr("Detect download links from clipboard automatically (HTTP, FTP, magnet, etc.)."),
+        tr("自动从剪切板检测下载链接（HTTP、FTP、磁力链等）。"),
         this
     );
     desc_label->setWordWrap(true);
@@ -365,14 +361,14 @@ QWidget* SettingsPage::create_clipboard_section_widget()
 
     // Detection delay
     auto* delay_layout = new QHBoxLayout();
-    auto* delay_label = new QLabel(tr("Detection interval:"), this);
+    auto* delay_label = new QLabel(tr("检测间隔:"), this);
 
     clipboard_delay_spin_ = new QSpinBox(this);
     clipboard_delay_spin_->setRange(500, 10000);
     clipboard_delay_spin_->setValue(1000);
     clipboard_delay_spin_->setSuffix(" ms");
 
-    auto* delay_hint = new QLabel(tr("(avoid duplicate triggers)"), this);
+    auto* delay_hint = new QLabel(tr("（避免重复触发）"), this);
     delay_hint->setObjectName("cardInfoLabel");
 
     delay_layout->addWidget(delay_label);
@@ -387,7 +383,7 @@ QWidget* SettingsPage::create_clipboard_section_widget()
 
 QWidget* SettingsPage::create_download_section_widget()
 {
-    auto* group = new QGroupBox(tr("Downloads"), this);
+    auto* group = new QGroupBox(tr("下载"), this);
 
     auto* layout = new QFormLayout(group);
     layout->setSpacing(16);
@@ -395,7 +391,7 @@ QWidget* SettingsPage::create_download_section_widget()
     layout->setLabelAlignment(Qt::AlignRight);
 
     // Default download directory
-    auto* dir_label = new QLabel(tr("Default download directory:"), this);
+    auto* dir_label = new QLabel(tr("默认下载目录:"), this);
 
     auto* dir_layout = new QHBoxLayout();
     dir_layout->setSpacing(8);
@@ -403,7 +399,7 @@ QWidget* SettingsPage::create_download_section_widget()
     download_dir_edit_->setReadOnly(true);
     dir_layout->addWidget(download_dir_edit_, 1);
 
-    auto* browse_btn = new QPushButton(tr("Browse..."), this);
+    auto* browse_btn = new QPushButton(tr("浏览..."), this);
     browse_btn->setCursor(Qt::PointingHandCursor);
     browse_btn->setObjectName("toolButton");
     connect(browse_btn, &QPushButton::clicked, this, &SettingsPage::browse_download_dir);
@@ -412,7 +408,7 @@ QWidget* SettingsPage::create_download_section_widget()
     layout->addRow(dir_label, dir_layout);
 
     // Maximum concurrent downloads
-    auto* max_label = new QLabel(tr("Max concurrent downloads:"), this);
+    auto* max_label = new QLabel(tr("最大并发下载数:"), this);
     max_downloads_spin_ = new QSpinBox(this);
     max_downloads_spin_->setRange(1, 10);
     max_downloads_spin_->setValue(3);
@@ -423,7 +419,7 @@ QWidget* SettingsPage::create_download_section_widget()
 
 QWidget* SettingsPage::create_speed_limit_section_widget()
 {
-    auto* group = new QGroupBox(tr("Speed Limit"), this);
+    auto* group = new QGroupBox(tr("限速"), this);
 
     auto* layout = new QFormLayout(group);
     layout->setSpacing(16);
@@ -431,7 +427,7 @@ QWidget* SettingsPage::create_speed_limit_section_widget()
     layout->setLabelAlignment(Qt::AlignRight);
 
     // Task speed limit
-    auto* task_limit_label = new QLabel(tr("Per-task speed limit:"), this);
+    auto* task_limit_label = new QLabel(tr("单任务限速:"), this);
     auto* task_limit_layout = new QHBoxLayout();
     task_limit_layout->setSpacing(8);
 
@@ -439,10 +435,10 @@ QWidget* SettingsPage::create_speed_limit_section_widget()
     task_speed_limit_spin_->setRange(0, 100000);
     task_speed_limit_spin_->setValue(0);
     task_speed_limit_spin_->setSuffix(" KB/s");
-    task_speed_limit_spin_->setSpecialValueText(tr("Unlimited"));
+    task_speed_limit_spin_->setSpecialValueText(tr("不限速"));
     task_limit_layout->addWidget(task_speed_limit_spin_);
 
-    auto* task_limit_hint = new QLabel(tr("(0 = unlimited)"), this);
+    auto* task_limit_hint = new QLabel(tr("（0 = 不限速）"), this);
     task_limit_hint->setObjectName("cardInfoLabel");
     task_limit_layout->addWidget(task_limit_hint);
     task_limit_layout->addStretch();
@@ -450,7 +446,7 @@ QWidget* SettingsPage::create_speed_limit_section_widget()
     layout->addRow(task_limit_label, task_limit_layout);
 
     // Global speed limit
-    auto* global_limit_label = new QLabel(tr("Global speed limit:"), this);
+    auto* global_limit_label = new QLabel(tr("全局限速:"), this);
     auto* global_limit_layout = new QHBoxLayout();
     global_limit_layout->setSpacing(8);
 
@@ -458,10 +454,10 @@ QWidget* SettingsPage::create_speed_limit_section_widget()
     global_speed_limit_spin_->setRange(0, 100000);
     global_speed_limit_spin_->setValue(0);
     global_speed_limit_spin_->setSuffix(" KB/s");
-    global_speed_limit_spin_->setSpecialValueText(tr("Unlimited"));
+    global_speed_limit_spin_->setSpecialValueText(tr("不限速"));
     global_limit_layout->addWidget(global_speed_limit_spin_);
 
-    auto* global_limit_hint = new QLabel(tr("(0 = unlimited)"), this);
+    auto* global_limit_hint = new QLabel(tr("（0 = 不限速）"), this);
     global_limit_hint->setObjectName("cardInfoLabel");
     global_limit_layout->addWidget(global_limit_hint);
     global_limit_layout->addStretch();
@@ -470,7 +466,7 @@ QWidget* SettingsPage::create_speed_limit_section_widget()
 
     // 说明文字
     auto* desc_label = new QLabel(
-        tr("Speed limits help manage bandwidth usage. Global limit applies to all downloads combined."),
+        tr("限速有助于控制带宽占用；全局限速对所有下载任务生效。"),
         this
     );
     desc_label->setWordWrap(true);
@@ -482,7 +478,7 @@ QWidget* SettingsPage::create_speed_limit_section_widget()
 
 QWidget* SettingsPage::create_completion_action_section_widget()
 {
-    auto* group = new QGroupBox(tr("When Download Completes"), this);
+    auto* group = new QGroupBox(tr("下载完成后"), this);
 
     auto* layout = new QVBoxLayout(group);
     layout->setSpacing(16);
@@ -492,14 +488,14 @@ QWidget* SettingsPage::create_completion_action_section_widget()
     auto* action_layout = new QHBoxLayout();
     action_layout->setSpacing(12);
 
-    auto* action_label = new QLabel(tr("Action:"), this);
+    auto* action_label = new QLabel(tr("完成后动作:"), this);
     action_layout->addWidget(action_label);
 
     completion_action_combo_ = new QComboBox(this);
-    completion_action_combo_->addItem(tr("Do nothing"));
-    completion_action_combo_->addItem(tr("Open file"));
-    completion_action_combo_->addItem(tr("Open folder"));
-    completion_action_combo_->addItem(tr("Show notification only"));
+    completion_action_combo_->addItem(tr("无操作"));
+    completion_action_combo_->addItem(tr("打开文件"));
+    completion_action_combo_->addItem(tr("打开文件夹"));
+    completion_action_combo_->addItem(tr("仅显示通知"));
     action_layout->addWidget(completion_action_combo_);
 
     action_layout->addStretch();
@@ -507,8 +503,7 @@ QWidget* SettingsPage::create_completion_action_section_widget()
 
     // 说明文字
     auto* desc_label = new QLabel(
-        tr("Choose what happens when a download completes. "
-           "For multiple files, only the notification will be shown."),
+        tr("选择下载完成后的动作；多文件任务仅显示通知。"),
         this
     );
     desc_label->setWordWrap(true);
@@ -520,7 +515,7 @@ QWidget* SettingsPage::create_completion_action_section_widget()
 
 QWidget* SettingsPage::create_connection_section_widget()
 {
-    auto* group = new QGroupBox(tr("Connection"), this);
+    auto* group = new QGroupBox(tr("连接"), this);
 
     auto* layout = new QFormLayout(group);
     layout->setSpacing(16);
@@ -528,14 +523,14 @@ QWidget* SettingsPage::create_connection_section_widget()
     layout->setLabelAlignment(Qt::AlignRight);
 
     // Default connections
-    auto* conn_label = new QLabel(tr("Default connections:"), this);
+    auto* conn_label = new QLabel(tr("默认连接数:"), this);
     default_connections_spin_ = new QSpinBox(this);
     default_connections_spin_->setRange(1, 16);
     default_connections_spin_->setValue(4);
     layout->addRow(conn_label, default_connections_spin_);
 
     // Connection timeout
-    auto* timeout_label = new QLabel(tr("Connection timeout:"), this);
+    auto* timeout_label = new QLabel(tr("连接超时:"), this);
     connection_timeout_spin_ = new QSpinBox(this);
     connection_timeout_spin_->setRange(5, 120);
     connection_timeout_spin_->setValue(30);
@@ -543,7 +538,7 @@ QWidget* SettingsPage::create_connection_section_widget()
     layout->addRow(timeout_label, connection_timeout_spin_);
 
     // Retry count
-    auto* retry_label = new QLabel(tr("Retry count:"), this);
+    auto* retry_label = new QLabel(tr("重试次数:"), this);
     retry_count_spin_ = new QSpinBox(this);
     retry_count_spin_->setRange(0, 10);
     retry_count_spin_->setValue(3);
@@ -551,9 +546,9 @@ QWidget* SettingsPage::create_connection_section_widget()
 
     // Daemon RPC 模式：经 aria2 兼容 JSON-RPC 连接 falcon-daemon。
     // 后端在应用启动时创建，切换需重启应用生效。
-    auto* daemon_label = new QLabel(tr("Daemon mode:"), this);
+    auto* daemon_label = new QLabel(tr("Daemon 模式:"), this);
     daemon_enabled_checkbox_ = new QCheckBox(
-        tr("Connect to falcon-daemon (applies after restart)"), this);
+        tr("连接 falcon-daemon（重启后生效）"), this);
     layout->addRow(daemon_label, daemon_enabled_checkbox_);
 
     auto* daemon_url_label = new QLabel(tr("Daemon RPC URL:"), this);
@@ -561,10 +556,10 @@ QWidget* SettingsPage::create_connection_section_widget()
     daemon_url_edit_->setPlaceholderText("http://127.0.0.1:6800/jsonrpc");
     layout->addRow(daemon_url_label, daemon_url_edit_);
 
-    auto* daemon_secret_label = new QLabel(tr("Daemon RPC secret:"), this);
+    auto* daemon_secret_label = new QLabel(tr("Daemon RPC 密钥:"), this);
     daemon_secret_edit_ = new QLineEdit(this);
     daemon_secret_edit_->setEchoMode(QLineEdit::Password);
-    daemon_secret_edit_->setPlaceholderText(tr("token secret (optional)"));
+    daemon_secret_edit_->setPlaceholderText(tr("token 密钥（可选）"));
     layout->addRow(daemon_secret_label, daemon_secret_edit_);
 
     return group;
@@ -572,17 +567,17 @@ QWidget* SettingsPage::create_connection_section_widget()
 
 QWidget* SettingsPage::create_notification_section_widget()
 {
-    auto* group = new QGroupBox(tr("Notifications"), this);
+    auto* group = new QGroupBox(tr("通知"), this);
 
     auto* layout = new QVBoxLayout(group);
     layout->setSpacing(16);
     layout->setContentsMargins(16, 20, 16, 16);
 
-    notifications_checkbox_ = new QCheckBox(tr("Enable notifications"), this);
+    notifications_checkbox_ = new QCheckBox(tr("启用通知"), this);
     notifications_checkbox_->setChecked(true);
     layout->addWidget(notifications_checkbox_);
 
-    sound_notification_checkbox_ = new QCheckBox(tr("Sound"), this);
+    sound_notification_checkbox_ = new QCheckBox(tr("提示音"), this);
     layout->addWidget(sound_notification_checkbox_);
 
     return group;
@@ -596,14 +591,14 @@ QLayout* SettingsPage::create_action_buttons_layout()
 
     layout->addStretch();
 
-    reset_button_ = new QPushButton(tr("Reset"), this);
+    reset_button_ = new QPushButton(tr("重置"), this);
     reset_button_->setCursor(Qt::PointingHandCursor);
     reset_button_->setMinimumWidth(100);
     reset_button_->setObjectName("toolButton");
     connect(reset_button_, &QPushButton::clicked, this, &SettingsPage::reset_to_defaults);
     layout->addWidget(reset_button_);
 
-    apply_button_ = new QPushButton(tr("Apply"), this);
+    apply_button_ = new QPushButton(tr("应用"), this);
     apply_button_->setCursor(Qt::PointingHandCursor);
     apply_button_->setMinimumWidth(100);
     apply_button_->setObjectName("primaryButton");
@@ -615,7 +610,7 @@ QLayout* SettingsPage::create_action_buttons_layout()
 
 QWidget* SettingsPage::create_appearance_section_widget()
 {
-    auto* group = new QGroupBox(tr("Appearance"), this);
+    auto* group = new QGroupBox(tr("外观"), this);
 
     auto* layout = new QVBoxLayout(group);
     layout->setSpacing(16);
@@ -625,15 +620,15 @@ QWidget* SettingsPage::create_appearance_section_widget()
     auto* theme_layout = new QHBoxLayout();
     theme_layout->setSpacing(12);
 
-    auto* theme_label = new QLabel(tr("Theme:"), this);
+    auto* theme_label = new QLabel(tr("主题:"), this);
     theme_layout->addWidget(theme_label);
 
-    current_theme_label_ = new QLabel(tr("Light"), this);
+    current_theme_label_ = new QLabel(tr("浅色"), this);
     theme_layout->addWidget(current_theme_label_);
 
     theme_layout->addStretch();
 
-    theme_toggle_button_ = new QPushButton(tr("Switch to Dark"), this);
+    theme_toggle_button_ = new QPushButton(tr("切换深色"), this);
     theme_toggle_button_->setCursor(Qt::PointingHandCursor);
     theme_toggle_button_->setObjectName("toolButton");
     connect(theme_toggle_button_, &QPushButton::clicked, this, &SettingsPage::on_theme_button_clicked);
@@ -642,7 +637,7 @@ QWidget* SettingsPage::create_appearance_section_widget()
     layout->addLayout(theme_layout);
 
     // 说明文字
-    auto* desc_label = new QLabel(tr("Switch between light and dark themes."), this);
+    auto* desc_label = new QLabel(tr("在浅色与深色主题之间切换。"), this);
     desc_label->setObjectName("cardInfoLabel");
     layout->addWidget(desc_label);
 

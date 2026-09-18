@@ -4,6 +4,9 @@
           text-secondary #616161 · text-disabled #9d9d9d
           accent #005fb8 (hover #1975c5 / pressed #004578)
           divider #e5e5e5 · hover rgba(0,0,0,10) · danger #c42b1c
+   字号刻度(全表仅此四档,数字展示位可上浮):
+     12 caption(表头/说明/统计标签) · 14 body(默认)
+     16 title(节标题/卡片文件名) · 20 page/hero 标题与关键数字
    与 fluent_dark.qss 严格成对:新增/删除规则必须同步两份。
    ============================================================ */
 
@@ -254,16 +257,18 @@ QGroupBox {
     border: 1px solid #e5e5e5;
     border-radius: 8px;
     margin-top: 14px;
-    padding: 10px 6px 6px 6px;
+    padding: 12px 8px 8px 8px;
     font-size: 14px;
 }
 
+/* 标题带卡片底色盖住边框线(fieldset legend 形态),不再浮在卡外 */
 QGroupBox::title {
     subcontrol-origin: margin;
     subcontrol-position: top left;
-    left: 12px;
-    top: 2px;
-    padding: 0 4px;
+    left: 14px;
+    top: 4px;
+    padding: 0 6px;
+    background-color: #ffffff;
     color: #616161;
     font-size: 12px;
     font-weight: 600;
@@ -412,11 +417,10 @@ QProgressBar::chunk {
     border-radius: 2px;
 }
 
+/* 进度条不承载文字,百分比由旁边的 #progressPctLabel 展示 */
 #taskProgressBar {
     min-height: 6px;
     border-radius: 3px;
-    font-size: 11px;
-    color: #616161;
 }
 
 #taskProgressBar::chunk {
@@ -425,6 +429,12 @@ QProgressBar::chunk {
 
 #cardProgressBar {
     min-height: 4px;
+}
+
+#progressPctLabel {
+    background: transparent;
+    color: #616161;
+    font-size: 12px;
 }
 
 /* ---------- 6. 顶栏 ---------- */
@@ -462,11 +472,13 @@ QProgressBar::chunk {
     border-right: 1px solid #e5e5e5;
 }
 
+/* 导航项:透明底 + 3px 左缘占位(选中态换 accent 条,文字不跳) */
 QPushButton#navTab {
     background: transparent;
     border: none;
+    border-left: 3px solid transparent;
     border-radius: 4px;
-    padding: 9px 12px;
+    padding: 9px 12px 9px 9px;
     text-align: left;
     color: #616161;
 }
@@ -478,7 +490,8 @@ QPushButton#navTab:hover {
 
 QPushButton#navTab:checked {
     background-color: #ffffff;
-    color: #1b1b1b;
+    border-left: 3px solid #005fb8;
+    color: #005fb8;
     font-weight: 600;
 }
 
@@ -528,13 +541,6 @@ QLabel#sectionLabel {
     border-radius: 8px;
 }
 
-#heroEyebrow {
-    background: transparent;
-    color: #005fb8;
-    font-size: 12px;
-    font-weight: 600;
-}
-
 #heroTitle {
     background: transparent;
     color: #1b1b1b;
@@ -551,6 +557,32 @@ QLabel#sectionLabel {
     background: transparent;
 }
 
+/* 页头分段切换器(下载中|已完成):灰底胶囊 + 白底选中段 */
+#viewSegmented {
+    background-color: #ececec;
+    border: 1px solid #e5e5e5;
+    border-radius: 6px;
+}
+
+QPushButton#viewSegmentButton {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 4px 16px;
+    color: #616161;
+}
+
+QPushButton#viewSegmentButton:hover {
+    color: #1b1b1b;
+}
+
+QPushButton#viewSegmentButton:checked {
+    background-color: #ffffff;
+    border: 1px solid #d9d9d9;
+    color: #005fb8;
+    font-weight: 600;
+}
+
 #summaryCard {
     background-color: #ffffff;
     border: 1px solid #e5e5e5;
@@ -560,7 +592,7 @@ QLabel#sectionLabel {
 #summaryValue {
     background: transparent;
     color: #1b1b1b;
-    font-size: 24px;
+    font-size: 20px;
     font-weight: 600;
 }
 
@@ -612,14 +644,7 @@ QScrollArea#gridScrollArea > QWidget > QWidget {
     font-size: 12px;
 }
 
-/* ---------- 10. 页面标题(P4 各页接入) ---------- */
-
-#pageTitle {
-    background: transparent;
-    color: #1b1b1b;
-    font-size: 20px;
-    font-weight: 600;
-}
+/* ---------- 10. 节标题(卡片内小节) ---------- */
 
 #sectionTitle {
     background: transparent;
@@ -629,13 +654,6 @@ QScrollArea#gridScrollArea > QWidget > QWidget {
 }
 
 /* ---------- 11. 通用杂项 ---------- */
-
-#headerLabel {
-    background: transparent;
-    color: #1b1b1b;
-    font-size: 16px;
-    font-weight: 600;
-}
 
 #separatorLine {
     background-color: #e5e5e5;
