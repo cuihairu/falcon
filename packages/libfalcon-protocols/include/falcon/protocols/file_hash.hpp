@@ -65,6 +65,22 @@ public:
                                   HashAlgorithm algorithm);
 
     /**
+     * @brief 流式计算文件哈希(分块读取,恒定内存占用)
+     *
+     * calculate(file_path, ...) 会把整个文件读进内存,GB 级镜像
+     * (Metalink 校验场景)不可接受;本接口按块流过 EVP 摘要。
+     *
+     * @param file_path 文件路径
+     * @param algorithm 哈希算法
+     * @param chunk_bytes 每块字节数(默认 256KB)
+     * @return 计算的哈希值(十六进制字符串);打开/读取失败返回空串
+     */
+    static std::string calculate_streaming(const std::string& file_path,
+                                            HashAlgorithm algorithm,
+                                            std::size_t chunk_bytes =
+                                                256 * 1024);
+
+    /**
      * @brief 验证文件哈希
      *
      * @param file_path 文件路径
@@ -86,6 +102,18 @@ public:
     static std::vector<HashResult> verify_multiple(
         const std::string& file_path,
         const std::vector<std::pair<std::string, HashAlgorithm>>& expected_hashes);
+
+    /**
+     * @brief 流式验证文件哈希(大文件友好)
+     *
+     * @param file_path 文件路径
+     * @param expected_hash 期望的哈希值
+     * @param algorithm 哈希算法
+     * @return 验证结果;打开/读取失败时 valid=false
+     */
+    static HashResult verify_streaming(const std::string& file_path,
+                                       const std::string& expected_hash,
+                                       HashAlgorithm algorithm);
 
     /**
      * @brief 从哈希字符串自动检测算法

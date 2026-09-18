@@ -114,3 +114,42 @@ TEST(BuiltinProtocolHandlersTest, GetPluginByUrlRoutesCorrectly) {
     GTEST_SKIP() << "HTTP plugin not enabled";
 #endif
 }
+
+TEST(BuiltinProtocolHandlersTest, LoadBuiltinHandlersRegistersMetalinkWhenEnabled) {
+#ifdef FALCON_ENABLE_METALINK_PLUGIN
+    falcon::ProtocolRegistry registry;
+    registry.load_builtin_handlers();
+
+    ASSERT_NE(registry.get_handler("metalink"), nullptr);
+
+    auto protocols = registry.supported_protocols();
+    EXPECT_NE(std::find(protocols.begin(), protocols.end(), "metalink"),
+              protocols.end());
+#else
+    GTEST_SKIP() << "Metalink handler not enabled";
+#endif
+}
+
+TEST(BuiltinProtocolHandlersTest, MetalinkUrlRoutesBeforeGenericHttp) {
+#ifdef FALCON_ENABLE_METALINK_PLUGIN
+    falcon::ProtocolRegistry manager;
+    manager.load_builtin_handlers();
+
+    auto* handler = manager.get_handler_for_url(
+        "http://mirror.example.com/ubuntu.iso.meta4");
+    ASSERT_NE(handler, nullptr);
+    EXPECT_EQ(handler->protocol_name(), "metalink");
+
+    auto* metalink_handler = manager.get_handler_for_url(
+        "https://example.com/dir/pkg.metalink");
+    ASSERT_NE(metalink_handler, nullptr);
+    EXPECT_EQ(metalink_handler->protocol_name(), "metalink");
+
+    // 无后缀的普通 URL 不受截获影响
+    auto* plain = manager.get_handler_for_url("http://example.com/file.zip");
+    ASSERT_NE(plain, nullptr);
+    EXPECT_EQ(plain->protocol_name(), "http");
+#else
+    GTEST_SKIP() << "Metalink handler not enabled";
+#endif
+}

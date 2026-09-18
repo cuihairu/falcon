@@ -38,7 +38,7 @@ option(FALCON_ENABLE_HTTP "Enable HTTP/HTTPS plugin" ON)
 option(FALCON_ENABLE_FTP "Enable FTP plugin" ON)
 option(FALCON_ENABLE_BITTORRENT "Enable BitTorrent plugin" OFF)
 option(FALCON_ENABLE_SFTP "Enable SFTP plugin" OFF)
-option(FALCON_ENABLE_METALINK "Enable Metalink plugin" OFF)
+option(FALCON_ENABLE_METALINK "Enable Metalink plugin" ON)
 
 # 私有协议插件
 option(FALCON_ENABLE_THUNDER "Enable Thunder protocol plugin" OFF)
@@ -184,13 +184,6 @@ endif()
 if(TARGET falcon_plugin_sftp)
     list(APPEND FALCON_PLUGIN_EXPORT_TARGETS falcon_plugin_sftp)
     install(TARGETS falcon_plugin_sftp EXPORT FalconTargets
-        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    )
-endif()
-if(TARGET falcon_plugin_metalink)
-    list(APPEND FALCON_PLUGIN_EXPORT_TARGETS falcon_plugin_metalink)
-    install(TARGETS falcon_plugin_metalink EXPORT FalconTargets
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     )

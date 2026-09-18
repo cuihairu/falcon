@@ -61,6 +61,83 @@ std::string FileHasher::calculate(const std::string& file_path,
     return calculate(reinterpret_cast<const char*>(data.data()), data.size(), algorithm);
 }
 
+std::string FileHasher::calculate_streaming(const std::string& file_path,
+                                             HashAlgorithm algorithm,
+                                             std::size_t chunk_bytes) {
+    std::ifstream file(file_path, std::ios::binary);
+    if (!file) {
+        FALCON_LOG_ERROR_STREAM("无法打开文件: " << file_path);
+        return "";
+    }
+    if (chunk_bytes == 0) chunk_bytes = 256 * 1024;
+
+#if defined(FALCON_USE_OPENSSL) || defined(FALCON_HAS_OPENSSL)
+    const char* md_type = nullptr;
+    switch (algorithm) {
+        case HashAlgorithm::MD5:    md_type = "MD5"; break;
+        case HashAlgorithm::SHA1:   md_type = "SHA1"; break;
+        case HashAlgorithm::SHA256: md_type = "SHA256"; break;
+        case HashAlgorithm::SHA512: md_type = "SHA512"; break;
+        default: md_type = "";
+    }
+
+    EVP_MD_CTX* mdctx = EVP_MD_CTX_new();
+    if (!mdctx) {
+        FALCON_LOG_ERROR_STREAM("创建 EVP_MD_CTX 失败");
+        return "";
+    }
+    const EVP_MD* md = EVP_get_digestbyname(md_type);
+    if (!md) {
+        FALCON_LOG_ERROR_STREAM("获取哈希算法失败: " << md_type);
+        EVP_MD_CTX_free(mdctx);
+        return "";
+    }
+    if (EVP_DigestInit_ex(mdctx, md, nullptr) != 1) {
+        FALCON_LOG_ERROR_STREAM("初始化哈希失败");
+        EVP_MD_CTX_free(mdctx);
+        return "";
+    }
+
+    std::vector<char> buffer(chunk_bytes);
+    while (file.read(buffer.data(),
+                     static_cast<std::streamsize>(buffer.size())) ||
+           file.gcount() > 0) {
+        const std::size_t bytes_read = static_cast<std::size_t>(file.gcount());
+        if (EVP_DigestUpdate(mdctx, buffer.data(), bytes_read) != 1) {
+            FALCON_LOG_ERROR_STREAM("更新哈希失败");
+            EVP_MD_CTX_free(mdctx);
+            return "";
+        }
+        if (file.eof()) break;
+    }
+
+    unsigned char hash_value[EVP_MAX_MD_SIZE];
+    unsigned int hash_len = 0;
+    if (EVP_DigestFinal_ex(mdctx, hash_value, &hash_len) != 1) {
+        FALCON_LOG_ERROR_STREAM("完成哈希失败");
+        EVP_MD_CTX_free(mdctx);
+        return "";
+    }
+    EVP_MD_CTX_free(mdctx);
+
+    std::ostringstream oss;
+    for (unsigned int i = 0; i < hash_len; i++) {
+        oss << std::hex << std::setw(2) << std::setfill('0')
+            << static_cast<int>(hash_value[i]);
+    }
+    return oss.str();
+#else
+    // 无 OpenSSL 的退化路径:与 calculate(file_path, ...) 的 fallback
+    // 保持同一结果(Metalink 侧此时本就跳过校验,一致性优先)
+    file.seekg(0, std::ios::end);
+    const auto file_size = file.tellg();
+    file.seekg(0, std::ios::beg);
+    std::vector<char> data(static_cast<std::size_t>(file_size));
+    file.read(data.data(), file_size);
+    return calculate(data.data(), data.size(), algorithm);
+#endif
+}
+
 std::string FileHasher::calculate(const char* data, std::size_t size,
                                    HashAlgorithm algorithm) {
 #if defined(FALCON_USE_OPENSSL) || defined(FALCON_HAS_OPENSSL)
@@ -197,6 +274,29 @@ std::vector<HashResult> FileHasher::verify_multiple(
     }
 
     return results;
+}
+
+HashResult FileHasher::verify_streaming(const std::string& file_path,
+                                         const std::string& expected_hash,
+                                         HashAlgorithm algorithm) {
+    HashResult result;
+    result.algorithm = algorithm;
+    result.expected = expected_hash;
+
+    result.calculated = calculate_streaming(file_path, algorithm);
+
+    if (result.calculated.length() == result.expected.length()) {
+        result.valid = std::equal(
+            result.calculated.begin(), result.calculated.end(),
+            result.expected.begin(),
+            [](char a, char b) {
+                return std::tolower(static_cast<unsigned char>(a)) ==
+                       std::tolower(static_cast<unsigned char>(b));
+            }
+        );
+    }
+
+    return result;
 }
 
 HashAlgorithm FileHasher::detect_algorithm(const std::string& hash) {

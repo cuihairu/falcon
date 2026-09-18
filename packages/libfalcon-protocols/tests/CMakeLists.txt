@@ -109,6 +109,15 @@ if(FALCON_ENABLE_QQDL)
     target_sources(falcon_protocols_tests PRIVATE unit/qqdl_plugin_test.cpp)
 endif()
 
+# Metalink 解析单测(handler e2e 挂到下方 falcon_http_tests 定义之后)
+if(FALCON_ENABLE_METALINK)
+    target_sources(falcon_protocols_tests PRIVATE
+        unit/mini_xml_parser_test.cpp
+        unit/metalink_parse_test.cpp
+    )
+    target_compile_definitions(falcon_protocols_tests PRIVATE FALCON_ENABLE_METALINK_PLUGIN)
+endif()
+
 target_link_libraries(falcon_protocols_tests
     PRIVATE
         falcon_protocols
@@ -182,6 +191,14 @@ endif()
 target_include_directories(falcon_http_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../plugins/http
 )
+
+# Metalink handler e2e:复用共享可编程 HTTP 服务器基建与 HttpHandler
+if(FALCON_ENABLE_METALINK)
+    target_sources(falcon_http_tests PRIVATE unit/metalink_handler_test.cpp)
+    target_include_directories(falcon_http_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../plugins/metalink
+    )
+endif()
 
 # ============================================================================
 # FTP plugin tests (conditional)

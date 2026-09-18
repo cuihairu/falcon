@@ -2,6 +2,69 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-18 - Metalink 下载支持落地（RFC 5854 委托模式 + 手写 mini XML 解析器）
+- **旧占位插件整体删除**：`metalink_plugin.{hpp,cpp}` 与孤儿测试（regex
+  解析器 parse() 从不赋值 text 的硬 bug、零真实能力）全部删除,旧
+  独立 CMakeLists 与 FORCE OFF 死开关一并清掉;`FALCON_ENABLE_METALINK`
+  默认 ON,新实现在根 CMakeLists 保留唯一 option
+- **手写 mini XML 解析器**（`plugins/metalink/mini_xml_parser.{hpp,cpp}`,
+  零新依赖）：字节级严格模式——声明/注释/CDATA/嵌套/自闭合/单双引
+  号属性;实体五种命名 + `&#dec;` + `&#xhex;`(控制字符与裸代理区
+  D800-DFFF 拒绝——XML 1.0 Char 产生式,代理区落盘即损坏 UTF-8);
+  元素与属性名统一去命名空间前缀取本地名(xmlns:m 亦按限定名规则存
+  为 m);文本中 `]]>` 严格拒绝,含 `]]>` 的 CDATA 内容须按 XML 标准
+  拆段(`]]]]><![CDATA[>`)两段文本拼接;畸形输入抛 XmlParseError 带
+  行列号;重复属性/多根/尾部垃圾全拒
+- **Metalink 解析双兼容**（metalink_handler.{hpp,cpp} 内
+  MetalinkFileParser）：RFC 5854(.meta4,priority 升序,缺省视为最低)
+  与 Metalink3(.metalink,preference 降序)同解析器;同 rank 保持文档
+  序;未知 hash type 跳过;size/整文件 hash 提取(<pieces> 分片哈希
+  阶段1 忽略——委托模式下整文件校验已足够);非 http/ftp 镜像过滤;
+  file name 路径穿越(/../、盘符、反斜杠)拒绝
+- **委托模式数据面**（thunder 蓝本,阶段1）：解析 → 镜像排序 → 逐个
+  委托 HTTP/FTP handler(继承 V1 分段/续传/限速能力)→ 流式哈希校验
+  (新增 FileHasher::calculate_streaming/verify_streaming,EVP 分块
+  256KB,GB 级文件不读全内存)→ 校验通过才 rename 发布并置
+  Completed;失败删 part 换下一镜像,全灭才抛异常(错误消息含逐镜像
+  失败原因);「rename 先于 Completed、完成=可信」不变式保持
+- **影子子任务 + 事件防火墙**：委托用自建影子 DownloadTask 不进
+  TaskManager,挂 MetalinkDelegateListener 吞 on_status_changed、
+  透传 on_progress/on_file_info/on_error/query_speed_limit——
+  parent 事件序列恒为「一次 Downloading → 一次 Completed/Failed」,
+  与普通 HTTP 任务无异;影子 id = parent id(同一时刻每 parent 至多
+  一个活跃镜像,天然唯一)
+- **暂停/取消语义(实证 worker 约定后修正)**：task_manager.cpp 的
+  worker catch (const std::exception&) 一律 set_error+Failed 且无
+  TaskCancelledException 特判——handler 抛任何异常都会把 Paused
+  覆盖成 Failed。MetalinkHandler 对齐 HTTP handler 既有约定
+  (http_handler.cpp):pause()/cancel() 首行自置 parent 状态
+  (Paused/Cancelled)再转发目标 handler;download 内各检查点查
+  parent status 后正常 return(绝不抛);catch 里 paused/cancelled
+  吞异常。抓取 .meta4 文档阶段的抓取连接同样注册进 ActiveContext
+  (抓取期间 pause/cancel 亦可转发中止)
+- **路由特判**：protocol_registry.cpp get_handler_for_url 的
+  http/https 分支内、HLS 特判之前——URL(剥 query/fragment)以
+  .meta4/.metalink 结尾且 metalink handler 已注册 → 截获(优雅降级:
+  未注册时普通 http 照旧);内置注册走 builtin_protocol_handlers
+  (priority=30,排在 http(100) 之前);抓取 .meta4 用
+  get_handler("http") 直查(不走 get_handler_for_url——那会经特判
+  递归指回自己)
+- **测试 53 用例全绿**：mini_xml_parser_test(~22,含 Reject 系列与
+  行列号)、metalink_parse_test(~17,排序/穿越/过滤/双兼容)、
+  metalink_handler_test(9 e2e:本地/远程 meta4 全链、坏哈希换镜像、
+  全灭、慢镜像暂停、事件序列恰 2 个状态变化、output_filename 覆盖);
+  测试基建抽取 scripted_http_server.hpp(自 http_handler_edges_test
+  共享,e2e 与 HTTP 边界测试共用可编程服务器;委派一次尝试 = HEAD
+  探测 + GET 共 2 请求);builtin 注册 +2 用例;HttpHandlerEdges 回归
+  26/26。e2e 挂 falcon_http_tests(需 HttpHandler 真实符号,weak-stub
+  链接陷阱规避)
+- **CMake/pimpl 陷阱两枚**：① 头文件 `std::map<TaskId,
+  unique_ptr<前置声明类>>` 成员——inline 默认构造的 EH 清理路径在
+  消费 TU 实例化 _Rb_tree 析构辅助,须 complete type;ActiveContext
+  改头文件完整定义(mutex/shared_ptr/裸指针均无 complete 依赖)+
+  构造/析构 out-of-line 双保险;② 测试挂载块必须在目标定义之后
+  (target_sources 前向不可引用)
+
 ### 2026-09-18 - Windows 启动先弹终端修复（WIN32_EXECUTABLE 变量名笔误）+ Nightly 包资源实证
 - **Windows 启动先弹终端**:nightly exe PE 头 Subsystem=3(CONSOLE)实证。
   根因是 CMakeLists `set(WIN32_EXECUTABLE TRUE)` 变量名笔误——CMake

@@ -24,6 +24,9 @@
 #ifdef FALCON_ENABLE_HLS_PLUGIN
 #include "../plugins/hls/hls_plugin.hpp"
 #endif
+#ifdef FALCON_ENABLE_METALINK_PLUGIN
+#include "../plugins/metalink/metalink_handler.hpp"
+#endif
 
 namespace falcon {
 
@@ -84,6 +87,12 @@ std::vector<BuiltinProtocolInfo> describe_builtin_protocols() {
     protocols.push_back({"hls", "HLS/DASH", {"hls", "m3u8", "mpd"}, false, false});
 #endif
 
+#ifdef FALCON_ENABLE_METALINK_PLUGIN
+    protocols.push_back({"metalink", "Metalink", {"meta4", "metalink"}, true, false});
+#else
+    protocols.push_back({"metalink", "Metalink", {"meta4", "metalink"}, false, false});
+#endif
+
     return protocols;
 }
 
@@ -118,6 +127,10 @@ void register_builtin_protocol_handlers([[maybe_unused]] ProtocolRegistry& regis
 
 #ifdef FALCON_ENABLE_HLS_PLUGIN
     registry.register_handler(protocols::create_hls_handler());
+#endif
+
+#ifdef FALCON_ENABLE_METALINK_PLUGIN
+    registry.register_handler(protocols::metalink::create_metalink_handler());
 #endif
 }
 

@@ -54,6 +54,15 @@ IProtocolHandler* ProtocolRegistry::get_handler_for_url(const std::string& url) 
 
         // Handle special cases
         if (scheme == "http" || scheme == "https") {
+            // Check for Metalink files (before generic http routing)
+            if (url.find(".meta4") != std::string::npos ||
+                url.find(".metalink") != std::string::npos) {
+                std::shared_lock<std::shared_mutex> lock(mutex_);
+                auto* metalink_handler = find_handler_unlocked("metalink");
+                if (metalink_handler && metalink_handler->can_handle(url)) {
+                    return metalink_handler;
+                }
+            }
             // Check for HLS streams
             if (url.find(".m3u8") != std::string::npos ||
                 url.find(".mpd") != std::string::npos) {

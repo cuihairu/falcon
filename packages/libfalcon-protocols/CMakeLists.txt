@@ -133,10 +133,13 @@ elseif(FALCON_ENABLE_SFTP)
     set(FALCON_ENABLE_SFTP OFF CACHE BOOL "Enable SFTP plugin" FORCE)
 endif()
 
-# Metalink plugin
+# Metalink protocol(手写 mini XML 解析器,零第三方依赖)
 if(FALCON_ENABLE_METALINK)
-    message(WARNING "Metalink plugin is not yet migrated to the current protocol handler architecture; disabling FALCON_ENABLE_METALINK")
-    set(FALCON_ENABLE_METALINK OFF CACHE BOOL "Enable Metalink plugin" FORCE)
+    target_sources(falcon_protocols PRIVATE
+        plugins/metalink/mini_xml_parser.cpp
+        plugins/metalink/metalink_handler.cpp
+    )
+    target_compile_definitions(falcon_protocols PRIVATE FALCON_ENABLE_METALINK_PLUGIN)
 endif()
 
 # Thunder protocol
@@ -198,6 +201,7 @@ target_link_libraries(falcon_builtin_protocol_handlers
 target_include_directories(falcon_builtin_protocol_handlers
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
 if(WIN32)
