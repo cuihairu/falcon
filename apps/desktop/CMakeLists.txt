@@ -12,11 +12,7 @@ if(APPLE)
   set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version" FORCE)
 endif()
 
-# Windows 特定设置
-if(WIN32)
-  # GUI 应用（无控制台窗口）
-  set(WIN32_EXECUTABLE TRUE)
-endif()
+# Windows 特定设置(见下方 add_executable 之后的 WIN32_EXECUTABLE 修正)
 
 # 修复 vcpkg freetype BZip2 依赖问题
 # freetype 引用了 BZip2::BZip2 但 vcpkg bzip2 没有提供该目标
@@ -105,6 +101,16 @@ endif()
 # add_executable 之后再挂:此前 qt_add_resources 在此之前调用是无效调用,
 # 资源从未进过二进制,运行时 QSS/图标读取全部落空)
 add_executable(falcon-desktop ${SOURCES} ${HEADERS} ${UI_FILES} ${RESOURCES})
+
+# Windows GUI 子系统(启动不弹控制台终端)。此前顶部 set(WIN32_EXECUTABLE
+# TRUE) 的变量名是错的——CMake 读取的变量是 CMAKE_WIN32_EXECUTABLE,
+# 普通变量 WIN32_EXECUTABLE(与 target 属性同名)从不被读取,exe 一直以
+# CONSOLE 子系统链接,启动先弹终端再出 GUI(nightly PE Subsystem=3 实证)。
+# 置 target 属性后 Qt6::Core 自动挂接 Qt6::QtMain 完成 main→WinMain 转发。
+# 沙盒 falcon-ui-sandbox 是开发工具,保留控制台打印截图路径,不置此属性。
+if(WIN32)
+  set_target_properties(falcon-desktop PROPERTIES WIN32_EXECUTABLE TRUE)
+endif()
 
 # Translations (optional; requires Qt Linguist Tools)
 set(TRANSLATION_TS_FILES

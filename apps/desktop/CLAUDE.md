@@ -2,6 +2,21 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-18 - Windows 启动先弹终端修复（WIN32_EXECUTABLE 变量名笔误）
+- **现象**:Windows 下启动 falcon-desktop 先弹一个控制台终端再出 GUI
+  (nightly PE 头 Subsystem=3 WINDOWS_CONSOLE 实证;正常 GUI 应用应为
+  2 WINDOWS_GUI 无控制台)
+- **根因**:CMakeLists 顶部 `set(WIN32_EXECUTABLE TRUE)` 变量名笔误——
+  CMake 读取的变量是 **CMAKE_WIN32_EXECUTABLE**,普通变量
+  WIN32_EXECUTABLE(与 target 属性同名)从不被读取 → add_executable
+  未带 WIN32 标志,exe 一直以 CONSOLE 子系统链接(自项目创建以来从未
+  生效过);MSVC 不报错、不告警,与资源缺陷同类——编译绿掩盖
+- **修复**:add_executable 之后 `set_target_properties(falcon-desktop
+  PROPERTIES WIN32_EXECUTABLE TRUE)`;WIN32_EXECUTABLE 属性置位后
+  Qt6::Core 自动挂接 Qt6::QtMain 完成 main→WinMain 入口转发(无需手动
+  链接)。沙盒 falcon-ui-sandbox 是开发工具,保留控制台打印截图路径,
+  不置此属性。验证:PE 头 Subsystem 须为 2(验证脚本见上一条目方法)
+
 ### 2026-09-18 - Nightly Windows 包资源编入实证（发布包二进制验证方法）
 - **验证方法**（无 Windows 环境对发布包做资源闭环验收）：下载 nightly
   Windows zip → 解包 → Python 直接分析 falcon-desktop.exe。三个陷阱
