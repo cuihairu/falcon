@@ -428,7 +428,8 @@ void MetalinkHandler::download(DownloadTask::Ptr task,
         return s == TaskStatus::Paused || s == TaskStatus::Cancelled;
     };
 
-    fs::path part_path;
+    std::string part_path;  // 全程窄字符串;Windows 的 fs::path 隐式转换是
+                            // wstring,传 const std::string& 形参 MSVC 拒绝
     try {
         const std::string xml =
             fetch_metalink_document(task->url(), task->options(), task_id,
@@ -491,7 +492,7 @@ void MetalinkHandler::download(DownloadTask::Ptr task,
                 continue;
             }
 
-            if (verify_or_discard(mf, part_path.string(), errors)) {
+            if (verify_or_discard(mf, part_path, errors)) {
                 // 发布:rename 先于 Completed(完成=可信)
                 fs::rename(part_path, final_path);
                 task->set_status(TaskStatus::Completed);
