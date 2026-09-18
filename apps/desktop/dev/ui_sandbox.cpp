@@ -120,9 +120,14 @@ Shell build_shell()
     auto* status_bar = new StatusBar;
     root_layout->addWidget(status_bar);
 
-    // 侧栏接线(照 main_window 的真实语义)
-    QObject::connect(side_bar, &SideBar::downloadClicked, stack, [stack] {
+    // 侧栏接线(照 main_window 的真实语义):下载 tab 各自带视图模式
+    QObject::connect(side_bar, &SideBar::downloadingTabClicked, stack, [stack, download] {
         stack->setCurrentIndex(0);
+        download->set_view_mode(DownloadViewMode::Downloading);
+    });
+    QObject::connect(side_bar, &SideBar::completedTabClicked, stack, [stack, download] {
+        stack->setCurrentIndex(0);
+        download->set_view_mode(DownloadViewMode::Completed);
     });
     QObject::connect(side_bar, &SideBar::cloudClicked,
                      stack, [stack] { stack->setCurrentIndex(1); });
@@ -184,7 +189,7 @@ int main(int argc, char** argv)
     };
 
     // 经侧栏按钮真实点击切页(信号 + QButtonGroup 选中态同步),
-    // navTab 创建序:0 下载中 / 3 资源发现 / 4 云盘空间 / 5 偏好设置
+    // navTab 创建序:0 下载中 / 1 已完成 / 2 资源发现 / 3 云盘空间 / 4 偏好设置
     const auto nav_tabs = shell.root->findChildren<QPushButton*>("navTab");
     const auto go = [&nav_tabs](int idx) {
         if (idx < nav_tabs.size()) {
@@ -193,16 +198,18 @@ int main(int argc, char** argv)
     };
 
     const auto shoot_all = [&](const QString& suffix) {
-        go(0);
+        go(0); // 下载中·表格
         snap("download_table_" + suffix);
         shell.download->toggle_display_style();
         snap("download_grid_" + suffix);
         shell.download->toggle_display_style();
-        go(4);
+        go(1); // 已完成
+        snap("download_completed_" + suffix);
+        go(3); // 云盘空间
         snap("cloud_" + suffix);
-        go(3);
+        go(2); // 资源发现
         snap("discovery_" + suffix);
-        go(5);
+        go(4); // 偏好设置
         snap("settings_" + suffix);
     };
 

@@ -35,6 +35,7 @@ target_link_libraries(falcon_desktop_backend_tests
 target_include_directories(falcon_desktop_backend_tests
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
 )
 
 target_compile_features(falcon_desktop_backend_tests PRIVATE cxx_std_17)

@@ -271,6 +271,34 @@ public:
      */
     bool has_segment_failure() const;
 
+    /**
+     * @brief 复位多分段跟踪计数（回零）
+     *
+     * 供 abandon 后重新发起全新下载的调度路径恢复不变量：组回到
+     * 非多段态后，二次 begin_multi_segment 的计数才从干净基线开始
+     */
+    void reset_multi_segment_tracking();
+
+    /**
+     * @brief 段级换源重试计数 +1，返回递增后的本次尝试序号
+     *
+     * 调度点据此判定预算：attempt > options.max_retries 时放弃该段。
+     * 段号越界返回 INT_MAX（直接放弃，不重试）
+     */
+    int increment_segment_retry(std::size_t idx);
+
+    /**
+     * @brief 重置全部段的重试计数（begin_multi_segment /
+     *        prepare_resumed_multi_segment 建立分段时调用）
+     */
+    void reset_segment_retries(std::size_t total_segments);
+
+    /**
+     * @brief 段已落盘进度（控制文件确认的字节数；无续传追踪或段号
+     *        越界返回 0）——段级换源重试的剩余 Range 数据源
+     */
+    Bytes segment_progress(std::size_t idx) const;
+
     // ------------------------------------------------------------------
     // 断点续传状态（V2 引擎）
     // ------------------------------------------------------------------
@@ -381,6 +409,8 @@ private:
     std::size_t segment_total_ = 0;
     std::size_t segment_finished_ = 0;
     bool segment_failure_ = false;
+    /// 各段换源重试计数（与 segment_* 同锁；建立分段时重置）
+    std::vector<int> segment_retry_counts_;
 
     // 断点续传状态（segment_mutex_ 保护；引擎单线程执行命令，pause
     // 等控制入口来自其他线程）。resume_valid_ 为真时 resume_ 记录

@@ -2,6 +2,50 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-18 - Metalink 阶段2：V2 引擎原生多源分段（P2SP 数据面,默认关）
+- **架构**：同一文件的多个 http/https 镜像交给共享 V2 引擎做多源
+  分段下载（段级换源 P2SP）。默认行为零变化——`v2_http_enabled`
+  关闭时阶段1 串行委托逐字节不变;开启且门禁全过（无 curl 专属
+  能力、http/https 镜像 ≥2、有整文件哈希且 OpenSSL 可用）才走
+  V2 桥接,任一不满足回落阶段1
+- **引擎层多源（B 系列,http_commands）**：`RequestGroup` 承载多
+  镜像 `uris()`（A 系列基座：段级进度/换源重试计数/多段跟踪复位
+  访问器）;段级换源重试——失败段按 uris 无状态轮转换下一镜像
+  （failed_url 不在列表即重定向后 URL,回落主镜像）,传输中断与
+  响应阶段失败共用一套分支;初始连接镜像轮转（主镜像连接拒绝换
+  下家,单 URL 不分段场景同享）;恢复段同样轮转,If-Range 仅当所
+  选 URL 仍是主镜像（ETag 归属者）时附带;C1:
+  `Command::retry_expired_segment` 虚方法把超时清理接入段级换源
+  （单段超时不再连坐整组 FAILED）;H 系列:重定向跟随携带原段号
+  （重定向后的镜像承接该段）、abandon 重置多段跟踪、二次分段
+  防御、多源进度绝对化
+- **Metalink 桥接（D 系列,metalink_handler）**：`download()` 中
+  门禁通过则驱动共享 V2 引擎（`add_download_as` 注入 parent id,
+  输出路径 = part_path,走 V2 temp_extension 语义）,200ms 桥接轮
+  询三态——完成→整文件哈希校验通过才 rename 发布（校验失败删残
+  留回落阶段1）;挂起（parent Paused/Cancelled）→ 保留 .falcon.tmp
+  /.falcon.ctrl 供 resume 续跑;失败→cancel 组+删残留后回落阶段1
+  串行循环（残留不删会让回落下载按污染过的临时文件"续传"）;
+  pause/cancel 先置 parent 状态再转发引擎,cancel 额外清 V2 残留
+  （挂在 part 文件名下）;桥接整体 try/catch,异常不向 worker 抛
+- **修复终态组同 id 复用缺陷**（桥接测试曝光的真产品缺陷）：常
+  驻引擎按 10s 周期 purge 终态组,周期未到时同 id 再注入（桥接
+  kCompleted 校验失败回落阶段1 逐镜像委托、V1 resume 重入）恒报
+  "V2 任务组状态异常" → 三镜像全灭任务 FAILED。修复:adapter 与
+  metalink 桥接组对齐处,终态组（COMPLETED/FAILED/REMOVED）→
+  `purge_finished_groups()` 提前回收（公开方法,PAUSED 不动、锁
+  外析构）→ 指针立即置 null → 重注入
+- **测试**：`download_engine_v2_multi_source_test.cpp` 8 用例（段
+  分发/单 URL 回归/传输中断换源/响应失败换源/预算耗尽 FAILED 留
+  断点/初始轮转/跨引擎恢复——主镜像恢复段带 If-Range==ETag、非
+  主镜像绝无,超时清理被段级换源吸收组不连坐）;metalink 桥接
+  e2e 7 用例（双镜像分段无影子事件/坏段换镜像/哈希不符回落串行
+  /ftp 镜像被门禁忽略/暂停恢复续跑/单镜像走阶段1/无哈希回落);
+  全量 ctest 2278 零失败,ASan protocols 32 + http 70 用例零告警
+- **测量备注**：V2 分段判定由 GET 响应显式 `Accept-Ranges: bytes`
+  头驱动（FakeResponse 需显式带头）;resume 前置位 Downloading 是
+  TaskManager 职责,直接调 handler->resume 的测试须自置状态
+
 ### 2026-09-18 - Metalink 下载支持落地（RFC 5854 委托模式 + 手写 mini XML 解析器）
 - **旧占位插件整体删除**：`metalink_plugin.{hpp,cpp}` 与孤儿测试（regex
   解析器 parse() 从不赋值 text 的硬 bug、零真实能力）全部删除,旧

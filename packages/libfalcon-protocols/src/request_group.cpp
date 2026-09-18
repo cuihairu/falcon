@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <limits>
 #include <string_view>
 
 namespace falcon {
@@ -273,6 +274,7 @@ void RequestGroup::begin_multi_segment(std::size_t total_segments) {
     segment_total_ = total_segments;
     segment_finished_ = 0;
     segment_failure_ = false;
+    reset_segment_retries(total_segments);
     FALCON_LOG_INFO_STREAM("多分段下载开始: id=" << id_ << ", 分段数=" << total_segments);
 }
 
@@ -292,6 +294,36 @@ bool RequestGroup::finish_segment(bool success) {
 bool RequestGroup::has_segment_failure() const {
     std::lock_guard<std::mutex> lock(segment_mutex_);
     return segment_failure_;
+}
+
+void RequestGroup::reset_multi_segment_tracking() {
+    std::lock_guard<std::mutex> lock(segment_mutex_);
+    segment_total_ = 0;
+    segment_finished_ = 0;
+    segment_failure_ = false;
+    segment_retry_counts_.clear();
+}
+
+int RequestGroup::increment_segment_retry(std::size_t idx) {
+    std::lock_guard<std::mutex> lock(segment_mutex_);
+    if (idx >= segment_retry_counts_.size()) {
+        return std::numeric_limits<int>::max();  // 越界：调用方放弃重试
+    }
+    return ++segment_retry_counts_[idx];
+}
+
+void RequestGroup::reset_segment_retries(std::size_t total_segments) {
+    // 调用方已持 segment_mutex_（begin_multi_segment /
+    // prepare_resumed_multi_segment 的建立路径），此处只做赋值
+    segment_retry_counts_.assign(total_segments, 0);
+}
+
+Bytes RequestGroup::segment_progress(std::size_t idx) const {
+    std::lock_guard<std::mutex> lock(segment_mutex_);
+    if (!resume_valid_ || idx >= resume_.segments.size()) {
+        return 0;
+    }
+    return resume_.segments[idx].downloaded;
 }
 
 //==============================================================================
@@ -457,6 +489,7 @@ void RequestGroup::prepare_resumed_multi_segment() {
     segment_total_ = resume_.segments.size();
     segment_finished_ = 0;
     segment_failure_ = false;
+    reset_segment_retries(segment_total_);
 
     Bytes resumed_total = 0;
     for (const auto& seg : resume_.segments) {
@@ -657,6 +690,11 @@ bool RequestGroupMan::remove_group(TaskId id) {
         std::remove(reserved_groups_.begin(), reserved_groups_.end(), group),
         reserved_groups_.end()
     );
+
+    // 即时摘除映射：find_group 立即返回 nullptr（与 10s purge 后语义
+    // 一致），同 id 组可在对象仍由 all_groups_ 持有至 purge 的窗口内
+    // 重新注入——宿主化桥接失败回落阶段1 后立刻重建同 id 组依赖此语义
+    group_map_.erase(it);
 
     FALCON_LOG_INFO_STREAM("标记 RequestGroup 为 REMOVED: id=" << id);
     return true;

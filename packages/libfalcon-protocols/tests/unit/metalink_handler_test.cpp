@@ -381,3 +381,385 @@ TEST_F(MetalinkHandlerTest, GetFileInfoFromLocalDoc) {
     EXPECT_EQ(info.total_size, 123456u);
     EXPECT_TRUE(info.supports_resume);
 }
+
+//==============================================================================
+// Metalink V2 多源桥接(阶段2:V2EngineHost 开启)
+//
+// 门禁/桥接/回落全链。V2 行为断言需哈希能力(门禁⑤),非 OpenSSL
+// 构建以 FALCON_TEST_METALINK_V2_HASH 排除;门禁拒绝类用例(单镜
+// 像/无哈希)不依赖哈希能力,恒编译。
+//==============================================================================
+
+#include <falcon/protocols/file_hash.hpp>
+#include <falcon/protocols/v2_engine_host.hpp>
+
+#if defined(FALCON_USE_OPENSSL) || defined(FALCON_HAS_OPENSSL)
+#define FALCON_TEST_METALINK_V2_HASH 1
+#endif
+
+namespace {
+
+using falcon::FileHasher;
+using falcon::HashAlgorithm;
+using falcon::V2EngineHost;
+using falcon::testscripts::RecordedRequest;
+
+/// 32 字节确定内容(4 段 × 8B:min_segment_size=8 + 4 连接)
+std::string v2_test_body() {
+    std::string body;
+    body.reserve(32);
+    for (std::size_t i = 0; i < 32; ++i) {
+        body.push_back(static_cast<char>('A' + (i % 26)));
+    }
+    return body;
+}
+
+std::string sha256_hex(const std::string& data) {
+    return FileHasher::calculate(data.data(), data.size(),
+                                 HashAlgorithm::SHA256);
+}
+
+/// V2 由 GET 响应头判定分段能力:显式 Accept-Ranges 才会分段
+FakeResponse v2_range_response(const std::string& body) {
+    FakeResponse resp;
+    resp.status = 200;
+    resp.body = body;
+    resp.support_range = true;
+    resp.headers = {{"Accept-Ranges", "bytes"}};
+    return resp;
+}
+
+/// path 上是否收到过带 Range 的 GET
+bool path_received_range(const std::vector<RecordedRequest>& requests,
+                         const std::string& path) {
+    for (const auto& r : requests) {
+        if (r.path == path && r.range.rfind("bytes=", 0) == 0) return true;
+    }
+    return false;
+}
+
+/// path 上以 bytes=<start>- 开头的 Range 请求次数
+std::size_t count_range_with_start(const std::vector<RecordedRequest>& requests,
+                                   const std::string& path,
+                                   std::size_t start) {
+    const std::string prefix = "bytes=" + std::to_string(start) + "-";
+    std::size_t n = 0;
+    for (const auto& r : requests) {
+        if (r.path == path && r.range.rfind(prefix, 0) == 0) ++n;
+    }
+    return n;
+}
+
+/// V2 桥接夹具:MetalinkHandlerTest 基建 + V2EngineHost 开关生命周期
+class MetalinkV2BridgeTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        auto& host = V2EngineHost::instance();
+        host.shutdown_and_join();  // 干净起点(其他用例可能已启动引擎)
+        host.set_v2_http_enabled(true);
+        falcon::EngineConfigV2 config;
+        config.command_wait_timeout_seconds = 10;  // 兜底防挂死拖 120s
+        host.configure(config);
+
+        server_ = std::make_unique<ScriptedHttpServer>();
+        server_->start();
+        registry_ = std::make_unique<ProtocolRegistry>();
+        registry_->register_handler(std::make_unique<HttpHandler>());
+        handler_ = std::make_unique<MetalinkHandler>();
+        handler_->set_protocol_registry(registry_.get());
+    }
+    void TearDown() override {
+        handler_.reset();
+        registry_.reset();
+        server_->stop();
+        auto& host = V2EngineHost::instance();
+        host.shutdown_and_join();
+        host.set_v2_http_enabled(false);
+    }
+
+    ScriptedHttpServer& server() { return *server_; }
+
+    std::string local_meta4(const std::string& inner) {
+        const std::string path =
+            (dir_.path() /
+             ("v2doc" + std::to_string(doc_count_++) + ".meta4"))
+                .string();
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        out << "<?xml version=\"1.0\"?><metalink>" << inner << "</metalink>";
+        return path;
+    }
+
+    std::unique_ptr<ScriptedHttpServer> server_;
+    std::unique_ptr<ProtocolRegistry> registry_;
+    std::unique_ptr<MetalinkHandler> handler_;
+    TempDir dir_;
+    int doc_count_ = 0;
+};
+
+#ifdef FALCON_TEST_METALINK_V2_HASH
+
+/// 双镜像多源分段:V2 完成 → 校验通过 → 发布;事件序列无影子
+TEST_F(MetalinkV2BridgeTest, V2OnTwoMirrorsDistributesSegments) {
+    const std::string body = v2_test_body();
+    server().set_response("/va.bin",
+                          v2_range_response(body));
+    server().set_response("/vb.bin",
+                          v2_range_response(body));
+    const std::string doc = local_meta4(
+        "<file name=\"out.bin\">"
+        "<size>32</size>"
+        "<hash type=\"sha-256\">" + sha256_hex(body) + "</hash>"
+        "<url priority=\"1\">" + server().url("/va.bin") + "</url>"
+        "<url priority=\"2\">" + server().url("/vb.bin") + "</url>"
+        "</file>");
+
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    options.max_connections = 4;
+    options.min_segment_size = 8;
+    auto task = make_task(101, doc, options);
+    RecordingListener listener;
+    task->set_listener(&listener);
+    task->set_status(TaskStatus::Downloading);
+
+    handler_->download(task, &listener);
+
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    const std::string final_path = (dir_.path() / "out.bin").string();
+    EXPECT_EQ(read_file(final_path), body);
+    // 无影子:parent 事件序列仍是恰两次状态变化(终态由 handler 驱动)
+    {
+        std::lock_guard<std::mutex> lock(listener.mutex_);
+        ASSERT_EQ(listener.statuses.size(), 2u);
+        EXPECT_EQ(listener.statuses[1].second, TaskStatus::Completed);
+    }
+    // 两镜像各收到 Range GET(混源分段生效,而非串行单镜像)
+    const auto reqs = server().requests();
+    EXPECT_TRUE(path_received_range(reqs, "/va.bin"));
+    EXPECT_TRUE(path_received_range(reqs, "/vb.bin"));
+    // part 与 V2 残留全部消失(组完成时引擎已改名发布 + 删控制文件)
+    EXPECT_FALSE(fs::exists(final_path + ".metalink-part"));
+    EXPECT_FALSE(fs::exists(final_path + ".metalink-part.falcon.tmp"));
+    EXPECT_FALSE(fs::exists(final_path + ".metalink-part.falcon.ctrl"));
+}
+
+/// 段级换源:uris[1] 上的段 1(起点 8)传 4B 后断连 → 换到 uris[0]
+/// 从断点(12)续传,组不连坐失败
+TEST_F(MetalinkV2BridgeTest, V2OnSegmentFailureSwapsMirror) {
+    const std::string body = v2_test_body();
+    server().set_response("/vok.bin",
+                          v2_range_response(body));
+    server().set_response("/vfail.bin",
+                          v2_range_response(body));
+    server().set_abort_after("/vfail.bin", 4, 8);  // 一次性:仅段 1 的连接
+    const std::string doc = local_meta4(
+        "<file name=\"out2.bin\">"
+        "<size>32</size>"
+        "<hash type=\"sha-256\">" + sha256_hex(body) + "</hash>"
+        "<url priority=\"1\">" + server().url("/vok.bin") + "</url>"
+        "<url priority=\"2\">" + server().url("/vfail.bin") + "</url>"
+        "</file>");
+
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    options.max_connections = 4;
+    options.min_segment_size = 8;
+    auto task = make_task(102, doc, options);
+    task->set_status(TaskStatus::Downloading);
+
+    handler_->download(task, nullptr);
+
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(read_file((dir_.path() / "out2.bin").string()), body);
+    const auto reqs = server().requests();
+    // /vfail.bin 对起点 8 恰 1 次(断连后换源,绝不同镜像重试)
+    EXPECT_EQ(count_range_with_start(reqs, "/vfail.bin", 8), 1u);
+    // /vok.bin 收到断点续传 Range(起点 12 = 8 + 4)
+    EXPECT_GE(count_range_with_start(reqs, "/vok.bin", 12), 1u);
+}
+
+/// 整文件哈希不符回落:A、B(V2 混源)内容错误 → 校验失败清残留 →
+/// 阶段1 串行重下(坏镜像逐个失败)→ C 提供正确内容发布
+TEST_F(MetalinkV2BridgeTest, V2OnHashMismatchFallsBackToSerial) {
+    const std::string body_good = v2_test_body();
+    std::string body_bad;
+    for (std::size_t i = 0; i < 32; ++i) {
+        body_bad.push_back(static_cast<char>('a' + (i % 26)));
+    }
+    server().set_response("/vbad1.bin",
+                          v2_range_response(body_bad));
+    server().set_response("/vbad2.bin",
+                          v2_range_response(body_bad));
+    server().set_response("/vgood.bin",
+                          v2_range_response(body_good));
+    const std::string doc = local_meta4(
+        "<file name=\"out3.bin\">"
+        "<size>32</size>"
+        "<hash type=\"sha-256\">" + sha256_hex(body_good) + "</hash>"
+        "<url priority=\"1\">" + server().url("/vbad1.bin") + "</url>"
+        "<url priority=\"2\">" + server().url("/vbad2.bin") + "</url>"
+        "<url priority=\"3\">" + server().url("/vgood.bin") + "</url>"
+        "</file>");
+
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    options.max_connections = 4;
+    options.min_segment_size = 8;
+    auto task = make_task(103, doc, options);
+    task->set_status(TaskStatus::Downloading);
+
+    handler_->download(task, nullptr);
+
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(read_file((dir_.path() / "out3.bin").string()), body_good);
+    // 回落清理彻底:混源临时文件与断点不残留(否则阶段1 会按污染
+    // 数据"续传"),part 经阶段1 成功后 rename 发布,亦消失
+    EXPECT_FALSE(
+        fs::exists((dir_.path() / "out3.bin.metalink-part").string()));
+    EXPECT_FALSE(fs::exists(
+        (dir_.path() / "out3.bin.metalink-part.falcon.tmp").string()));
+    EXPECT_FALSE(fs::exists(
+        (dir_.path() / "out3.bin.metalink-part.falcon.ctrl").string()));
+}
+
+/// 1 ftp + 2 http:桥接只取 http 镜像(ftp handler 未注册也不出错)
+TEST_F(MetalinkV2BridgeTest, V2OnFtpMirrorIgnoredByBridge) {
+    const std::string body = v2_test_body();
+    server().set_response("/fh1.bin",
+                          v2_range_response(body));
+    server().set_response("/fh2.bin",
+                          v2_range_response(body));
+    const std::string doc = local_meta4(
+        "<file name=\"out6.bin\">"
+        "<size>32</size>"
+        "<hash type=\"sha-256\">" + sha256_hex(body) + "</hash>"
+        "<url priority=\"1\">ftp://192.0.2.55/f.bin</url>"
+        "<url priority=\"2\">" + server().url("/fh1.bin") + "</url>"
+        "<url priority=\"3\">" + server().url("/fh2.bin") + "</url>"
+        "</file>");
+
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    options.max_connections = 4;
+    options.min_segment_size = 8;
+    auto task = make_task(106, doc, options);
+    task->set_status(TaskStatus::Downloading);
+
+    handler_->download(task, nullptr);
+
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(read_file((dir_.path() / "out6.bin").string()), body);
+    const auto reqs = server().requests();
+    EXPECT_TRUE(path_received_range(reqs, "/fh1.bin") ||
+                path_received_range(reqs, "/fh2.bin"));
+}
+
+/// 暂停/恢复:桥接期间 pause → 引擎组暂停(临时文件是断点挂点,
+/// part 本体不存在)→ resume 重入 download() 组对齐续跑至完成
+TEST_F(MetalinkV2BridgeTest, V2PauseThenResume) {
+    const std::string body = v2_test_body();
+    server().set_response("/vp1.bin",
+                          v2_range_response(body));
+    server().set_response("/vp2.bin",
+                          v2_range_response(body));
+    server().set_slow_body("/vp1.bin", 100000, 2);  // 每 2B 停 100ms
+    server().set_slow_body("/vp2.bin", 100000, 2);
+    const std::string doc = local_meta4(
+        "<file name=\"out7.bin\">"
+        "<size>32</size>"
+        "<hash type=\"sha-256\">" + sha256_hex(body) + "</hash>"
+        "<url priority=\"1\">" + server().url("/vp1.bin") + "</url>"
+        "<url priority=\"2\">" + server().url("/vp2.bin") + "</url>"
+        "</file>");
+
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    options.max_connections = 4;
+    options.min_segment_size = 8;
+    auto task = make_task(107, doc, options);
+    RecordingListener listener;
+    task->set_listener(&listener);
+    task->set_status(TaskStatus::Downloading);
+
+    std::thread worker([&] { handler_->download(task, &listener); });
+    // 等真实字节落账(桥接上报进度),避免暂停落在组尚未开拉的窗口
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (task->downloaded_bytes() == 0 &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    ASSERT_GT(task->downloaded_bytes(), 0u);
+
+    handler_->pause(task);  // 对齐 TaskManager:handler 负责置 Paused
+    worker.join();
+
+    ASSERT_EQ(task->status(), TaskStatus::Paused);
+    const std::string part =
+        (dir_.path() / "out7.bin.metalink-part").string();
+    // 引擎只写临时名:part 本体不存在,断点挂点保留供 resume 续跑
+    EXPECT_FALSE(fs::exists(part));
+    EXPECT_TRUE(fs::exists(part + ".falcon.tmp"));
+
+    // resume 前置位 Downloading 是 TaskManager 职责(http handler 同约定)
+    task->set_status(TaskStatus::Downloading);
+    handler_->resume(task, &listener);  // download() 重入,组对齐续跑
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(read_file((dir_.path() / "out7.bin").string()), body);
+    EXPECT_FALSE(fs::exists(part));
+    EXPECT_FALSE(fs::exists(part + ".falcon.tmp"));
+    EXPECT_FALSE(fs::exists(part + ".falcon.ctrl"));
+}
+
+#endif  // FALCON_TEST_METALINK_V2_HASH
+
+/// 单镜像(V2 开):门禁 http 镜像 ≥2 不过 → 阶段1 串行,行为不变
+TEST_F(MetalinkV2BridgeTest, V2OnSingleMirrorUsesStage1) {
+    server().set_response("/single.bin",
+                          FakeResponse{200, "OK", {}, kMirror1Body, true});
+    const std::string doc = local_meta4(
+        "<file name=\"out4.bin\">"
+        "<url>" + server().url("/single.bin") + "</url>"
+        "</file>");
+
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    auto task = make_task(104, doc, options);
+    task->set_status(TaskStatus::Downloading);
+
+    handler_->download(task, nullptr);
+
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(read_file((dir_.path() / "out4.bin").string()), kMirror1Body);
+    // 阶段1 单连接:全新下载不带 Range
+    for (const auto& r : server().requests()) {
+        if (r.path == "/single.bin") EXPECT_TRUE(r.range.empty());
+    }
+}
+
+/// 无整文件哈希(V2 开):门禁拒绝无校验混源 → 阶段1 首镜像成功即止
+TEST_F(MetalinkV2BridgeTest, V2OnNoHashFallsBack) {
+    server().set_response("/nh1.bin",
+                          FakeResponse{200, "OK", {}, kMirror1Body, true});
+    server().set_response("/nh2.bin",
+                          FakeResponse{200, "OK", {}, kMirror2Body, true});
+    const std::string doc = local_meta4(
+        "<file name=\"out5.bin\">"
+        "<url priority=\"1\">" + server().url("/nh1.bin") + "</url>"
+        "<url priority=\"2\">" + server().url("/nh2.bin") + "</url>"
+        "</file>");
+
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    auto task = make_task(105, doc, options);
+    task->set_status(TaskStatus::Downloading);
+
+    handler_->download(task, nullptr);
+
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(read_file((dir_.path() / "out5.bin").string()), kMirror1Body);
+    // 串行语义:首镜像成功,次镜像零请求
+    EXPECT_EQ(server().count_requests("/nh2.bin"), 0u);
+}
+
+} // namespace

@@ -39,7 +39,7 @@ AddDownloadDialog::AddDownloadDialog(const UrlInfo& url_info, QWidget* parent)
     , cancel_button_(nullptr)
 {
     setup_ui();
-    setWindowTitle(tr("Add Download Task"));
+    setWindowTitle(tr("添加下载任务"));
     setModal(true);
     resize(600, 450);
 }
@@ -133,7 +133,7 @@ void AddDownloadDialog::browse_directory()
 {
     QString dir = QFileDialog::getExistingDirectory(
         this,
-        tr("Select save directory"),
+        tr("选择保存目录"),
         save_path_edit_->text(),
         QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks
     );
@@ -198,10 +198,6 @@ QWidget* AddDownloadDialog::create_page_hero()
     layout->setContentsMargins(18, 16, 18, 16);
     layout->setSpacing(4);
 
-    auto* eyebrow = new QLabel(tr("NEW TASK"), hero);
-    eyebrow->setObjectName("heroEyebrow");
-    layout->addWidget(eyebrow);
-
     auto* title = new QLabel(tr("添加下载任务"), hero);
     title->setObjectName("heroTitle");
     layout->addWidget(title);
@@ -223,7 +219,7 @@ QWidget* AddDownloadDialog::create_url_section_widget()
 
     // Protocol label
     protocol_label_ = new QLabel(
-        tr("Protocol: %1").arg(UrlDetector::get_protocol_name(url_info_.protocol)),
+        tr("协议: %1").arg(UrlDetector::get_protocol_name(url_info_.protocol)),
         this
     );
     layout->addWidget(protocol_label_);
@@ -238,7 +234,7 @@ QWidget* AddDownloadDialog::create_url_section_widget()
 
 QWidget* AddDownloadDialog::create_file_section_widget()
 {
-    auto* group = new QGroupBox(tr("Save"), this);
+    auto* group = new QGroupBox(tr("保存"), this);
 
     auto* layout = new QFormLayout(group);
     layout->setSpacing(12);
@@ -246,19 +242,19 @@ QWidget* AddDownloadDialog::create_file_section_widget()
     layout->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
 
     // File name
-    auto* file_label = new QLabel(tr("File name:"), this);
+    auto* file_label = new QLabel(tr("文件名:"), this);
     file_name_edit_ = new QLineEdit(url_info_.file_name, this);
     layout->addRow(file_label, file_name_edit_);
 
     // Save path
-    auto* path_label = new QLabel(tr("Save path:"), this);
+    auto* path_label = new QLabel(tr("保存路径:"), this);
 
     auto* path_layout = new QHBoxLayout();
     path_layout->setSpacing(8);
     save_path_edit_ = new QLineEdit(QDir::homePath() + "/Downloads", this);
     path_layout->addWidget(save_path_edit_, 1);
 
-    browse_button_ = new QPushButton(tr("Browse..."), this);
+    browse_button_ = new QPushButton(tr("浏览..."), this);
     browse_button_->setObjectName("toolButton");
     browse_button_->setCursor(Qt::PointingHandCursor);
     connect(browse_button_, &QPushButton::clicked, this, &AddDownloadDialog::browse_directory);
@@ -271,14 +267,14 @@ QWidget* AddDownloadDialog::create_file_section_widget()
 
 QWidget* AddDownloadDialog::create_options_section_widget()
 {
-    auto* group = new QGroupBox(tr("Advanced"), this);
+    auto* group = new QGroupBox(tr("高级"), this);
 
     auto* layout = new QFormLayout(group);
     layout->setSpacing(12);
     layout->setLabelAlignment(Qt::AlignRight);
 
     // Connections
-    auto* conn_label = new QLabel(tr("Connections:"), this);
+    auto* conn_label = new QLabel(tr("连接数:"), this);
     connections_spin_ = new QSpinBox(this);
     connections_spin_->setRange(1, 16);
     connections_spin_->setValue(4);
@@ -294,7 +290,7 @@ QWidget* AddDownloadDialog::create_options_section_widget()
     layout->addRow(ua_label, user_agent_combo_);
 
     // Referrer
-    auto* ref_label = new QLabel(tr("Referrer:"), this);
+    auto* ref_label = new QLabel(tr("Referer:"), this);
     referrer_edit_ = new QLineEdit(this);
     referrer_edit_->setPlaceholderText("https://example.com/");
     layout->addRow(ref_label, referrer_edit_);
@@ -317,14 +313,14 @@ QLayout* AddDownloadDialog::create_button_layout()
 
     layout->addStretch();
 
-    cancel_button_ = new QPushButton(tr("Cancel"), this);
+    cancel_button_ = new QPushButton(tr("取消"), this);
     cancel_button_->setObjectName("toolButton");
     cancel_button_->setCursor(Qt::PointingHandCursor);
     cancel_button_->setMinimumWidth(100);
     connect(cancel_button_, &QPushButton::clicked, this, &AddDownloadDialog::cancel_dialog);
     layout->addWidget(cancel_button_);
 
-    start_button_ = new QPushButton(tr("Start"), this);
+    start_button_ = new QPushButton(tr("开始下载"), this);
     start_button_->setObjectName("primaryButton");
     start_button_->setCursor(Qt::PointingHandCursor);
     start_button_->setMinimumWidth(100);

@@ -211,6 +211,8 @@ public:
      */
     int socket_fd() const noexcept override { return socket_fd_; }
 
+    bool retry_expired_segment(DownloadEngineV2* engine) override;
+
     /**
      * @brief 获取 HTTP 请求对象
      */
@@ -251,6 +253,17 @@ public:
      * Last-Modified（RFC 7233）
      */
     void set_if_range(std::string value) { if_range_ = std::move(value); }
+
+    /**
+     * @brief 标记本连接是段级换源重试的重建连接
+     *
+     * 带 Range 的初始连接有两种来源：暂停恢复的续传响应（走
+     * schedule_resume_download，多段防御触发 abandon）与段 0 的换源
+     * 重试重建连接（必须按段路由——落进恢复路径会把全组进度作废）。
+     * 两者从 Range 头无法区分（第一个未完成段可能恰是段 0），显式
+     * 标记沿命令链传给响应命令
+     */
+    void set_segment_retry(bool value) noexcept { segment_retry_ = value; }
 
     /**
      * @brief 获取分段编号
@@ -328,6 +341,9 @@ private:
     SegmentId range_segment_id_ = 0;
     Bytes range_offset_ = 0;
     Bytes range_length_ = 0;
+
+    // 段级换源重试的重建连接标记（沿命令链传给响应命令决定响应路由）
+    bool segment_retry_ = false;
 
     // If-Range 验证值（续传请求附带；非续传请求为空）
     std::string if_range_;
@@ -452,6 +468,8 @@ public:
      */
     int socket_fd() const noexcept override { return socket_fd_; }
 
+    bool retry_expired_segment(DownloadEngineV2* engine) override;
+
     /**
      * @brief 检查是否接受 Range 请求
      */
@@ -475,6 +493,17 @@ public:
      * @brief 获取连接级重试计数
      */
     int retry_count() const noexcept { return retry_count_; }
+
+    /**
+     * @brief 标记响应来自段级换源重试的重建连接（连接阶段携带而来）
+     *
+     * 段 0 重试连接的响应 segment_id 为 0，与初始恢复连接从 Range 头
+     * 无法区分；此标记决定 determine_download_strategy 按段路由而非
+     * 落进初始恢复路径（那里的多段防御会 abandon 全组进度）
+     */
+    void set_segment_retry_routing(bool value) noexcept {
+        segment_retry_routing_ = value;
+    }
 
     /**
      * @brief 设置重定向深度（连接阶段携带而来）
@@ -526,6 +555,9 @@ private:
     // 连接级重试计数（连接阶段携带而来，用于响应头阶段失败后的
     // max_retries 判定）
     int retry_count_ = 0;
+
+    // 段级换源重试的重建连接标记（决定段 0 重试响应的路由分支）
+    bool segment_retry_routing_ = false;
 
     // 重定向深度（连接阶段携带而来，超链防护）
     int redirect_depth_ = 0;
@@ -598,7 +630,8 @@ public:
                         std::string initial_data = {},
                         Bytes resumed_bytes = 0,
                         bool truncate_output = true,
-                        bool chunked = false
+                        bool chunked = false,
+                        std::string source_url = {}
 #ifdef FALCON_ENABLE_OPENSSL
                         ,
                         HttpTlsSessionPtr tls_session = {}
@@ -652,6 +685,8 @@ public:
      */
     void prepare_sweep(DownloadEngineV2* engine) override;
 
+    bool retry_expired_segment(DownloadEngineV2* engine) override;
+
     /**
      * @brief 获取分段起始偏移
      */
@@ -685,11 +720,25 @@ private:
     /// 无临时扩展名或已发布时直接成功
     /// @return false 表示改名失败（错误已写入 task）
     bool publish_output(const DownloadTask::Ptr& task);
-    void complete_group_if_all_segments_done(RequestGroup& group,
+    void complete_group_if_all_segments_done(DownloadEngineV2* engine,
+                                             RequestGroup& group,
                                              const DownloadTask::Ptr& task,
                                              bool success);
-    void fail_group_on_segment_error(RequestGroup& group,
+
+    /**
+     * @brief 段错误收口（先试段级换源重试，预算耗尽才终态化）
+     *
+     * @return true 已终态收口（组 FAILED）；false 重试已接管（组保持
+     *         ACTIVE，调用方按非失败收口处理）或组非可失败态
+     */
+    bool fail_group_on_segment_error(DownloadEngineV2* engine,
+                                     RequestGroup& group,
                                      const DownloadTask::Ptr& task);
+
+    /// 已落盘进度的段内绝对值：恢复段连接按剩余量请求（offset_ 是
+    /// 断点起点而非段计划起点），下载计数是剩余量——上报控制文件前
+    /// 换算成段计划坐标，否则被单调门忽略、断点永不推进
+    Bytes flushed_progress_absolute(const RequestGroup& group) const;
 
     int socket_fd_;
     std::shared_ptr<HttpResponse> http_response_;
@@ -697,6 +746,8 @@ private:
     Bytes offset_;                          // 当前分段在文件中的起始偏移
     Bytes length_;          // 分段长度（0 表示到末尾）
     [[maybe_unused]] Bytes current_offset_;  // 当前写入位置
+    /// 本命令数据来源 URL（段级换源重试的轮转基准；空 = 不参与轮转）
+    std::string source_url_;
 
     // 下载状态
     Bytes downloaded_bytes_ = 0;
@@ -789,6 +840,65 @@ private:
     std::chrono::seconds retry_wait_;
     // 最早重试时刻：到点前 execute 以 NEED_RETRY 回队轮询，
     // 不阻塞引擎线程（旧实现 sleep_for 会停摆整个事件循环）
+    std::chrono::steady_clock::time_point retry_at_;
+};
+
+/**
+ * @brief 段级换源重试命令（Metalink 多源分段，阶段2）
+ *
+ * 多段下载中某段的连接/传输失败时，由调度点（schedule_retry）在
+ * 预算内换下一镜像重建该段的 Range 连接。与 HttpRetryCommand 分离：
+ * 后者是初始连接语义（耗尽路径整组终态、Range 取第一个未完成段），
+ * 改造它会波及单连接路径既有行为
+ *
+ * 预算判定收口在调度点（increment_segment_retry / options.max_retries），
+ * 本命令只做「延迟 → 重建带 Range 的连接」，天然保证 finish_segment
+ * 只在预算耗尽时被调用一次
+ */
+class HttpSegmentRetryCommand : public AbstractCommand {
+public:
+    HttpSegmentRetryCommand(TaskId task_id,
+                            std::string url,
+                            const DownloadOptions& options,
+                            SegmentId segment_id,
+                            Bytes offset,
+                            Bytes length,
+                            std::string if_range,
+                            int retry_count);
+
+    bool execute(DownloadEngineV2* engine) override;
+
+    const char* name() const override {
+        return "HttpSegmentRetry";
+    }
+
+    /**
+     * @brief 段失败调度点：预算内换源重建该段连接，预算耗尽返回 false
+     *
+     * 门禁：组存在且非终态/暂停 / 处于多分段模式 / uris 非空。
+     * 剩余 Range 从组内控制文件确认进度推导（segment_progress），
+     * If-Range 仅当轮转结果仍是主镜像（uris_[0]，ETag 归属者）才附带
+     *
+     * @return true 重试已调度（调用方按非失败收口处理）；false 预算
+     *         耗尽或不可重试（调用方走既有失败收口）
+     */
+    static bool schedule_retry(DownloadEngineV2* engine,
+                               TaskId task_id,
+                               SegmentId segment_id,
+                               Bytes plan_offset,
+                               Bytes plan_length,
+                               const std::string& failed_url);
+
+private:
+    std::string url_;
+    DownloadOptions options_;
+    SegmentId segment_id_;
+    Bytes offset_;
+    Bytes length_;
+    std::string if_range_;
+    int retry_count_;
+    std::chrono::seconds retry_wait_;
+    // 最早重试时刻：到点前以 NEED_RETRY 回队轮询（同 HttpRetryCommand）
     std::chrono::steady_clock::time_point retry_at_;
 };
 

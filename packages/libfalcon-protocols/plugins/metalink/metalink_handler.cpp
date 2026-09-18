@@ -12,15 +12,21 @@
 #include <falcon/exceptions.hpp>
 #include <falcon/logger.hpp>
 #include <falcon/protocol_registry.hpp>
+#include <falcon/protocols/commands/http_commands.hpp>
+#include <falcon/protocols/download_engine_v2.hpp>
+#include <falcon/protocols/request_group.hpp>
+#include <falcon/protocols/v2_engine_host.hpp>
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <limits>
 #include <sstream>
+#include <thread>
 #include <utility>
 
 #if defined(FALCON_USE_OPENSSL) || defined(FALCON_HAS_OPENSSL)
@@ -428,7 +434,8 @@ void MetalinkHandler::download(DownloadTask::Ptr task,
         return s == TaskStatus::Paused || s == TaskStatus::Cancelled;
     };
 
-    fs::path part_path;
+    std::string part_path;  // 全程窄字符串;Windows 的 fs::path 隐式转换是
+                            // wstring,传 const std::string& 形参 MSVC 拒绝
     try {
         const std::string xml =
             fetch_metalink_document(task->url(), task->options(), task_id,
@@ -459,6 +466,45 @@ void MetalinkHandler::download(DownloadTask::Ptr task,
         // 逐镜像委托;失败记录换下一个,全灭才 FAILED
         std::vector<std::string> errors;
         bool published = false;
+
+        // 阶段2:V2 引擎原生多源分段(开关默认关,门禁全过才走)。
+        // kCompleted → 整文件哈希校验后发布;kFailed → 清残留后回落
+        // 下方串行循环;kSuspended → parent 已暂停/取消,由既有检查
+        // 点正常 return(组挂点保留供 resume)
+        std::vector<std::string> v2_urls;
+        if (v2_multi_source_gate(task->options(), mf, v2_urls)) {
+            std::string v2_fail_reason;
+            auto outcome = V2BridgeOutcome::kFailed;
+            try {
+                outcome = run_v2_multi_source(mf, task, listener, part_path,
+                                              v2_urls, v2_fail_reason);
+            } catch (const std::exception& e) {
+                // 桥接内部异常转失败回落,不向 worker 抛(与方案一致:
+                // worker 的 catch 会把任务置 Failed,跳过回落机会)
+                v2_fail_reason = std::string("V2 桥接异常: ") + e.what();
+                outcome = V2BridgeOutcome::kFailed;
+                cleanup_v2_leftovers(part_path);
+            }
+            if (outcome == V2BridgeOutcome::kCompleted) {
+                if (verify_or_discard(mf, part_path, errors)) {
+                    // 发布:rename 先于 Completed(完成=可信)
+                    fs::rename(part_path, final_path);
+                    task->set_status(TaskStatus::Completed);
+                    return;
+                }
+                // 哈希不符:数据已由 verify_or_discard 删除,.tmp/.ctrl
+                // 残留清掉后回落逐镜像重下(重下才有校验机会)
+                FALCON_LOG_WARN_STREAM(
+                    "[metalink] V2 多源哈希校验失败,回落串行镜像");
+                cleanup_v2_leftovers(part_path);
+            } else if (outcome == V2BridgeOutcome::kFailed) {
+                FALCON_LOG_WARN_STREAM("[metalink] V2 多源失败,回落串行镜像: "
+                                      << v2_fail_reason);
+                errors.push_back("v2-multi-source: " + v2_fail_reason);
+            }
+            if (paused_or_cancelled()) return;
+        }
+
         for (const auto& mirror : mf.urls) {
             if (paused_or_cancelled()) return;
 
@@ -491,7 +537,7 @@ void MetalinkHandler::download(DownloadTask::Ptr task,
                 continue;
             }
 
-            if (verify_or_discard(mf, part_path.string(), errors)) {
+            if (verify_or_discard(mf, part_path, errors)) {
                 // 发布:rename 先于 Completed(完成=可信)
                 fs::rename(part_path, final_path);
                 task->set_status(TaskStatus::Completed);
@@ -516,6 +562,177 @@ void MetalinkHandler::download(DownloadTask::Ptr task,
         // 不得把 TaskManager 已置的 Paused/Cancelled 改写成 Failed
         if (paused_or_cancelled()) return;
         throw; // worker 统一 set_error + Failed
+    }
+}
+
+//------------------------------------------------------------------------------
+// 阶段2:V2 引擎原生多源分段桥接
+//------------------------------------------------------------------------------
+
+namespace {
+
+/// 桥接轮询粒度(update_progress 内建节流,实际下发频率取较大值)
+constexpr auto kV2PollInterval = std::chrono::milliseconds(200);
+
+} // namespace
+
+bool MetalinkHandler::v2_multi_source_gate(const DownloadOptions& options,
+                                           const MetalinkFile& mf,
+                                           std::vector<std::string>& urls_out) {
+    // 1. 进程开关:只查不启动(engine() 惰性启动推迟到桥接真正跑起来)
+    if (!V2EngineHost::instance().v2_http_enabled()) return false;
+
+    // 2. curl 专属能力 → 回退(本地复刻 V2 adapter 的回退表:同一
+    //    任务的能力必须两侧等价,socks/TLS 代理 V2 判 Unsupported)
+    if (parse_http_proxy(options).kind == HttpProxyKind::Unsupported) {
+        return false;
+    }
+    if (!options.cookie_file.empty() || !options.cookie_jar.empty()) {
+        return false;  // cookie 引擎(CURLOPT_COOKIEFILE/JAR)
+    }
+    if (!options.http_username.empty() || !options.http_password.empty()) {
+        return false;  // HTTP 401 认证
+    }
+    if (!options.referer.empty()) {
+        return false;  // Referer 头(防盗链语义),V2 不发送
+    }
+
+    // 3. V2 可拉的镜像(http/https;FTP 镜像留阶段1)≥2 才值得混源
+    for (const auto& u : mf.urls) {
+        const std::string scheme = scheme_of(u.url);
+        if (scheme == "http" || scheme == "https") urls_out.push_back(u.url);
+    }
+    if (urls_out.size() < 2) return false;
+
+    // 4/5. 无整文件哈希(或无 OpenSSL 校验能力)不做无校验混源——
+    // 镜像间内容漂移只有整文件哈希门能兜底
+    if (mf.hashes.empty()) return false;
+#ifdef FALCON_METALINK_HAS_HASH
+    return true;
+#else
+    return false;
+#endif
+}
+
+void MetalinkHandler::cleanup_v2_leftovers(const std::string& part_path) {
+    std::error_code ec;
+    fs::remove(part_path + ".falcon.tmp", ec);  // V2 temp_extension 数据文件
+    fs::remove(part_path + ".falcon.ctrl", ec); // 断点控制文件
+}
+
+MetalinkHandler::V2BridgeOutcome MetalinkHandler::run_v2_multi_source(
+    const MetalinkFile& /*mf*/, const DownloadTask::Ptr& parent,
+    IEventListener* /*listener*/, const std::string& part_path,
+    const std::vector<std::string>& urls, std::string& fail_reason) {
+    auto* host = &V2EngineHost::instance();
+    auto engine = host->engine();  // 此刻才惰性启动(门禁只查开关)
+    auto* group_man = engine->request_group_man();
+    const TaskId id = parent->id();
+
+    // 组对齐:PAUSED 组(resume 重入)续跑,文档镜像变更则作废重建;
+    // 终态组(常驻引擎按周期回收,不等周期)提前回收让同 id 可重注入
+    // (如 V2 失败→阶段1 全灭→resume 重入);不存在注入新组(同一 V1
+    // id、输出路径覆盖到 part 文件)
+    auto* group = group_man->find_group(id);
+    if (group != nullptr && group->status() == RequestGroupStatus::PAUSED) {
+        if (group->uris() != urls) {
+            engine->cancel_task(id);  // 镜像列表变更:旧组断点作废
+            group = nullptr;
+        } else if (!engine->resume_task(id)) {
+            fail_reason = "V2 引擎恢复任务失败: " + std::to_string(id);
+            return V2BridgeOutcome::kFailed;
+        }
+    } else if (group != nullptr &&
+               (group->status() == RequestGroupStatus::COMPLETED ||
+                group->status() == RequestGroupStatus::FAILED ||
+                group->status() == RequestGroupStatus::REMOVED)) {
+        group_man->purge_finished_groups();
+        group = nullptr;  // 被回收组在锁外析构,指针立即失效
+    } else if (group != nullptr) {
+        // 同 id 组已存在且非暂停/终态:并发冲突,回落阶段1
+        fail_reason = "V2 任务组状态异常(非暂停态已存在)";
+        engine->cancel_task(id);
+        return V2BridgeOutcome::kFailed;
+    }
+    if (group == nullptr) {
+        const TaskId injected = engine->add_download_as(
+            id, urls, parent->options(), part_path);
+        if (injected == INVALID_TASK_ID) {
+            fail_reason = "V2 引擎无法接受任务(ID 冲突或 URL 无效)";
+            return V2BridgeOutcome::kFailed;
+        }
+    }
+
+    // 桥接轮询:parent 侧控制优先,组状态为主判据(无影子,直接驱动
+    // parent——update_progress 自带节流)
+    while (true) {
+        std::this_thread::sleep_for(kV2PollInterval);
+
+        const auto parent_status = parent->status();
+        if (parent_status == TaskStatus::Paused ||
+            parent_status == TaskStatus::Cancelled) {
+            // 兜底同步(正常路径 pause()/cancel() 已转发,幂等)
+            if (parent_status == TaskStatus::Cancelled) {
+                engine->cancel_task(id);
+            } else {
+                engine->pause_task(id);
+            }
+            // 组保持 PAUSED 供 resume 续跑;临时文件/控制文件保留
+            return V2BridgeOutcome::kSuspended;
+        }
+
+        // 每轮重取:宿主停机后引擎实例会被销毁,不长期持有
+        engine = host->try_engine();
+        if (!engine) {
+            fail_reason = "V2 引擎已停机";
+            cleanup_v2_leftovers(part_path);
+            return V2BridgeOutcome::kFailed;
+        }
+        group_man = engine->request_group_man();
+        group = group_man->find_group(id);
+        if (group == nullptr) {
+            fail_reason = "V2 任务组丢失";
+            cleanup_v2_leftovers(part_path);
+            return V2BridgeOutcome::kFailed;
+        }
+
+        switch (group->status()) {
+        case RequestGroupStatus::COMPLETED: {
+            // 终态先同步最终进度(200ms 粒度下最后一次轮询可能落在
+            // 终态分支)
+            const auto progress = group->get_progress();
+            parent->update_progress(progress.downloaded, progress.total,
+                                    progress.speed);
+            // V2 temp_extension 语义:组完成时引擎已把
+            // part_path.falcon.tmp 原子改名回 part_path(控制文件同刻
+            // 删除)——成品在 part_path,哈希校验+rename 发布到
+            // final_path 由调用方完成
+            return V2BridgeOutcome::kCompleted;
+        }
+        case RequestGroupStatus::FAILED: {
+            fail_reason = group->error_message().empty()
+                              ? "V2 多源下载失败"
+                              : group->error_message();
+            // 组标 REMOVED(结合 remove_group 即时摘表,立即可重注入),
+            // 并删除混源临时文件——否则回落阶段1 的单镜像下载会按
+            // 污染过的临时文件"续传",挫败回落重下的意义
+            engine->cancel_task(id);
+            cleanup_v2_leftovers(part_path);
+            return V2BridgeOutcome::kFailed;
+        }
+        case RequestGroupStatus::PAUSED:
+            // V2 侧被暂停(如宿主停机 pause_all):parent 对齐后挂起,
+            // resume 经 download() 重新进入续跑
+            parent->set_status(TaskStatus::Paused);
+            return V2BridgeOutcome::kSuspended;
+        default: {
+            // WAITING/ACTIVE/REMOVED:桥接进度(组内部进度聚合)
+            const auto progress = group->get_progress();
+            parent->update_progress(progress.downloaded, progress.total,
+                                    progress.speed);
+            break;
+        }
+        }
     }
 }
 
@@ -575,6 +792,12 @@ void MetalinkHandler::pause(DownloadTask::Ptr task) {
     // download 各检查点看到 Paused 后正常返回,worker 不再改写状态
     task->set_status(TaskStatus::Paused);
 
+    // V2 多源路径:parent 已置 Paused,桥接轮询下一拍即收敛到
+    // kSuspended;此处直接转发引擎尽早冻结数据流(组不存在时幂等 false)
+    if (auto engine = V2EngineHost::instance().try_engine()) {
+        engine->pause_task(task->id());
+    }
+
     ActiveContext* context = find_context(task->id());
     if (!context) return;
 
@@ -594,6 +817,14 @@ void MetalinkHandler::resume(DownloadTask::Ptr task,
 
 void MetalinkHandler::cancel(DownloadTask::Ptr task) {
     task->set_status(TaskStatus::Cancelled);
+
+    // V2 多源路径:取消即终态,组无保留价值——cancel_task 后清残留
+    // (桥接轮询随后以 kSuspended 收口,发现 parent 已 Cancelled 正常
+    // 返回)。V2 残留挂在 part 文件名下(output_path 是最终名)
+    if (auto engine = V2EngineHost::instance().try_engine()) {
+        engine->cancel_task(task->id());
+    }
+    cleanup_v2_leftovers(task->output_path() + ".metalink-part");
 
     ActiveContext* context = find_context(task->id());
     if (!context) return;

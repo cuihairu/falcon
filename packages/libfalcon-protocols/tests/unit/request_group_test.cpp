@@ -19,6 +19,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -1294,6 +1295,88 @@ TEST(ResumeControlCovS, LoadRejectsCrlfMagicLine) {
         "seg=0 0 100 0\r\n"));
     falcon::ResumeControl ctrl;
     EXPECT_FALSE(falcon::load_resume_control(file.path, ctrl));
+}
+
+//==============================================================================
+// 段级进度 / 换源重试计数 / 多段跟踪复位（Metalink 阶段2 基座访问器）
+//==============================================================================
+
+TEST(RequestGroupSegmentBase, SegmentProgressWithoutResumeState) {
+    std::vector<std::string> urls = {"http://example.com/file.bin"};
+    DownloadOptions options;
+    RequestGroup group(1, urls, options);
+
+    EXPECT_EQ(group.segment_progress(0), Bytes{0});
+    // 越界段号同样返回 0（防御）
+    EXPECT_EQ(group.segment_progress(99), Bytes{0});
+}
+
+TEST(RequestGroupSegmentBase, SegmentProgressReflectsFlushedReport) {
+    std::vector<std::string> urls = {"http://example.com/file.bin"};
+    DownloadOptions options;  // resume_enabled 默认 true
+    RequestGroup group(1, urls, options);
+
+    std::vector<ResumeSegment> segments = {
+        {Bytes{0}, Bytes{100}, Bytes{0}},
+        {Bytes{100}, Bytes{100}, Bytes{0}},
+    };
+    group.begin_resume_tracking("http://example.com/file.bin", Bytes{200},
+                                "etag-1", "", segments);
+    ASSERT_TRUE(group.has_resume_state());
+
+    group.report_segment_flushed(0, Bytes{40});
+    group.report_segment_flushed(1, Bytes{70});
+    EXPECT_EQ(group.segment_progress(0), Bytes{40});
+    EXPECT_EQ(group.segment_progress(1), Bytes{70});
+    // 单调不回退：更小的上报被忽略
+    group.report_segment_flushed(0, Bytes{10});
+    EXPECT_EQ(group.segment_progress(0), Bytes{40});
+    // 越界段号
+    EXPECT_EQ(group.segment_progress(5), Bytes{0});
+}
+
+TEST(RequestGroupSegmentBase, IncrementSegmentRetryCounts) {
+    std::vector<std::string> urls = {"http://example.com/file.bin"};
+    DownloadOptions options;
+    RequestGroup group(1, urls, options);
+
+    group.begin_multi_segment(2);
+    EXPECT_EQ(group.increment_segment_retry(0), 1);
+    EXPECT_EQ(group.increment_segment_retry(0), 2);
+    EXPECT_EQ(group.increment_segment_retry(1), 1);
+
+    // 重建分段即重置计数
+    group.begin_multi_segment(3);
+    EXPECT_EQ(group.increment_segment_retry(0), 1);
+    EXPECT_EQ(group.increment_segment_retry(2), 1);
+}
+
+TEST(RequestGroupSegmentBase, IncrementSegmentRetryOutOfRangeGivesUp) {
+    std::vector<std::string> urls = {"http://example.com/file.bin"};
+    DownloadOptions options;
+    RequestGroup group(1, urls, options);
+
+    group.begin_multi_segment(2);
+    EXPECT_EQ(group.increment_segment_retry(42), std::numeric_limits<int>::max());
+    // 越界尝试不得污染在界段的计数
+    EXPECT_EQ(group.increment_segment_retry(0), 1);
+}
+
+TEST(RequestGroupSegmentBase, ResetMultiSegmentTrackingClearsCounters) {
+    std::vector<std::string> urls = {"http://example.com/file.bin"};
+    DownloadOptions options;
+    RequestGroup group(1, urls, options);
+
+    group.begin_multi_segment(3);
+    group.finish_segment(true);
+    group.finish_segment(false);
+    EXPECT_TRUE(group.has_segment_failure());
+
+    group.reset_multi_segment_tracking();
+    EXPECT_FALSE(group.is_multi_segment());
+    EXPECT_FALSE(group.has_segment_failure());
+    // 复位后重试计数也清空：越界即放弃
+    EXPECT_EQ(group.increment_segment_retry(0), std::numeric_limits<int>::max());
 }
 
 //==============================================================================

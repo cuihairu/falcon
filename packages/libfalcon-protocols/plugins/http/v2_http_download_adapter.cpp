@@ -60,8 +60,10 @@ void V2HttpDownloadAdapter::run() {
 
     const TaskId id = task_->id();
 
-    // 组对齐：有 PAUSED 组（V1 resume → 重新 download()）则续跑，
-    // 否则注入新组（V1 id + 已确定的 output_path，两侧写同一文件）
+    // 组对齐：有 PAUSED 组（V1 resume → 重新 download()）则续跑；
+    // 终态组（常驻引擎按周期回收终态组，metalink 桥接完成后的同 id
+    // 阶段1 回落重注入等不会等周期）提前回收让同 id 立即可复用；否则
+    // 注入新组（V1 id + 已确定的 output_path，两侧写同一文件）
     auto* group = group_man->find_group(id);
     if (group != nullptr &&
         group->status() == RequestGroupStatus::PAUSED) {
@@ -69,7 +71,14 @@ void V2HttpDownloadAdapter::run() {
             throw std::runtime_error("V2 引擎恢复任务失败: " +
                                      std::to_string(id));
         }
-    } else if (group == nullptr) {
+    } else if (group == nullptr ||
+               group->status() == RequestGroupStatus::COMPLETED ||
+               group->status() == RequestGroupStatus::FAILED ||
+               group->status() == RequestGroupStatus::REMOVED) {
+        if (group != nullptr) {
+            group_man->purge_finished_groups();
+            group = nullptr;  // 被回收组在锁外析构,指针立即失效
+        }
         const TaskId injected = engine->add_download_as(
             id, {task_->url()}, task_->options(), task_->output_path());
         if (injected == INVALID_TASK_ID) {
@@ -77,7 +86,7 @@ void V2HttpDownloadAdapter::run() {
                 "V2 引擎无法接受任务（ID 冲突或 URL 无效）");
         }
     } else {
-        // 同 id 组已存在且非暂停态：V1 同一任务不会并发 download()
+        // 同 id 组已存在且非暂停/终态：V1 同一任务不会并发 download()
         throw std::runtime_error("V2 任务组状态异常（非暂停态已存在）");
     }
 

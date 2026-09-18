@@ -19,6 +19,15 @@
  * 完成不变式:rename 先于 parent->set_status(Completed)——监听者
  * 看到完成时成品必然已就位且哈希校验通过(「完成=可信」)。校验
  * 失败的数据绝不 rename,删除半成品后换下一镜像。
+ *
+ * 阶段2 架构(V2 引擎原生多源分段,默认关):进程开关
+ * v2_http_enabled 开启且门禁全过(http/https 镜像 ≥2、无 curl 专属
+ * 能力、有整文件哈希)时,同一文件的多个镜像交给共享 V2 引擎做
+ * 多源分段下载(无影子,直接驱动 parent;阶段1 前提「同 id 单活跃
+ * 镜像」仅约束委托路径)。桥接三态:完成 → 整文件哈希校验后发布;
+ * 挂起(parent Paused/Cancelled)→ 保留 .falcon.tmp/.falcon.ctrl
+ * 供 resume 续跑;失败 → cancel 组并删残留后回落阶段1 串行循环
+ * (残留不删会让回落下载按混源污染过的临时文件"续传")。
  */
 
 #pragma once
@@ -170,6 +179,27 @@ public:
     }
 
 private:
+    /// V2 多源桥接结果:完成 / 挂起(parent Paused/Cancelled)/ 失败(回落)
+    enum class V2BridgeOutcome { kCompleted, kSuspended, kFailed };
+
+    /// V2 多源门禁:开关开 + 无 curl 专属能力 + http/https 镜像 ≥2 +
+    /// 有整文件哈希(含 OpenSSL 可用)。全部满足才写 urls_out 并返回 true
+    static bool v2_multi_source_gate(const DownloadOptions& options,
+                                     const MetalinkFile& mf,
+                                     std::vector<std::string>& urls_out);
+
+    /// 驱动共享 V2 引擎做多源分段下载(桥接轮询,200ms 粒度);阻塞
+    /// 至组终态或 parent 暂停/取消。失败时内部已 cancel 组并清理残留
+    V2BridgeOutcome run_v2_multi_source(const MetalinkFile& mf,
+                                        const DownloadTask::Ptr& parent,
+                                        IEventListener* listener,
+                                        const std::string& part_path,
+                                        const std::vector<std::string>& urls,
+                                        std::string& fail_reason);
+
+    /// 删除 V2 下载残留(临时数据文件与断点控制文件),best-effort
+    static void cleanup_v2_leftovers(const std::string& part_path);
+
     /// 委托期间的活跃上下文(pause/cancel 转发到底层的锚点)。
     /// 必须在此完整定义:contexts_ 的 unique_ptr 在头文件 inline
     /// 构造/清理路径(EH)需要完整类型,仅前置声明会炸消费 TU

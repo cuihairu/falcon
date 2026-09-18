@@ -325,13 +325,8 @@ void MainWindow::create_side_bar()
     side_bar_ = new SideBar(this);
 
     // 连接侧边栏信号到页面切换
-    connect(side_bar_, &SideBar::downloadClicked, this, [this]() {
-        content_stack_->setCurrentIndex(PAGE_DOWNLOAD);
-        if (download_page_) {
-            download_page_->set_view_mode(DownloadViewMode::Downloading);
-        }
-    });
-
+    // 每个 tab 各自设置视图模式,不再经 downloadClicked 无条件重置
+    // (旧实现双信号 + 连接顺序导致"已完成/云添加"被覆盖回"下载中")
     connect(side_bar_, &SideBar::downloadingTabClicked, this, [this]() {
         content_stack_->setCurrentIndex(PAGE_DOWNLOAD);
         if (download_page_) {
@@ -343,13 +338,6 @@ void MainWindow::create_side_bar()
         content_stack_->setCurrentIndex(PAGE_DOWNLOAD);
         if (download_page_) {
             download_page_->set_view_mode(DownloadViewMode::Completed);
-        }
-    });
-
-    connect(side_bar_, &SideBar::cloudAddTabClicked, this, [this]() {
-        content_stack_->setCurrentIndex(PAGE_DOWNLOAD);
-        if (download_page_) {
-            download_page_->set_view_mode(DownloadViewMode::CloudAdd);
         }
     });
 
