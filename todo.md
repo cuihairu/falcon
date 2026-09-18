@@ -2415,3 +2415,71 @@ request_group 系 106 / resource_search 47（WebCrawler 泄漏已
   子串 "daemon/main.cpp" 不命中）
 - 行号来自批次 S 全量 ctest 后的新 gcda（2043 清单采集），
   直接可信；初判：多为网络注入 / 线程时序 / 平台分支
+
+### 2026-09-18 - aria2 功能对齐差距分析（立项路线）
+
+**背景：** 以 aria2 为参照做功能覆盖盘点（基于 grep 全库实证，
+非文档宣称）。结论：主下载路径已对齐或以自有方式覆盖，缺口
+集中在 Metalink / SFTP / BT 做种策略与若干 HTTP 细节。
+
+**已对齐（含等价实现）：**
+- ✅ HTTP(S)/FTP(S)：V1 curl + V2 裸 socket 双引擎；分段下载、
+  断点续传（.falcon.ctrl 控制文件 + If-Range 内容变更防护，
+  语义对齐 aria2 -c 且更严）
+- ✅ 限速：全局 + 任务级（V2 滑动窗口 / V1 curl 通道热应用）
+  ≈ aria2 --max-overall-download-limit + --max-download-limit
+- ✅ 重试：max_retries + retry_delay_seconds + 指数退避
+  ≈ --max-tries + --retry-wait
+- ✅ 代理：HTTP 明文（absolute-form）+ CONNECT 隧道（V2）；
+  V1 curl 另有 socks/HTTPS 代理。≈ --all-proxy
+- ✅ BT/Magnet：DHT（Kademlia 迭代查找）/ PEX / tracker；
+  ≈ aria2 的 DHT+PEX+utp 基础面
+- ✅ RPC：JSON-RPC over HTTP+WS 28 方法 aria2 兼容（AriaNg 可
+  直连）+ 事件通知 + 会话持久化（SQLite + auto-save + 重启恢复，
+  ≈ --save-session/--input-file 语义）
+- ✅ cookie 引擎、HTTP Basic 认证（401 挑战重放）、UA/自定义头；
+  Digest/NTLM 由 V1 CURLAUTH_ANY 覆盖（http_handler.cpp:246）
+- ✅ 已存在文件保护：V2 overwrite 门禁（明确报错或显式授权覆盖）
+  ≈ --allow-overwrite=false 语义
+
+**Falcon 独有（aria2 无）：** 包装协议 thunder/flashget/qqlink、
+ED2K、HLS/DASH；云存储浏览（S3/OSS/COS/Kodo/Upyun，endpoint
+path-style）；网盘分享链识别（12 平台）+ 资源搜索；GUI 桌面。
+
+**缺口（按价值排序，附实证）：**
+1. **Metalink（aria2 语义）**：现 metalink 插件是 2025-12 旧接口
+   占位（getSupportedSchemes/canHandle 旧 API、自造 "metalink:"
+   scheme、独立 CMake 子项目未编入主库；builtin 注册表仅 8 个
+   handler 无 metalink）。缺 aria2 的真语义：.metalink4/.meta4
+   文件输入 → 多源镜像并行 + piece 级哈希校验。**立项首选**——
+   可复用 V2 分段骨架（多源=多段来源）+ file_hash 分块哈希
+2. **SFTP**：同上形态（plugins/sftp 449 行旧接口未接入注册表）；
+   aria2 原生支持。可经 V1 curl 的 SCP/SFTP 能力低成本接入
+   （需 libssh2 构建项）
+3. **BT 做种策略**：seed-ratio/seed-time 全库零命中——下载完
+   即停，无法做种保活（PT 站核心需求）。需要 BT handler 增加
+   完成后保留会话 + 上传计量 + 条件退出
+4. **gzip/deflate content-encoding**：V2 无 Accept-Encoding/
+   content-encoding 处理（grep 零命中）——不主动协商所以多数
+   服务器不压缩，但强制 gzip 响应会把压缩体原样落盘。V1 curl
+   自动解压，V2 需补 zlib 解帧（可挂 chunked 状态机尾部）
+5. **auto-file-renaming**：CLI 有 --auto-file-renaming 参数
+   （arg_parser.cpp:256）但 DownloadOptions 零消费——引擎侧
+   是"拒绝或覆盖"二值，无 .1/.2 自动改名（与限速当年的
+   "零消费端"同型）
+6. **conditional-get**：If-Modified-Since/If-Match 零命中
+   （aria2 --conditional-get，配合镜像同步场景）
+7. **V2 IPv6**：resolve_host 已 AF_UNSPEC，数据面 socket
+   AF_INET-only——IPv6 目标在 V2 判失败（ip6-localhost 有干净
+   失败分支，批次 D 测试钉住）；生产默认 V1 不受影响，V2 灰度
+   面收窄项
+8. **file-allocation**：连 CLI 参数都没有——V2 稀疏临时文件 /
+   V1 curl 直写；大文件预分配（falloc）对机械盘碎片与空间预留
+   有意义，优先级低
+9. **客户端 TLS 证书**：V1/V2 均无（CURLOPT_SSLCERT 未接线）
+   ——aria2 --certificate/--private-key，双向 TLS 场景需要
+
+**记录不修的假缺口：** HTTP Digest（V1 CURLAUTH_ANY 已含，V2
+经适配层 401 回退 V1 兜底）、socks/HTTPS 代理（V2 判 Unsupported
+回退 V1）、Referer（同回退）——均为"V2 原生化"项而非生产缺口，
+随 V2 引擎成熟度逐步收编。
