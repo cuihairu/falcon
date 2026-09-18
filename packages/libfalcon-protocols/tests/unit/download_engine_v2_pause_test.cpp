@@ -718,3 +718,56 @@ TEST(DownloadEngineV2Pause, MultiSegmentPauseResumeAbandonsForFreshDownload) {
     std::error_code rm_ec;
     std::filesystem::remove_all(dir, rm_ec);
 }
+
+/// 批次 W：sweep_task_connections 的跨任务 continue 分支——清扫 B 时
+/// 等待表里的 A 挂起命令必须跳过（只收走目标任务自己的命令）。A 全程
+/// 不受反复清扫影响：慢发照常推进、成品逐字节一致
+TEST(DownloadEngineV2Pause, SweepSkipsOtherTasksPendingCommands) {
+    const std::size_t kBodySize = 128 * 1024;
+    const std::string body = make_body(kBodySize);
+    PauseTestServer server;
+    // 4KB/10ms → 32 块 ≈ 320ms 慢发窗口，期间 A 命令绝大部分时间挂起
+    ASSERT_TRUE(server.start(body, 4 * 1024, 10));
+
+    const std::string dir = temp_dir_for("sweepskip");
+    std::filesystem::create_directories(dir);
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options_a;
+    options_a.output_filename = (std::filesystem::path(dir) / "a.bin").string();
+    options_a.max_connections = 1;
+    options_a.max_retries = 0;
+    const TaskId task_a = engine.add_download(server.url("/a.bin"), options_a);
+    ASSERT_GT(task_a, 0u);
+    auto* group_a = engine.request_group_man()->find_group(task_a);
+    ASSERT_NE(group_a, nullptr);
+
+    // B 连端口 1 立即失败（重试 0）→ 快速终态，等待表里只剩 A 的命令
+    DownloadOptions options_b;
+    options_b.output_filename = (std::filesystem::path(dir) / "b.bin").string();
+    options_b.max_retries = 0;
+    const TaskId task_b = engine.add_download("http://127.0.0.1:1/b.bin", options_b);
+    ASSERT_GT(task_b, 0u);
+
+    EngineRunner runner(engine);
+
+    // A 慢发期间反复清扫 B：每轮扫描等待表都遇到 A 的挂起命令并跳过
+    for (int i = 0; i < 30; ++i) {
+        engine.sweep_task_connections(task_b);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    // A 不被误收：照常完成、成品一致
+    ASSERT_TRUE(wait_group_terminal(engine, group_a, 10'000));
+    EXPECT_EQ(group_a->status(), RequestGroupStatus::COMPLETED);
+    EXPECT_EQ(read_file_content((std::filesystem::path(dir) / "a.bin").string()),
+              body);
+
+    runner.shutdown_and_join();
+    server.stop();
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}

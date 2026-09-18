@@ -469,3 +469,52 @@ TEST_F(PexExtensionHandlerTest, SendsViaBothExtensionIds) {
     EXPECT_EQ(sent_[0].data, sent_[1].data);
     EXPECT_EQ(sent_[0].data.size(), size_t{6});  // 1 个 IPv4 peer
 }
+
+//==============================================================================
+// 批次 W：IPv6 展开压缩段计数 / 握手非 dict 输入 / 未知扩展 ID
+//==============================================================================
+
+// "::1:2"：before 空、after="1:2" 含冒号 → afterCount 的冒号计数循环
+//（既有用例 after 恒为单组无冒号，循环体从未执行）
+TEST(PexUtilsTest, StringToIPv6ExpandsColonTailGroups) {
+    auto addr = PexUtils::stringToIPv6("::1:2");
+    // 8 组 = 6 个展开零组 + "1" + "2"：字节 12-13 = 1、14-15 = 2
+    for (size_t i = 0; i < 12; ++i) {
+        EXPECT_EQ(addr[i], 0) << "byte " << i;
+    }
+    EXPECT_EQ(addr[12], 0);
+    EXPECT_EQ(addr[13], 1);
+    EXPECT_EQ(addr[14], 0);
+    EXPECT_EQ(addr[15], 2);
+}
+
+// "1:2:3:4:5:6:7::"：before 七组、after 空 → after.empty() 拼接分支
+//（既有 "2001:db8::1" 走 before/after 双非空分支）
+TEST(PexUtilsTest, StringToIPv6FullPrefixWithEmptyTail) {
+    auto addr = PexUtils::stringToIPv6("1:2:3:4:5:6:7::");
+    EXPECT_EQ(addr[0], 0);
+    EXPECT_EQ(addr[1], 1);
+    EXPECT_EQ(addr[12], 0);
+    EXPECT_EQ(addr[13], 7);  // 第 7 组
+    EXPECT_EQ(addr[14], 0);  // 尾组由 :: 展开补零
+    EXPECT_EQ(addr[15], 0);
+}
+
+// 整数 bencode 非 dict：握手解码安静返回默认值（不抛）
+TEST(PexHandshakeTest, DecodeNonDictInputReturnsEmptyHandshake) {
+    auto hs = PexHandshake::decode("i42e");
+    EXPECT_EQ(hs.extensionIds.utPex, 0);
+    EXPECT_EQ(hs.extensionIds.ltPex, 0);
+}
+
+// 仅协商 lt_pex（libtorrent 扩展）的场景：handlePexMessage 的 ltPex
+// 分支此前从未执行——既有用例全部只协商 ut_pex；lt_pex 协商 ID 同样
+// 分发进候选集
+TEST_F(PexExtensionHandlerTest, HandlePexMessageLtPexExtIdDispatches) {
+    EXPECT_TRUE(handler_->handleExtensionHandshake("d6:lt_pexi5ee"));
+    handler_->enable();
+
+    auto peers = PexUtils::encodeCompactPeersIPv4({makePeer("10.0.0.9", 999)});
+    handler_->handlePexMessage(5, peers);
+    EXPECT_EQ(handler_->getManager().getCandidatePeerCount(), size_t{1});
+}

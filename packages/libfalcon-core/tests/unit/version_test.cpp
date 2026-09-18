@@ -223,6 +223,23 @@ TEST(VersionParsing, ParseVersionWithTooManyComponents) {
     static_cast<void>(falcon::Version::parse("1.2.3.4"));
 }
 
+// 剥掉 "v"/"V" 前缀后为空：版本号主体缺失必须 nullopt（此前用例
+// 都用 "v1.2.3"，剥后非空，55 行的空判定从未执行）
+TEST(VersionParsing, ParsePrefixOnlyLetterYieldsNullopt) {
+    EXPECT_FALSE(falcon::Version::parse("v").has_value());
+    EXPECT_FALSE(falcon::Version::parse("V").has_value());
+}
+
+// 分隔符之间出现空组件：getline 产出空 part → nullopt（"invalid" 类
+// 输入走的是非数字分支，63 行的空组件判定从未执行）。
+// 注意 getline 语义：尾分隔符不产出空组件——"5." 解析为 {5} 合法
+// （宽松接受尾点，忠于实现固化）
+TEST(VersionParsing, ParseEmptyComponentYieldsNullopt) {
+    EXPECT_FALSE(falcon::Version::parse("1..2").has_value());
+    EXPECT_FALSE(falcon::Version::parse(".5").has_value());
+    EXPECT_TRUE(falcon::Version::parse("5.").has_value());
+}
+
 //==============================================================================
 // Version 边界条件测试
 //==============================================================================

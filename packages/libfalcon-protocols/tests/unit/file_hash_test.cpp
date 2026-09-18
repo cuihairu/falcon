@@ -330,6 +330,31 @@ TEST(FileHashTest, VerifyFileWithSHA256) {
     remove_test_file(path);
 }
 
+
+TEST(FileHashTest, VerifyMultipleAggregatesResults) {
+    SKIP_NO_OPENSSL();
+    std::string path = make_unique_temp_path("test_verify_multi.txt");
+    create_test_file(path, "Hello, World!");
+
+    const std::string md5_ok = get_md5_hash("Hello, World!");
+    const std::string sha256_ok = get_sha256_hash("Hello, World!");
+
+    const auto results = FileHasher::verify_multiple(path, {
+        {md5_ok, HashAlgorithm::MD5},
+        {sha256_ok, HashAlgorithm::SHA256},
+        {std::string("00000000000000000000000000000000"), HashAlgorithm::MD5},
+    });
+
+    ASSERT_EQ(results.size(), std::size_t{3});
+    EXPECT_TRUE(results[0].valid);
+    EXPECT_EQ(results[0].algorithm, HashAlgorithm::MD5);
+    EXPECT_TRUE(results[1].valid);
+    EXPECT_EQ(results[1].algorithm, HashAlgorithm::SHA256);
+    EXPECT_FALSE(results[2].valid);
+
+    remove_test_file(path);
+}
+
 //==============================================================================
 // 错误处理测试
 //==============================================================================
@@ -1069,6 +1094,51 @@ TEST(FileHashTest, CalculateUnknownAlgorithmFailsGracefully) {
 TEST(FileHashTest, GetHashLengthUnknownAlgorithmDefaultsTo64) {
     EXPECT_EQ(FileHasher::get_hash_length(static_cast<HashAlgorithm>(99)),
               std::size_t{64});
+}
+
+// 覆盖率批次 X:calculate_streaming 的算法矩阵与文件层防御
+TEST(FileHashTest, StreamingFileMissingFailsGracefully) {
+    SKIP_NO_OPENSSL();
+    EXPECT_TRUE(FileHasher::calculate_streaming(
+                    "/nonexistent/falcon-no-such-file.bin", HashAlgorithm::MD5)
+                    .empty());
+}
+
+TEST(FileHashTest, StreamingMatchesCalculateForAllAlgorithms) {
+    SKIP_NO_OPENSSL();
+    const std::string path =
+        create_test_file("stream_alg_matrix.bin", "falcon streaming matrix");
+    for (auto algo : {HashAlgorithm::MD5, HashAlgorithm::SHA1,
+                      HashAlgorithm::SHA256, HashAlgorithm::SHA512}) {
+        EXPECT_EQ(FileHasher::calculate_streaming(path, algo),
+                  FileHasher::calculate(path, algo))
+            << "algorithm mismatch: " << static_cast<int>(algo);
+    }
+    remove_test_file(path);
+}
+
+TEST(FileHashTest, StreamingUnknownAlgorithmFailsGracefully) {
+    SKIP_NO_OPENSSL();
+    // md_type 置空 → EVP 获取失败防御(与非流式 default 互相独立)
+    const std::string path =
+        create_test_file("stream_unknown_alg.bin", "falcon");
+    EXPECT_TRUE(FileHasher::calculate_streaming(
+                    path, static_cast<HashAlgorithm>(99))
+                    .empty());
+    remove_test_file(path);
+}
+
+TEST(FileHashTest, CalculateLargeFileLogsWarning) {
+    SKIP_NO_OPENSSL();
+    // >100MB 触发慢速告警日志分支;稀疏文件不占磁盘
+    const std::string path = make_unique_temp_path("large_sparse.bin");
+    {
+        std::ofstream file(path, std::ios::binary);
+        file.seekp(100 * 1024 * 1024 + 1);
+        file.put('\0');
+    }
+    EXPECT_FALSE(FileHasher::calculate(path, HashAlgorithm::MD5).empty());
+    remove_test_file(path);
 }
 
 //==============================================================================

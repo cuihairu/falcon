@@ -611,3 +611,14 @@ TEST(OSSBrowserMockTest, ConnectHttpsEndpointPrefixStillPathStyle) {
         {"endpoint", "https://127.0.0.1:1"}};
     EXPECT_FALSE(browser.connect("oss://" + std::string(kBucket), options));
 }
+
+/// 批次 W：只传 region 不传 endpoint——connect 的 endpoint 推导
+///（"oss-" + region + ".aliyuncs.com"）与 build_url 的官方域名虚拟
+/// 主机拼接两处一并走到；region "cn-tesla-9" 不存在 → DNS 失败收口
+TEST(OSSBrowserMockTest, ConnectWithRegionOnlyDerivesEndpointAndFails) {
+    OSSBrowser browser;
+    const std::map<std::string, std::string> options = {
+        {"access_key_id", "ak"}, {"access_key_secret", "sk"},
+        {"region", "cn-tesla-9"}};
+    EXPECT_FALSE(browser.connect("oss://" + std::string(kBucket), options));
+}

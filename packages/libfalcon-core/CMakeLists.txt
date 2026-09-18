@@ -21,6 +21,7 @@ find_package(OpenSSL QUIET)
 
 add_library(falcon_core
     src/download_engine.cpp
+    src/logger.cpp
     src/download_task.cpp
     src/task_manager.cpp
     src/thread_pool.cpp

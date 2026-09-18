@@ -2,6 +2,7 @@
 // Copyright (c) 2025 Falcon Project
 
 #include <falcon/download_task.hpp>
+#include <falcon/protocol_handler.hpp>
 
 #include <gtest/gtest.h>
 
@@ -567,4 +568,41 @@ TEST_F(DownloadTaskTest, ProgressIntervalThrottlesListenerCallback) {
 
     // 存储值即时更新，不受节流影响
     EXPECT_EQ(task->downloaded_bytes(), 300);
+}
+
+namespace {
+
+/// 记录 resume 转发的最小 handler（仅区分"有 handler"分支）
+class ResumeRecordingHandler final : public IProtocolHandler {
+public:
+    std::string protocol_name() const override { return "record"; }
+    std::vector<std::string> supported_schemes() const override { return {"record"}; }
+    bool can_handle(const std::string&) const override { return true; }
+    FileInfo get_file_info(const std::string&, const DownloadOptions&) override { return {}; }
+    void download(DownloadTask::Ptr, IEventListener*) override {}
+    void pause(DownloadTask::Ptr) override {}
+    void resume(DownloadTask::Ptr task, IEventListener*) override {
+        resumed_ids.push_back(task->id());
+    }
+    void cancel(DownloadTask::Ptr) override {}
+
+    std::vector<TaskId> resumed_ids;
+};
+
+} // namespace
+
+// resume 的有 handler 分支：转发 handler_->resume（无 handler 分支已由
+// PauseResume 覆盖——那条路径直接置 Downloading，本用例不检查状态，
+// handler 不负责置状态）
+TEST_F(DownloadTaskTest, ResumeWithHandlerForwardsToHandler) {
+    auto task = std::make_shared<DownloadTask>(11, "https://example.com/h.bin", options_);
+    EXPECT_TRUE(task->pause());
+    ASSERT_EQ(task->status(), TaskStatus::Paused);
+
+    auto handler = std::make_shared<ResumeRecordingHandler>();
+    task->set_handler(handler);
+    task->resume();
+
+    ASSERT_EQ(handler->resumed_ids.size(), size_t{1});
+    EXPECT_EQ(handler->resumed_ids[0], TaskId{11});
 }

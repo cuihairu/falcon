@@ -905,3 +905,199 @@ TEST_F(V2EngineHostLifecycle, LazyStartConfigureAndRebuild) {
 }
 
 }  // namespace
+
+// 批次 W：引擎已启动后的 configure 必须告警并保持不动（下次启动才
+// 应用 pending_config_）——此前该防御分支从未执行
+TEST_F(V2EngineHostLifecycle, ConfigureAfterEngineStartIsWarnedAndIgnored) {
+    auto& host = V2EngineHost::instance();
+    host.shutdown_and_join();  // 干净起点
+
+    EngineConfigV2 first_cfg;
+    first_cfg.poll_timeout_ms = 10;
+    host.configure(first_cfg);
+    auto engine = host.engine();
+    ASSERT_NE(engine, nullptr);
+
+    // 启动后再 configure：WARN + return，不影响运行中的引擎。
+    // 注意实现语义：运行中的 configure 被直接丢弃（不落 pending_config_）
+    // ——WARN 文案"下次启动时应用"与实现不符（文案缺陷，如实记录），
+    // 停机重建后仍是首次配置
+    EngineConfigV2 second_cfg;
+    second_cfg.poll_timeout_ms = 999;
+    host.configure(second_cfg);
+
+    // 运行中引擎保持首次配置
+    EXPECT_EQ(host.engine(), engine);
+    EXPECT_EQ(engine->config().poll_timeout_ms, 10);
+
+    host.shutdown_and_join();
+    EXPECT_EQ(host.try_engine(), nullptr);
+    auto rebuilt = host.engine();
+    ASSERT_NE(rebuilt, nullptr);
+    EXPECT_NE(rebuilt, engine);
+    EXPECT_EQ(rebuilt->config().poll_timeout_ms, 10)
+        << "运行中被忽略的配置不落 pending，重建仍是首次配置";
+}
+// ============================================================================
+// 桥接错误路径（批次 X-1）：冲突组 / 引擎停机 / 组丢失 → throw →
+// V1 worker catch 收口 Failed + error_message（worker 语义忠实复刻）
+// ============================================================================
+
+namespace {
+
+class V2HttpAdapterBridgeErrors : public ::testing::Test {
+protected:
+    void SetUp() override {
+        V2EngineHost::instance().shutdown_and_join();  // 干净起点
+        V2EngineHost::instance().set_v2_http_enabled(true);
+    }
+    void TearDown() override {
+        V2EngineHost::instance().shutdown_and_join();
+        V2EngineHost::instance().set_v2_http_enabled(false);
+    }
+    DownloadTask::Ptr make_bridge_task(TaskId id, const std::string& url,
+                                       const std::string& output_path) {
+        DownloadOptions options;
+        options.output_filename = output_path;
+        options.max_connections = 1;
+        options.max_retries = 0;
+        auto task = std::make_shared<DownloadTask>(id, url, options);
+        task->set_output_path(output_path);
+        return task;
+    }
+};
+
+// 同 id 组已存在且 ACTIVE（陈旧残留 / 并发注入）：find_group 命中
+// 非暂停态分支 → throw"任务组状态异常" → worker 收口 Failed
+TEST_F(V2HttpAdapterBridgeErrors, ConflictingActiveGroupFailsTask) {
+    auto& host = V2EngineHost::instance();
+    const std::string body = make_body(64 * 1024);
+    AdapterTestServer server;
+    ASSERT_TRUE(server.start());
+    server.set_body(body);
+
+    const std::string dir = temp_dir_for("conflict");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+    const std::string foreign_out = out_path + ".foreign.tmp";
+
+    // 外部组：同任务 id，挂在慢路径上保持 ACTIVE
+    std::error_code stale_ec;
+    std::filesystem::remove(foreign_out, stale_ec);
+    auto engine = host.engine();
+    ASSERT_NE(engine, nullptr);
+    engine->add_download_as(50, {server.url("/foreign.bin")},
+                            DownloadOptions{}, foreign_out);
+
+    HttpHandler handler;
+    RecordingListener listener;
+    auto task = make_bridge_task(50, server.url("/bait"), out_path);
+    task->set_listener(&listener);
+    task->set_status(TaskStatus::Downloading);
+
+    EXPECT_FALSE(download_via_worker(handler, task, &listener));
+    EXPECT_EQ(task->status(), TaskStatus::Failed);
+    EXPECT_NE(task->error_message().find("V2 任务组状态异常"),
+              std::string::npos);
+
+    engine->cancel_task(50);  // 收尾外部组
+    host.shutdown_and_join();
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+// 桥接轮询期间宿主停机：try_engine 返回 null → throw"引擎已停机"
+TEST_F(V2HttpAdapterBridgeErrors, EngineShutdownDuringBridgeFailsTask) {
+    auto& host = V2EngineHost::instance();
+    const std::string body = make_body(256 * 1024);  // 慢发撑住轮询窗口
+    AdapterTestServer server;
+    ASSERT_TRUE(server.start());
+    server.set_body(body);
+
+    const std::string dir = temp_dir_for("bridge_shut");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    HttpHandler handler;
+    RecordingListener listener;
+    auto task = make_bridge_task(51, server.url("/slow.bin"), out_path);
+    task->set_listener(&listener);
+    task->set_status(TaskStatus::Downloading);
+
+    std::thread killer([&host, id = task->id()] {
+        // 等桥接把组注入引擎再停机（避免引擎先于注入销毁的空转窗口）
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::seconds(5);
+        while (std::chrono::steady_clock::now() < deadline) {
+            auto engine = host.try_engine();
+            if (engine && engine->request_group_man() &&
+                engine->request_group_man()->find_group(id)) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        host.shutdown_and_join();
+    });
+
+    EXPECT_FALSE(download_via_worker(handler, task, &listener));
+    killer.join();
+    EXPECT_EQ(task->status(), TaskStatus::Failed);
+    EXPECT_NE(task->error_message().find("V2 引擎已停机"),
+              std::string::npos);
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+// 桥接轮询期间组被引擎侧移除：find_group 返回 null →
+// throw"任务组丢失"
+TEST_F(V2HttpAdapterBridgeErrors, GroupRemovedDuringBridgeFailsTask) {
+    auto& host = V2EngineHost::instance();
+    const std::string body = make_body(256 * 1024);
+    AdapterTestServer server;
+    ASSERT_TRUE(server.start());
+    server.set_body(body);
+
+    const std::string dir = temp_dir_for("bridge_gone");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    HttpHandler handler;
+    RecordingListener listener;
+    auto task = make_bridge_task(52, server.url("/slow.bin"), out_path);
+    task->set_listener(&listener);
+    task->set_status(TaskStatus::Downloading);
+
+    std::thread remover([] {
+        // 等桥接把组注入引擎再移除（避免 cancel 早于注入的时序竞争）
+        auto& host = V2EngineHost::instance();
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::seconds(5);
+        while (std::chrono::steady_clock::now() < deadline) {
+            auto engine = host.try_engine();
+            if (engine && engine->request_group_man() &&
+                engine->request_group_man()->find_group(52)) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        if (auto engine = host.try_engine()) {
+            engine->cancel_task(52);  // 引擎侧移除组（非 V1 转发路径）
+        }
+    });
+
+    EXPECT_FALSE(download_via_worker(handler, task, &listener));
+    remover.join();
+    EXPECT_EQ(task->status(), TaskStatus::Failed);
+    EXPECT_NE(task->error_message().find("V2 任务组丢失"),
+              std::string::npos);
+
+    host.shutdown_and_join();
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+}  // namespace

@@ -198,3 +198,13 @@ TEST(BitTorrentParseTest, MagnetInfoHasNoSize) {
     EXPECT_EQ(info.total_size, size_t{0});
     EXPECT_TRUE(info.supports_resume);
 }
+
+// 空文件：读成功但 data 为空 → parseBencode 入口的 pos >= length
+// 判定直接 throw（截断输入严格化的最短形态）
+TEST(BitTorrentParseTest, EmptyTorrentFileThrows) {
+    TempDir dir;
+    BitTorrentHandler handler;
+    const std::string path =
+        writeTorrent(dir, "empty.torrent", "");
+    EXPECT_THROW(handler.get_file_info(path, DownloadOptions{}), std::exception);
+}

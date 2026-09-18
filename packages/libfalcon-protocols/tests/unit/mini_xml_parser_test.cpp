@@ -204,3 +204,67 @@ TEST(MiniXmlParserTest, ErrorCarriesLineAndColumn) {
         EXPECT_NE(std::string(e.what()).find("line 2"), std::string::npos);
     }
 }
+
+//==============================================================================
+// 边界补遗(覆盖率批次 X):UTF-8 BOM / 多字节实体 / 属性值实体与拒绝
+//==============================================================================
+
+TEST(MiniXmlParserTest, Utf8BomSkipped) {
+    const auto root = MiniXmlParser::parse("\xef\xbb\xbf<r ok=\"1\"/>");
+    ASSERT_NE(root, nullptr);
+    EXPECT_EQ(root->name, "r");
+}
+
+TEST(MiniXmlParserTest, TwoByteEntityEncoding) {
+    // U+00E9(é)→ 2 字节 UTF-8(C3 A9)
+    const auto root = MiniXmlParser::parse("<r>caf&#xe9;</r>");
+    ASSERT_NE(root, nullptr);
+    EXPECT_EQ(root->text, "caf\xc3\xa9");
+}
+
+TEST(MiniXmlParserTest, FourByteEntityEncoding) {
+    // U+1F600(😀)→ 4 字节 UTF-8(F0 9F 98 80)
+    const auto root = MiniXmlParser::parse("<r>&#x1f600;</r>");
+    ASSERT_NE(root, nullptr);
+    EXPECT_EQ(root->text, "\xf0\x9f\x98\x80");
+}
+
+TEST(MiniXmlParserTest, RejectInvalidHexDigitInEntity) {
+    EXPECT_THROW(MiniXmlParser::parse("<r>&#xG42;</r>"), XmlParseError);
+}
+
+TEST(MiniXmlParserTest, RejectAttributeMissingEquals) {
+    // 属性名后缺 '='(expect("=") 失败路径)
+    EXPECT_THROW(MiniXmlParser::parse("<r a \"1\"/>"), XmlParseError);
+}
+
+TEST(MiniXmlParserTest, RejectAttrValueMissingQuote) {
+    EXPECT_THROW(MiniXmlParser::parse("<r a=x/>"), XmlParseError);
+}
+
+TEST(MiniXmlParserTest, AttrValueEntitiesDecoded) {
+    const auto root = MiniXmlParser::parse("<r a=\"x&amp;y&#65;z\"/>");
+    ASSERT_NE(root, nullptr);
+    ASSERT_NE(root->attr("a"), nullptr);
+    EXPECT_EQ(*root->attr("a"), "x&yAz");
+}
+
+TEST(MiniXmlParserTest, RejectLtInAttrValue) {
+    EXPECT_THROW(MiniXmlParser::parse("<r a=\"a<b\"/>"), XmlParseError);
+}
+
+TEST(MiniXmlParserTest, RejectDoctype) {
+    EXPECT_THROW(MiniXmlParser::parse("<!DOCTYPE note SYSTEM \"x.dtd\"><r/>"),
+                 XmlParseError);
+}
+
+TEST(MiniXmlParserTest, RejectUnknownPiAtProlog) {
+    // xml 伪前缀(xmlfoo):prolog 位置的未知 PI 拒绝
+    EXPECT_THROW(MiniXmlParser::parse("<?xmlfoo bar?><r/>"), XmlParseError);
+}
+
+TEST(MiniXmlParserTest, RejectDeclarationMissingVersion) {
+    // XML 声明缺 version 属性(期望 "version" 字面量失败)
+    EXPECT_THROW(MiniXmlParser::parse("<?xml encoding=\"utf-8\"?><r/>"),
+                 XmlParseError);
+}

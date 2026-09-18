@@ -1016,6 +1016,85 @@ TEST(SegmentDownloaderEdges, StartRejectedWhileRunning) {
     std::remove(output_path.c_str());
 }
 
+// 下载函数抛异常：worker 段级 catch 记录 last_error 后重试，
+// 恢复的段正常完成（异常路径不吞掉整次下载）
+TEST(SegmentDownloaderEdges, ThrowingDownloadFuncRetriedThenSucceeds) {
+    DownloadOptions options;
+    options.max_connections = 2;
+
+    auto task = std::make_shared<MockDownloadTask>(1, "http://test.example.com/file.bin", options);
+    task->set_test_file_info(1024 * 10);
+
+    const std::string output_path = make_unique_temp_path("falcon_test_seg_throw.bin");
+    SegmentConfig config;
+    config.num_connections = 2;
+    config.min_segment_size = 1024;
+    config.min_file_size = 1;
+    config.max_retries = 3;
+
+    SegmentDownloader downloader(task, "http://test.example.com/file.bin",
+                                 output_path, config);
+
+    // 前 2 次调用直接抛异常（覆盖 worker 段级 catch），其后恢复正常
+    std::atomic<int> calls{0};
+    auto throwing_then_ok = [&](const std::string& url, Bytes start, Bytes end,
+                                const std::string& path,
+                                std::atomic<bool>& cancelled) -> bool {
+        if (calls.fetch_add(1) < 2) {
+            throw std::runtime_error("transient seg explode");
+        }
+        return mock_segment_download(url, start, end, path, cancelled);
+    };
+
+    EXPECT_TRUE(downloader.start(throwing_then_ok));
+    EXPECT_GE(calls.load(), 3);  // 异常确实发生过且被重试吸收
+    EXPECT_EQ(downloader.completed_segments(), downloader.total_segments());
+
+    // 成品完整（10240 字节且逐字节模式正确）
+    std::ifstream out(output_path, std::ios::binary);
+    ASSERT_TRUE(out.is_open());
+    out.seekg(0, std::ios::end);
+    EXPECT_EQ(static_cast<size_t>(out.tellg()), 1024u * 10);
+    out.close();
+    std::remove(output_path.c_str());
+}
+
+// 输出父目录被普通文件阻塞：start 内 create_directories 抛出 →
+// FileIOException → 外层收口返回 false，且从未发起任何段下载
+TEST(SegmentDownloaderEdges, CreateDirectoryFailureFailsFast) {
+    DownloadOptions options;
+    options.max_connections = 2;
+    options.create_directory = true;
+
+    auto task = std::make_shared<MockDownloadTask>(1, "http://test.example.com/file.bin", options);
+    task->set_test_file_info(1024 * 10);
+
+    // 先造一个普通文件，让 output 的 parent_path 恰好落在它身上
+    const std::string blocker_dir = make_unique_temp_path("falcon_blocker");
+    const std::string blocker = blocker_dir + "_file";
+    {
+        std::ofstream f(blocker, std::ios::binary);
+        f << "i am a file, not a directory";
+    }
+    const std::string output_path = blocker + "/sub/out.bin";
+
+    SegmentDownloader downloader(task, "http://test.example.com/file.bin",
+                                 output_path, SegmentConfig{});
+
+    std::atomic<int> calls{0};
+    auto counting_download = [&](const std::string& url, Bytes start, Bytes end,
+                                 const std::string& path,
+                                 std::atomic<bool>& cancelled) -> bool {
+        ++calls;
+        return mock_segment_download(url, start, end, path, cancelled);
+    };
+
+    EXPECT_FALSE(downloader.start(counting_download));
+    EXPECT_EQ(calls.load(), 0);  // 目录创建失败先于任何段下载
+    EXPECT_EQ(downloader.completed_segments(), 0u);
+    std::remove(blocker.c_str());
+}
+
 // start() 前已取消：直接拒绝
 TEST(SegmentDownloaderEdges, StartRejectedAfterCancel) {
     auto task = std::make_shared<MockDownloadTask>(

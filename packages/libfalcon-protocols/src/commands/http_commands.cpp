@@ -493,6 +493,10 @@ HttpInitiateConnectionCommand::~HttpInitiateConnectionCommand() {
     // Socket 的清理由连接池负责
 }
 
+const char* HttpInitiateConnectionCommand::name() const {
+    return "HttpInitiateConnection";
+}
+
 bool HttpInitiateConnectionCommand::execute(DownloadEngineV2* engine) {
     try {
         if (!engine) {
@@ -1283,6 +1287,10 @@ HttpResponseCommand::HttpResponseCommand(
 }
 
 HttpResponseCommand::~HttpResponseCommand() = default;
+
+const char* HttpResponseCommand::name() const {
+    return "HttpResponse";
+}
 
 bool HttpResponseCommand::execute(DownloadEngineV2* engine) {
     if (!engine) {
@@ -2075,6 +2083,10 @@ HttpDownloadCommand::~HttpDownloadCommand() {
     finish_output();
 }
 
+const char* HttpDownloadCommand::name() const {
+    return "HttpDownload";
+}
+
 bool HttpDownloadCommand::execute(DownloadEngineV2* engine) {
     if (!engine) {
         return handle_result(ExecutionResult::ERROR_OCCURRED);
@@ -2841,6 +2853,10 @@ HttpSegmentRetryCommand::HttpSegmentRetryCommand(
 {
 }
 
+const char* HttpSegmentRetryCommand::name() const {
+    return "HttpSegmentRetry";
+}
+
 bool HttpSegmentRetryCommand::execute(DownloadEngineV2* engine) {
     // 组消失/已暂停/已终态：静默退出（重试链随之终结；暂停后的恢复
     // 由 resume 重新调度，不沿旧重试链续跑）
@@ -2996,6 +3012,10 @@ HttpRetryCommand::HttpRetryCommand(
     , retry_wait_(std::chrono::seconds(options.retry_delay_seconds))
     , retry_at_(std::chrono::steady_clock::now() + retry_wait_)
 {
+}
+
+const char* HttpRetryCommand::name() const {
+    return "HttpRetry";
 }
 
 bool HttpRetryCommand::execute(DownloadEngineV2* engine) {

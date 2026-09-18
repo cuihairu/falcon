@@ -731,6 +731,38 @@ TEST_F(MainIntegrationTest, DaemonModeLifecycle) {
     EXPECT_TRUE(file_exists(log_file));
 }
 
+
+// --daemon 且日志文件不可创建：redirect_stdio 的 log open 失败兜底
+// （stdout/stderr 落到 /dev/null，fd==0 时跳过 close），daemon 照常运行
+TEST_F(MainIntegrationTest, DaemonModeWithUnwritableLogFileStillRuns) {
+    TempDirGuard tmp(make_temp_dir());
+    const std::string pid_file = tmp.path + "/daemon.pid";
+    // 父目录不存在 → O_CREAT 打不开 → /dev/null 兜底分支
+    const std::string bad_log = tmp.path + "/no/such/dir/daemon.log";
+
+    auto r = run_wait({"--daemon",
+                       "--pid-file", pid_file,
+                       "--working-dir", tmp.path,
+                       "--log-file", bad_log,
+                       "--task-db", tmp.path + "/tasks.db",
+                       "--enable-rpc=false"},
+                      15000);
+    ASSERT_FALSE(r.timed_out) << r.out << r.err;
+    EXPECT_EQ(r.exit_code, 0);
+
+    // 守护化孙进程存活（stdio 已全部指向 /dev/null 也不崩）
+    ASSERT_TRUE(wait_until([&] { return file_exists(pid_file); }, 8000));
+    std::ifstream in(pid_file);
+    int daemon_pid = -1;
+    in >> daemon_pid;
+    EXPECT_EQ(::kill(static_cast<pid_t>(daemon_pid), 0), 0);
+    EXPECT_FALSE(file_exists(bad_log));
+
+    EXPECT_EQ(::kill(static_cast<pid_t>(daemon_pid), SIGTERM), 0);
+    EXPECT_TRUE(wait_until([&] { return !file_exists(pid_file); }, 10000))
+        << "daemonized process did not shut down cleanly";
+}
+
 // ===========================================================================
 // Config file (--conf-path) tests
 // ===========================================================================

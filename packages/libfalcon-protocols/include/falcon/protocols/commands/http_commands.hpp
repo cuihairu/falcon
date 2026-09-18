@@ -202,9 +202,7 @@ public:
      */
     bool execute(DownloadEngineV2* engine) override;
 
-    const char* name() const override {
-        return "HttpInitiateConnection";
-    }
+    const char* name() const override;  // 实现集中在 .cpp(name() 纯为异常日志服务,inline 会让每 TU 生成实例行)
 
     /**
      * @brief 获取创建的 Socket 文件描述符
@@ -417,9 +415,7 @@ public:
 
     bool execute(DownloadEngineV2* engine) override;
 
-    const char* name() const override {
-        return "HttpResponse";
-    }
+    const char* name() const override;  // 实现集中在 .cpp(name() 纯为异常日志服务,inline 会让每 TU 生成实例行)
 
     /**
      * @brief 获取 HTTP 响应对象
@@ -642,9 +638,7 @@ public:
 
     bool execute(DownloadEngineV2* engine) override;
 
-    const char* name() const override {
-        return "HttpDownload";
-    }
+    const char* name() const override;  // 实现集中在 .cpp(name() 纯为异常日志服务,inline 会让每 TU 生成实例行)
 
     /**
      * @brief 获取已下载字节数
@@ -814,9 +808,7 @@ public:
 
     bool execute(DownloadEngineV2* engine) override;
 
-    const char* name() const override {
-        return "HttpRetry";
-    }
+    const char* name() const override;  // 实现集中在 .cpp(name() 纯为异常日志服务,inline 会让每 TU 生成实例行)
 
     /**
      * @brief 检查是否应该重试
@@ -868,9 +860,7 @@ public:
 
     bool execute(DownloadEngineV2* engine) override;
 
-    const char* name() const override {
-        return "HttpSegmentRetry";
-    }
+    const char* name() const override;  // 实现集中在 .cpp(name() 纯为异常日志服务,inline 会让每 TU 生成实例行)
 
     /**
      * @brief 段失败调度点：预算内换源重建该段连接，预算耗尽返回 false

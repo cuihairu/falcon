@@ -299,13 +299,33 @@ void consume_pi(Scanner& s) {
         std::isspace(static_cast<unsigned char>(s.peek())) == 0) {
         throw XmlParseError("不支持的处理指令", line, col);
     }
+    // 收集声明体(XML 1.0 [23] XMLDecl::= '<?xml' VersionInfo ...):
+    // version 属性必填,只写 encoding/standalone 的伪声明拒绝
+    std::string body;
     while (true) {
         if (s.eof()) throw XmlParseError("声明未闭合", line, col);
-        if (s.starts_with("?>")) {
-            s.advance(2);
-            return;
-        }
+        if (s.starts_with("?>")) break;
+        body.push_back(s.peek());
         s.advance();
+    }
+    s.advance(2);
+    bool has_version = false;
+    for (std::size_t i = 0; i + 7 <= body.size(); ++i) {
+        if (body.compare(i, 7, "version") != 0) continue;
+        const bool boundary = i == 0 ||
+                              std::isspace(static_cast<unsigned char>(body[i - 1])) != 0;
+        if (!boundary) continue;
+        std::size_t j = i + 7;
+        while (j < body.size() &&
+               std::isspace(static_cast<unsigned char>(body[j])) != 0) ++j;
+        if (j + 1 < body.size() && body[j] == '=' &&
+            (body[j + 1] == '"' || body[j + 1] == '\'')) {
+            has_version = true;
+            break;
+        }
+    }
+    if (!has_version) {
+        throw XmlParseError("声明缺少 version 属性", line, col);
     }
 }
 

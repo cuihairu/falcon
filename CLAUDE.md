@@ -2,6 +2,50 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-18 - 覆盖率批次 X：行 95.1% → 96.2% + incremental 零长度 memcpy UB 修复 + metalink 桥接测试挂死模式修复（98% 结构性不可达收口）
+- **74 新用例，cov 全量 ctest 零失败（3 例记录在案并行抖动串行
+  复跑过）+ ASan 七套件零告警**；miss 816 → 649（净收敛 167 行）；
+  全包覆盖率（批次 C 同款 gcovr 口径）：**行 96.2% / 函数 98.8% /
+  分支 55.3%**
+- **产品缺陷修复（incremental_download.cpp）**：downloadChanged 对
+  size==0 的 changed 分块执行 `memcpy(dst, nullptr, 0)`——UBSan
+  nonnull 检查下未定义行为，加 `chunk.size > 0` 守卫跳过零尺寸
+  分块；配套用例覆盖元数据非数值四变体（fileSize/chunks 非数字、
+  大整数溢出、chunkSize 非法）
+- **metalink 桥接测试挂死模式修复（全量负载实测曝光）**：6 处
+  「进度等待断言位于 worker.join() 之前」（ASSERT_GT(downloaded) /
+  ASSERT_TRUE(wait_progress)）——断言失败 gtest 直接 return 不
+  join，TearDown 析构链与存活 worker 竞争（整只 falcon_http_tests
+  卡死占用 ctest 通道）；统一改「等待结果记 bool 不中断 →
+  pause/cancel+join 先收 worker → 断言后置」，等待超时测试红而
+  不挂
+- **98% 结构性不可达收口（如实记录）**：目标行 98%（miss≤341），
+  全部真实可测缺口（mock 错误剧本/参数形状/回环服务器/纯单元）
+  收尽后 96.2%，剩余 649 行逐行定性构成：http_commands 153
+  （TLS 故障注入/socket 硬错误/平台分支）、EVP/curl/sqlite OOM
+  注入防御 ~90（file_hash/upyun/config_manager/incremental）、
+  gcc 行归属伪影 ~40（task_manager 9 行/dht 函数尾行/logger.hpp，
+  函数入口计数非零铁证）、接口存根与零调用方 ~40（cloud_storage
+  /resource_search）、时序竞态窗口 ~30（websocket/json_rpc）、
+  死防御与结构不可达（metalink 551 errors.empty、daemon 683/694
+  fd 守卫、task_manager 847-850 submit-after-stop、metalink 659
+  注入失败门禁前置不可达）。到 98% 需要产品代码引入故障注入框架
+  或写假断言凑数，均不可取；按批次 V 先例以 96.2% 为当前口径
+  收口值
+- 新用例分布：json_rpc 越界优先级 code 1「Priority must be 0..3」
+  （数值可解析与形状错误 -32602 分流）/ kodo 列举排序四比较器
+  （name/size × 升降序乱序数据）/ cos URL 解析无 region marker
+  分支（整串 bucket + 带 path 切 key）/ task_manager worker 内层
+  catch（handler download 抛异常 → Failed + error_message）/
+  segment_downloader 下载函数抛异常重试后恢复与建目录失败快停 /
+  v2_adapter 桥接三错误路径（同 id 冲突组 ACTIVE、引擎停机排水、
+  组被移除——后台线程轮询 find_group 非 null 再动作，消除固定
+  sleep 时序竞争）/ file_hash verify_multiple 聚合结果 / http
+  handler 撒谎重试 200 段截回（resize 截回分支）/ daemon --daemon
+  模式日志路径不可写 /dev/null 兜底 / multi_source 段重定向携段
+  号换镜像承接与恢复响应阶段超时换镜像 / metalink 本地文档目录
+  读取失败明细、暂停后改文档重下载走全新计划
+
 ### 2026-09-18 - Metalink 阶段2：V2 引擎原生多源分段（P2SP 数据面,默认关）
 - **架构**：同一文件的多个 http/https 镜像交给共享 V2 引擎做多源
   分段下载（段级换源 P2SP）。默认行为零变化——`v2_http_enabled`

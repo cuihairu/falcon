@@ -142,6 +142,25 @@ public:
         abort_[path] = SlowSpec{0, n_bytes, range_start};
     }
 
+    /// 黑洞：对匹配 Range（range_start<0 则任意请求）收下请求后
+    /// 不回任何字节，连接保持到客户端断开/服务器收超时（响应头
+    /// 阶段挂起 → 客户端超时清理路径）
+    void set_black_hole(const std::string& path, long range_start = -1) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        black_holes_[path] = SlowSpec{0, 0, range_start};
+    }
+
+    /// HEAD 专用应答（GET 保持 set_response/script 剧本不变）。引擎
+    /// 数据面（V2）纯 GET 不会产生 HEAD,而 HEAD 探测只出现在下载
+    /// 入口——可借此按阶段切换剧本。flip_get=true 时首个 HEAD 之后
+    /// 把该 path 的 GET 应答一并替换为 resp
+    void set_head_response(const std::string& path, const FakeResponse& resp,
+                           bool flip_get = false) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        head_responses_[path] = resp;
+        head_flip_get_[path] = flip_get;
+    }
+
     // ---- 记录 ----
 
     std::vector<RecordedRequest> requests() {
@@ -247,9 +266,34 @@ private:
                 }
             }
             {
+                bool is_black_hole = false;
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    auto bh = black_holes_.find(route);
+                    is_black_hole =
+                        bh != black_holes_.end() &&
+                        (bh->second.range_start < 0 ||
+                         bh->second.range_start == request_range_start);
+                }
+                if (is_black_hole) {
+                    // 黑洞：不回任何字节，recv 阻塞到客户端断开或
+                    // SO_RCVTIMEO 到期（必须锁外等待，否则 mutex 被
+                    // 占住会拖死其他连接的应答）
+                    char drain[4096];
+                    while (::recv(fd, drain, sizeof(drain), 0) > 0) {
+                    }
+                    CLOSE_SOCKET(fd);
+                    return;
+                }
                 std::lock_guard<std::mutex> lock(mutex_);
                 auto script = scripts_.find(route);
-                if (script != scripts_.end()) {
+                auto hresp = rec.method == "HEAD"
+                                 ? head_responses_.find(route)
+                                 : head_responses_.end();
+                if (hresp != head_responses_.end()) {
+                    resp = hresp->second;
+                    if (head_flip_get_[route]) responses_[route] = hresp->second;
+                } else if (script != scripts_.end()) {
                     auto& seq = script->second;
                     if (rec.method == "HEAD") {
                         // HEAD 探测（get_file_info）恒用末位应答：
@@ -373,6 +417,9 @@ private:
     std::unordered_map<std::string, std::vector<FakeResponse>> scripts_;
     std::unordered_map<std::string, SlowSpec> slow_;
     std::unordered_map<std::string, SlowSpec> abort_;
+    std::unordered_map<std::string, SlowSpec> black_holes_;
+    std::unordered_map<std::string, FakeResponse> head_responses_;
+    std::unordered_map<std::string, bool> head_flip_get_;
 
     std::atomic<bool> running_{false};
     int listen_fd_ = -1;

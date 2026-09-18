@@ -709,6 +709,35 @@ TEST_F(HttpHandlerEdgesTest, SegmentedDownloadFailsOnRangeLyingServer) {
     EXPECT_FALSE(fs::exists(out));
 }
 
+// 段文件已有部分数据（首次尝试中断残留）后再遇 200 撒谎：
+// resize 截回续传起点（existing_size>0 分支），残段不膨胀成全量垃圾
+TEST_F(HttpHandlerEdgesTest, SegmentPartialDataTruncatedOnLyingRetry) {
+    const std::string content(64 * 1024, 'x');
+    FakeResponse full;  // GET 一律 200 全量（Range 撒谎）
+    full.body = content;
+    FakeResponse head;
+    head.headers = {{"Accept-Ranges", "bytes"}};  // 探测放行 → 分段
+    head.body = content;
+
+    server().set_head_response("/seglie2.bin", head);
+    server().set_response("/seglie2.bin", full);
+    // 一次性：对起始 16KB 的 Range 请求发 4KB 后硬断连 → 段文件残留 4KB
+    server().set_abort_after("/seglie2.bin", 4096, 16384);
+
+    DownloadOptions options;
+    options.max_connections = 4;
+    options.min_segment_size = 16 * 1024;
+    options.max_retries = 2;
+    options.retry_delay_seconds = 0;
+
+    TempDir dir;
+    const std::string out = dir.file("seglie2.bin");
+    const auto task = makeTask(222, server().url("/seglie2.bin"), out, options);
+
+    EXPECT_THROW(handler()->download(task, nullptr), FileIOException);
+    EXPECT_FALSE(fs::exists(out));
+}
+
 TEST_F(HttpHandlerEdgesTest, DownloadWithoutContentLengthCompletesWithUnknownTotal) {
     FakeResponse resp;
     resp.body = std::string(2048, 'n');

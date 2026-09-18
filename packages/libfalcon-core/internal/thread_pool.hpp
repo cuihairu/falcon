@@ -43,9 +43,10 @@ public:
 
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (stopped_) {
-                throw std::runtime_error("Submit on stopped ThreadPool");
-            }
+            // stopped_ 唯一置位点在析构,submit-after-stop 无合法调用
+            // 窗口(批次 V 定性)——防御保留,但 throw 单实例化在 .cpp:
+            // 留在模板体内会让每个 TU 生成一份永不执行的实例行(测量水分)
+            ensure_not_stopped();
             tasks_.emplace([task]() { (*task)(); });
         }
 
@@ -67,6 +68,9 @@ public:
 
 private:
     void worker_thread();
+
+    /// 持锁调用:池已停机即抛(实现见 thread_pool.cpp)
+    void ensure_not_stopped();
 
     std::vector<std::thread> workers_;
     std::queue<std::function<void()>> tasks_;

@@ -632,3 +632,16 @@ TEST_F(S3BrowserMockTest, RenameFailsWhenCopyFails) {
         }
     }
 }
+
+/// 批次 W：无自定义 endpoint——build_url 落到 S3 virtual-host 官方域名
+/// 分支（{bucket}.s3.{region}.amazonaws.com）。region "us-east-9z"
+/// 不存在 → DNS 解析失败快速收口；URL 拼接先于请求，官方域名分支的
+/// 行覆盖与请求结果无关（与 kodo/cos/upyun 的批次 V 用例同款）
+TEST_F(S3BrowserMockTest, ConnectWithoutEndpointUsesOfficialDomainAndFails) {
+    S3Browser browser;
+    const std::map<std::string, std::string> options = {
+        {"access_key_id", "AKIA_TEST"},
+        {"secret_access_key", "secret"},
+        {"region", "us-east-9z"}};
+    EXPECT_FALSE(browser.connect("s3://" + std::string(kBucket), options));
+}

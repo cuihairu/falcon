@@ -537,6 +537,27 @@ TEST_F(IncrementalDownloadTest, ParseHashListRejectsCorruptInput) {
     EXPECT_TRUE(IncrementalDownloader::parseHashList("# only comments\n", 10, "sha256").empty());
 }
 
+TEST_F(IncrementalDownloadTest, ParseHashListRejectsNonNumericMetadata) {
+    // 元数据数值非法：stoull 抛出 → 整个列表无效
+    const std::string bad_filesize =
+        "# chunkSize: 10\n# algorithm: sha256\n# fileSize: abc\naabb\n";
+    EXPECT_TRUE(IncrementalDownloader::parseHashList(bad_filesize, 10, "sha256").empty());
+
+    const std::string bad_chunks =
+        "# chunkSize: 10\n# algorithm: sha256\n# chunks: 3x\naabb\n";
+    EXPECT_TRUE(IncrementalDownloader::parseHashList(bad_chunks, 10, "sha256").empty());
+
+    // 数值溢出（超出 uint64_t）同样按非法处理
+    const std::string overflow =
+        "# chunkSize: 10\n# algorithm: sha256\n"
+        "# fileSize: 99999999999999999999999\naabb\n";
+    EXPECT_TRUE(IncrementalDownloader::parseHashList(overflow, 10, "sha256").empty());
+
+    const std::string bad_chunk_size =
+        "# chunkSize: zz\n# algorithm: sha256\naabb\n";
+    EXPECT_TRUE(IncrementalDownloader::parseHashList(bad_chunk_size, 10, "sha256").empty());
+}
+
 // ============================================================================
 // 端到端：本地服务器 + compare + downloadChanged
 // ============================================================================

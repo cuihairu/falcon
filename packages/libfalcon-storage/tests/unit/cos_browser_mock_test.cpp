@@ -413,6 +413,20 @@ TEST(COSBrowserMockTest, UrlParserRejectsMissingHost) {
     EXPECT_THROW(COSUrlParser::parse("cos://"), std::invalid_argument);
 }
 
+TEST(COSBrowserMockTest, UrlParserHostWithoutRegionMarker) {
+    // host 不含 region 标记（-ap- 等）→ 整串视为 bucket，region 留空
+    auto plain = COSUrlParser::parse("cos://plainbucket");
+    EXPECT_EQ(plain.bucket, "plainbucket");
+    EXPECT_TRUE(plain.region.empty());
+    EXPECT_TRUE(plain.key.empty());
+
+    // 无 region 但带 path：key 正常切出
+    auto withpath = COSUrlParser::parse("cos://plainbucket/dir/file.bin");
+    EXPECT_EQ(withpath.bucket, "plainbucket");
+    EXPECT_TRUE(withpath.region.empty());
+    EXPECT_EQ(withpath.key, "dir/file.bin");
+}
+
 //==============================================================================
 // 浏览器元数据与协议支持
 //==============================================================================

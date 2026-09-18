@@ -3,8 +3,16 @@
 
 #include "internal/thread_pool.hpp"
 
+#include <stdexcept>
+
 namespace falcon {
 namespace internal {
+
+void ThreadPool::ensure_not_stopped() {
+    if (stopped_) {
+        throw std::runtime_error("Submit on stopped ThreadPool");
+    }
+}
 
 ThreadPool::ThreadPool(std::size_t num_threads) {
     if (num_threads == 0) {

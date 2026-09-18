@@ -529,7 +529,9 @@ bool IncrementalDownloader::downloadChanged(const FileDiff& diff,
     std::vector<std::vector<uint8_t>> changedChunks;
 
     for (const auto& chunk : diff.chunks) {
-        if (chunk.changed) {
+        // 零尺寸分块无可下载内容，跳过（也避免 data.data()==nullptr 的
+        // 零长度 memcpy——UBSan nonnull 检查下的未定义行为）
+        if (chunk.changed && chunk.size > 0) {
             auto data = downloadRange(diff.remotePath, chunk.offset, chunk.size);
             if (data.size() != chunk.size) {
                 FALCON_LOG_ERROR("Failed to download chunk at offset {}", chunk.offset);

@@ -455,4 +455,159 @@ TEST_F(MultiSourceDownload, TimeoutSweepsSegmentNotGroup) {
     EXPECT_EQ(b_requests, 2u);
 }
 
+
+/// 段级重定向携带段号：轮转落 /b 的段遇 302 → 跟随连接必须携带该段
+/// 的 Range（重定向后的镜像承接该段），/redir 正常 206 → COMPLETED
+TEST_F(MultiSourceDownload, SegmentRedirectCarriesSegment) {
+    ScriptedHttpServer server;
+    server.start();
+    server.set_response("/a", range_response(body_));
+    FakeResponse redirect;
+    redirect.status = 302;
+    redirect.status_text = "Found";
+    redirect.headers = {{"Location", "/redir"}};
+    server.set_response("/b", redirect);
+    server.set_response("/redir", range_response(body_));
+
+    const std::string out_path = dir_->string() + "/seg_redirect.bin";
+    auto options = multi_source_options(out_path);
+
+    DownloadEngineV2 engine;
+    const TaskId id = engine.add_download(
+        std::vector<std::string>{server.url("/a"), server.url("/b")}, options);
+    ASSERT_GT(id, 0u);
+    auto* group = engine.request_group_man()->find_group(id);
+    ASSERT_NE(group, nullptr);
+
+    ASSERT_TRUE(run_until_terminal(engine, group, 20));
+    ASSERT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+    EXPECT_EQ(read_file_content(out_path), body_);
+
+    // /b 上的段全部 302 到 /redir：跟随请求必须带同起点的 Range
+    const auto reqs = server.requests();
+    const auto starts_b = range_starts_of(reqs, "/b");
+    ASSERT_FALSE(starts_b.empty());
+    const auto starts_redir = range_starts_of(reqs, "/redir");
+    EXPECT_EQ(starts_redir, starts_b);
+    // 302 后不在 /b 重试：每个起点恰 1 次请求
+    for (const auto start : starts_b) {
+        EXPECT_EQ(count_range_requests(reqs, "/b", start), 1u);
+    }
+}
+
+/// 段重定向后跟随目标失败：failed_url 为重定向后 URL（不在 uris
+/// 列表），轮转换源回落主镜像 /a 重下该段 → COMPLETED
+TEST_F(MultiSourceDownload, SegmentRedirectFallbackToPrimaryMirror) {
+    ScriptedHttpServer server;
+    server.start();
+    server.set_response("/a", range_response(body_));
+    FakeResponse redirect;
+    redirect.status = 302;
+    redirect.status_text = "Found";
+    redirect.headers = {{"Location", "/redir"}};
+    server.set_response("/b", redirect);
+    FakeResponse broken;
+    broken.status = 500;
+    broken.status_text = "Internal Server Error";
+    server.set_response("/redir", broken);
+
+    const std::string out_path = dir_->string() + "/seg_redir_fallback.bin";
+    auto options = multi_source_options(out_path, 4, 16, 1);  // 每段预算 1
+
+    DownloadEngineV2 engine;
+    const TaskId id = engine.add_download(
+        std::vector<std::string>{server.url("/a"), server.url("/b")}, options);
+    ASSERT_GT(id, 0u);
+    auto* group = engine.request_group_man()->find_group(id);
+    ASSERT_NE(group, nullptr);
+
+    ASSERT_TRUE(run_until_terminal(engine, group, 20));
+    ASSERT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+    EXPECT_EQ(read_file_content(out_path), body_);
+
+    // 落 /b 的段各恰 1 次 302（失败后不回 /b）、跟随 /redir 各恰 1 次
+    // 500；换源轮转的 failed_url 不在 uris → 回落主镜像 /a 接管
+    const auto reqs = server.requests();
+    const auto starts_b = range_starts_of(reqs, "/b");
+    ASSERT_FALSE(starts_b.empty());
+    EXPECT_EQ(range_starts_of(reqs, "/redir"), starts_b);
+    for (const auto start : starts_b) {
+        EXPECT_EQ(count_range_requests(reqs, "/a", start), 1u)
+            << "重定向后 URL 不在镜像列表，该段必须回落主镜像: " << start;
+    }
+}
+
+/// 恢复段响应阶段超时：阶段 1 留断点，阶段 2 主镜像 /a 对段 0 的
+/// 恢复请求收下连接却不回响应头 → 任务级超时清理命中恢复段的
+/// 响应命令 → 段级换源接管（非主镜像 /b 无 If-Range 完成收尾）
+TEST_F(MultiSourceDownload, ResumeResponseStageTimeoutSwitchesMirror) {
+    ScriptedHttpServer server;
+    server.start();
+    auto fail_resp = range_response(body_);
+    fail_resp.fail_nonzero_range = true;
+    server.set_response("/a", fail_resp);
+    server.set_response("/b", fail_resp);
+
+    const std::string out_path = dir_->string() + "/resume_resp_timeout.bin";
+    auto options = multi_source_options(out_path, 4, 16, 0);  // 预算 0
+
+    // 阶段 1：全部段响应失败 → FAILED，断点留存
+    {
+        DownloadEngineV2 engine;
+        const TaskId id = engine.add_download(
+            std::vector<std::string>{server.url("/a"), server.url("/b")}, options);
+        ASSERT_GT(id, 0u);
+        auto* group = engine.request_group_man()->find_group(id);
+        ASSERT_NE(group, nullptr);
+        ASSERT_TRUE(run_until_terminal(engine, group, 20));
+        EXPECT_EQ(group->status(), RequestGroupStatus::FAILED);
+    }
+    ASSERT_TRUE(std::filesystem::exists(out_path + ".falcon.ctrl"));
+
+    // 阶段 2：段 0 已由无 Range 初始 GET 承载完成，第一个未完成段
+    // 是段 1（起点 16），恢复初始连接按段号轮转落 /b——对该请求
+    // 黑洞（收连接不回响应头），任务级超时 1s → 响应命令超时清理
+    // → 段级换源（换到主镜像 /a，携带 If-Range）；/a 其余段正常
+    server.set_response("/a", range_response(body_));
+    server.set_response("/b", range_response(body_));
+    server.set_black_hole("/b", 16);
+    const std::size_t requests_before = server.requests().size();
+    auto resume_options = options;
+    resume_options.timeout_seconds = 1;
+    resume_options.max_retries = 1;  // 超时换源需要预算
+    {
+        DownloadEngineV2 engine;
+        const TaskId id = engine.add_download(
+            std::vector<std::string>{server.url("/a"), server.url("/b")},
+            resume_options);
+        ASSERT_GT(id, 0u);
+        auto* group = engine.request_group_man()->find_group(id);
+        ASSERT_NE(group, nullptr);
+        ASSERT_TRUE(run_until_terminal(engine, group, 25));
+        ASSERT_TRUE(run_until_terminal(engine, group, 25));
+        ASSERT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+    }
+    EXPECT_EQ(read_file_content(out_path), body_);
+    EXPECT_FALSE(std::filesystem::exists(out_path + ".falcon.ctrl"));
+
+    // 段 1（起点 16）的恢复请求在 /b 恰 1 次（黑洞，超时后不在 /b
+    // 重试），换源收尾落在主镜像 /a（带 If-Range）；口径只数阶段
+    // 2 增量——阶段 1 的 /b 16-31（500 失败）不计入
+    const auto all_reqs = server.requests();
+    std::size_t a16 = 0, b16 = 0;
+    bool a16_ifrange = false;
+    for (std::size_t i = requests_before; i < all_reqs.size(); ++i) {
+        const auto& r = all_reqs[i];
+        if (r.path == "/a" && parse_range_start(r.range) == 16) {
+            ++a16;
+            const auto it = r.headers.find("if-range");
+            a16_ifrange = it != r.headers.end() && it->second == "\"etag-ms\"";
+        }
+        if (r.path == "/b" && parse_range_start(r.range) == 16) ++b16;
+    }
+    EXPECT_EQ(a16, 1u);
+    EXPECT_EQ(b16, 1u);
+    EXPECT_TRUE(a16_ifrange) << "换源到主镜像的恢复收尾必须带 If-Range";
+}
+
 } // namespace

@@ -62,3 +62,11 @@ TEST(CoreIsolationTest, ProtocolRegistrySupportsManualRegistration) {
     EXPECT_NE(registry.get_handler("dummy"), nullptr);
     EXPECT_TRUE(registry.supports_url("dummy://test"));
 }
+
+// 本二进制只链 falcon_core：describe_builtin_protocols() 命中 core 侧的
+// weak 空 stub（真实实现在 protocols，GNU ld 归档一次扫描下未被拉入，
+// 与 register_builtin_protocol_handlers 的链接形态同理）。daemon 等
+// 引用强符号的二进制才命中真实实现——此断言固化 stub 路径的存在。
+TEST(CoreIsolationTest, DescribeBuiltinProtocolsStubIsEmptyInCoreOnly) {
+    EXPECT_TRUE(falcon::describe_builtin_protocols().empty());
+}

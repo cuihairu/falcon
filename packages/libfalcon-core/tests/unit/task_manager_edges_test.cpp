@@ -327,6 +327,54 @@ TEST(TaskManagerEdgesTest, StopCancelsActiveDownloads) {
     EXPECT_EQ(task->status(), TaskStatus::Cancelled);
 }
 
+/// handler->download 抛异常：worker 内层 catch 收口 set_error + Failed
+///（与"无 handler"同一路径，但异常源是 handler 本身）
+TEST(TaskManagerEdgesTest, WorkerCatchesHandlerExceptionAndFails) {
+    class ThrowingHandler final : public IProtocolHandler {
+    public:
+        std::string protocol_name() const override { return "throwing"; }
+        std::vector<std::string> supported_schemes() const override { return {"https"}; }
+        bool can_handle(const std::string& url) const override {
+            return url.rfind("https://", 0) == 0;
+        }
+        void download(DownloadTask::Ptr, IEventListener*) override {
+            throw std::runtime_error("boom inside handler download");
+        }
+        FileInfo get_file_info(const std::string& url,
+                               const DownloadOptions&) override {
+            FileInfo info;
+            info.url = url;
+            return info;
+        }
+        void pause(DownloadTask::Ptr task) override {
+            task->set_status(TaskStatus::Paused);
+        }
+        void resume(DownloadTask::Ptr task, IEventListener* listener) override {
+            download(std::move(task), listener);
+        }
+        void cancel(DownloadTask::Ptr task) override {
+            task->set_status(TaskStatus::Cancelled);
+        }
+    };
+
+    auto handler = std::make_shared<ThrowingHandler>();
+    auto task = make_task(45, "https://example.com/boom.bin");
+    task->set_handler(handler);
+    task->mark_started();
+
+    TaskManager tm(base_config(), nullptr);
+    ASSERT_EQ(tm.add_task(task, TaskPriority::Normal), 45u);
+    ASSERT_TRUE(tm.start_task(45));
+    tm.start();
+    EXPECT_TRUE(wait_until(
+        [&] { return task->status() == TaskStatus::Failed; },
+        std::chrono::milliseconds(3000)));
+    tm.stop();
+
+    EXPECT_EQ(task->error_message(), "boom inside handler download");
+}
+
+
 // ============================================================================
 // auto-save 异步保存链
 // ============================================================================

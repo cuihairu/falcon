@@ -358,11 +358,14 @@ TEST_F(MetalinkHandlerTest, PauseDuringSlowMirror) {
 
     std::thread worker([&] { handler_->download(task, &listener); });
 
-    // 等影子进度透传到 parent listener(防火墙生效的证据),再暂停
-    ASSERT_TRUE(listener.wait_progress(1));
+    // 等影子进度透传到 parent listener(防火墙生效的证据),再暂停。
+    // 等待结果先记下不提前退出:pause+join 必须先收 worker,断言后置
+    const bool progressed = listener.wait_progress(1);
 
     handler_->pause(task); // 对齐 TaskManager:handler 负责置 Paused
     worker.join();
+
+    ASSERT_TRUE(progressed);
 
     EXPECT_EQ(task->status(), TaskStatus::Paused);
     EXPECT_FALSE(fs::exists((dir_.path() / "out.bin.metalink-part").string()));
@@ -381,6 +384,233 @@ TEST_F(MetalinkHandlerTest, GetFileInfoFromLocalDoc) {
     EXPECT_EQ(info.total_size, 123456u);
     EXPECT_TRUE(info.supports_resume);
 }
+
+/// file 本体不可读(路径指向目录):读取阶段失败,异常携带具体原因
+TEST_F(MetalinkHandlerTest, LocalDocDirectoryReadFailsWithDetail) {
+    const std::string dir_path = (dir_.path() / "not-a-doc").string();
+    fs::create_directories(dir_path);
+
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    auto task = make_task(31, dir_path, options);
+    task->set_status(TaskStatus::Downloading);
+
+    try {
+        handler_->download(task, nullptr);
+        FAIL() << "expected exception";
+    } catch (const std::exception& e) {
+        EXPECT_NE(std::string(e.what()).find("读取 metalink 文件失败"),
+                  std::string::npos);
+    }
+}
+
+/// 非 http(s)/file 的获取方式:can_handle 只看后缀,download 在获取
+/// 阶段按不支持协议干净拒绝(绝不回落普通 http 处理器)
+TEST_F(MetalinkHandlerTest, UnsupportedFetchSchemeRejected) {
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    auto task = make_task(32, "ftp://192.0.2.10/doc.meta4", options);
+    task->set_status(TaskStatus::Downloading);
+
+    try {
+        handler_->download(task, nullptr);
+        FAIL() << "expected exception";
+    } catch (const std::exception& e) {
+        EXPECT_NE(std::string(e.what()).find("不支持的 metalink 获取方式"),
+                  std::string::npos);
+    }
+}
+
+/// 远程文档但注册表无 http handler:抓取前置检查拒绝
+TEST_F(MetalinkHandlerTest, RemoteFetchWithoutHttpHandler) {
+    auto empty_registry = std::make_unique<ProtocolRegistry>();
+    auto lone = std::make_unique<MetalinkHandler>();
+    lone->set_protocol_registry(empty_registry.get());
+
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    auto task = make_task(33, "http://192.0.2.10/doc.meta4", options);
+    task->set_status(TaskStatus::Downloading);
+
+    try {
+        lone->download(task, nullptr);
+        FAIL() << "expected exception";
+    } catch (const std::exception& e) {
+        EXPECT_NE(std::string(e.what()).find("HTTP handler 未注册"),
+                  std::string::npos);
+    }
+}
+
+/// 抓取远程文档途中暂停:pause 转发抓取连接中止数据流,fetch 以非
+/// Completed 收口 → 按暂停语义收口,parent 停在 Paused
+TEST_F(MetalinkHandlerTest, PauseDuringRemoteFetchStaysPaused) {
+    const std::string xml =
+        "<?xml version=\"1.0\"?><metalink><file name=\"x.bin\">"
+        "<url>http://192.0.2.10/x.bin</url></file></metalink>";
+    server().set_response("/remote.meta4",
+                          FakeResponse{200, "OK", {}, xml, false});
+    server().set_slow_body("/remote.meta4", 100000, 2);  // 2B/100ms 慢发
+
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    auto task = make_task(34, server().url("/remote.meta4"), options);
+    RecordingListener listener;
+    task->set_listener(&listener);
+    task->set_status(TaskStatus::Downloading);
+
+    std::thread worker([&] { handler_->download(task, &listener); });
+    // 等待结果先记下不提前退出:pause+join 必须先收 worker
+    const bool progressed = listener.wait_progress(1);
+    handler_->pause(task);  // 对齐 TaskManager:handler 负责置 Paused
+    worker.join();
+
+    ASSERT_TRUE(progressed);
+    ASSERT_EQ(task->status(), TaskStatus::Paused);
+    EXPECT_FALSE(fs::exists((dir_.path() / "x.bin").string()));
+}
+
+/// 文档含多个 file:告警并只取第一个,其余条目不产生任何下载
+TEST_F(MetalinkHandlerTest, MultiFileDocTakesFirstOnly) {
+    server().set_response("/first.bin",
+                          FakeResponse{200, "OK", {}, kMirror1Body, true});
+    const std::string doc = local_meta4(
+        "<file name=\"first.bin\">"
+        "<url>" + server().url("/first.bin") + "</url>"
+        "</file>"
+        "<file name=\"second.bin\">"
+        "<url>" + server().url("/second.bin") + "</url>"
+        "</file>");
+
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    auto task = make_task(35, doc, options);
+    task->set_status(TaskStatus::Downloading);
+
+    handler_->download(task, nullptr);
+
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(read_file((dir_.path() / "first.bin").string()), kMirror1Body);
+    EXPECT_FALSE(fs::exists((dir_.path() / "second.bin").string()));
+    EXPECT_EQ(server().count_requests("/second.bin"), 0u);
+}
+
+/// file 条目零镜像:解析层即拒绝(不进镜像循环,零网络请求)
+TEST_F(MetalinkHandlerTest, FileWithoutUrlsRejectedAtParse) {
+    const std::string doc = local_meta4(
+        "<file name=\"out.bin\">"
+        "<hash type=\"sha-256\">" + std::string(64, 'a') + "</hash>"
+        "</file>");
+
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    auto task = make_task(36, doc, options);
+    task->set_status(TaskStatus::Downloading);
+
+    try {
+        handler_->download(task, nullptr);
+        FAIL() << "expected exception";
+    } catch (const std::exception& e) {
+        EXPECT_NE(std::string(e.what()).find("无可用 HTTP/FTP 镜像"),
+                  std::string::npos);
+    }
+    EXPECT_FALSE(fs::exists((dir_.path() / "out.bin").string()));
+}
+
+/// 镜像 URL 带 .meta4 后缀:路由特判把镜像指回 metalink 自身 →
+/// 视为无可用协议处理器,该镜像不计入可委托列表
+TEST_F(MetalinkHandlerTest, MirrorRoutedToSelfTreatedUnavailable) {
+    server().set_response("/loop.meta4",
+                          FakeResponse{200, "OK", {}, kMirror1Body, true});
+    // 自注册:metalink 必须在册,.meta4 后缀镜像才被路由特判截获
+    auto own_registry = std::make_unique<ProtocolRegistry>();
+    own_registry->register_handler(std::make_unique<HttpHandler>());
+    auto ml = std::make_unique<MetalinkHandler>();
+    MetalinkHandler* ml_raw = ml.get();
+    own_registry->register_handler(std::move(ml));
+    ml_raw->set_protocol_registry(own_registry.get());
+
+    const std::string doc = local_meta4(
+        "<file name=\"out.bin\">"
+        "<url>" + server().url("/loop.meta4") + "</url>"
+        "</file>");
+
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    auto task = make_task(37, doc, options);
+    task->set_status(TaskStatus::Downloading);
+
+    try {
+        ml_raw->download(task, nullptr);
+        FAIL() << "expected exception";
+    } catch (const std::exception& e) {
+        EXPECT_NE(std::string(e.what()).find("无可用协议处理器"),
+                  std::string::npos);
+    }
+    // 自指镜像从未被当作普通 http 镜像委托(零请求)
+    EXPECT_EQ(server().count_requests("/loop.meta4"), 0u);
+}
+
+/// 无 registry 的 handler:镜像循环拿到 null target → "无可用协议
+/// 处理器"(513 的 else 分支),异常消息携带逐镜像原因
+TEST_F(MetalinkHandlerTest, NoRegistryTreatedUnavailable) {
+    server().set_response("/nr.bin",
+                          FakeResponse{200, "OK", {}, kMirror1Body, true});
+    const std::string doc = local_meta4(
+        "<file name=\"nrout.bin\">"
+        "<url>" + server().url("/nr.bin") + "</url>"
+        "</file>");
+
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    MetalinkHandler bare;  // 不 set_protocol_registry
+    auto task = make_task(41, doc, options);
+    task->set_status(TaskStatus::Downloading);
+
+    try {
+        bare.download(task, nullptr);
+        FAIL() << "expected exception";
+    } catch (const std::exception& e) {
+        EXPECT_NE(std::string(e.what()).find("无可用协议处理器"),
+                  std::string::npos);
+    }
+    // 镜像从未被委托(零请求),最终名不出现
+    EXPECT_EQ(server().count_requests("/nr.bin"), 0u);
+    EXPECT_FALSE(fs::exists((dir_.path() / "nrout.bin").string()));
+}
+
+/// 串行委托阶段取消:cancel 先转发 V2 引擎(无桥接组,无操作)再经
+/// ActiveContext 转发影子任务的目标 handler(832),parent 置 Cancelled
+TEST_F(MetalinkHandlerTest, CancelDuringSlowMirror) {
+    server().set_response("/cslow.bin",
+                          FakeResponse{200, "OK", {}, kMirror1Body, true});
+    server().set_slow_body("/cslow.bin", 200000, 4);
+    const std::string doc = local_meta4(
+        "<file name=\"cout.bin\">"
+        "<url>" + server().url("/cslow.bin") + "</url>"
+        "</file>");
+
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    auto task = make_task(42, doc, options);
+    RecordingListener listener;
+    task->set_listener(&listener);
+    task->set_status(TaskStatus::Downloading);
+
+    std::thread worker([&] { handler_->download(task, &listener); });
+    // 等待结果先记下不提前退出:cancel+join 必须先收 worker
+    const bool progressed = listener.wait_progress(1);
+
+    handler_->cancel(task);  // 对齐 TaskManager:handler 负责置 Cancelled
+    worker.join();
+
+    ASSERT_TRUE(progressed);
+
+    EXPECT_EQ(task->status(), TaskStatus::Cancelled);
+    EXPECT_FALSE(
+        fs::exists((dir_.path() / "cout.bin.metalink-part").string()));
+    EXPECT_FALSE(fs::exists((dir_.path() / "cout.bin").string()));
+}
+
 
 //==============================================================================
 // Metalink V2 多源桥接(阶段2:V2EngineHost 开启)
@@ -689,11 +919,11 @@ TEST_F(MetalinkV2BridgeTest, V2PauseThenResume) {
            std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
-    ASSERT_GT(task->downloaded_bytes(), 0u);
-
+    // 等待超时也不提前退出:pause+join 必须先收 worker,进度断言后置
     handler_->pause(task);  // 对齐 TaskManager:handler 负责置 Paused
     worker.join();
 
+    ASSERT_GT(task->downloaded_bytes(), 0u);
     ASSERT_EQ(task->status(), TaskStatus::Paused);
     const std::string part =
         (dir_.path() / "out7.bin.metalink-part").string();
@@ -709,6 +939,281 @@ TEST_F(MetalinkV2BridgeTest, V2PauseThenResume) {
     EXPECT_FALSE(fs::exists(part));
     EXPECT_FALSE(fs::exists(part + ".falcon.tmp"));
     EXPECT_FALSE(fs::exists(part + ".falcon.ctrl"));
+}
+
+/// V2 组失败回落:两镜像 GET 对 start>0 的 Range 一律 500 且重试
+/// 预算 0 → 组快速 FAILED → 清混源残留 → 阶段1 回落。镜像 1 的
+/// HEAD 探测切换 GET 剧本(无 Range 平凡响应),回落串行单连接
+/// 整文件下载成功发布(进程开关开启时阶段1 经 V2 适配器,同样以
+/// HEAD 为下载入口,分段判定随新 GET 剧本关闭)
+TEST_F(MetalinkV2BridgeTest, V2GroupFailedFallsBackToSerial) {
+    const std::string body = v2_test_body();
+    FakeResponse liar = v2_range_response(body);
+    liar.fail_nonzero_range = true;
+    server().set_response("/gf1.bin", liar);
+    server().set_response("/gf2.bin", liar);
+    // 串行阶段剧本:HEAD 即切换(镜像 1 首个 HEAD 后 GET 变平凡响应)
+    FakeResponse plain;
+    plain.status = 200;
+    plain.body = body;
+    server().set_head_response("/gf1.bin", plain, /*flip_get=*/true);
+    const std::string doc = local_meta4(
+        "<file name=\"gfout.bin\">"
+        "<size>32</size>"
+        "<hash type=\"sha-256\">" + sha256_hex(body) + "</hash>"
+        "<url priority=\"1\">" + server().url("/gf1.bin") + "</url>"
+        "<url priority=\"2\">" + server().url("/gf2.bin") + "</url>"
+        "</file>");
+
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    options.max_connections = 4;
+    options.min_segment_size = 8;
+    options.max_retries = 0;  // 段失败无重试预算,组快速 FAILED
+    auto task = make_task(230, doc, options);
+    task->set_status(TaskStatus::Downloading);
+
+    handler_->download(task, nullptr);
+
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(read_file((dir_.path() / "gfout.bin").string()), body);
+    // 回落前残留已清:混源临时/控制文件不残留,串行按干净 part 重下
+    const std::string part = (dir_.path() / "gfout.bin.metalink-part").string();
+    EXPECT_FALSE(fs::exists(part + ".falcon.tmp"));
+    EXPECT_FALSE(fs::exists(part + ".falcon.ctrl"));
+}
+
+/// 同 id 终态组重注入:首次 V2 完成后同任务再次 download → 终态组
+/// 被提前回收(不等 10s purge 周期)→ 重注入后再完成
+TEST_F(MetalinkV2BridgeTest, V2SameIdReinjectAfterTerminal) {
+    const std::string body = v2_test_body();
+    server().set_response("/ri1.bin", v2_range_response(body));
+    server().set_response("/ri2.bin", v2_range_response(body));
+    const std::string doc = local_meta4(
+        "<file name=\"riout.bin\">"
+        "<size>32</size>"
+        "<hash type=\"sha-256\">" + sha256_hex(body) + "</hash>"
+        "<url priority=\"1\">" + server().url("/ri1.bin") + "</url>"
+        "<url priority=\"2\">" + server().url("/ri2.bin") + "</url>"
+        "</file>");
+
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    options.max_connections = 4;
+    options.min_segment_size = 8;
+    auto task = make_task(231, doc, options);
+    task->set_status(TaskStatus::Downloading);
+    handler_->download(task, nullptr);
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(read_file((dir_.path() / "riout.bin").string()), body);
+
+    task->set_status(TaskStatus::Downloading);  // 模拟重新入队
+    handler_->download(task, nullptr);
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(read_file((dir_.path() / "riout.bin").string()), body);
+}
+
+/// 暂停后文档镜像变更:resume 重入时 PAUSED 组的 uris 与新文档不符
+/// → 旧组断点作废重建,按新镜像列表下载至完成
+TEST_F(MetalinkV2BridgeTest, V2ResumeWithChangedMirrors) {
+    const std::string body = v2_test_body();
+    server().set_response("/cm1.bin", v2_range_response(body));
+    server().set_response("/cm2.bin", v2_range_response(body));
+    server().set_slow_body("/cm1.bin", 100000, 2);
+    server().set_slow_body("/cm2.bin", 100000, 2);
+    const std::string doc_path = local_meta4(
+        "<file name=\"cmout.bin\">"
+        "<size>32</size>"
+        "<hash type=\"sha-256\">" + sha256_hex(body) + "</hash>"
+        "<url priority=\"1\">" + server().url("/cm1.bin") + "</url>"
+        "<url priority=\"2\">" + server().url("/cm2.bin") + "</url>"
+        "</file>");
+
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    options.max_connections = 4;
+    options.min_segment_size = 8;
+    auto task = make_task(232, doc_path, options);
+    RecordingListener listener;
+    task->set_listener(&listener);
+    task->set_status(TaskStatus::Downloading);
+
+    std::thread worker([&] { handler_->download(task, &listener); });
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (task->downloaded_bytes() == 0 &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    // 等待超时也不提前退出:pause+join 必须先收 worker,进度断言后置
+    handler_->pause(task);
+    worker.join();
+    ASSERT_GT(task->downloaded_bytes(), 0u);
+    ASSERT_EQ(task->status(), TaskStatus::Paused);
+
+    // 重写文档:镜像列表换成全新路径,uris 对比必不相等
+    server().set_response("/cm3.bin", v2_range_response(body));
+    server().set_response("/cm4.bin", v2_range_response(body));
+    {
+        std::ofstream out(doc_path, std::ios::binary | std::ios::trunc);
+        out << "<?xml version=\"1.0\"?><metalink>"
+            << "<file name=\"cmout.bin\">"
+            << "<size>32</size>"
+            << "<hash type=\"sha-256\">" << sha256_hex(body) << "</hash>"
+            << "<url priority=\"1\">" << server().url("/cm3.bin") << "</url>"
+            << "<url priority=\"2\">" << server().url("/cm4.bin") << "</url>"
+            << "</file></metalink>";
+    }
+
+    task->set_status(TaskStatus::Downloading);
+    handler_->resume(task, &listener);  // download() 重入:旧组作废重建
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(read_file((dir_.path() / "cmout.bin").string()), body);
+    const auto reqs = server().requests();
+    EXPECT_TRUE(path_received_range(reqs, "/cm3.bin"));
+    EXPECT_TRUE(path_received_range(reqs, "/cm4.bin"));
+}
+
+/// V2 侧组被外部暂停(绕过 handler 直接引擎 pause_task):桥接发现
+/// 组 PAUSED → parent 对齐 Paused 挂起;resume 后组对齐续跑至完成
+TEST_F(MetalinkV2BridgeTest, V2BridgeGroupPausedExternally) {
+    const std::string body = v2_test_body();
+    server().set_response("/pe1.bin", v2_range_response(body));
+    server().set_response("/pe2.bin", v2_range_response(body));
+    server().set_slow_body("/pe1.bin", 100000, 2);
+    server().set_slow_body("/pe2.bin", 100000, 2);
+    const std::string doc = local_meta4(
+        "<file name=\"peout.bin\">"
+        "<size>32</size>"
+        "<hash type=\"sha-256\">" + sha256_hex(body) + "</hash>"
+        "<url priority=\"1\">" + server().url("/pe1.bin") + "</url>"
+        "<url priority=\"2\">" + server().url("/pe2.bin") + "</url>"
+        "</file>");
+
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    options.max_connections = 4;
+    options.min_segment_size = 8;
+    auto task = make_task(233, doc, options);
+    RecordingListener listener;
+    task->set_listener(&listener);
+    task->set_status(TaskStatus::Downloading);
+
+    std::thread worker([&] { handler_->download(task, &listener); });
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (task->downloaded_bytes() == 0 &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    ASSERT_GT(task->downloaded_bytes(), 0u);
+
+    // 不经 metalink pause():组 PAUSED 而 parent 仍是 Downloading
+    V2EngineHost::instance().engine()->pause_task(task->id());
+    worker.join();
+
+    ASSERT_EQ(task->status(), TaskStatus::Paused);
+    const std::string part = (dir_.path() / "peout.bin.metalink-part").string();
+    EXPECT_FALSE(fs::exists(part));
+    EXPECT_TRUE(fs::exists(part + ".falcon.tmp"));
+
+    server().clear_slow_body("/pe1.bin");
+    server().clear_slow_body("/pe2.bin");
+    task->set_status(TaskStatus::Downloading);
+    handler_->resume(task, &listener);
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(read_file((dir_.path() / "peout.bin").string()), body);
+}
+
+/// 桥接期间取消:cancel 置 Cancelled + 转发引擎 + 清 V2 残留,桥接
+/// 以 kSuspended 收口,part/成品/混源挂点全部不残留
+TEST_F(MetalinkV2BridgeTest, V2CancelDuringBridge) {
+    const std::string body = v2_test_body();
+    server().set_response("/cc1.bin", v2_range_response(body));
+    server().set_response("/cc2.bin", v2_range_response(body));
+    server().set_slow_body("/cc1.bin", 100000, 2);
+    server().set_slow_body("/cc2.bin", 100000, 2);
+    const std::string doc = local_meta4(
+        "<file name=\"ccout.bin\">"
+        "<size>32</size>"
+        "<hash type=\"sha-256\">" + sha256_hex(body) + "</hash>"
+        "<url priority=\"1\">" + server().url("/cc1.bin") + "</url>"
+        "<url priority=\"2\">" + server().url("/cc2.bin") + "</url>"
+        "</file>");
+
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    options.max_connections = 4;
+    options.min_segment_size = 8;
+    auto task = make_task(234, doc, options);
+    RecordingListener listener;
+    task->set_listener(&listener);
+    task->set_status(TaskStatus::Downloading);
+
+    std::thread worker([&] { handler_->download(task, &listener); });
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (task->downloaded_bytes() == 0 &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    // 等待超时也不提前退出:cancel+join 必须先收 worker,进度断言后置
+    handler_->cancel(task);  // 对齐 TaskManager:handler 负责置 Cancelled
+    worker.join();
+
+    ASSERT_GT(task->downloaded_bytes(), 0u);
+    ASSERT_EQ(task->status(), TaskStatus::Cancelled);
+    const std::string part = (dir_.path() / "ccout.bin.metalink-part").string();
+    EXPECT_FALSE(fs::exists(part));
+    EXPECT_FALSE(fs::exists(part + ".falcon.tmp"));
+    EXPECT_FALSE(fs::exists(part + ".falcon.ctrl"));
+    EXPECT_FALSE(fs::exists((dir_.path() / "ccout.bin").string()));
+}
+
+/// 同 id 已有非暂停/终态组(外部注入的并发冲突):桥接判状态异常
+/// 回落阶段1,串行照常完成,不向 worker 抛
+TEST_F(MetalinkV2BridgeTest, V2ConflictingActiveGroupFallsBackToSerial) {
+    const std::string body = v2_test_body();
+    server().set_response("/xf1.bin", v2_range_response(body));
+    server().set_response("/xf2.bin", v2_range_response(body));
+    // 外部组:同任务 id,挂在慢镜像上保持 ACTIVE(陈旧残留先清,防止
+    // add 门禁即时 FAILED 走错分支)
+    std::error_code stale_ec;
+    fs::remove("/tmp/falcon-conflict.bin", stale_ec);
+    fs::remove("/tmp/falcon-conflict.bin.falcon.tmp", stale_ec);
+    fs::remove("/tmp/falcon-conflict.bin.falcon.ctrl", stale_ec);
+    const std::string foreign_body(4096, 'z');
+    server().set_response("/foreign.bin",
+                          FakeResponse{200, "OK", {}, foreign_body, false});
+    server().set_slow_body("/foreign.bin", 100000, 2);
+    auto engine = V2EngineHost::instance().engine();  // 提前启动引擎
+    DownloadTask::Ptr conflict =
+        make_task(235, server().url("/foreign.bin"), DownloadOptions{});
+    engine->add_download_as(conflict->id(), {server().url("/foreign.bin")},
+                            DownloadOptions{}, "/tmp/falcon-conflict.bin");
+
+    const std::string doc = local_meta4(
+        "<file name=\"xfout.bin\">"
+        "<size>32</size>"
+        "<hash type=\"sha-256\">" + sha256_hex(body) + "</hash>"
+        "<url priority=\"1\">" + server().url("/xf1.bin") + "</url>"
+        "<url priority=\"2\">" + server().url("/xf2.bin") + "</url>"
+        "</file>");
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    options.max_connections = 4;
+    options.min_segment_size = 8;
+    auto task = make_task(235, doc, options);
+    task->set_status(TaskStatus::Downloading);
+
+    handler_->download(task, nullptr);
+
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(read_file((dir_.path() / "xfout.bin").string()), body);
+    engine->cancel_task(conflict->id());  // 收尾外部组(桥接已 cancel,幂等)
+    std::error_code rm_ec;
+    fs::remove("/tmp/falcon-conflict.bin.falcon.tmp", rm_ec);
+    fs::remove("/tmp/falcon-conflict.bin.falcon.ctrl", rm_ec);
 }
 
 #endif  // FALCON_TEST_METALINK_V2_HASH
@@ -763,3 +1268,141 @@ TEST_F(MetalinkV2BridgeTest, V2OnNoHashFallsBack) {
 }
 
 } // namespace
+/// curl 专属能力门禁:cookie/HTTP 认证/Referer 任一存在 → 桥接前置
+/// 回退阶段1 串行,引擎全程未被拉起(try_engine 恒空)
+TEST_F(MetalinkV2BridgeTest, V2GateRejectsCurlSpecificOptions) {
+    server().set_response("/gt1.bin",
+                          FakeResponse{200, "OK", {}, kMirror1Body, true});
+    server().set_response("/gt2.bin",
+                          FakeResponse{200, "OK", {}, kMirror2Body, true});
+
+    // 文档无需哈希:能力门禁在镜像/哈希检查之前返回
+    auto make_doc = [&](const char* fname) {
+        return local_meta4(
+            "<file name=\"" + std::string(fname) + "\">"
+            "<url priority=\"1\">" + server().url("/gt1.bin") + "</url>"
+            "<url priority=\"2\">" + server().url("/gt2.bin") + "</url>"
+            "</file>");
+    };
+    auto run_case = [&](falcon::TaskId id, void (*mutate)(DownloadOptions&),
+                        const char* fname) {
+        DownloadOptions options;
+        options.output_directory = dir_.string();
+        mutate(options);
+        auto task = make_task(id, make_doc(fname), options);
+        task->set_status(TaskStatus::Downloading);
+        handler_->download(task, nullptr);
+        EXPECT_EQ(task->status(), TaskStatus::Completed);
+        EXPECT_EQ(read_file((dir_.path() / fname).string()), kMirror1Body);
+    };
+
+    run_case(240, [](DownloadOptions& o) { o.cookie_file = "cookies.txt"; },
+             "gt-cookie.bin");
+    run_case(241,
+             [](DownloadOptions& o) {
+                 o.http_username = "user";
+                 o.http_password = "pass";
+             },
+             "gt-auth.bin");
+    run_case(242, [](DownloadOptions& o) { o.referer = "http://ref.example/"; },
+             "gt-referer.bin");
+
+    // socks 代理:门禁判 Unsupported 回退阶段1;V1 curl 走死代理 →
+    // 两镜像皆不可达,干净失败(门禁行本身已被评估并命中)
+    {
+        DownloadOptions options;
+        options.output_directory = dir_.string();
+        options.proxy = "socks5://127.0.0.1:1080";  // 无 socks 服务
+        options.max_retries = 0;  // 连接拒绝无退避,快速失败
+        auto task = make_task(243, make_doc("gt-socks.bin"), options);
+        task->set_status(TaskStatus::Downloading);
+        EXPECT_THROW(handler_->download(task, nullptr), std::exception);
+    }
+
+    // 四条门禁路径全部前置回退:宿主从未启动引擎
+    EXPECT_EQ(V2EngineHost::instance().try_engine(), nullptr);
+}
+
+/// 桥接轮询中宿主停机:try_engine 返回 null → kFailed → 清残留回落
+/// 阶段1 串行循环 → Completed
+TEST_F(MetalinkV2BridgeTest, V2EngineShutdownDuringBridgeFallsBackToSerial) {
+    const std::string body = v2_test_body();
+    server().set_response("/sd1.bin", v2_range_response(body));
+    server().set_response("/sd2.bin", v2_range_response(body));
+    server().set_slow_body("/sd1.bin", 150000, 4);  // 撑开桥接轮询窗口
+    const std::string doc = local_meta4(
+        "<file name=\"sdout.bin\">"
+        "<size>32</size>"
+        "<hash type=\"sha-256\">" + sha256_hex(body) + "</hash>"
+        "<url priority=\"1\">" + server().url("/sd1.bin") + "</url>"
+        "<url priority=\"2\">" + server().url("/sd2.bin") + "</url>"
+        "</file>");
+
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    options.max_connections = 4;
+    options.min_segment_size = 8;
+    auto task = make_task(251, doc, options);
+    task->set_status(TaskStatus::Downloading);
+
+    std::thread killer([&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        V2EngineHost::instance().shutdown_and_join();
+    });
+    handler_->download(task, nullptr);
+    killer.join();
+
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(read_file((dir_.path() / "sdout.bin").string()), body);
+    // 回落串行清掉了 V2 残留
+    const std::string final_path = (dir_.path() / "sdout.bin").string();
+    EXPECT_FALSE(fs::exists(final_path + ".metalink-part.falcon.tmp"));
+    EXPECT_FALSE(fs::exists(final_path + ".metalink-part.falcon.ctrl"));
+}
+
+/// 桥接轮询中组被移除(外部 cancel_task):find_group null → kFailed
+/// → 回落阶段1 串行循环 → Completed
+TEST_F(MetalinkV2BridgeTest, V2GroupRemovedDuringBridgeFallsBackToSerial) {
+    const std::string body = v2_test_body();
+    server().set_response("/rm1.bin", v2_range_response(body));
+    server().set_response("/rm2.bin", v2_range_response(body));
+    server().set_slow_body("/rm1.bin", 150000, 4);
+    const std::string doc = local_meta4(
+        "<file name=\"rmout.bin\">"
+        "<size>32</size>"
+        "<hash type=\"sha-256\">" + sha256_hex(body) + "</hash>"
+        "<url priority=\"1\">" + server().url("/rm1.bin") + "</url>"
+        "<url priority=\"2\">" + server().url("/rm2.bin") + "</url>"
+        "</file>");
+
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    options.max_connections = 4;
+    options.min_segment_size = 8;
+    auto task = make_task(252, doc, options);
+    task->set_status(TaskStatus::Downloading);
+
+    std::thread remover([&] {
+        // 等桥接把组注入引擎（避免 cancel 早于注入的时序竞争），
+        // 5s 上限防桥接异常时用例悬挂
+        auto& host = V2EngineHost::instance();
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::seconds(5);
+        while (std::chrono::steady_clock::now() < deadline) {
+            auto engine = host.try_engine();
+            if (engine && engine->request_group_man() &&
+                engine->request_group_man()->find_group(task->id())) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        if (auto engine = host.try_engine()) {
+            engine->cancel_task(task->id());  // remove_group → 组消失
+        }
+    });
+    handler_->download(task, nullptr);
+    remover.join();
+
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(read_file((dir_.path() / "rmout.bin").string()), body);
+}

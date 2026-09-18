@@ -854,3 +854,14 @@ TEST_F(DownloadEngineV2Test, CleanupCompletedCommands_DropsParkedCommandOwnershi
     EXPECT_EQ(counts.waiting_commands, 0u);
     EXPECT_EQ(counts.waiting_command_times, 0u);
 }
+
+// 批次 W：resume_all / cancel_all 的空转直调（此前两方法全库零直接
+// 调用，入口日志行从未执行；空组循环零次，cancel_all 无任务可取消）
+TEST(DownloadEngineV2BatchW, ResumeAllAndCancelAllOnIdleEngineAreSafe) {
+    EngineConfigV2 config;
+    DownloadEngineV2 engine(config);
+
+    engine.resume_all();
+    engine.cancel_all();
+    engine.resume_all();  // cancel 后再 resume 仍安全
+}

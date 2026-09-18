@@ -162,3 +162,35 @@ TEST(BencodeUtilsTest, GenericEncodeDecodeRoundTrip) {
     auto decoded = BencodeUtils::decode(BencodeUtils::encode(value));
     EXPECT_EQ(decoded.asInt(), 12345);
 }
+
+//==============================================================================
+// 批次 W：防御分支补漏（hasKey 非 Dict / 非 const 下标重载 / 非字符串值回填）
+//==============================================================================
+
+TEST(BencodeEdgeTest, HasKeyOnNonDictReturnsFalse) {
+    // 非 Dict 类型的 hasKey 安静返回 false（既有的 DictAccessOnNonDict
+    // 测的是 operator[]，hasKey 的这条防御从未执行）
+    EXPECT_FALSE(BencodeValue(std::string("text")).hasKey("k"));
+    EXPECT_FALSE(BencodeValue(static_cast<int64_t>(1)).hasKey("k"));
+
+    BencodeValue dict = makeSampleDict();
+    EXPECT_TRUE(dict.hasKey("name"));
+    EXPECT_FALSE(dict.hasKey("missing"));
+}
+
+TEST(BencodeEdgeTest, MutableListIndexOnNonListThrows) {
+    // 非 const 重载 operator[](size_t)（既有用例持 const 对象，命中的
+    // 是 const 重载，非 const 版本的防御从未执行）
+    BencodeValue str(std::string("text"));
+    EXPECT_THROW(str[0], BencodeException);
+    BencodeValue integer(static_cast<int64_t>(7));
+    EXPECT_THROW(integer[0], BencodeException);
+}
+
+TEST(BencodeUtilsTest, DecodeDictToStringMapEncodesNonStringValues) {
+    // dict 值非 string（int/list）→ bencode 文本回填而非 asString 直取
+    auto decoded = BencodeUtils::decodeDictToStringMap(makeSampleDict());
+    EXPECT_EQ(decoded.at("name"), "falcon");
+    EXPECT_EQ(decoded.at("port"), "i6881e");
+    EXPECT_EQ(decoded.at("items"), "l1:ai2ee");
+}

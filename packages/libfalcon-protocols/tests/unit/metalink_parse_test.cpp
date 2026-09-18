@@ -224,3 +224,28 @@ TEST(MetalinkParseTest, MalformedXmlPropagatesWithPosition) {
         EXPECT_GT(e.line(), 0u);
     }
 }
+
+TEST(MetalinkParseTest, AttrGarbageAndOverflowFallBack) {
+    // priority/size 的垃圾值与溢出值一律回落默认值:不抛出、不致命
+    // ("12abc" 尾随垃圾 / 9999...9 超出 long / 3000000000 超出 int /
+    //  size 非数字),回落条目视为缺省 rank 保持文档序
+    const auto files = MetalinkFileParser::parse(meta4(
+        "<file name=\"f\">"
+        "<size>not-a-number</size>"
+        "<url priority=\"3\">http://c/</url>"
+        "<url priority=\"12abc\">http://a/</url>"
+        "<url priority=\"3000000000\">http://b/</url>"
+        "<url priority=\"99999999999999999999\">http://d/</url>"
+        "</file>"));
+    ASSERT_EQ(files.size(), 1u);
+    EXPECT_EQ(files.front().size, 0u);
+    const auto& urls = files.front().urls;
+    ASSERT_EQ(urls.size(), 4u);
+    EXPECT_EQ(urls[0].url, "http://c/");  // 唯一有效 priority
+    EXPECT_EQ(urls[1].url, "http://a/");  // 三条回落 kNoPriority,文档序
+    EXPECT_EQ(urls[2].url, "http://b/");
+    EXPECT_EQ(urls[3].url, "http://d/");
+    EXPECT_EQ(urls[1].priority, kNoPriority);
+    EXPECT_EQ(urls[2].priority, kNoPriority);
+    EXPECT_EQ(urls[3].priority, kNoPriority);
+}

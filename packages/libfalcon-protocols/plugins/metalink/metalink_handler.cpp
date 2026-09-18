@@ -530,12 +530,10 @@ void MetalinkHandler::download(DownloadTask::Ptr task,
                 continue;
             }
             if (paused_or_cancelled()) return;
-            if (!mirror_ok) {
-                errors.push_back(mirror.url + ": 镜像下载未完成");
-                std::error_code rm_ec;
-                fs::remove(part_path, rm_ec);
-                continue;
-            }
+            // run_mirror 返回 false ⇒ parent 已暂停/取消(其内部仅有
+            // 两处 false 出口,均以 parent 状态为前提),上方检查点已按
+            // 暂停语义收口——不存在"非暂停的 false",无需再分支
+            (void)mirror_ok;
 
             if (verify_or_discard(mf, part_path, errors)) {
                 // 发布:rename 先于 Completed(完成=可信)

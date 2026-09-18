@@ -1449,3 +1449,122 @@ TEST_F(HttpCommandsCoverageTest, SetGlobalSpeedLimitZeroLogsCancellation) {
     engine.set_global_speed_limit(0);          // 取消分支（0 → 日志"取消"）
     engine.set_global_speed_limit(0);          // 幂等重复取消
 }
+
+//==============================================================================
+// 批次 W：InitiateConnection 的组 PAUSED 入口守卫（两态）+ 无组多段回退
+//==============================================================================
+
+/// execute 入口的 PAUSED 守卫：连接已建立（命令持 fd）后组被暂停——
+/// 重入时守卫关闭持有的 fd 并以 OK 静默收口（非失败语义）；首轮
+/// （fd=-1、连接未建立）同守卫只走判定不触 close
+TEST_F(HttpCommandsCoverageTest, InitiateConnectionPausedGroupGuardClosesHeldSocket) {
+    const std::string response =
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Length: 5\r\n"
+        "\r\n"
+        "hello";
+
+    LocalTcpServer server(LocalTcpServer::Mode::kRespondAndClose, response);
+    ASSERT_TRUE(server.valid());
+
+    EngineConfigV2 config;
+    DownloadEngineV2 engine(config);
+
+    const std::string out_path = test_dir_ + "/paused_guard.bin";
+    TaskHandle handle = make_engine_task(engine, out_path);
+    ASSERT_NE(handle.group, nullptr);
+
+    const std::string url =
+        "http://127.0.0.1:" + std::to_string(server.port()) + "/file.bin";
+
+    // 先驱动到连接建立（命令持 fd、REQUEST_SENT），组仍非 PAUSED
+    DownloadOptions options;
+    HttpInitiateConnectionCommand cmd(handle.id, url, options);
+    bool done = false;
+    for (int i = 0; i < 100 && !done; ++i) {
+        done = cmd.execute(&engine);
+        if (!done) {
+            engine.event_poll()->poll(10);
+        }
+    }
+    ASSERT_TRUE(done);
+    ASSERT_GE(cmd.socket_fd(), 0);
+    EXPECT_EQ(cmd.connection_state(), HttpConnectionState::REQUEST_SENT);
+    server.join();
+
+    // 暂停后重入：守卫关闭持有的 fd 再 OK 收口
+    ASSERT_TRUE(engine.pause_task(handle.id));
+    ASSERT_EQ(handle.group->status(), RequestGroupStatus::PAUSED);
+    EXPECT_TRUE(cmd.execute(&engine));
+    EXPECT_EQ(cmd.status(), CommandStatus::COMPLETED);
+    EXPECT_EQ(cmd.socket_fd(), -1) << "守卫必须关闭持有的 fd";
+
+    // 首轮形态：全新命令（fd=-1）直接遇 PAUSED 组——判定行走过、
+    // 不触 close 分支，同样 OK 收口
+    HttpInitiateConnectionCommand fresh(handle.id, url, options);
+    EXPECT_TRUE(fresh.execute(&engine));
+    EXPECT_EQ(fresh.status(), CommandStatus::COMPLETED);
+    EXPECT_EQ(fresh.socket_fd(), -1);
+}
+
+/// task 无对应组（9999）时的多段计划回退：determine_download_strategy
+/// 判定多段后 schedule_multi_segment_download 的 find_group 失败
+/// return false——调度回退单连接路径（URL 拼接与策略计算先于寻组，
+/// 行覆盖与最终命令状态无关）
+TEST_F(HttpCommandsCoverageTest, MultiSegmentPlanWithoutGroupFallsBackToSingle) {
+    EngineConfigV2 config;
+    DownloadEngineV2 engine(config);
+
+    auto [fd0, fd1] = make_socket_pair_nb();
+    ASSERT_GE(fd0, 0);
+    ASSERT_GE(fd1, 0);
+    ScopedFd guard0(fd0);
+    ScopedFd guard1(fd1);
+
+    const std::string raw =
+        "HTTP/1.1 200 OK\r\n"
+        "Accept-Ranges: bytes\r\n"
+        "Content-Length: 16384\r\n"
+        "\r\n";
+    ASSERT_TRUE(write_all(fd1, raw));
+
+    DownloadOptions options;
+    options.min_segment_size = 1024;
+    options.max_connections = 2;
+    auto request = std::make_shared<HttpRequest>();
+    request->set_url("http://127.0.0.1/file.bin");
+    HttpResponseCommand cmd(/*task_id=*/9999, fd0, request, options);
+
+    EXPECT_TRUE(cmd.execute(&engine));
+    // 回退路径的后续单连接调度同样无组——命令以终态收口即可
+    EXPECT_NE(cmd.status(), CommandStatus::ACTIVE);
+}
+
+/// name() 已 out-of-line(inline 会让每个 TU 生成实例行,覆盖按实例
+/// 分账产生测量水分)——异常日志是唯一生产调用方,此处直调收口标识符
+TEST_F(HttpCommandsCoverageTest, CommandNamesReturnStableIdentifiers) {
+    DownloadOptions options;
+    auto request = std::make_shared<HttpRequest>();
+    request->set_url("http://127.0.0.1/file.bin");
+
+    EXPECT_STREQ(
+        HttpInitiateConnectionCommand(1, "http://127.0.0.1/file.bin", options)
+            .name(),
+        "HttpInitiateConnection");
+    EXPECT_STREQ(HttpResponseCommand(1, -1, std::move(request), options).name(),
+                 "HttpResponse");
+    EXPECT_STREQ(
+        HttpDownloadCommand(1, -1, std::make_shared<HttpResponse>(),
+                            /*segment_id=*/0, /*offset=*/0)
+            .name(),
+        "HttpDownload");
+    EXPECT_STREQ(
+        HttpRetryCommand(1, "http://127.0.0.1/file.bin", options, 0).name(),
+        "HttpRetry");
+    EXPECT_STREQ(
+        HttpSegmentRetryCommand(1, "http://127.0.0.1/file.bin", options,
+                                /*segment_id=*/0, /*offset=*/0, /*length=*/0,
+                                /*if_range=*/"", /*retry_count=*/0)
+            .name(),
+        "HttpSegmentRetry");
+}

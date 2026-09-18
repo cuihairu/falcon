@@ -413,6 +413,57 @@ TEST(KodoBrowserMockTest, GetQuotaInfoEmptyOnBadResponse) {
 // URL 解析 / 基本属性
 //==============================================================================
 
+TEST(KodoBrowserMockTest, ListDirectorySortsByNameAndSize) {
+    // 故意乱序：a/c 名序与 b/a 尺寸序都与返回序相反，升/降四个比较器
+    // 分支都靠断言顺序收口
+    auto server = make_server([](const std::string& method, const std::string& path) {
+        if (method == "POST" && path == "/list") {
+            return MockServer::Response{200,
+                R"({"items":[)"
+                R"({"key":"docs/c.txt","fsize":300},)"
+                R"({"key":"docs/a.txt","fsize":200},)"
+                R"({"key":"docs/b.txt","fsize":100}]})"};
+        }
+        return MockServer::Response{200, "{}"};
+    });
+    ASSERT_NE(server, nullptr);
+
+    KodoBrowser browser;
+    ASSERT_TRUE(connect_kodo(browser, server->base_url()));
+
+    // 默认 sort_by="name" 升序
+    auto resources = browser.list_directory("docs/", ListOptions{});
+    ASSERT_EQ(resources.size(), 3u);
+    EXPECT_EQ(resources[0].name, "a.txt");
+    EXPECT_EQ(resources[1].name, "b.txt");
+    EXPECT_EQ(resources[2].name, "c.txt");
+
+    // name 降序
+    ListOptions name_desc;
+    name_desc.sort_desc = true;
+    resources = browser.list_directory("docs/", name_desc);
+    ASSERT_EQ(resources.size(), 3u);
+    EXPECT_EQ(resources[0].name, "c.txt");
+    EXPECT_EQ(resources[2].name, "a.txt");
+
+    // size 升序
+    ListOptions size_asc;
+    size_asc.sort_by = "size";
+    resources = browser.list_directory("docs/", size_asc);
+    ASSERT_EQ(resources.size(), 3u);
+    EXPECT_EQ(resources[0].size, 100u);
+    EXPECT_EQ(resources[2].size, 300u);
+
+    // size 降序
+    ListOptions size_desc;
+    size_desc.sort_by = "size";
+    size_desc.sort_desc = true;
+    resources = browser.list_directory("docs/", size_desc);
+    ASSERT_EQ(resources.size(), 3u);
+    EXPECT_EQ(resources[0].size, 300u);
+    EXPECT_EQ(resources[2].size, 100u);
+}
+
 TEST(KodoBrowserMockTest, UrlParserRejectsNonKodoProtocol) {
     // 非 kodo/qiniu 协议必须抛异常（此前缺失协议是未定义行为路径）
     EXPECT_THROW(KodoUrlParser::parse("https://bucket/key"), std::invalid_argument);
@@ -633,4 +684,15 @@ TEST(KodoBrowserMockTest, ConnectHttpsEndpointPrefixStillPathStyle) {
         {"access_key", "ak"}, {"secret_key", "sk"},
         {"endpoint", "https://127.0.0.1:1"}};
     EXPECT_FALSE(browser.connect("kodo://" + std::string(kBucket), options));
+}
+
+/// 批次 W：无 endpoint 时 list_directory 的 rsf 官方域名分支——
+/// build_rsf_url("list") 落到 rsf.qbox.me（connect 已失败不阻断列举，
+/// URL 拼接先于请求）；真实 rsf 域名未授权/不可达 → 空结果收口
+TEST(KodoBrowserMockTest, ListDirectoryWithoutEndpointBuildsOfficialRsfUrlAndFails) {
+    KodoBrowser browser;
+    const std::map<std::string, std::string> options = {
+        {"access_key", "ak"}, {"secret_key", "sk"}};
+    EXPECT_FALSE(browser.connect("kodo://" + std::string(kBucket), options));
+    EXPECT_TRUE(browser.list_directory("/", ListOptions{}).empty());
 }

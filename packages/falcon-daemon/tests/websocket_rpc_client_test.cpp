@@ -1038,4 +1038,26 @@ TEST(WsClientFrameTest, Base64ForHandshakeKey) {
     EXPECT_EQ(encoded.back(), '=');
 }
 
+
+// 服务器推非 JSON 文本帧 / 合法 JSON 非 object 帧：客户端静默忽略
+//（不断连、不误认为响应），随后同一连接上的请求-应答照常工作
+TEST(WsRpcClientEdge, NonJsonFramesIgnoredAndConnectionStaysUsable) {
+    RawWsServer raw;
+    raw.on_connected = [](RawWsServer& s, int fd) {
+        s.send_server_frame(fd, WS_OP_TEXT, "hello, not json");
+        s.send_server_frame(fd, WS_OP_TEXT, "[1,2,3]");
+    };
+    WebSocketRpcClient client(raw_client_config(raw.url()));
+    ASSERT_TRUE(client.connect());
+
+    raw.on_request = [](const json& req) {
+        return json{{"jsonrpc", "2.0"},
+                    {"id", req["id"]},
+                    {"result", json::array()}}.dump();
+    };
+    JsonRpcError err;
+    auto result = client.call("aria2.tellActive", json::array(), &err);
+    ASSERT_TRUE(result) << err.message;
+}
+
 } // namespace

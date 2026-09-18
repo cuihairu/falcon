@@ -1585,4 +1585,48 @@ TEST_F(JsonRpcCoverageTest, UpdateAuthRotatesSecretAtRuntime) {
     EXPECT_TRUE(ok.contains("result")) << ok.dump();
 }
 
+
+/// changePriority 的 priority 非整数值：非整数字符串 / 浮点数 →
+/// "Invalid priority"（-32602），与缺参、bool 形状错误区分
+TEST_F(JsonRpcCoverageTest, ChangePriorityInvalidPriorityValue) {
+    start_server();
+    // 字符串非数字：stoi 抛
+    auto parsed = call("aria2.changePriority",
+                       json::array({"00000000000000ff", "abc"}));
+    EXPECT_EQ(parsed["error"]["code"], -32602) << parsed.dump();
+    EXPECT_EQ(parsed["error"]["message"], "Invalid priority") << parsed.dump();
+    // 浮点数：非 number_integer，get<std::string> 抛
+    parsed = call("aria2.changePriority",
+                  json::array({"00000000000000ff", 1.5}));
+    EXPECT_EQ(parsed["error"]["code"], -32602) << parsed.dump();
+}
+
+/// changePriority 越界值：数值可解析但超出 0..3 → 语义错误 code 1
+///（"Priority must be 0..3"），与形状错误（-32602）区分
+TEST_F(JsonRpcCoverageTest, ChangePriorityOutOfRangeValue) {
+    start_server();
+    auto parsed = call("aria2.changePriority",
+                       json::array({"00000000000000ff", "5"}));
+    EXPECT_EQ(parsed["error"]["code"], 1) << parsed.dump();
+    EXPECT_EQ(parsed["error"]["message"], "Priority must be 0..3") << parsed.dump();
+    // 负数同样越界
+    parsed = call("aria2.changePriority",
+                  json::array({"00000000000000ff", -1}));
+    EXPECT_EQ(parsed["error"]["code"], 1) << parsed.dump();
+}
+
+/// changeGlobalOption 的取值抛异常路径：合法键但值无法解析
+///（max-concurrent-downloads 非数字字符串）→ "Invalid option value"
+TEST_F(JsonRpcCoverageTest, GlobalOptionValueParseExceptionPath) {
+    start_server();
+    auto parsed = call("aria2.changeGlobalOption",
+                       json::array({json{{"max-concurrent-downloads", "abc"}}}));
+    ASSERT_TRUE(parsed.contains("error")) << parsed.dump();
+    EXPECT_EQ(parsed["error"]["code"], 1) << parsed.dump();
+    EXPECT_NE(parsed["error"]["message"].get<std::string>()
+                  .find("Invalid option value: max-concurrent-downloads"),
+              std::string::npos)
+        << parsed.dump();
+}
+
 } // namespace
