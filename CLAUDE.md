@@ -2,6 +2,28 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-18 - Nightly Windows 包资源编入实证（发布包二进制验证方法沉淀）
+- **验证目的**：66b8144 资源修复只有"编译绿"证据（编译不查资源，正是
+  上次缺陷逃逸的根因），触发 nightly（run 35291193607，三平台打包全绿）
+  下载 Windows zip 对 exe 做二进制级验收：①包布局核对（qt.conf/
+  plugins/platforms/qwindows.dll/Qt6Svg.dll/imageformats/qsvg.dll/CRT）；
+  ②exe 内定位 rcc 名字数组与数据区；③压缩流全算法解压验证 QSS 内容。
+  结论：资源在生产包闭环——名字数组完整 + 两份 QSS 解压字节与源文件
+  精确相等（12358/12569）+ 27 个 Lucide SVG 明文 entry + 布局齐全
+- **三个搜索陷阱**（本轮逐一踩过，下轮直接用正确姿势）：
+  ① UTF-16BE 资源名搜索会被 .rdata 里的 UTF-16LE 代码字面量**错位
+  误报**（load_qss 的 ":/styles/..." 字符串交错字节恰好构成 BE 序列，
+  命中位置全是 theme_manager/icon_utils 的路径字面量）——真名字数组
+  须搜 `[2B len][4B hash][BE 名字]` 条目结构（fluent_light.qss =
+  `00 10 05 47 53 a3`）；② 资源体压缩形态**随平台 rcc 而异**：本机
+  Linux rcc 用 ZSTD（`28 b5 2f fd`）、nightly Windows rcc 用 zlib
+  level 9——只搜一种压缩头必然漏；③ zlib 头随压缩级别变化
+  （78 01/5e/9c/da），四种全扫并逐流试解压才不漏
+- **决定性判据**：名字数组条目结构完整 + 解压流字节数与源文件逐一
+  精确相等 + 图标以 `[4B BE 长度头][明文]` 标准 rcc entry 存在；
+  exe 内数组布局 data → name 紧邻（名字数组紧跟最后一个数据 entry，
+  可反推数据区位置）
+
 ### 2026-09-17 - 桌面资源链路致命缺陷修复（资源从未编入二进制）+ 离屏 UI 截图沙盒
 - **资源从未编入二进制**(离屏截图首跑曝光,上一轮 UI 重做的遗留):
   `qt_add_resources` 在 add_executable 之前调用是无效调用且 resources.qrc

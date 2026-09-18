@@ -2,6 +2,29 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-18 - Nightly Windows 包资源编入实证（发布包二进制验证方法）
+- **验证方法**（无 Windows 环境对发布包做资源闭环验收）：下载 nightly
+  Windows zip → 解包 → Python 直接分析 falcon-desktop.exe。三个陷阱
+  逐一踩过，下轮直接用正确姿势：
+  ① **UTF-16BE 资源名搜索会被 UTF-16LE 代码字面量错位误报**——.rdata
+  里 load_qss 的 ":/styles/..." 与 icon_utils 的 ":/icons/..." 字符串
+  交错字节恰好构成 BE 序列（此前命中位置全是误报）；真名字数组须搜
+  `[2B len][4B hash][BE 名字]` 条目结构（fluent_light.qss = `00 10
+  05 47 53 a3`），Windows 包实证名字数组完整（icons/styles/两 QSS/
+  27 图标名）在 0xdd3aa，紧跟最后一个数据 entry（数组布局 data→name）
+  ② **资源体压缩形态随平台 rcc 而异**：本机 Linux rcc 用 ZSTD
+  （28 b5 2f fd，qrc_resources.cpp 直接可见）、nightly Windows rcc 用
+  zlib level 9——只搜一种压缩头必然漏
+  ③ **zlib 头随压缩级别变化**：78 01/5e/9c/da 四种全扫并逐流试解压
+- **决定性判据**：zlib 78 da 流解压出两份 QSS，字节数与源文件逐一
+  精确相等（fluent_light 12358 / fluent_dark 12569）；27 个 SVG 以
+  `[4B BE 长度头][明文]` 标准 rcc entry 编入（upload.svg 头 = `00 00
+  01 a7`）。包布局核对：qt.conf（`Plugins = plugins`）+ qwindows.dll
+  + Qt6Svg.dll + imageformats/qsvg.dll + CRT 全齐
+- nightly run 35291193607 三平台打包全绿，66b8144 资源修复在生产包
+  闭环确认；对照教训：编译绿 ≠ 资源在（编译不查资源正是上次缺陷
+  逃逸的根因），发布包二进制验证才是终点证据
+
 ### 2026-09-17 - 资源链路致命缺陷修复 + 网格视图两缺陷 + 离屏截图沙盒
 - **资源从未编入二进制**(离屏截图首跑曝光的三重缺陷,上一轮 UI 重做的
   遗留):① `qt_add_resources(falcon-desktop ...)` 在 add_executable 之前
