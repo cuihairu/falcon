@@ -788,11 +788,29 @@ TEST_F(HttpHandlerEdgesTest, SegmentFileOccupiedByDirectoryFailsCleanly) {
 
     TempDir dir;
     const std::string out = dir.file("segdir.bin");
-    // 段 0 文件路径(<out>.falcon.tmp.seg0)被目录占用 → 段打开即失败
-    fs::create_directories(out + ".falcon.tmp.seg0");
+    const std::string seg0 = out + ".falcon.tmp.seg0";
+
+    // 诊断轮(CI Coverage 三连红、本机与 Windows 均不复现):三个判别
+    // 事实无条件落日志——① 占位目录是否真的建成;② download 走的哪
+    // 条失败路径(异常消息);③ 下载完成后目录是否还在(是否被下载内
+    // 部删除)。create_directories 用 ec 重载,建目录失败本身也是被观
+    // 测的事实而非测试终结
+    std::error_code cd_ec;
+    const bool cd_ok = fs::create_directories(seg0, cd_ec);
+    std::cout << "[诊断] 建目录: ok=" << cd_ok << " ec=" << cd_ec.message()
+              << " is_dir_after=" << fs::is_directory(seg0)
+              << " root=" << dir.path().string() << std::endl;
 
     const auto task = makeTask(218, server().url("/segdir.bin"), out, options);
-    EXPECT_THROW(handler()->download(task, nullptr), FileIOException);
+    try {
+        handler()->download(task, nullptr);
+        std::cout << "[诊断] download 未抛; seg0_is_dir=" << fs::is_directory(seg0)
+                  << " seg0_exists=" << fs::exists(seg0)
+                  << " out_is_dir=" << fs::is_directory(out) << std::endl;
+        FAIL() << "段 0 被目录占用必须以 FileIOException 收口";
+    } catch (const FileIOException& e) {
+        std::cout << "[诊断] FileIOException: " << e.what() << std::endl;
+    }
     EXPECT_FALSE(fs::exists(out));
 
     // 路径事实无条件落日志:分段失败于段 0 打开时零 GET(打开先于
