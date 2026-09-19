@@ -51,6 +51,10 @@ lcov*.info
 *.swo
 *~
 
+# Claude Code 本地文件（个人设置/技能/运行时产物；index.json 为项目 AI 索引，保留跟踪）
+.claude/*
+!.claude/index.json
+
 # OS
 .DS_Store
 Thumbs.db
