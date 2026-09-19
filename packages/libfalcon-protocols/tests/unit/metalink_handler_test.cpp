@@ -399,8 +399,13 @@ TEST_F(MetalinkHandlerTest, LocalDocDirectoryReadFailsWithDetail) {
         handler_->download(task, nullptr);
         FAIL() << "expected exception";
     } catch (const std::exception& e) {
-        EXPECT_NE(std::string(e.what()).find("读取 metalink 文件失败"),
-                  std::string::npos);
+        // 目录不可作文档,两平台失败点不同但语义一致:Linux 的 ifstream
+        // 打开目录成功、读取流失败("读取 metalink 文件失败");MSVC 的
+        // ifstream 打开目录即失败("无法打开 metalink 文件")。
+        // 平台无关断言:失败收场 + 消息带"metalink 文件"与具体路径
+        const std::string what = e.what();
+        EXPECT_NE(what.find("metalink 文件"), std::string::npos);
+        EXPECT_NE(what.find(dir_path), std::string::npos);
     }
 }
 

@@ -613,9 +613,20 @@ bool MetalinkHandler::v2_multi_source_gate(const DownloadOptions& options,
 }
 
 void MetalinkHandler::cleanup_v2_leftovers(const std::string& part_path) {
-    std::error_code ec;
-    fs::remove(part_path + ".falcon.tmp", ec);  // V2 temp_extension 数据文件
-    fs::remove(part_path + ".falcon.ctrl", ec); // 断点控制文件
+    // 引擎 cancel_task/pause 只置组状态,下载命令持有的 ofstream 要等
+    // 引擎线程清扫(析构命令/关 fd)才释放——Windows 上对仍被打开的
+    // 文件 remove(DeleteFile)直接失败;短暂重试等引擎放手,Linux 上
+    // 首轮即成功零开销
+    for (const char* suffix : {".falcon.tmp", ".falcon.ctrl"}) {
+        const std::string target = part_path + suffix;
+        for (int attempt = 0; attempt < 20; ++attempt) {
+            std::error_code rm_ec;
+            fs::remove(target, rm_ec);
+            std::error_code exists_ec;
+            if (!fs::exists(target, exists_ec)) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
+    }
 }
 
 MetalinkHandler::V2BridgeOutcome MetalinkHandler::run_v2_multi_source(
