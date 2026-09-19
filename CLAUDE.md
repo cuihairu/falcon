@@ -1863,7 +1863,7 @@
                      │
 ┌────────────────────▼────────────────────────────────────┐
 │       基础设施层 (third_party/ & 系统库)                 │
-│  libcurl, libtorrent, spdlog, CLI11, nlohmann/json...   │
+│  libcurl, libtorrent, OpenSSL, spdlog, SQLite, json...  │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -1947,10 +1947,12 @@ graph TD
 | OpenSSL | HTTPS/TLS 支持 | 1.1+ |
 | libtorrent-rasterbar | BitTorrent 协议（可选） | 2.0+ |
 | spdlog | 日志库 | 1.9+ |
-| CLI11 | 命令行解析 | 2.3+ |
 | nlohmann/json | JSON 配置解析 | 3.10+ |
-| gRPC | RPC 框架（daemon 用） | 1.40+ |
+| SQLite3 | 任务持久化 + 加密配置管理 | 3.35+ |
+| Qt6 | 桌面应用（可选，base/svg） | 6.2+ |
 | GoogleTest | 单元测试 | 1.12+ |
+
+> 注：daemon 的 RPC 是自实现的 aria2 兼容 JSON-RPC（HTTP + WebSocket），**无 gRPC 依赖**；CLI 参数解析为手写 `arg_parser`，**无 CLI11 依赖**。
 
 ### 编译步骤
 
@@ -1960,7 +1962,7 @@ git clone https://github.com/yourusername/falcon.git
 cd falcon
 
 # 2. 安装依赖（以 vcpkg 为例）
-vcpkg install curl libtorrent spdlog cli11 nlohmann-json grpc gtest
+vcpkg install curl openssl libtorrent spdlog nlohmann-json sqlite3 gtest
 
 # 3. 配置 CMake
 cmake -B build -S . -DCMAKE_BUILD_TYPE=Release \
@@ -2043,7 +2045,7 @@ cmake --build build --target falcon-cli
 ## 编码规范
 
 ### C++ 标准与风格
-- **标准**：C++17（最低要求），推荐 C++20（便于协程）
+- **标准**：C++17（全库统一，CMakeLists 与各 target `cxx_std_17` 已锁定；升级前需先核对三平台编译器与系统 Qt 支持矩阵）
 - **命名规范**：Google C++ Style Guide 或 LLVM Coding Standards
   - 类名：PascalCase（`DownloadEngine`）
   - 函数/变量：snake_case（`start_download()`）
@@ -2277,19 +2279,22 @@ option(FALCON_USE_STATIC_LIBS "静态链接依赖库" OFF)
 ```
 
 ### 运行时配置
-CLI 程序支持配置文件（`~/.config/falcon/config.json`）：
+CLI 程序支持配置文件（用户级 `~/.config/falcon/config.json` 与系统级
+`/etc/falcon/config.json`，命令行显式参数优先）。全部字段见
+`packages/falcon-cli/src/config_loader.cpp`，常用字段示例：
 ```json
 {
-  "max_concurrent_tasks": 5,
+  "max_connections": 4,
+  "max_concurrent_downloads": 5,
+  "timeout_seconds": 60,
+  "max_retries": 5,
+  "min_segment_size": 1048576,
+  "resume_enabled": true,
+  "verify_ssl": true,
+  "user_agent": "Falcon/1.0",
+  "proxy": "http://127.0.0.1:7890",
   "default_download_dir": "~/Downloads",
-  "log_level": "info",
-  "plugins": {
-    "http": {
-      "timeout_seconds": 30,
-      "max_retries": 3,
-      "user_agent": "Falcon/1.0"
-    }
-  }
+  "log_level": "info"
 }
 ```
 

@@ -15,20 +15,25 @@
 
 ## 特性 🚀
 
-- **多协议支持**: HTTP/HTTPS、FTP、BitTorrent、磁力链接、私有协议
+- **aria2 风格架构**: 事件驱动命令模式、I/O 多路复用 (epoll/kqueue/poll)、连接复用、请求组管理
+- **多协议支持**: HTTP/HTTPS、FTP、Metalink、BitTorrent、磁力链接、私有协议
   - 迅雷 (Thunder)
   - 腾讯旋风 (QQDL)
   - 快车 (FlashGet)
   - 电驴 (ED2K)
   - HLS/DASH 流媒体
+- **守护进程与 RPC 服务** (`falcon-daemon`): aria2 兼容 JSON-RPC (HTTP + WebSocket
+  事件流)、任务持久化 (SQLite)、`daemon.json` 配置与 SIGHUP 热重载
+- **桌面应用** (Qt6): Fluent 设计语言、亮暗主题、表格/网格双视图、云盘浏览、Daemon
+  RPC 后端
 - **云存储集成**:
   - 亚马逊 S3
   - 阿里云 OSS
   - 腾讯云 COS
   - 七牛云 Kodo
   - 又拍云 USS
-- **远程资源浏览**: 轻松浏览 FTP/SFTP/S3 目录，显示详细信息
-- **资源搜索**: 内置搜索引擎，支持种子和文件资源搜索
+- **远程资源浏览**: 浏览 FTP/SFTP/S3 目录，显示详细信息
+- **资源搜索**: 搜索引擎框架，支持种子和文件资源搜索
 - **安全配置**: AES-256 加密存储凭据，主密码保护
 - **高性能**: 多线程下载，支持速度控制和带宽限制
 - **断点续传**: 自动恢复中断的下载
@@ -77,6 +82,8 @@ falcon-cli --proxy http://127.0.0.1:7890 \
 |------|------|------|
 | HTTP/HTTPS | 已启用 | 标准 Web 协议，支持断点续传 |
 | FTP/FTPS | 已启用 | 文件传输协议，支持被动模式 |
+| Metalink | 已启用 | RFC 5854 `.meta4` / Metalink3 `.metalink` 镜像列表，整文件哈希校验 |
+| SFTP | 可选插件 | 仓库内已实现，默认构建关闭 |
 | BitTorrent | 可选插件 | 仓库内已实现，默认构建关闭 |
 | 迅雷 | 可选插件 | 仓库内已实现，默认构建关闭 |
 | 腾讯旋风 | 可选插件 | 仓库内已实现，默认构建关闭 |
@@ -86,119 +93,38 @@ falcon-cli --proxy http://127.0.0.1:7890 \
 
 ## 云存储支持 ☁️
 
-以下能力来自仓库中的相关模块，但 CLI 示例是否可直接使用应以当前命令行实现为准。
+仓库已实现库层级的云存储浏览（`packages/libfalcon-storage`），覆盖亚马逊 S3、阿里云
+OSS、腾讯云 COS、七牛云 Kodo、又拍云 USS：列举、树形视图、对象信息、建目录/改名/
+递归删除、配额查询，并支持自定义 endpoint（MinIO / 私有化网关）。桌面应用的云盘页
+面即基于这些模块构建。
 
-### 亚马逊 S3
-```bash
-falcon-cli --list s3://my-bucket \
-  --key-id AKIAIOSFODNN7EXAMPLE \
-  --secret-key wJalrXUtnFEMI/ \
-  --region us-west-2
-```
+> **注意**：CLI 目前未提供存储浏览命令。部分旧示例中出现的 `--list`、`--tree`、
+> `--search`、`--add-config`、`--set-master-password` 等参数**并未实现**——请使用
+> 桌面应用，或直接调用相关库。
 
-### 阿里云 OSS
-```bash
-falcon-cli --list oss://my-bucket/my-folder \
-  --access-key-id YOUR_ACCESS_KEY_ID \
-  --access-key-secret YOUR_ACCESS_KEY_SECRET \
-  --region cn-beijing
-```
+## 安全配置 🔐
 
-### 腾讯云 COS
-```bash
-falcon-cli --list cos://my-bucket-1250000000 \
-  --secret-id YOUR_SECRET_ID \
-  --secret-key YOUR_SECRET_KEY \
-  --region ap-beijing
-```
-
-### 七牛云 Kodo
-```bash
-falcon-cli --list kodo://my-bucket \
-  --access-key YOUR_ACCESS_KEY \
-  --secret-key YOUR_SECRET_KEY
-```
-
-### 又拍云 USS
-```bash
-falcon-cli --list upyun://my-service \
-  --username YOUR_USERNAME \
-  --password YOUR_PASSWORD
-```
-
-## 配置管理 🔐
-
-Falcon 提供使用 AES-256 加密的安全凭据存储：
-
-### 设置主密码
-```bash
-falcon-cli --set-master-password
-```
-
-### 添加云存储配置
-```bash
-# 交互模式（提示输入凭据）
-falcon-cli --add-config my-s3-bucket --provider s3
-
-# 直接模式
-falcon-cli --add-config my-s3-bucket --provider s3 \
-  --key-id AKIAIOSFODNN7EXAMPLE \
-  --secret-key wJalrXUtnFEMI/ \
-  --region us-west-2 \
-  --bucket my-bucket
-```
-
-### 使用已保存的配置
-```bash
-falcon-cli --list s3://my-bucket --config my-s3-bucket
-```
-
-### 列出所有配置
-```bash
-falcon-cli --list-configs
-```
+`libfalcon-drives` 提供加密配置管理器（SQLite 存储，AES-256-GCM 凭据加密，主密码
+保护）。桌面应用的设置页基于它实现。CLI 管理命令尚未开放。
 
 ## 高级功能 ⚙️
 
 ### 资源搜索
-在多个种子和文件托管网站中搜索：
-```bash
-# 基础搜索
-falcon-cli --search "Ubuntu 22.04"
-
-# 高级搜索和过滤
-falcon-cli --search "电影" \
-  --category video \
-  --min-size 1GB \
-  --max-size 10GB \
-  --min-seeds 50 \
-  --sort-by seeds \
-  --download 1
-```
+`libfalcon-drives` 内置搜索提供者框架（`resource_search`）：提供者接口、URL 校验、
+磁力链接解析、过滤/排序/截断，以及通用爬虫搜索提供者。CLI 搜索命令尚未实现，集成
+请参见库 API。
 
 ### 远程目录浏览
-浏览远程目录并显示丰富信息：
-```bash
-# 短格式列表
-falcon-cli --list ftp://ftp.example.com/pub
-
-# 详细列表
-falcon-cli --list -L ftp://ftp.example.com/pub
-
-# 树形视图，递归显示
-falcon-cli --list --tree --recursive s3://my-bucket/data
-
-# 排序和过滤
-falcon-cli --list --sort size --sort-desc s3://my-bucket/
-```
+`libfalcon-storage` 实现 `ResourceBrowser` 接口，覆盖 FTP、SFTP、S3、OSS、COS、
+Kodo、又拍云——格式化树/表格列举、路径校验、递归操作。桌面云盘页面即基于它构建。
 
 ### 下载管理
 ```bash
 # 从文件批量下载
 falcon-cli --input urls.txt
 
-# 恢复中断的下载
-falcon-cli --continue https://example.com/partial.zip
+# 恢复中断的下载（默认启用，也可用 aria2 风格显式开关）
+falcon-cli --continue true https://example.com/partial.zip
 
 # 自定义请求头和用户代理
 falcon-cli https://example.com/file.bin \
@@ -208,8 +134,8 @@ falcon-cli https://example.com/file.bin \
 # 代理支持
 falcon-cli https://example.com/file.zip \
   --proxy http://proxy.example.com:8080 \
-  --proxy-username user \
-  --proxy-password pass
+  --proxy-user user \
+  --proxy-passwd pass
 ```
 
 ## 架构设计 🏗️
@@ -217,41 +143,43 @@ falcon-cli https://example.com/file.zip \
 Falcon 采用模块化架构：
 
 ```
-┌─────────────────────────────────────────┐
-│              应用层                      │
-│  ┌────────────┐ ┌────────────┐          │
-│  │ falcon-cli │ │ falcon-gui │          │
-│  └────────────┘ └────────────┘          │
-└────────────────────┬────────────────────┘
-                     │
-┌────────────────────▼────────────────────┐
-│              Falcon 核心库               │
-│  ┌──────────────────────────────────┐  │
-│  │     下载引擎                      │  │
-│  │     任务管理器                    │  │
-│  │     插件管理器                    │  │
-│  │     配置管理器                    │  │
-│  │     密码管理器                    │  │
-│  └──────────────────────────────────┘  │
-└────────────────────┬────────────────────┘
-                     │
-┌────────────────────▼────────────────────┐
-│              协议插件层                  │
-│  ┌─────┐ ┌─────┐ ┌──────┐ ┌─────┐       │
-│  │ HTTP│ │ FTP │ │  BT  │ │ OSS  │ ...  │
-│  └─────┘ └─────┘ └──────┘ └─────┘       │
-└─────────────────────────────────────────┘
+┌─────────────────────────────────────────────┐
+│                   应用层                    │
+│ falcon-cli · falcon-daemon · desktop (Qt6)  │
+└──────────────────────┬──────────────────────┘
+                      │
+┌──────────────────────▼──────────────────────┐
+│         Falcon 核心库 (aria2 风格)          │
+│  ┌─────────────────────────────────┐        │
+│  │  下载引擎 / 事件循环            │        │
+│  │  命令队列 / 例程命令            │        │
+│  │  事件轮询 (epoll/kqueue/poll)   │        │
+│  │  请求组管理 / 等待队列          │        │
+│  │  Socket 连接复用                │        │
+│  │  任务管理器 / 事件分发          │        │
+│  └─────────────────────────────────┘        │
+└──────────────────────┬──────────────────────┘
+                      │
+┌──────────────────────▼──────────────────────┐
+│                 协议插件层                  │
+│  ┌─────┐ ┌────┐ ┌────┐ ┌────────┐ ┌─────┐   │
+│  │ HTTP│ │ FTP│ │ BT │ │Metalink│ │ ... │   │
+│  └─────┘ └────┘ └────┘ └────────┘ └─────┘   │
+└─────────────────────────────────────────────┘
 ```
 
 ## 开发指南 👷
 
 ### 系统要求
 - CMake 3.15+
-- C++17 兼容的编译器
+- C++17 兼容的编译器（推荐 GCC 11+ / Clang 14+ / MSVC 2019+）
 - libcurl 7.68+
-- nlohmann/json 3.10+
 - OpenSSL 1.1.1+
+- nlohmann/json 3.10+
+- spdlog 1.9+
 - SQLite 3.35+
+- libtorrent-rasterbar 2.0+（可选，BitTorrent 插件）
+- Qt 6（可选，桌面应用）
 
 ### 编译选项
 ```bash
@@ -280,11 +208,13 @@ cmake -B build -S . \
 
 ## 致谢 🙏
 
-- [libcurl](https://curl.se/) 用于 HTTP/FTP 支持
+- [libcurl](https://curl.se/) 用于 HTTP/FTP/SFTP 支持
 - [libtorrent](https://www.libtorrent.org/) 用于 BitTorrent 支持
 - [nlohmann/json](https://github.com/nlohmann/json) 用于 JSON 处理
+- [spdlog](https://github.com/gabime/spdlog) 用于日志
 - [OpenSSL](https://www.openssl.org/) 用于加密操作
-- [SQLite](https://sqlite.org/) 用于配置存储
+- [SQLite](https://sqlite.org/) 用于任务持久化与配置存储
+- [Qt 6](https://www.qt.io/) 用于桌面应用
 
 ## 功能路线图 📋
 
