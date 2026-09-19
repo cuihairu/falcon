@@ -12,6 +12,7 @@
 
 #include "dht_node.hpp"
 #include "bencode.hpp"
+#include <falcon/detail/injection.hpp>
 #include <falcon/logger.hpp>
 
 #include <random>
@@ -490,7 +491,10 @@ void DhtClient::start() {
     }
 
     // 创建 UDP socket
-    socket_ = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    socket_ = ::falcon::detail::inject_failure(
+                  ::falcon::detail::InjectPoint::DhtSocketCreate)
+                  ? -1
+                  : socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (socket_ < 0) {
         falcon::detail::log_errorf("Failed to create DHT socket: {}", strerror(errno));
         return;

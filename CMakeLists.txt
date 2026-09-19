@@ -60,6 +60,15 @@ option(FALCON_USE_STATIC_LIBS "Link dependencies statically" OFF)
 # 开发选项
 option(FALCON_ENABLE_COVERAGE "Enable code coverage" OFF)
 option(FALCON_ENABLE_SANITIZERS "Enable sanitizers (ASan, UBSan)" OFF)
+# 故障注入点（falcon::detail::inject_failure）：构建测试时自动开启，
+# 生产构建（FALCON_BUILD_TESTS=OFF）恒为常量 false，编译器完全消除
+option(FALCON_ENABLE_FAILURE_INJECTION "Enable failure injection points" OFF)
+
+# 全局编译定义必须在 add_subdirectory 之前设置，保证所有包一致
+# （该宏影响 falcon::detail::injection.hpp 的内联定义，跨 TU 必须同布局）
+if(FALCON_ENABLE_FAILURE_INJECTION OR FALCON_BUILD_TESTS)
+    add_compile_definitions(FALCON_FAILURE_INJECTION=1)
+endif()
 
 # ============================================================================
 # 编译器警告与标准

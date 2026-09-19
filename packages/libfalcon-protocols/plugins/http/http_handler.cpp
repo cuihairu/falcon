@@ -2,6 +2,7 @@
 // Copyright (c) 2025 Falcon Project
 
 #include "http_handler.hpp"
+#include <falcon/detail/injection.hpp>
 
 #include "v2_http_download_adapter.hpp"
 
@@ -396,7 +397,10 @@ public:
         info.url = url;
 
 #ifdef FALCON_USE_CURL
-        CURL* curl = curl_easy_init();
+        // 注入命中时短路真实调用，避免已创建句柄在 throw 路径泄漏
+        CURL* curl = detail::inject_failure(detail::InjectPoint::CurlEasyInit)
+                         ? nullptr
+                         : curl_easy_init();
         if (!curl) {
             throw NetworkException("Failed to initialize CURL");
         }
@@ -532,7 +536,11 @@ public:
                 throw FileIOException("Failed to open file: " + temp_path);
             }
 
-            CURL* curl = curl_easy_init();
+            // 注入命中时短路真实调用，避免已创建句柄在 throw 路径泄漏
+            CURL* curl =
+                detail::inject_failure(detail::InjectPoint::CurlEasyInit)
+                    ? nullptr
+                    : curl_easy_init();
             if (!curl) {
                 throw NetworkException("Failed to initialize CURL");
             }

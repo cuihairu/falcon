@@ -7,6 +7,7 @@
 #include "rpc/websocket_rpc_client.hpp"
 #include "rpc/websocket_frame.hpp"
 
+#include <falcon/detail/injection.hpp>
 #include <falcon/download_engine.hpp>
 #include <falcon/download_task.hpp>
 
@@ -1078,4 +1079,31 @@ TEST(WsRpcClientEdge, NonJsonFramesIgnoredAndConnectionStaysUsable) {
     ASSERT_TRUE(result) << err.message;
 }
 
-} // namespace
+#if defined(FALCON_FAILURE_INJECTION)
+
+// 握手请求发送失败：connect 报 false，fd 被回收
+TEST(WsRpcClientEdge, ConnectFailsWhenHandshakeSendInjected) {
+    RawWsServer raw;
+    WebSocketRpcClient client(raw_client_config(raw.url()));
+    ::falcon::detail::ScopedInjection guard(
+        ::falcon::detail::InjectPoint::WsClientSendFail);
+    EXPECT_FALSE(client.connect());
+}
+
+// 已连接后请求帧发送失败：挂起请求以 -32000 唤醒并标注失败原因
+TEST(WsRpcClientEdge, CallFailsWhenSendFrameInjected) {
+    RawWsServer raw;
+    WebSocketRpcClient client(raw_client_config(raw.url()));
+    ASSERT_TRUE(client.connect());
+
+    ::falcon::detail::ScopedInjection guard(
+        ::falcon::detail::InjectPoint::WsClientSendFail);
+    JsonRpcError err;
+    EXPECT_FALSE(client.call("aria2.getGlobalStat", json::array(), &err));
+    EXPECT_EQ(err.code, -32000);
+    EXPECT_EQ(err.message, "WebSocket send failed");
+}
+
+#endif  // FALCON_FAILURE_INJECTION
+
+} // namespace} // namespace

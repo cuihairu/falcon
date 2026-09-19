@@ -71,6 +71,7 @@ if(FALCON_ENABLE_RESOURCE_BROWSER)
             unit/cos_browser_mock_test.cpp
             unit/kodo_browser_mock_test.cpp
             unit/upyun_browser_mock_test.cpp
+            unit/storage_injection_test.cpp
         )
     endif()
 

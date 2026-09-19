@@ -6,6 +6,7 @@
  */
 
 #include <falcon/protocols/commands/http_commands.hpp>
+#include <falcon/detail/injection.hpp>
 #include <falcon/protocols/download_engine_v2.hpp>
 #include <falcon/exceptions.hpp>
 #include <falcon/logger.hpp>
@@ -954,10 +955,24 @@ HttpInitiateConnectionCommand::send_proxy_connect(
         const char* data = proxy_request_.data() + proxy_sent_;
         const std::size_t remaining = proxy_request_.size() - proxy_sent_;
 #ifdef _WIN32
-        const ssize_t n = send(socket_fd_, data,
-                               static_cast<int>(remaining), kSendFlags);
+        ssize_t n;
+        if (::falcon::detail::inject_failure(
+                ::falcon::detail::InjectPoint::ProxyConnectSendFail)) {
+            WSASetLastError(WSAECONNRESET);
+            n = -1;
+        } else {
+            n = send(socket_fd_, data, static_cast<int>(remaining),
+                     kSendFlags);
+        }
 #else
-        const ssize_t n = send(socket_fd_, data, remaining, kSendFlags);
+        ssize_t n;
+        if (::falcon::detail::inject_failure(
+                ::falcon::detail::InjectPoint::ProxyConnectSendFail)) {
+            errno = ECONNRESET;
+            n = -1;
+        } else {
+            n = send(socket_fd_, data, remaining, kSendFlags);
+        }
 #endif
         if (n < 0) {
             if (sock_would_block(sock_errno())) {

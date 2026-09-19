@@ -119,29 +119,6 @@ public:
         return results;
     }
 
-    bool validate_url(const std::string& url) override {
-        return !url.empty() &&
-               (url.find("magnet:") == 0 || url.find("http:") == 0 || url.find("https:") == 0);
-    }
-
-    SearchResult get_details(const std::string& url) override {
-        SearchResult result;
-        result.url = url;
-        result.source = name_;
-
-        if (url.find("magnet:") == 0) {
-            // 解析magnet链接
-            size_t hash_pos = url.find("btih:");
-            if (hash_pos != std::string::npos) {
-                size_t hash_end = url.find("&", hash_pos);
-                if (hash_end == std::string::npos) hash_end = url.length();
-                result.hash = url.substr(hash_pos + 5, hash_end - hash_pos - 5);
-            }
-        }
-
-        return result;
-    }
-
     bool is_available() override {
         return true; // Mock总是可用
     }
@@ -292,10 +269,6 @@ TEST_F(SearchIntegrationTest, SearchToDownloadIntegration) {
     // 在实际实现中，这里会启动下载
     // auto task = engine.start_download(download_url, options);
 
-    // 验证URL有效性
-    search_manager.register_provider(std::make_unique<MockSearchProvider>("Validator"));
-    auto& provider = *(static_cast<MockSearchProvider*>(search_manager.get_providers()[0].get()));
-    EXPECT_TRUE(provider.validate_url(download_url));
 }
 
 // 测试配置文件热重载
@@ -356,8 +329,6 @@ TEST_F(SearchIntegrationTest, ErrorHandling) {
             throw std::runtime_error("Search failed");
         }
 
-        bool validate_url(const std::string& url) override { return false; }
-        SearchResult get_details(const std::string& url) override { return {}; }
         bool is_available() override { return false; }
     };
 
@@ -399,8 +370,6 @@ TEST_F(SearchIntegrationTest, PerformanceLargeResultHandling) {
             return results;
         }
 
-        bool validate_url(const std::string& url) override { return true; }
-        SearchResult get_details(const std::string& url) override { return {}; }
         bool is_available() override { return true; }
     };
 

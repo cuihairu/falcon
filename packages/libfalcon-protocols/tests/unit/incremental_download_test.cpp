@@ -7,6 +7,7 @@
 
 #include <gtest/gtest.h>
 #include <falcon/protocols/incremental_download.hpp>
+#include <falcon/detail/injection.hpp>
 #include <falcon/types.hpp>
 #include <filesystem>
 #include <fstream>
@@ -982,3 +983,43 @@ TEST_F(IncrementalDownloadTest, DownloadChangedRangeShortServerFailsCleanly) {
     EXPECT_FALSE(downloader.downloadChanged(diff, out_path));
     EXPECT_FALSE(std::filesystem::exists(out_path));
 }
+
+#if defined(FALCON_FAILURE_INJECTION)
+
+// calculateHash 的 EVP 防御链注入：哈希计算失败返回空串 → 校验失败收口
+// （正确哈希在注入前生成；注入后本地哈希恒空 → 与期望不匹配）
+
+TEST_F(IncrementalDownloadTest, InjectedHashInitFailureFailsVerify) {
+    IncrementalDownloader downloader;
+    std::string filePath = createTestFile("inj_init.bin", 1024);
+    auto chunks = downloader.generateHashList(filePath, 2048);
+    ASSERT_FALSE(chunks.empty());
+
+    ::falcon::detail::ScopedInjection guard(
+        ::falcon::detail::InjectPoint::IncrementalHashInit);
+    EXPECT_FALSE(downloader.verifyFile(filePath, chunks[0].hash));
+}
+
+TEST_F(IncrementalDownloadTest, InjectedHashUpdateFailureFailsVerify) {
+    IncrementalDownloader downloader;
+    std::string filePath = createTestFile("inj_update.bin", 1024);
+    auto chunks = downloader.generateHashList(filePath, 2048);
+    ASSERT_FALSE(chunks.empty());
+
+    ::falcon::detail::ScopedInjection guard(
+        ::falcon::detail::InjectPoint::IncrementalHashUpdate);
+    EXPECT_FALSE(downloader.verifyFile(filePath, chunks[0].hash));
+}
+
+TEST_F(IncrementalDownloadTest, InjectedHashFinalFailureFailsVerify) {
+    IncrementalDownloader downloader;
+    std::string filePath = createTestFile("inj_final.bin", 1024);
+    auto chunks = downloader.generateHashList(filePath, 2048);
+    ASSERT_FALSE(chunks.empty());
+
+    ::falcon::detail::ScopedInjection guard(
+        ::falcon::detail::InjectPoint::IncrementalHashFinal);
+    EXPECT_FALSE(downloader.verifyFile(filePath, chunks[0].hash));
+}
+
+#endif  // FALCON_FAILURE_INJECTION

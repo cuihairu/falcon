@@ -6,6 +6,7 @@
  */
 
 #include <falcon/drives/resource_search.hpp>
+#include <falcon/detail/injection.hpp>
 #include <falcon/logger.hpp>
 #include <curl/curl.h>
 #ifdef HAVE_NLOHMANN_JSON
@@ -146,21 +147,6 @@ std::vector<SearchResult> parse_html_by_selectors(const std::string& html,
     return results;
 }
 
-/// URL 前缀白名单校验（ISearchProvider::validate_url 的实现逻辑）
-bool validate_url(const std::string& url) {
-    if (url.empty()) return false;
-
-    // 检查URL格式
-    if (url.find("magnet:") == 0 ||
-        url.find("http:") == 0 ||
-        url.find("https:") == 0 ||
-        url.find("ftp:") == 0) {
-        return true;
-    }
-
-    return false;
-}
-
 std::string url_decode(const std::string& str) {
     std::string result;
     for (size_t i = 0; i < str.size(); ++i) {
@@ -220,7 +206,11 @@ static size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::stri
 class WebCrawler {
 public:
     WebCrawler() {
-        curl_ = curl_easy_init();
+        // 注入命中时短路真实调用，避免已创建句柄在 throw 路径泄漏
+        curl_ = ::falcon::detail::inject_failure(
+                    ::falcon::detail::InjectPoint::CurlEasyInit)
+                    ? nullptr
+                    : curl_easy_init();
         if (!curl_) {
             throw std::runtime_error("Failed to initialize CURL");
         }
@@ -362,22 +352,6 @@ public:
 
         FALCON_LOG_DEBUG_STREAM("Found " << results.size() << " results from " << config_.name);
         return results;
-    }
-
-    bool validate_url(const std::string& url) override {
-        return detail::validate_url(url);
-    }
-
-    SearchResult get_details(const std::string& url) override {
-        SearchResult result;
-        result.url = url;
-
-        // 对于magnet链接，解析基本信息
-        if (url.find("magnet:") == 0) {
-            result = detail::parse_magnet_link(url);
-        }
-
-        return result;
     }
 
     bool is_available() override {

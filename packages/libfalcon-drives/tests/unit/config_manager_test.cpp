@@ -908,4 +908,86 @@ TEST(ConfigManagerTest, UpdateFailsWhenConfigsIsAView) {
     EXPECT_FALSE(cm.update_cloud_config("alpha", make_config("alpha", "s3", "AK", "SK")));
 }
 
-#endif
+#endif  // FALCON_ENABLE_CONFIG_MANAGER
+
+#if defined(FALCON_FAILURE_INJECTION)
+
+#include <falcon/detail/injection.hpp>
+
+// ============================================================================
+// 故障注入：AES-256-GCM 加解密 EVP 防御链（正常执行不可达的 OOM 路径）
+// ============================================================================
+
+namespace {
+
+/// 加密侧注入：save_cloud_config 内 AES256GCM::encrypt 命中注入点即失败
+void test_encrypt_injection(const char* prefix,
+                            falcon::detail::InjectPoint point) {
+    auto base = std::filesystem::temp_directory_path();
+    auto dir = base / (prefix + std::to_string(
+        static_cast<unsigned long long>(
+            std::chrono::steady_clock::now().time_since_epoch().count())));
+    std::filesystem::create_directories(dir);
+    const auto db = (dir / "config.db").string();
+
+    falcon::ConfigManager cm;
+    ASSERT_TRUE(cm.initialize(db, "Master123!"));
+    auto cfg = make_config("inj", "s3", "AK", "SK");
+    {
+        falcon::detail::ScopedInjection guard(point);
+        EXPECT_FALSE(cm.save_cloud_config(cfg));
+    }
+    // 注入清除后恢复
+    EXPECT_TRUE(cm.save_cloud_config(cfg));
+}
+
+}  // namespace
+
+TEST(ConfigManagerInjectionTest, EncryptCtxNewFailureFailsSave) {
+    test_encrypt_injection("falcon_cfg_inj_a_",
+                           falcon::detail::InjectPoint::ConfigEncryptCtxNew);
+}
+
+TEST(ConfigManagerInjectionTest, EncryptInitFailureFailsSave) {
+    test_encrypt_injection("falcon_cfg_inj_b_",
+                           falcon::detail::InjectPoint::ConfigEncryptInit);
+}
+
+TEST(ConfigManagerInjectionTest, EncryptUpdateFailureFailsSave) {
+    test_encrypt_injection("falcon_cfg_inj_c_",
+                           falcon::detail::InjectPoint::ConfigEncryptUpdate);
+}
+
+TEST(ConfigManagerInjectionTest, EncryptFinalFailureFailsSave) {
+    test_encrypt_injection("falcon_cfg_inj_d_",
+                           falcon::detail::InjectPoint::ConfigEncryptFinal);
+}
+
+TEST(ConfigManagerInjectionTest, DecryptFailuresYieldEmptyConfig) {
+    auto dir = unique_temp_dir("falcon_cfg_inj_e_");
+    const auto db = (dir / "config.db").string();
+
+    falcon::ConfigManager cm;
+    ASSERT_TRUE(cm.initialize(db, "Master123!"));
+    ASSERT_TRUE(cm.save_cloud_config(make_config("inj-e", "s3", "AKIA", "SK")));
+
+    // 重新初始化同一库，读取走解密路径
+    falcon::ConfigManager cm2;
+    ASSERT_TRUE(cm2.initialize(db, "Master123!"));
+
+    const falcon::detail::InjectPoint points[] = {
+        falcon::detail::InjectPoint::ConfigDecryptCtxNew,
+        falcon::detail::InjectPoint::ConfigDecryptInit,
+        falcon::detail::InjectPoint::ConfigDecryptSetTag,
+        falcon::detail::InjectPoint::ConfigDecryptUpdate,
+    };
+    for (const auto point : points) {
+        falcon::CloudStorageConfig cfg{};
+        falcon::detail::ScopedInjection guard(point);
+        // 解密失败：读取报失败或字段为空串（密文不可恢复）
+        const bool ok = cm2.get_cloud_config("inj-e", cfg);
+        EXPECT_TRUE(!ok || cfg.access_key.empty()) << "point=" << static_cast<int>(point);
+    }
+}
+
+#endif  // FALCON_FAILURE_INJECTION

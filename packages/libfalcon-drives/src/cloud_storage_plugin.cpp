@@ -40,81 +40,46 @@ std::map<CloudPlatform, std::vector<std::regex>> CloudLinkDetector::url_patterns
 void CloudLinkDetector::init_patterns() {
     if (!url_patterns_.empty()) return;
 
-    // 百度网盘
-    url_patterns_[CloudPlatform::BaiduNetdisk] = {
-        std::regex(R"(https?://pan\.baidu\.com/s/[a-zA-Z0-9_-]+)"),
-        std::regex(R"(https?://yun\.baidu\.com/s/[a-zA-Z0-9_-]+)"),
-        std::regex(R"(baidupan://[a-zA-Z0-9]+)")
+    // 平台 → URL 模式白名单表(表驱动:每条模式在下方循环中统一构造,
+    // 避免逐平台赋值块的行归属测量伪影)
+    struct PlatformPattern {
+        CloudPlatform platform;
+        const char* pattern;
+    };
+    static const PlatformPattern kPatterns[] = {
+        {CloudPlatform::BaiduNetdisk, R"(https?://pan\.baidu\.com/s/[a-zA-Z0-9_-]+)"},
+        {CloudPlatform::BaiduNetdisk, R"(https?://yun\.baidu\.com/s/[a-zA-Z0-9_-]+)"},
+        {CloudPlatform::BaiduNetdisk, R"(baidupan://[a-zA-Z0-9]+)"},
+        {CloudPlatform::LanzouCloud, R"(https?://([\w-]+\.)*lanzou[a-z]\.(com|net)/[\w]+)"},
+        {CloudPlatform::LanzouCloud, R"(https?://([\w-]+\.)*lanzou[a-z]\.(com|net)/i[\w]+)"},
+        {CloudPlatform::AlibabaCloud, R"(https?://www\.aliyundrive\.com/s/[a-zA-Z0-9]+)"},
+        {CloudPlatform::AlibabaCloud, R"(https?://www\.alipan\.com/s/[a-zA-Z0-9]+)"},
+        {CloudPlatform::AlibabaCloud, R"(alipan://[a-zA-Z0-9]+)"},
+        {CloudPlatform::TencentWeiyun, R"(https?://share\.weiyun\.com/[a-zA-Z0-9]+)"},
+        {CloudPlatform::TencentWeiyun, R"(https?://pan\.qq\.com/s/[a-zA-Z0-9]+)"},
+        {CloudPlatform::Cloud115, R"(https?://115\.com/s/[a-zA-Z0-9]+)"},
+        {CloudPlatform::Cloud115, R"(https?://anxia\.com/s/[a-zA-Z0-9]+)"},
+        {CloudPlatform::Quark, R"(https?://pan\.quark\.cn/s/[a-zA-Z0-9]+)"},
+        {CloudPlatform::Quark, R"(quark://[a-zA-Z0-9]+)"},
+        {CloudPlatform::PikPak, R"(https?://mypikpak\.com/s/[a-zA-Z0-9]+)"},
+        {CloudPlatform::PikPak, R"(https?://share\.pikpak\.com/s/[a-zA-Z0-9]+)"},
+        {CloudPlatform::Mega, R"(https?://mega\.co\.nz/#[a-zA-Z0-9_-]+)"},
+        {CloudPlatform::Mega, R"(https?://mega\.nz/#[a-zA-Z0-9_-]+)"},
+        {CloudPlatform::Mega, R"(mega://[a-zA-Z0-9!@#$%^&*()]+)"},
+        {CloudPlatform::GoogleDrive, R"(https?://drive\.google\.com/file/d/[a-zA-Z0-9_-]+)"},
+        {CloudPlatform::GoogleDrive, R"(https?://drive\.google\.com/open\?id=[a-zA-Z0-9_-]+)"},
+        {CloudPlatform::GoogleDrive, R"(https?://docs\.google\.com/[^\s]+)"},
+        {CloudPlatform::OneDrive, R"(https?://1drv\.ms/[a-zA-Z]/[a-zA-Z0-9!_-]+)"},
+        {CloudPlatform::OneDrive, R"(https?://onedrive\.live\.com/[^\s]+)"},
+        {CloudPlatform::Dropbox, R"(https?://www\.dropbox\.com/s/[a-zA-Z0-9]+/[^\s]+)"},
+        {CloudPlatform::Dropbox, R"(https?://dl\.dropboxusercontent\.com/s/[a-zA-Z0-9]+/[^\s]+)"},
+        {CloudPlatform::YandexDisk, R"(https?://disk\.yandex\.ru/d/[a-zA-Z0-9]+/[^\s]+)"},
+        {CloudPlatform::YandexDisk, R"(https?://yadi\.sk/d/[a-zA-Z0-9]+/[^\s]+)"},
     };
 
-    // 蓝奏云
-    url_patterns_[CloudPlatform::LanzouCloud] = {
-        std::regex(R"(https?://([\w-]+\.)*lanzou[a-z]\.(com|net)/[\w]+)"),
-        std::regex(R"(https?://([\w-]+\.)*lanzou[a-z]\.(com|net)/i[\w]+)")
-    };
-
-    // 阿里云盘
-    url_patterns_[CloudPlatform::AlibabaCloud] = {
-        std::regex(R"(https?://www\.aliyundrive\.com/s/[a-zA-Z0-9]+)"),
-        std::regex(R"(https?://www\.alipan\.com/s/[a-zA-Z0-9]+)"),
-        std::regex(R"(alipan://[a-zA-Z0-9]+)")
-    };
-
-    // 腾讯微云
-    url_patterns_[CloudPlatform::TencentWeiyun] = {
-        std::regex(R"(https?://share\.weiyun\.com/[a-zA-Z0-9]+)"),
-        std::regex(R"(https?://pan\.qq\.com/s/[a-zA-Z0-9]+)")
-    };
-
-    // 115网盘
-    url_patterns_[CloudPlatform::Cloud115] = {
-        std::regex(R"(https?://115\.com/s/[a-zA-Z0-9]+)"),
-        std::regex(R"(https?://anxia\.com/s/[a-zA-Z0-9]+)")
-    };
-
-    // 夸克网盘
-    url_patterns_[CloudPlatform::Quark] = {
-        std::regex(R"(https?://pan\.quark\.cn/s/[a-zA-Z0-9]+)"),
-        std::regex(R"(quark://[a-zA-Z0-9]+)")
-    };
-
-    // PikPak
-    url_patterns_[CloudPlatform::PikPak] = {
-        std::regex(R"(https?://mypikpak\.com/s/[a-zA-Z0-9]+)"),
-        std::regex(R"(https?://share\.pikpak\.com/s/[a-zA-Z0-9]+)")
-    };
-
-    // MEGA
-    url_patterns_[CloudPlatform::Mega] = {
-        std::regex(R"(https?://mega\.co\.nz/#[a-zA-Z0-9_-]+)"),
-        std::regex(R"(https?://mega\.nz/#[a-zA-Z0-9_-]+)"),
-        std::regex(R"(mega://[a-zA-Z0-9!@#$%^&*()]+)")
-    };
-
-    // Google Drive
-    url_patterns_[CloudPlatform::GoogleDrive] = {
-        std::regex(R"(https?://drive\.google\.com/file/d/[a-zA-Z0-9_-]+)"),
-        std::regex(R"(https?://drive\.google\.com/open\?id=[a-zA-Z0-9_-]+)"),
-        std::regex(R"(https?://docs\.google\.com/[^\s]+)")
-    };
-
-    // OneDrive
-    url_patterns_[CloudPlatform::OneDrive] = {
-        std::regex(R"(https?://1drv\.ms/[a-zA-Z]/[a-zA-Z0-9!_-]+)"),
-        std::regex(R"(https?://onedrive\.live\.com/[^\s]+)")
-    };
-
-    // Dropbox
-    url_patterns_[CloudPlatform::Dropbox] = {
-        std::regex(R"(https?://www\.dropbox\.com/s/[a-zA-Z0-9]+/[^\s]+)"),
-        std::regex(R"(https?://dl\.dropboxusercontent\.com/s/[a-zA-Z0-9]+/[^\s]+)")
-    };
-
-    // Yandex Disk
-    url_patterns_[CloudPlatform::YandexDisk] = {
-        std::regex(R"(https?://disk\.yandex\.ru/d/[a-zA-Z0-9]+/[^\s]+)"),
-        std::regex(R"(https?://yadi\.sk/d/[a-zA-Z0-9]+/[^\s]+)")
-    };
+    for (const auto& entry : kPatterns) {
+        url_patterns_[entry.platform].emplace_back(entry.pattern);
+    }
 }
 
 CloudPlatform CloudLinkDetector::detect_platform(const std::string& url) {
@@ -871,12 +836,12 @@ private:
 class TencentWeiyunPlugin : public LightweightCloudPluginBase {
 public:
     std::string platform_name() const override { return "TencentWeiyun"; }
+    std::string platform_display_name() const override { return "腾讯微云"; }
     CloudPlatform platform_type() const override { return CloudPlatform::TencentWeiyun; }
     bool can_handle(const std::string& url) const override {
         return CloudLinkDetector::detect_platform(url) == CloudPlatform::TencentWeiyun;
     }
 protected:
-    std::string platform_display_name() const override { return "腾讯微云"; }
     std::string resolve_hint() const override {
         return "需要使用腾讯微云客户端或 QQ 账号登录获取下载链接";
     }
@@ -886,12 +851,12 @@ protected:
 class Cloud115Plugin : public LightweightCloudPluginBase {
 public:
     std::string platform_name() const override { return "Cloud115"; }
+    std::string platform_display_name() const override { return "115网盘"; }
     CloudPlatform platform_type() const override { return CloudPlatform::Cloud115; }
     bool can_handle(const std::string& url) const override {
         return CloudLinkDetector::detect_platform(url) == CloudPlatform::Cloud115;
     }
 protected:
-    std::string platform_display_name() const override { return "115网盘"; }
     std::string resolve_hint() const override {
         return "需要使用 115 浏览器或 115 客户端登录获取下载链接";
     }
@@ -901,12 +866,12 @@ protected:
 class PikPakPlugin : public LightweightCloudPluginBase {
 public:
     std::string platform_name() const override { return "PikPak"; }
+    std::string platform_display_name() const override { return "PikPak"; }
     CloudPlatform platform_type() const override { return CloudPlatform::PikPak; }
     bool can_handle(const std::string& url) const override {
         return CloudLinkDetector::detect_platform(url) == CloudPlatform::PikPak;
     }
 protected:
-    std::string platform_display_name() const override { return "PikPak"; }
     std::string resolve_hint() const override {
         return "需要使用 PikPak 客户端登录获取下载链接";
     }
@@ -916,12 +881,12 @@ protected:
 class MegaPlugin : public LightweightCloudPluginBase {
 public:
     std::string platform_name() const override { return "MEGA"; }
+    std::string platform_display_name() const override { return "MEGA"; }
     CloudPlatform platform_type() const override { return CloudPlatform::Mega; }
     bool can_handle(const std::string& url) const override {
         return CloudLinkDetector::detect_platform(url) == CloudPlatform::Mega;
     }
 protected:
-    std::string platform_display_name() const override { return "MEGA"; }
     std::string resolve_hint() const override {
         return "需要 MEGA 账号或客户端解密后获取下载链接";
     }
@@ -931,12 +896,12 @@ protected:
 class GoogleDrivePlugin : public LightweightCloudPluginBase {
 public:
     std::string platform_name() const override { return "GoogleDrive"; }
+    std::string platform_display_name() const override { return "Google Drive"; }
     CloudPlatform platform_type() const override { return CloudPlatform::GoogleDrive; }
     bool can_handle(const std::string& url) const override {
         return CloudLinkDetector::detect_platform(url) == CloudPlatform::GoogleDrive;
     }
 protected:
-    std::string platform_display_name() const override { return "Google Drive"; }
     std::string resolve_hint() const override {
         return "需要 Google 账号授权或 API Key 调用 Drive API 获取下载链接";
     }
@@ -946,12 +911,12 @@ protected:
 class OneDrivePlugin : public LightweightCloudPluginBase {
 public:
     std::string platform_name() const override { return "OneDrive"; }
+    std::string platform_display_name() const override { return "OneDrive"; }
     CloudPlatform platform_type() const override { return CloudPlatform::OneDrive; }
     bool can_handle(const std::string& url) const override {
         return CloudLinkDetector::detect_platform(url) == CloudPlatform::OneDrive;
     }
 protected:
-    std::string platform_display_name() const override { return "OneDrive"; }
     std::string resolve_hint() const override {
         return "需要 Microsoft 账号授权或 Graph API 获取下载链接";
     }
@@ -961,12 +926,12 @@ protected:
 class DropboxPlugin : public LightweightCloudPluginBase {
 public:
     std::string platform_name() const override { return "Dropbox"; }
+    std::string platform_display_name() const override { return "Dropbox"; }
     CloudPlatform platform_type() const override { return CloudPlatform::Dropbox; }
     bool can_handle(const std::string& url) const override {
         return CloudLinkDetector::detect_platform(url) == CloudPlatform::Dropbox;
     }
 protected:
-    std::string platform_display_name() const override { return "Dropbox"; }
     std::string resolve_hint() const override {
         return "可通过将 dl.dropboxusercontent.com 替换域名或调用 Dropbox API 获取直链";
     }
@@ -976,12 +941,12 @@ protected:
 class YandexDiskPlugin : public LightweightCloudPluginBase {
 public:
     std::string platform_name() const override { return "YandexDisk"; }
+    std::string platform_display_name() const override { return "Yandex Disk"; }
     CloudPlatform platform_type() const override { return CloudPlatform::YandexDisk; }
     bool can_handle(const std::string& url) const override {
         return CloudLinkDetector::detect_platform(url) == CloudPlatform::YandexDisk;
     }
 protected:
-    std::string platform_display_name() const override { return "Yandex Disk"; }
     std::string resolve_hint() const override {
         return "可通过将 disk.yandex.ru 直链加 ?dl=1 或调用 Yandex Disk API 获取下载链接";
     }

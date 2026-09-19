@@ -6,6 +6,7 @@
  */
 
 #include "ftp_handler.hpp"
+#include <falcon/detail/injection.hpp>
 
 #include <falcon/exceptions.hpp>
 #include <falcon/logger.hpp>
@@ -110,7 +111,10 @@ bool FtpHandler::can_handle(const std::string& url) const {
 }
 
 FileInfo FtpHandler::get_file_info(const std::string& url, const DownloadOptions& options) {
-    CURL* curl = curl_easy_init();
+    // 注入命中时短路真实调用，避免已创建句柄在 throw 路径泄漏
+    CURL* curl = detail::inject_failure(detail::InjectPoint::CurlEasyInit)
+                     ? nullptr
+                     : curl_easy_init();
     if (!curl) {
         throw NetworkException("Failed to initialize CURL");
     }
@@ -178,7 +182,11 @@ void FtpHandler::download(DownloadTask::Ptr task, IEventListener* listener) {
             throw FileIOException("Failed to open file: " + temp_path);
         }
 
-        CURL* curl = curl_easy_init();
+        // 注入命中时短路真实调用，避免已创建句柄在 throw 路径泄漏
+        CURL* curl =
+            detail::inject_failure(detail::InjectPoint::CurlEasyInit)
+                ? nullptr
+                : curl_easy_init();
         if (!curl) {
             throw NetworkException("Failed to initialize CURL");
         }

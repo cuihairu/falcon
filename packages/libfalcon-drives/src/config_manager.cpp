@@ -6,6 +6,7 @@
  */
 
 #include <falcon/drives/config_manager.hpp>
+#include <falcon/detail/injection.hpp>
 #include <falcon/logger.hpp>
 #include <sqlite3.h>
 #include <openssl/aes.h>
@@ -81,11 +82,15 @@ public:
         SHA256_Update(&sha256, key.c_str(), key.length());
         SHA256_Final(derived_key, &sha256);
 
-        // 加密
-        EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+        // 加密（注入命中时短路真实调用，避免已创建 ctx 在失败路径泄漏）
+        EVP_CIPHER_CTX* ctx =
+            detail::inject_failure(detail::InjectPoint::ConfigEncryptCtxNew)
+                ? nullptr
+                : EVP_CIPHER_CTX_new();
         if (!ctx) return "";
 
-        if (EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, derived_key, iv) != 1) {
+        if (detail::inject_failure(detail::InjectPoint::ConfigEncryptInit) ||
+            EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, derived_key, iv) != 1) {
             EVP_CIPHER_CTX_free(ctx);
             return "";
         }
@@ -94,7 +99,8 @@ public:
         std::string ciphertext;
         ciphertext.resize(plaintext.size() + 16); // GCM tag
 
-        if (EVP_EncryptUpdate(ctx, (unsigned char*)&ciphertext[0], &len,
+        if (detail::inject_failure(detail::InjectPoint::ConfigEncryptUpdate) ||
+            EVP_EncryptUpdate(ctx, (unsigned char*)&ciphertext[0], &len,
                              (unsigned char*)plaintext.c_str(), plaintext.length()) != 1) {
             EVP_CIPHER_CTX_free(ctx);
             return "";
@@ -102,7 +108,8 @@ public:
 
         int ciphertext_len = len;
 
-        if (EVP_EncryptFinal_ex(ctx, (unsigned char*)&ciphertext[len], &len) != 1) {
+        if (detail::inject_failure(detail::InjectPoint::ConfigEncryptFinal) ||
+            EVP_EncryptFinal_ex(ctx, (unsigned char*)&ciphertext[len], &len) != 1) {
             EVP_CIPHER_CTX_free(ctx);
             return "";
         }
@@ -141,17 +148,22 @@ public:
         SHA256_Update(&sha256, key.c_str(), key.length());
         SHA256_Final(derived_key, &sha256);
 
-        // 解密
-        EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+        // 解密（注入命中时短路真实调用，避免已创建 ctx 在失败路径泄漏）
+        EVP_CIPHER_CTX* ctx =
+            detail::inject_failure(detail::InjectPoint::ConfigDecryptCtxNew)
+                ? nullptr
+                : EVP_CIPHER_CTX_new();
         if (!ctx) return "";
 
-        if (EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, derived_key, iv) != 1) {
+        if (detail::inject_failure(detail::InjectPoint::ConfigDecryptInit) ||
+            EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, derived_key, iv) != 1) {
             EVP_CIPHER_CTX_free(ctx);
             return "";
         }
 
         // 设置tag
-        if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, 16, (void*)tag) != 1) {
+        if (detail::inject_failure(detail::InjectPoint::ConfigDecryptSetTag) ||
+            EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, 16, (void*)tag) != 1) {
             EVP_CIPHER_CTX_free(ctx);
             return "";
         }
@@ -160,7 +172,8 @@ public:
         plaintext.resize(enc_len);
         int len;
 
-        if (EVP_DecryptUpdate(ctx, (unsigned char*)&plaintext[0], &len,
+        if (detail::inject_failure(detail::InjectPoint::ConfigDecryptUpdate) ||
+            EVP_DecryptUpdate(ctx, (unsigned char*)&plaintext[0], &len,
                              enc_data, enc_len) != 1) {
             EVP_CIPHER_CTX_free(ctx);
             return "";
@@ -354,6 +367,13 @@ public:
         // 加密敏感信息
         std::string encrypted_access = AES256GCM::encrypt(config.access_key, master_password_);
         std::string encrypted_secret = AES256GCM::encrypt(config.secret_key, master_password_);
+
+        // 加密失败（EVP 防御命中，正常仅内存耗尽可达）绝不落库：空密文
+        // 写入即静默丢弃用户凭据，且后续读取恒为空
+        if (encrypted_access.empty() || encrypted_secret.empty()) {
+            FALCON_LOG_ERROR_STREAM("配置加密失败: " << config.name);
+            return false;
+        }
 
         // 序列化额外配置
         std::string extra_json;
@@ -611,6 +631,13 @@ public:
 
         std::string encrypted_access = AES256GCM::encrypt(config.access_key, master_password_);
         std::string encrypted_secret = AES256GCM::encrypt(config.secret_key, master_password_);
+
+        // 加密失败（EVP 防御命中，正常仅内存耗尽可达）绝不落库：空密文
+        // 写入即静默丢弃用户凭据，且后续读取恒为空
+        if (encrypted_access.empty() || encrypted_secret.empty()) {
+            FALCON_LOG_ERROR_STREAM("配置加密失败: " << config.name);
+            return false;
+        }
 
         std::string extra_json;
         if (!config.extra.empty()) {

@@ -9,6 +9,7 @@
 #ifdef __linux__
 
 #include <falcon/protocols/net/event_poll.hpp>
+#include <falcon/detail/injection.hpp>
 #include <falcon/logger.hpp>
 
 #include <sys/epoll.h>
@@ -27,7 +28,10 @@ EPollEventPoll::EPollEventPoll(int max_events)
     : epoll_fd_(-1)
     , max_events_(max_events)
 {
-    epoll_fd_ = epoll_create1(EPOLL_CLOEXEC);
+    epoll_fd_ = ::falcon::detail::inject_failure(
+                    ::falcon::detail::InjectPoint::EpollCreate1)
+                    ? -1
+                    : epoll_create1(EPOLL_CLOEXEC);
     if (epoll_fd_ < 0) {
         set_error("epoll_create1 失败: " + std::string(strerror(errno)));
         return;
@@ -147,8 +151,11 @@ int EPollEventPoll::poll(int timeout_ms) {
     // 分配事件数组
     std::vector<struct epoll_event> epoll_events(static_cast<std::size_t>(max_events_));
 
-    int nfds = epoll_wait(epoll_fd_, epoll_events.data(),
-                         max_events_, timeout_ms);
+    int nfds = ::falcon::detail::inject_failure(
+                   ::falcon::detail::InjectPoint::EpollWaitFail)
+                   ? -1
+                   : epoll_wait(epoll_fd_, epoll_events.data(),
+                                max_events_, timeout_ms);
     if (nfds < 0) {
         if (errno == EINTR) {
             return 0;  // 被信号中断，不算错误

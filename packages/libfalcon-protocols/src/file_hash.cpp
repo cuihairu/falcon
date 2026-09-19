@@ -6,6 +6,7 @@
  */
 
 #include <falcon/protocols/file_hash.hpp>
+#include <falcon/detail/injection.hpp>
 #include <falcon/logger.hpp>
 
 #include <fstream>
@@ -81,7 +82,11 @@ std::string FileHasher::calculate_streaming(const std::string& file_path,
         default: md_type = "";
     }
 
-    EVP_MD_CTX* mdctx = EVP_MD_CTX_new();
+    // 注入命中时短路真实调用，避免已创建 ctx 在失败路径泄漏
+    EVP_MD_CTX* mdctx =
+        detail::inject_failure(detail::InjectPoint::FileHashStreamCtxNew)
+            ? nullptr
+            : EVP_MD_CTX_new();
     if (!mdctx) {
         FALCON_LOG_ERROR_STREAM("创建 EVP_MD_CTX 失败");
         return "";
@@ -92,7 +97,8 @@ std::string FileHasher::calculate_streaming(const std::string& file_path,
         EVP_MD_CTX_free(mdctx);
         return "";
     }
-    if (EVP_DigestInit_ex(mdctx, md, nullptr) != 1) {
+    if (detail::inject_failure(detail::InjectPoint::FileHashStreamDigestInit) ||
+        EVP_DigestInit_ex(mdctx, md, nullptr) != 1) {
         FALCON_LOG_ERROR_STREAM("初始化哈希失败");
         EVP_MD_CTX_free(mdctx);
         return "";
@@ -103,7 +109,8 @@ std::string FileHasher::calculate_streaming(const std::string& file_path,
                      static_cast<std::streamsize>(buffer.size())) ||
            file.gcount() > 0) {
         const std::size_t bytes_read = static_cast<std::size_t>(file.gcount());
-        if (EVP_DigestUpdate(mdctx, buffer.data(), bytes_read) != 1) {
+        if (detail::inject_failure(detail::InjectPoint::FileHashStreamDigestUpdate) ||
+            EVP_DigestUpdate(mdctx, buffer.data(), bytes_read) != 1) {
             FALCON_LOG_ERROR_STREAM("更新哈希失败");
             EVP_MD_CTX_free(mdctx);
             return "";
@@ -113,7 +120,8 @@ std::string FileHasher::calculate_streaming(const std::string& file_path,
 
     unsigned char hash_value[EVP_MAX_MD_SIZE];
     unsigned int hash_len = 0;
-    if (EVP_DigestFinal_ex(mdctx, hash_value, &hash_len) != 1) {
+    if (detail::inject_failure(detail::InjectPoint::FileHashStreamDigestFinal) ||
+        EVP_DigestFinal_ex(mdctx, hash_value, &hash_len) != 1) {
         FALCON_LOG_ERROR_STREAM("完成哈希失败");
         EVP_MD_CTX_free(mdctx);
         return "";
@@ -154,8 +162,12 @@ std::string FileHasher::calculate(const char* data, std::size_t size,
         default: md_type = "";
     }
 
-    // 使用 OpenSSL 3.0 EVP API
-    EVP_MD_CTX* mdctx = EVP_MD_CTX_new();
+    // 使用 OpenSSL 3.0 EVP API（注入命中时短路真实调用，避免已创建
+    // ctx 在失败路径泄漏）
+    EVP_MD_CTX* mdctx =
+        detail::inject_failure(detail::InjectPoint::FileHashCalcCtxNew)
+            ? nullptr
+            : EVP_MD_CTX_new();
     if (!mdctx) {
         FALCON_LOG_ERROR_STREAM("创建 EVP_MD_CTX 失败");
         return "";
@@ -168,13 +180,15 @@ std::string FileHasher::calculate(const char* data, std::size_t size,
         return "";
     }
 
-    if (EVP_DigestInit_ex(mdctx, md, nullptr) != 1) {
+    if (detail::inject_failure(detail::InjectPoint::FileHashCalcDigestInit) ||
+        EVP_DigestInit_ex(mdctx, md, nullptr) != 1) {
         FALCON_LOG_ERROR_STREAM("初始化哈希失败");
         EVP_MD_CTX_free(mdctx);
         return "";
     }
 
-    if (EVP_DigestUpdate(mdctx, data, size) != 1) {
+    if (detail::inject_failure(detail::InjectPoint::FileHashCalcDigestUpdate) ||
+        EVP_DigestUpdate(mdctx, data, size) != 1) {
         FALCON_LOG_ERROR_STREAM("更新哈希失败");
         EVP_MD_CTX_free(mdctx);
         return "";
@@ -182,7 +196,8 @@ std::string FileHasher::calculate(const char* data, std::size_t size,
 
     unsigned char hash_value[EVP_MAX_MD_SIZE];
     unsigned int hash_len = 0;
-    if (EVP_DigestFinal_ex(mdctx, hash_value, &hash_len) != 1) {
+    if (detail::inject_failure(detail::InjectPoint::FileHashCalcDigestFinal) ||
+        EVP_DigestFinal_ex(mdctx, hash_value, &hash_len) != 1) {
         FALCON_LOG_ERROR_STREAM("完成哈希失败");
         EVP_MD_CTX_free(mdctx);
         return "";

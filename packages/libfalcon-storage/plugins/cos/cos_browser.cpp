@@ -6,6 +6,7 @@
  */
 
 #include <falcon/storage/cos_browser.hpp>
+#include <falcon/detail/injection.hpp>
 #include <falcon/storage/cloud_url_protocols.hpp>
 #include <falcon/logger.hpp>
 #include <curl/curl.h>
@@ -105,7 +106,11 @@ COSUrl COSUrlParser::parse(const std::string& url) {
  */
 class COSBrowser::Impl {
 public:
-    Impl() : curl_(curl_easy_init()) {
+    Impl() {
+        // 注入命中时短路真实调用，避免已创建句柄在 throw 路径泄漏
+        curl_ = detail::inject_failure(detail::InjectPoint::CurlEasyInit)
+                    ? nullptr
+                    : curl_easy_init();
         if (!curl_) {
             throw std::runtime_error("Failed to initialize CURL");
         }
@@ -483,26 +488,33 @@ public:
     }
 
     std::string sha256_hex(const std::string& data) {
-        // 使用 OpenSSL 3.0 EVP API
-        EVP_MD_CTX* mdctx = EVP_MD_CTX_new();
+        // 使用 OpenSSL 3.0 EVP API（注入命中时短路真实调用，避免已创建
+        // ctx 在失败路径泄漏）
+        EVP_MD_CTX* mdctx =
+            detail::inject_failure(detail::InjectPoint::CosShaCtxNew)
+                ? nullptr
+                : EVP_MD_CTX_new();
         if (!mdctx) {
             return "";
         }
 
         const EVP_MD* md = EVP_sha256();
-        if (EVP_DigestInit_ex(mdctx, md, nullptr) != 1) {
+        if (detail::inject_failure(detail::InjectPoint::CosShaDigestInit) ||
+            EVP_DigestInit_ex(mdctx, md, nullptr) != 1) {
             EVP_MD_CTX_free(mdctx);
             return "";
         }
 
-        if (EVP_DigestUpdate(mdctx, data.c_str(), data.length()) != 1) {
+        if (detail::inject_failure(detail::InjectPoint::CosShaDigestUpdate) ||
+            EVP_DigestUpdate(mdctx, data.c_str(), data.length()) != 1) {
             EVP_MD_CTX_free(mdctx);
             return "";
         }
 
         unsigned char hash[EVP_MAX_MD_SIZE];
         unsigned int hash_len = 0;
-        if (EVP_DigestFinal_ex(mdctx, hash, &hash_len) != 1) {
+        if (detail::inject_failure(detail::InjectPoint::CosShaDigestFinal) ||
+            EVP_DigestFinal_ex(mdctx, hash, &hash_len) != 1) {
             EVP_MD_CTX_free(mdctx);
             return "";
         }

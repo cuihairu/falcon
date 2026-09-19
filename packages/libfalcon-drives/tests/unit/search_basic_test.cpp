@@ -63,17 +63,6 @@ public:
         return results;
     }
 
-    bool validate_url(const std::string& url) override {
-        return !url.empty() && url.find("http") == 0;
-    }
-
-    SearchResult get_details(const std::string& url) override {
-        SearchResult result;
-        result.url = url;
-        result.source = name_;
-        return result;
-    }
-
     bool is_available() override {
         return true;
     }
@@ -232,26 +221,6 @@ TEST_F(SearchBasicTest, MultipleProviders) {
         sources.insert(result.source);
     }
     EXPECT_GT(sources.size(), 1);
-}
-
-// 测试URL验证
-TEST_F(SearchBasicTest, URLValidation) {
-    MockSearchProvider provider("Test");
-
-    EXPECT_TRUE(provider.validate_url("https://example.com/file.zip"));
-    EXPECT_TRUE(provider.validate_url("http://test.org/data.bin"));
-    EXPECT_FALSE(provider.validate_url(""));
-    EXPECT_FALSE(provider.validate_url("invalid-url"));
-}
-
-// 测试获取详细信息
-TEST_F(SearchBasicTest, GetDetails) {
-    MockSearchProvider provider("Test");
-    std::string url = "https://example.com/test.zip";
-
-    auto details = provider.get_details(url);
-    EXPECT_EQ(details.url, url);
-    EXPECT_EQ(details.source, "Test");
 }
 
 // 测试可用性检查

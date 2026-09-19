@@ -7,6 +7,7 @@
 
 #include <gtest/gtest.h>
 #include <falcon/protocols/file_hash.hpp>
+#include <falcon/detail/injection.hpp>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
@@ -1140,6 +1141,102 @@ TEST(FileHashTest, CalculateLargeFileLogsWarning) {
     EXPECT_FALSE(FileHasher::calculate(path, HashAlgorithm::MD5).empty());
     remove_test_file(path);
 }
+
+//==============================================================================
+// 故障注入:EVP 失败防御(仅测试构建编入注入点)
+//==============================================================================
+
+#if defined(FALCON_FAILURE_INJECTION) && \
+    (defined(FALCON_HAS_OPENSSL) || defined(FALCON_USE_OPENSSL))
+
+TEST(FileHashInjection, CalculateEvpDefenseChain) {
+    const std::string content = "falcon injection";
+    // 基准:未注入时的正常结果
+    const std::string good =
+        FileHasher::calculate(content.data(), content.size(), HashAlgorithm::MD5);
+    ASSERT_FALSE(good.empty());
+    // 逐个置位,验证四层 EVP 防御各自返回空串
+    {
+        detail::ScopedInjection guard(detail::InjectPoint::FileHashCalcCtxNew);
+        EXPECT_TRUE(FileHasher::calculate(content.data(), content.size(),
+                                          HashAlgorithm::MD5)
+                        .empty());
+    }
+    {
+        detail::ScopedInjection guard(
+            detail::InjectPoint::FileHashCalcDigestInit);
+        EXPECT_TRUE(FileHasher::calculate(content.data(), content.size(),
+                                          HashAlgorithm::MD5)
+                        .empty());
+    }
+    {
+        detail::ScopedInjection guard(
+            detail::InjectPoint::FileHashCalcDigestUpdate);
+        EXPECT_TRUE(FileHasher::calculate(content.data(), content.size(),
+                                          HashAlgorithm::MD5)
+                        .empty());
+    }
+    {
+        detail::ScopedInjection guard(
+            detail::InjectPoint::FileHashCalcDigestFinal);
+        EXPECT_TRUE(FileHasher::calculate(content.data(), content.size(),
+                                          HashAlgorithm::MD5)
+                        .empty());
+    }
+    // 注入清除后恢复正常
+    EXPECT_EQ(FileHasher::calculate(content.data(), content.size(),
+                                    HashAlgorithm::MD5),
+              good);
+}
+
+TEST(FileHashInjection, StreamingEvpDefenseChain) {
+    const std::string path =
+        create_test_file("inj_stream.bin", "falcon injection streaming");
+    {
+        detail::ScopedInjection guard(detail::InjectPoint::FileHashStreamCtxNew);
+        EXPECT_TRUE(
+            FileHasher::calculate_streaming(path, HashAlgorithm::MD5).empty());
+    }
+    {
+        detail::ScopedInjection guard(
+            detail::InjectPoint::FileHashStreamDigestInit);
+        EXPECT_TRUE(
+            FileHasher::calculate_streaming(path, HashAlgorithm::MD5).empty());
+    }
+    {
+        detail::ScopedInjection guard(
+            detail::InjectPoint::FileHashStreamDigestUpdate);
+        EXPECT_TRUE(
+            FileHasher::calculate_streaming(path, HashAlgorithm::MD5).empty());
+    }
+    {
+        detail::ScopedInjection guard(
+            detail::InjectPoint::FileHashStreamDigestFinal);
+        EXPECT_TRUE(
+            FileHasher::calculate_streaming(path, HashAlgorithm::MD5).empty());
+    }
+    // 注入清除后与内存版一致
+    EXPECT_FALSE(
+        FileHasher::calculate_streaming(path, HashAlgorithm::MD5).empty());
+    remove_test_file(path);
+}
+
+TEST(FileHashInjection, VerifyPathPropagatesInjectedFailure) {
+    // verify → calculate 注入失败:valid=false 且 calculated 为空
+    const std::string path = create_test_file("inj_verify.bin", "falcon");
+    const std::string good = FileHasher::calculate(path, HashAlgorithm::MD5);
+    ASSERT_FALSE(good.empty());
+    {
+        detail::ScopedInjection guard(
+            detail::InjectPoint::FileHashCalcDigestUpdate);
+        const HashResult r = FileHasher::verify(path, good, HashAlgorithm::MD5);
+        EXPECT_FALSE(r.valid);
+        EXPECT_TRUE(r.calculated.empty());
+    }
+    remove_test_file(path);
+}
+
+#endif  // FALCON_FAILURE_INJECTION && OpenSSL
 
 //==============================================================================
 // 主函数

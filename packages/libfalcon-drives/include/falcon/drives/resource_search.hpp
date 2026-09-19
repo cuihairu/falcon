@@ -89,20 +89,6 @@ public:
     virtual std::vector<SearchResult> search(const SearchQuery& query) = 0;
 
     /**
-     * @brief 验证搜索结果链接是否有效
-     * @param url 资源链接
-     * @return 是否有效
-     */
-    virtual bool validate_url(const std::string& url) = 0;
-
-    /**
-     * @brief 获取资源详细信息
-     * @param url 资源链接
-     * @return 详细信息
-     */
-    virtual SearchResult get_details(const std::string& url) = 0;
-
-    /**
      * @brief 检查搜索引擎是否可用
      */
     virtual bool is_available() = 0;
@@ -236,9 +222,6 @@ double calculate_confidence(const SearchResult& result);
 
 /// 人类可读大小文本解析（"1.5GB" 等单位后缀，无法解析返回 0）
 size_t parse_size(const std::string& size_str);
-
-/// URL 前缀白名单校验（magnet:/http:/https:/ftp:）
-bool validate_url(const std::string& url);
 
 /// magnet: 链接解析（btih 40 位十六进制哈希 + dn 显示名经 url_decode）
 SearchResult parse_magnet_link(const std::string& magnet_url);

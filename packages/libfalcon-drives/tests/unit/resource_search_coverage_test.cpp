@@ -39,7 +39,6 @@ using falcon::search::detail::parse_html_by_selectors;
 using falcon::search::detail::parse_magnet_link;
 using falcon::search::detail::parse_size;
 using falcon::search::detail::url_decode;
-using falcon::search::detail::validate_url;
 
 namespace {
 
@@ -366,17 +365,6 @@ public:
             throw std::runtime_error("provider failure: " + name_);
         }
         return results_;
-    }
-
-    bool validate_url(const std::string& url) override {
-        return url.find("magnet:") == 0 || url.find("http") == 0;
-    }
-
-    SearchResult get_details(const std::string& url) override {
-        SearchResult r;
-        r.url = url;
-        r.source = name_;
-        return r;
     }
 
     bool is_available() override { return available_; }
@@ -977,23 +965,8 @@ TEST_F(ResourceSearchCovNetTest, SearchUnavailableServerYieldsNoResults) {
 }
 
 // ============================================================================
-// detail 提升函数补充覆盖（validate_url / parse_magnet_link / url_decode）
+// detail 提升函数补充覆盖（parse_magnet_link / url_decode）
 // ============================================================================
-
-TEST(ResourceSearchCovDetailTest, ValidateUrlPrefixWhitelist) {
-    EXPECT_FALSE(validate_url(""));
-    EXPECT_TRUE(validate_url("magnet:?xt=urn:btih:" + std::string(40, 'a')));
-    EXPECT_TRUE(validate_url("http://example.com/file.iso"));
-    EXPECT_TRUE(validate_url("https://example.com/file.iso"));
-    EXPECT_TRUE(validate_url("ftp://ftp.example.com/file.iso"));
-
-    // 前缀白名单之外的 scheme 一律拒绝。
-    EXPECT_FALSE(validate_url("ed2k://|file|name|1024|deadbeef|/"));
-    EXPECT_FALSE(validate_url("thunder://QUFodHRw"));
-    // "https" 开头但非 "https:" 前缀同样拒绝。
-    EXPECT_FALSE(validate_url("httpsfake"));
-    EXPECT_FALSE(validate_url("plain-string"));
-}
 
 TEST(ResourceSearchCovDetailTest, ParseMagnetLinkExtractsHashAndDecodesName) {
     const std::string magnet =

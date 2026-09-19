@@ -6,6 +6,7 @@
  */
 
 #include <falcon/storage/kodo_browser.hpp>
+#include <falcon/detail/injection.hpp>
 #include <falcon/storage/cloud_url_protocols.hpp>
 #include <falcon/logger.hpp>
 #include <curl/curl.h>
@@ -73,7 +74,11 @@ KodoUrl KodoUrlParser::parse(const std::string& url) {
  */
 class KodoBrowser::Impl {
 public:
-    Impl() : curl_(curl_easy_init()) {
+    Impl() {
+        // 注入命中时短路真实调用，避免已创建句柄在 throw 路径泄漏
+        curl_ = detail::inject_failure(detail::InjectPoint::CurlEasyInit)
+                    ? nullptr
+                    : curl_easy_init();
         if (!curl_) {
             throw std::runtime_error("Failed to initialize CURL");
         }

@@ -10,6 +10,7 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#include <falcon/detail/injection.hpp>
 #include <falcon/download_engine.hpp>
 #include <falcon/download_task.hpp>
 
@@ -1629,4 +1630,32 @@ TEST_F(JsonRpcCoverageTest, GlobalOptionValueParseExceptionPath) {
         << parsed.dump();
 }
 
-} // namespace
+#if defined(FALCON_FAILURE_INJECTION)
+
+// socket() 创建失败：start 立即报 false，对象状态干净可安全 stop
+TEST(JsonRpcLifecycleTest, StartFailsWhenSocketCreationInjected) {
+    falcon::DownloadEngine engine;
+    falcon::daemon::rpc::JsonRpcServerConfig cfg;
+    cfg.listen_port = 0;
+    falcon::daemon::rpc::JsonRpcServer server(&engine, cfg);
+    ::falcon::detail::ScopedInjection guard(
+        ::falcon::detail::InjectPoint::RpcServerSocket);
+    EXPECT_FALSE(server.start());
+    server.stop();
+}
+
+// listen() 失败：bind 成功但监听失败，fd 收回、start 报 false
+TEST(JsonRpcLifecycleTest, StartFailsWhenListenInjected) {
+    falcon::DownloadEngine engine;
+    falcon::daemon::rpc::JsonRpcServerConfig cfg;
+    cfg.listen_port = 0;
+    falcon::daemon::rpc::JsonRpcServer server(&engine, cfg);
+    ::falcon::detail::ScopedInjection guard(
+        ::falcon::detail::InjectPoint::RpcServerListen);
+    EXPECT_FALSE(server.start());
+    server.stop();
+}
+
+#endif  // FALCON_FAILURE_INJECTION
+
+} // namespace} // namespace

@@ -8,6 +8,7 @@
 #include "rpc/websocket_rpc_client.hpp"
 
 #include "rpc/websocket_frame.hpp"
+#include <falcon/detail/injection.hpp>
 
 #include <cctype>
 #include <chrono>
@@ -84,6 +85,10 @@ static void set_recv_timeout_ms(int fd, int ms) {
 #endif
 
 static bool send_all(int fd, const std::string& data) {
+    if (::falcon::detail::inject_failure(
+            ::falcon::detail::InjectPoint::WsClientSendFail)) {
+        return false;
+    }
     std::size_t off = 0;
     while (off < data.size()) {
         const auto chunk_len = static_cast<

@@ -6,6 +6,7 @@
  */
 
 #include <falcon/protocols/incremental_download.hpp>
+#include <falcon/detail/injection.hpp>
 #include <falcon/logger.hpp>
 #include <fstream>
 #include <sstream>
@@ -212,12 +213,16 @@ std::string IncrementalDownloader::calculateHash(const std::string& data,
         return "";
     }
 
-    if (EVP_DigestInit_ex(ctx, md, nullptr) != 1) {
+    if ((::falcon::detail::inject_failure(
+             ::falcon::detail::InjectPoint::IncrementalHashInit) ||
+         EVP_DigestInit_ex(ctx, md, nullptr) != 1)) {
         EVP_MD_CTX_free(ctx);
         return "";
     }
 
-    if (EVP_DigestUpdate(ctx, data.c_str(), data.size()) != 1) {
+    if ((::falcon::detail::inject_failure(
+             ::falcon::detail::InjectPoint::IncrementalHashUpdate) ||
+         EVP_DigestUpdate(ctx, data.c_str(), data.size()) != 1)) {
         EVP_MD_CTX_free(ctx);
         return "";
     }
@@ -225,7 +230,9 @@ std::string IncrementalDownloader::calculateHash(const std::string& data,
     unsigned char hash[EVP_MAX_MD_SIZE];
     unsigned int hashLen = 0;
 
-    if (EVP_DigestFinal_ex(ctx, hash, &hashLen) != 1) {
+    if ((::falcon::detail::inject_failure(
+             ::falcon::detail::InjectPoint::IncrementalHashFinal) ||
+         EVP_DigestFinal_ex(ctx, hash, &hashLen) != 1)) {
         EVP_MD_CTX_free(ctx);
         return "";
     }

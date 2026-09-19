@@ -1186,6 +1186,44 @@ TEST(EventPollData, ActualDataTransfer) {
     CLOSE_SOCKET(server_fd);
 }
 
+#if defined(__linux__) && defined(FALCON_FAILURE_INJECTION)
+
+#include <falcon/detail/injection.hpp>
+
+#include <cerrno>
+
+// 注入用例：epoll 实例创建失败 → 全部操作走「实例未创建」防御
+TEST(EventPollTest, InjectedCreateFailureDisablesAllOps) {
+    ::falcon::detail::ScopedInjection guard(
+        ::falcon::detail::InjectPoint::EpollCreate1);
+    EPollEventPoll poller;
+    auto callback = [](int, int, void*) {};
+    EXPECT_FALSE(poller.add_event(0, static_cast<int>(IOEvent::READ), callback));
+    EXPECT_FALSE(poller.modify_event(0, static_cast<int>(IOEvent::READ)));
+    EXPECT_FALSE(poller.remove_event(0));
+    EXPECT_EQ(poller.poll(0), -1);
+}
+
+// 注入 epoll_wait 失败 + errno=EINTR：信号中断语义，poll 返回 0 不算错误
+TEST(EventPollTest, InjectedWaitEintrReturnsZero) {
+    EPollEventPoll poller;
+    errno = EINTR;
+    ::falcon::detail::ScopedInjection guard(
+        ::falcon::detail::InjectPoint::EpollWaitFail);
+    EXPECT_EQ(poller.poll(0), 0);
+}
+
+// 注入 epoll_wait 失败 + errno 非 EINTR：真实失败语义，poll 返回 -1
+TEST(EventPollTest, InjectedWaitFailureReportsError) {
+    EPollEventPoll poller;
+    errno = 0;
+    ::falcon::detail::ScopedInjection guard(
+        ::falcon::detail::InjectPoint::EpollWaitFail);
+    EXPECT_EQ(poller.poll(0), -1);
+}
+
+#endif  // __linux__ && FALCON_FAILURE_INJECTION
+
 //==============================================================================
 // 主函数
 //==============================================================================

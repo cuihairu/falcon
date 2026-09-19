@@ -33,6 +33,7 @@
 
 #include <gtest/gtest.h>
 #include <falcon/protocols/download_engine_v2.hpp>
+#include <falcon/detail/injection.hpp>
 #include <falcon/protocols/commands/command.hpp>
 
 #include <algorithm>
@@ -1781,3 +1782,125 @@ TEST(DownloadEngineV2RunTest, PruneFinishedTaskWindowAfterSpeedLimitedDownload) 
     server.stop();
     std::filesystem::remove_all(dir);
 }
+
+//==============================================================================
+// 注入用例：事件循环顶层兜底与终态组周期回收
+//==============================================================================
+
+/// 循环体抛 std 异常：顶层兜底 catch 接住 → 安全 break 停机，线程正常
+/// 收尾而非 std::terminate；引擎对象此后仍可查询
+TEST(DownloadEngineV2RunTest, LoopBodyStdExceptionStopsRunSafely) {
+    DownloadEngineV2 engine(fast_poll_config());
+    ASSERT_GT(engine.add_download("http://127.0.0.1:1/keepalive.bin",
+                                  keepalive_options()),
+              0);
+
+    ::falcon::detail::ScopedInjection guard(
+        ::falcon::detail::InjectPoint::EngineLoopThrowStd);
+    engine.run();  // 首轮循环体入口即命中注入，break 收尾
+
+    // catch 只 break 退出循环（"安全停机"= 排水收尾，非显式 shutdown
+    // 标志）；run() 正常返回、引擎对象此后仍可查询
+    EXPECT_FALSE(engine.is_running());
+    EXPECT_NE(engine.request_group_man()->find_group(1), nullptr);
+}
+
+/// 循环体抛非 std 异常：同上，走 catch (...) 分支
+TEST(DownloadEngineV2RunTest, LoopBodyNonStdExceptionStopsRunSafely) {
+    DownloadEngineV2 engine(fast_poll_config());
+    ASSERT_GT(engine.add_download("http://127.0.0.1:1/keepalive.bin",
+                                  keepalive_options()),
+              0);
+
+    ::falcon::detail::ScopedInjection guard(
+        ::falcon::detail::InjectPoint::EngineLoopThrowNonStd);
+    engine.run();
+
+    EXPECT_FALSE(engine.is_running());
+}
+
+/// 终态组周期回收（wait_when_idle 常驻引擎）：组进 FAILED 后跨过
+/// 10s purge 周期，组表被回收（不回收则常驻引擎组表无界增长）
+TEST(DownloadEngineV2RunTest, PurgePeriodicallyReclaimsFinishedGroups) {
+    EngineConfigV2 config = fast_poll_config();
+    config.wait_when_idle = true;
+    DownloadEngineV2 engine(config);
+
+    // 保留端口连接拒绝 + 零重试 → 组快速进 FAILED（终态）
+    DownloadOptions options;
+    options.max_retries = 0;
+    TaskId id = engine.add_download("http://127.0.0.1:1/purge.bin", options);
+    ASSERT_GT(id, 0);
+
+    std::thread loop([&engine]() { engine.run(); });
+
+    // 等组进终态（快速失败，亚秒级）
+    bool failed = false;
+    for (int i = 0; i < 200; ++i) {
+        auto* group = engine.request_group_man()->find_group(id);
+        if (group && group->status() == RequestGroupStatus::FAILED) {
+            failed = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_TRUE(failed) << "组应在无重试配置下快速 FAILED";
+
+    // 跨过 purge 周期（10s），周期到达后终态组被回收
+    std::this_thread::sleep_for(std::chrono::seconds(11));
+    EXPECT_EQ(engine.request_group_man()->find_group(id), nullptr)
+        << "终态组应在 purge 周期后被回收";
+
+    engine.shutdown();
+    loop.join();
+}
+
+#if !defined(_WIN32)
+//==============================================================================
+// 磁盘写失败（/dev/full，POSIX only）：直写初始体 / 完成冲刷 / 接收后
+// 完成冲刷三条失败路径。temp_extension 置空让数据直写 /dev/full（写
+// 恒 ENOSPC），overwrite 授权绕过存在性门禁
+//==============================================================================
+
+void run_dev_full_download(EngineConfigV2 config, std::size_t body_size,
+                           bool disk_cache) {
+    MinimalHttpServer server;
+    ASSERT_TRUE(server.start(std::string(body_size, 'w')));
+
+    config.temp_extension = "";  // 数据直写 /dev/full
+    config.enable_disk_cache = disk_cache;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options;
+    options.max_retries = 0;
+    options.overwrite_existing = true;
+    // 输出路径 override 指向 /dev/full：写入恒 ENOSPC
+    ASSERT_EQ(engine.add_download_as(1, {server.url("/full.bin")}, options,
+                                     "/dev/full"),
+              1u);
+
+    engine.run();
+
+    auto* group = engine.request_group_man()->find_group(1);
+    ASSERT_NE(group, nullptr);
+    EXPECT_EQ(group->status(), RequestGroupStatus::FAILED);
+    EXPECT_FALSE(group->error_message().empty());
+}
+
+/// 直写模式：初始 body 直写 /dev/full 失败 → "initial body bytes"
+TEST(DownloadEngineV2RunTest, DiskWriteFailureOnInitialDirectWrite) {
+    run_dev_full_download(fast_poll_config(), 64 * 1024, /*disk_cache=*/false);
+}
+
+/// 缓冲模式：4KB body 单段收满 → 完成冲刷 /dev/full 失败
+TEST(DownloadEngineV2RunTest, DiskWriteFailureOnCompletionFlush) {
+    run_dev_full_download(fast_poll_config(), 4 * 1024, /*disk_cache=*/true);
+}
+
+/// 缓冲模式：256KB 多 TCP 段到达（initial 不完整）→ receive_data 收满
+/// 后完成冲刷失败（缓冲 4MB 默认值不触发中途冲刷）
+TEST(DownloadEngineV2RunTest, DiskWriteFailureOnReceiveCompletionFlush) {
+    run_dev_full_download(fast_poll_config(), 256 * 1024, /*disk_cache=*/true);
+}
+
+#endif  // !_WIN32

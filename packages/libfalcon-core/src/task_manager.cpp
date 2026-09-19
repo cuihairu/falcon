@@ -72,12 +72,15 @@ bool read_download_options(std::istream& in, DownloadOptions& options) {
     }
     options.resume_enabled = resume_enabled != 0;
 
-    if (!(in >> std::quoted(options.user_agent) >> std::quoted(options.proxy) >>
-          std::quoted(options.proxy_type) >>
-          std::quoted(options.proxy_username) >>
-          std::quoted(options.proxy_password))) {
-        return false;
-    }
+    auto read_quoted = [&in](std::string& value) {
+        in >> std::quoted(value);
+        return static_cast<bool>(in);
+    };
+    if (!read_quoted(options.user_agent)) return false;
+    if (!read_quoted(options.proxy)) return false;
+    if (!read_quoted(options.proxy_type)) return false;
+    if (!read_quoted(options.proxy_username)) return false;
+    if (!read_quoted(options.proxy_password)) return false;
 
     int verify_ssl = 1;
     if (!read_int(in, verify_ssl)) {
@@ -536,39 +539,43 @@ public:
         for (const auto& [id, task] : tasks_) {
             const auto& options = task->options();
 
-            file << "task "
-                 << id << " "
-                 << static_cast<int>(task->status()) << " "
-                 << task->downloaded_bytes() << " "
-                 << task->total_bytes() << " "
-                 << task->speed() << " "
-                 << static_cast<int>(task->get_priority()) << " "
-                 << std::quoted(task->url()) << " "
-                 << std::quoted(task->output_path()) << " "
-                 << std::quoted(task->error_message()) << " "
-                 << options.max_connections << " "
-                 << options.timeout_seconds << " "
-                 << options.max_retries << " "
-                 << options.retry_delay_seconds << " "
-                 << std::quoted(options.output_directory) << " "
-                 << std::quoted(options.output_filename) << " "
-                 << options.speed_limit << " "
-                 << (options.resume_enabled ? 1 : 0) << " "
-                 << std::quoted(options.user_agent) << " "
-                 << std::quoted(options.proxy) << " "
-                 << std::quoted(options.proxy_type) << " "
-                 << std::quoted(options.proxy_username) << " "
-                 << std::quoted(options.proxy_password) << " "
-                 << (options.verify_ssl ? 1 : 0) << " "
-                 << std::quoted(options.referer) << " "
-                 << std::quoted(options.cookie_file) << " "
-                 << std::quoted(options.cookie_jar) << " "
-                 << options.min_segment_size << " "
-                 << (options.adaptive_segment_sizing ? 1 : 0) << " "
-                 << options.progress_interval_ms << " "
-                 << (options.create_directory ? 1 : 0) << " "
-                 << (options.overwrite_existing ? 1 : 0) << " "
-                 << options.headers.size();
+            // 逐字段独立语句：输出格式（空格分隔、顺序）与序列化契约不变，
+            // 但消除单语句跨多行的 gcc 行归属测量伪影
+            auto write_quoted = [&file](const std::string& value) {
+                file << std::quoted(value) << " ";
+            };
+            file << "task " << id << " ";
+            file << static_cast<int>(task->status()) << " ";
+            file << task->downloaded_bytes() << " ";
+            file << task->total_bytes() << " ";
+            file << task->speed() << " ";
+            file << static_cast<int>(task->get_priority()) << " ";
+            write_quoted(task->url());
+            write_quoted(task->output_path());
+            write_quoted(task->error_message());
+            file << options.max_connections << " ";
+            file << options.timeout_seconds << " ";
+            file << options.max_retries << " ";
+            file << options.retry_delay_seconds << " ";
+            write_quoted(options.output_directory);
+            write_quoted(options.output_filename);
+            file << options.speed_limit << " ";
+            file << (options.resume_enabled ? 1 : 0) << " ";
+            write_quoted(options.user_agent);
+            write_quoted(options.proxy);
+            write_quoted(options.proxy_type);
+            write_quoted(options.proxy_username);
+            write_quoted(options.proxy_password);
+            file << (options.verify_ssl ? 1 : 0) << " ";
+            write_quoted(options.referer);
+            write_quoted(options.cookie_file);
+            write_quoted(options.cookie_jar);
+            file << options.min_segment_size << " ";
+            file << (options.adaptive_segment_sizing ? 1 : 0) << " ";
+            file << options.progress_interval_ms << " ";
+            file << (options.create_directory ? 1 : 0) << " ";
+            file << (options.overwrite_existing ? 1 : 0) << " ";
+            file << options.headers.size();
 
             for (const auto& [k, v] : options.headers) {
                 file << " " << std::quoted(k) << " " << std::quoted(v);
@@ -745,13 +752,6 @@ public:
         // 分发错误事件
         if (event_dispatcher_) {
             event_dispatcher_->dispatch_error(task_id, error_message);
-        }
-    }
-
-    void on_completed(TaskId task_id, const std::string& output_path) {
-        // 分发完成事件
-        if (event_dispatcher_) {
-            event_dispatcher_->dispatch_completed(task_id, output_path, 0, Duration{0});
         }
     }
 

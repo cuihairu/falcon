@@ -37,6 +37,7 @@
 #define POLL(fd_ptr, count, timeout_ms) ::poll((fd_ptr), (count), (timeout_ms))
 #endif
 
+#include <falcon/detail/injection.hpp>
 #include <gtest/gtest.h>
 #include <falcon/protocols/download_engine_v2.hpp>
 #include <falcon/protocols/commands/http_commands.hpp>
@@ -1001,5 +1002,66 @@ TEST(DownloadEngineV2Proxy, ConnectResponseSplitAcrossSegmentsSucceeds) {
 }
 
 #endif  // FALCON_ENABLE_OPENSSL
+
+/// CONNECT 发送硬错误（ECONNRESET 注入）：代理 accept 前客户端 send
+/// 失败，走「Failed to send CONNECT to proxy」干净收口——组 FAILED、
+/// 错误消息指向 CONNECT。回环上 RST 抢在客户端首个 send 之前到达是
+/// 亚毫秒竞态，注入点确定性命中
+TEST(DownloadEngineV2Proxy, ConnectSendHardErrorFailsCleanly) {
+    // 纯监听 socket：连接在 accept 队列完成握手即可，无需 accept——
+    // 客户端 send 注入失败发生在任何代理应答之前
+    const int listen_fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    ASSERT_GE(listen_fd, 0);
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = 0;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    ASSERT_EQ(::bind(listen_fd, reinterpret_cast<sockaddr*>(&addr),
+                     sizeof(addr)), 0);
+    ASSERT_EQ(::listen(listen_fd, 4), 0);
+    sockaddr_in bound{};
+    sock_len len = sizeof(bound);
+    ASSERT_EQ(::getsockname(listen_fd, reinterpret_cast<sockaddr*>(&bound),
+                            &len), 0);
+    const int proxy_port = ntohs(bound.sin_port);
+    struct ListenGuard {
+        int fd;
+        ~ListenGuard() { CLOSE_SOCKET(fd); }
+    } listen_guard{listen_fd};
+
+    const std::string dir = temp_dir_for("connfail");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options = base_proxy_options(out_path);
+    options.proxy = "http://127.0.0.1:" + std::to_string(proxy_port);
+
+    // https 目标：CONNECT 隧道只用于 HTTPS 经代理（明文 HTTP 走
+    // absolute-form 直发请求，不经 send_proxy_connect，注入点不可达）
+    const TaskId task_id = engine.add_download(
+        "https://upstream.invalid/x.bin", options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    ::falcon::detail::ScopedInjection injection(
+        ::falcon::detail::InjectPoint::ProxyConnectSendFail);
+
+    ProxyEngineRunner runner(engine);
+    ASSERT_TRUE(wait_group_terminal(engine, group, 10000));
+    ASSERT_EQ(group->status(), RequestGroupStatus::FAILED);
+    EXPECT_NE(group->error_message().find("CONNECT"), std::string::npos)
+        << "错误消息应指向 CONNECT 发送失败";
+
+    runner.shutdown_and_join();
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
 
 } // namespace

@@ -18,6 +18,7 @@
 #include <falcon/event_listener.hpp>
 #include <falcon/exceptions.hpp>
 
+#include <falcon/detail/injection.hpp>
 #include "scripted_http_server.hpp"
 
 #include <gtest/gtest.h>
@@ -806,3 +807,27 @@ TEST_F(HttpHandlerEdgesTest, SegmentFileOccupiedByDirectoryFailsCleanly) {
     EXPECT_TRUE(fs::is_directory(seg0));
     EXPECT_FALSE(fs::exists(out));
 }
+
+#if defined(FALCON_FAILURE_INJECTION)
+
+// ============================================================================
+// 故障注入：curl 句柄创建失败（OOM 防御路径，正常执行不可达）
+// ============================================================================
+
+TEST_F(HttpHandlerEdgesTest, GetFileInfoThrowsOnCurlInitFailure) {
+    falcon::detail::ScopedInjection guard(
+        falcon::detail::InjectPoint::CurlEasyInit);
+    EXPECT_THROW(handler()->get_file_info("http://127.0.0.1:1/x.bin", {}),
+                 falcon::NetworkException);
+}
+
+TEST_F(HttpHandlerEdgesTest, DownloadThrowsOnCurlInitFailure) {
+    TempDir dir;
+    const std::string out = dir.file("inj.bin");
+    const auto task = makeTask(901, "http://127.0.0.1:1/inj.bin", out, {});
+    falcon::detail::ScopedInjection guard(
+        falcon::detail::InjectPoint::CurlEasyInit);
+    EXPECT_THROW(handler()->download(task, nullptr), falcon::NetworkException);
+}
+
+#endif  // FALCON_FAILURE_INJECTION

@@ -18,6 +18,7 @@
 
 #include <gtest/gtest.h>
 
+#include <falcon/detail/injection.hpp>
 #include "mock_ftp_server.hpp"
 
 #include <algorithm>
@@ -476,3 +477,24 @@ TEST_F(FtpHandlerTest, PauseAndCancelRejectNullTask) {
 }
 
 } // namespace
+
+#if defined(FALCON_FAILURE_INJECTION)
+
+// 故障注入：curl 句柄创建失败（OOM 防御路径）
+TEST_F(FtpHandlerTest, GetFileInfoThrowsOnCurlInitFailure) {
+    falcon::detail::ScopedInjection guard(
+        falcon::detail::InjectPoint::CurlEasyInit);
+    EXPECT_THROW(handler()->get_file_info("ftp://127.0.0.1:1/x.bin", {}),
+                 falcon::NetworkException);
+}
+
+TEST_F(FtpHandlerTest, DownloadThrowsOnCurlInitFailure) {
+    TempDir dir;
+    const std::string out = dir.file("inj_out.bin");
+    auto task = makeTask(901, "ftp://127.0.0.1:1/x.bin", out);
+    falcon::detail::ScopedInjection guard(
+        falcon::detail::InjectPoint::CurlEasyInit);
+    EXPECT_THROW(handler()->download(task, nullptr), falcon::NetworkException);
+}
+
+#endif  // FALCON_FAILURE_INJECTION

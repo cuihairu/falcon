@@ -13,6 +13,8 @@
 
 #include "dht_node.hpp"
 
+#include <falcon/detail/injection.hpp>
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -1028,3 +1030,18 @@ TEST_F(DhtClientTest, HardRecvErrorFromDeadBootstrapIsIgnored) {
     client->stop();
     EXPECT_FALSE(client->isRunning());
 }
+
+#if defined(FALCON_FAILURE_INJECTION)
+
+// socket() 创建失败：start() 静默失败，isRunning() 不撒谎（批次 E 语义）
+TEST(DhtNodeTest, StartSurvivesSocketCreationFailure) {
+    ::falcon::detail::ScopedInjection guard(
+        ::falcon::detail::InjectPoint::DhtSocketCreate);
+    DhtClient client(0);
+    client.clear_bootstrap_nodes();
+    client.start();
+    EXPECT_FALSE(client.isRunning());
+    client.stop();  // 未运行状态收尾安全
+}
+
+#endif  // FALCON_FAILURE_INJECTION

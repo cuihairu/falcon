@@ -6,6 +6,7 @@
 #include "storage/task_storage.hpp"
 #endif
 
+#include <falcon/detail/injection.hpp>
 #include <falcon/download_task.hpp>
 #include <falcon/logger.hpp>
 
@@ -514,7 +515,10 @@ bool JsonRpcServer::start() {
     stop_requested_ = false;
     ensure_winsock_started();
 
-    listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+    listen_fd_ = ::falcon::detail::inject_failure(
+                     ::falcon::detail::InjectPoint::RpcServerSocket)
+                     ? -1
+                     : ::socket(AF_INET, SOCK_STREAM, 0);
     if (listen_fd_ < 0) {
         FALCON_LOG_ERROR_STREAM("socket() failed: " << std::strerror(errno));
         return false;
@@ -555,7 +559,9 @@ bool JsonRpcServer::start() {
         }
     }
 
-    if (::listen(listen_fd_, 128) < 0) {
+    if (::falcon::detail::inject_failure(
+            ::falcon::detail::InjectPoint::RpcServerListen) ||
+        ::listen(listen_fd_, 128) < 0) {
         FALCON_LOG_ERROR_STREAM("listen() failed: " << std::strerror(errno));
         socket_close(listen_fd_);
         listen_fd_ = -1;

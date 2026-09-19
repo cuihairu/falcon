@@ -127,6 +127,20 @@ TEST(UpyunBrowserMockTest, ConnectWithoutApiDomainFallsBackToDefaultAndFails) {
 // 列举
 //==============================================================================
 
+/// path-style URL 拼接：path 不带前导斜杠时自动补 '/'（build_upyun_url
+/// 的分隔符分支，官方域名分支的对应行因 connect 探测必然失败不可达）
+TEST(UpyunBrowserMockTest, ListDirectoryPathWithoutLeadingSlashGetsSeparator) {
+    auto server = make_server(defaultReply);
+    ASSERT_NE(server, nullptr);
+
+    UpyunBrowser browser;
+    ASSERT_TRUE(connect_upyun(browser, server->base_url()));
+
+    // mock 一律 200 空 body：拼接后请求发出即达目标，应答解析为空列表
+    auto resources = browser.list_directory("docs", ListOptions{});
+    EXPECT_TRUE(resources.empty());
+}
+
 TEST(UpyunBrowserMockTest, ListDirectoryParsesTextLines) {
     auto server = make_server(listAwareReply);
     ASSERT_NE(server, nullptr);

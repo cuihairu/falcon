@@ -6,6 +6,7 @@
  */
 
 #include <falcon/protocols/download_engine_v2.hpp>
+#include <falcon/detail/injection.hpp>
 #include <falcon/logger.hpp>
 #include <falcon/protocols/commands/command.hpp>
 #include <falcon/protocols/commands/http_commands.hpp>
@@ -447,6 +448,18 @@ void DownloadEngineV2::run() {
     // 主事件循环
     while (!is_shutdown_requested()) {
         try {
+            // 异常注入闸门（仅测试构建生效）：覆盖循环体顶层兜底
+            // catch——单命令与例程命令异常已有内层收口，这两处
+            // 兜底只在异常逃出内层边界时可达
+            if (::falcon::detail::inject_failure(
+                    ::falcon::detail::InjectPoint::EngineLoopThrowStd)) {
+                throw std::runtime_error("注入: 事件循环异常");
+            }
+            if (::falcon::detail::inject_failure(
+                    ::falcon::detail::InjectPoint::EngineLoopThrowNonStd)) {
+                throw 42;  // 非 std 异常形态
+            }
+
             // 检查是否所有任务完成（wait_when_idle 时引擎常驻，
             // 只随显式 shutdown 退出）
             if (!config_.wait_when_idle && request_group_man_->all_completed()) {
