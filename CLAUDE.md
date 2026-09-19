@@ -2,6 +2,49 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-19 - CI 收口轮：SegmentFileOccupied 根因闭环（段文件删除点 is_regular_file 守卫）+ Windows ResumeAll 双根因 + metalink 两用例修复
+- **SegmentFileOccupied 三连红根因闭环（真产品缺陷，423da46）**：
+  段路径被目录占用时，恢复检测/重试记账的 ifstream 打开目录同样
+  成功（glibc fopen 目录不拒），tellg() 返回**目录 st_size**（文件
+  系统相关）——命中"超尺寸段不可信"删除分支后 fs::remove/
+  std::remove 把**空目录当损坏段文件删掉（remove 对空目录 = rmdir
+  语义，成功）**，下载照常完成：目录占用被静默"自愈"，下载器销毁
+  了不属于自己的目录
+- **本机/CI 行为分叉的文件系统解释**：ext4 空目录 st_size=4096 ≤
+  段大小 16KB → 走断点预置 → 段打开 EISDIR 失败（本机/Windows 恒
+  不复现）；CI runner /tmp 的空目录 st_size **> 16KB** → 走"删段
+  重下"→ 分段全成功。诊断轮（6fc8a9f，三个判别事实无条件落日志：
+  建目录结果/异常消息/事后路径状态）一轮 CI 拿到铁证——目录建成 →
+  下载后消失 → 成品发布
+- **修复：三处段文件删除点全部 is_regular_file 守卫，目录不是段文
+  件绝不删除**——① start() 恢复检测循环入口（非普通文件不视为断
+  点也不删，交给段下载打开失败收口）；② worker 重试记账的超尺寸
+  删除分支；③ cleanup_segment_files（resume_enabled=false 路径，
+  std::remove 同 rmdir 语义）。占位目录保留 → 段打开失败 →
+  start()==false → FileIOException，失败语义三平台一致
+- **修复 Windows ResumeAll 双根因**：① 产品缺陷（6cd07cd）——V2
+  引擎数据面直接用 Winsock 从不初始化，daemon 碰巧被 RPC 层
+  WSAStartup 覆盖，CLI/桌面进程内引擎 socket() 全报 WSA 10093；
+  DownloadEngineV2 构造时 std::call_once 幂等 WSAStartup（进程生
+  命周期不清理，与 daemon RPC 层做法一致）。② 测试竞态
+  （c12b2eb）——resume_all 返回后 run 循环异步重新激活组，Windows
+  失败路径亚毫秒完成，钉死瞬态 WAITING 是竞态断言，改轮询确认组
+  离开 PAUSED
+- **修复 metalink 两 Windows 用例**（f9c45d9）：V2 桥接取消后残留
+  清理对 Windows 文件锁重试 + 目录读取断言平台无关化
+- **测量级教训**：① `std::filesystem::remove`/`std::remove(C)` 对
+  空目录都成功——任何"清理自己创建的文件"的代码必须 is_regular_
+  file 守卫；② "本机过 CI 挂"且涉文件路径/尺寸时优先怀疑 fs 语义
+  分叉（st_size/tellg/rmdir 对目录行为），而非并行时序；③ 诊断轮
+  方法论：三连红且本机不可复现时，无条件 std::cout 判别事实（绝不
+  挂断言消息上——断言失败即不输出），一轮 CI 定位；④ TempDir 熵
+  源换 random_device（c12b2eb，CI VM 时钟粒度粗，pid+时钟截断跨进
+  程同名概率不可忽略）
+- 仓库 topics 补全（20 个上限内：aria2/bittorrent/cpp/cross-
+  platform/download-manager/downloader/ftp/hls/http/json-rpc/
+  libcurl/linux/macos/metalink/multi-source/qt6/resumable-
+  downloads/s3/cloud-storage/windows）
+
 ### 2026-09-19 - 覆盖率批次 Y：行 96.2% → 96.3%（649 行余量再挖一轮，miss 649 → 633）
 - **13 新用例，cov 全量 ctest 2268 清单通过（2 例新增并行抖动
   DownloadEngineTest.CancelTask / WsRpcClientEdge.AddUriRejectsNonStringGid
