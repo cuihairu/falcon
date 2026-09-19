@@ -790,37 +790,19 @@ TEST_F(HttpHandlerEdgesTest, SegmentFileOccupiedByDirectoryFailsCleanly) {
     const std::string out = dir.file("segdir.bin");
     const std::string seg0 = out + ".falcon.tmp.seg0";
 
-    // 诊断轮(CI Coverage 三连红、本机与 Windows 均不复现):三个判别
-    // 事实无条件落日志——① 占位目录是否真的建成;② download 走的哪
-    // 条失败路径(异常消息);③ 下载完成后目录是否还在(是否被下载内
-    // 部删除)。create_directories 用 ec 重载,建目录失败本身也是被观
-    // 测的事实而非测试终结
+    // 段 0 路径被空目录占用:修复前的 CI 实证缺陷——恢复检测循环对
+    // 段路径 ifstream 打开目录同样成功(glibc fopen 目录不拒),
+    // tellg() 返回目录 st_size(文件系统相关,CI /tmp 上可远大于段
+    // 大小),命中"超尺寸段不可信"分支后 fs::remove 把空目录当损坏
+    // 段文件删掉(rmdir 语义),下载照常完成——目录占用被静默"自愈",
+    // 用户目录被下载器销毁。修复后目录必须保留并以下载失败收口
     std::error_code cd_ec;
-    const bool cd_ok = fs::create_directories(seg0, cd_ec);
-    std::cout << "[诊断] 建目录: ok=" << cd_ok << " ec=" << cd_ec.message()
-              << " is_dir_after=" << fs::is_directory(seg0)
-              << " root=" << dir.path().string() << std::endl;
+    ASSERT_TRUE(fs::create_directories(seg0, cd_ec)) << cd_ec.message();
 
     const auto task = makeTask(218, server().url("/segdir.bin"), out, options);
-    try {
-        handler()->download(task, nullptr);
-        std::cout << "[诊断] download 未抛; seg0_is_dir=" << fs::is_directory(seg0)
-                  << " seg0_exists=" << fs::exists(seg0)
-                  << " out_is_dir=" << fs::is_directory(out) << std::endl;
-        FAIL() << "段 0 被目录占用必须以 FileIOException 收口";
-    } catch (const FileIOException& e) {
-        std::cout << "[诊断] FileIOException: " << e.what() << std::endl;
-    }
-    EXPECT_FALSE(fs::exists(out));
+    EXPECT_THROW(handler()->download(task, nullptr), FileIOException);
 
-    // 路径事实无条件落日志:分段失败于段 0 打开时零 GET(打开先于
-    // curl),单连接成功为 1 次无 Range GET,分段全成功为 4 次带 Range
-    // GET——"下载成功"的具体路径由请求序列直接判别
-    std::string req_dump;
-    for (const auto& r : server().requests()) {
-        req_dump += r.method + " " + r.path +
-                    (r.range.empty() ? "" : " Range=" + r.range) + "; ";
-    }
-    std::cout << "[诊断] 请求序列: " << (req_dump.empty() ? "(无请求)" : req_dump)
-              << "| 成品存在: " << fs::exists(out) << std::endl;
+    // 占位目录必须原样保留(不得被任何"清段/删段"路径吞掉),成品不发布
+    EXPECT_TRUE(fs::is_directory(seg0));
+    EXPECT_FALSE(fs::exists(out));
 }

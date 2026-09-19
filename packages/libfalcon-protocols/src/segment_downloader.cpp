@@ -217,6 +217,13 @@ bool SegmentDownloader::start(SegmentDownloadFunc download_func) {
     } else {
         for (auto& segment : segments_) {
             const std::string segment_path = get_segment_path(segment->index);
+            // 只有普通文件才可能是断点段文件：路径被目录占用时 ifstream
+            // 打开目录同样成功、tellg() 返回目录 st_size（文件系统相关，
+            // CI 的 /tmp 上可远大于段大小）——继续往下走会把"目录占用"
+            // 误判为"超尺寸损坏段"并把空目录删掉，下载照常进行。非普通
+            // 文件一律不视为断点也不删除，交给段下载以打开失败收口
+            std::error_code reg_ec;
+            if (!std::filesystem::is_regular_file(segment_path, reg_ec)) continue;
             std::ifstream file(segment_path, std::ios::binary | std::ios::ate);
             if (!file.is_open()) continue;
             auto sz = file.tellg();
@@ -459,8 +466,14 @@ void SegmentDownloader::download_segment(
 
         // Update downloaded bytes from partial segment file (best-effort)
         {
+            // 同 start() 恢复检测：目录占用的段路径 ifstream 打开成功、
+            // tellg() 是目录 st_size——超尺寸删除分支不得作用于目录，
+            // 占位目录必须保留到段下载打开失败收口
+            std::error_code reg_ec;
+            const bool is_regular =
+                std::filesystem::is_regular_file(segment_path, reg_ec);
             std::ifstream file(segment_path, std::ios::binary | std::ios::ate);
-            if (file.is_open()) {
+            if (is_regular && file.is_open()) {
                 Bytes downloaded = static_cast<Bytes>(file.tellg());
                 if (downloaded > segment_size) {
                     // 超尺寸段不可信（本次尝试已确认数据损坏）：删除，
@@ -724,9 +737,17 @@ void SegmentDownloader::cleanup_segment_files() {
     std::lock_guard<std::mutex> lock(segments_mutex_);
     for (const auto& segment : segments_) {
         std::string segment_path = get_segment_path(segment->index);
-        std::remove(segment_path.c_str());
+        // 只清理普通文件：std::remove 对空目录等价 rmdir，段路径被目录
+        // 占用时不得清掉不属于下载器的目录
+        std::error_code reg_ec;
+        if (std::filesystem::is_regular_file(segment_path, reg_ec)) {
+            std::remove(segment_path.c_str());
+        }
         std::string resume_path = segment_path + ".resume";
-        std::remove(resume_path.c_str());
+        std::error_code res_ec;
+        if (std::filesystem::is_regular_file(resume_path, res_ec)) {
+            std::remove(resume_path.c_str());
+        }
     }
 }
 
