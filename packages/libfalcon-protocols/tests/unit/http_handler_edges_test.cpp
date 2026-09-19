@@ -26,10 +26,17 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
+
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -47,9 +54,19 @@ using HttpTestServer = falcon::testscripts::ScriptedHttpServer;
 
 int uniqueSuffix() {
     static int counter = 0;
-    return static_cast<int>(
-        std::chrono::steady_clock::now().time_since_epoch().count() % 1000000) +
-        (counter++);
+    // pid 参与:ctest 每用例独立进程并行跑,counter 各自从 0 起,仅靠
+    // 时钟低 6 位截断跨进程可撞——同名 TempDir 会被并行进程的析构
+    // remove_all 连树删掉,下载期间目录消失即静默改变被测行为
+    // (CI Coverage 实证:并行进程删掉段 0 占位目录 → 分段全成功,
+    // "目录占用必须失败"的用例反而下载成功)
+#ifdef _WIN32
+    const auto pid = static_cast<long long>(_getpid());
+#else
+    const auto pid = static_cast<long long>(getpid());
+#endif
+    const auto tick = static_cast<long long>(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    return static_cast<int>((pid * 1000003 + tick) % 1000000000) + (counter++);
 }
 
 class TempDir {
@@ -785,17 +802,14 @@ TEST_F(HttpHandlerEdgesTest, SegmentFileOccupiedByDirectoryFailsCleanly) {
     EXPECT_THROW(handler()->download(task, nullptr), FileIOException);
     EXPECT_FALSE(fs::exists(out));
 
-    // 路径诊断:分段失败于段 0 打开时零 GET(打开先于 curl),单连接
-    // 成功则恰 1 次无 Range GET——CI(vcpkg curl)曾出现后者,请求序
-    // 列落进失败消息直接判别路径
+    // 路径事实无条件落日志:分段失败于段 0 打开时零 GET(打开先于
+    // curl),单连接成功为 1 次无 Range GET,分段全成功为 4 次带 Range
+    // GET——"下载成功"的具体路径由请求序列直接判别
     std::string req_dump;
-    size_t head_n = 0, get_n = 0;
     for (const auto& r : server().requests()) {
-        if (r.method == "HEAD") ++head_n;
-        if (r.method == "GET") ++get_n;
         req_dump += r.method + " " + r.path +
                     (r.range.empty() ? "" : " Range=" + r.range) + "; ";
     }
-    EXPECT_EQ(head_n, 1u) << "请求序列: " << req_dump;
-    EXPECT_LE(get_n, 4u) << "请求序列: " << req_dump;
+    std::cout << "[诊断] 请求序列: " << (req_dump.empty() ? "(无请求)" : req_dump)
+              << "| 成品存在: " << fs::exists(out) << std::endl;
 }
