@@ -116,6 +116,12 @@ public:
     bool valid() const { return socket_ >= 0; }
     uint16_t port() const { return port_; }
 
+    // 最近一个数据报发送者的端口（供测试反查 DhtClient 的随机端口）
+    uint16_t last_sender_port() const {
+        std::lock_guard<std::mutex> lock(receivedMutex_);
+        return last_sender_port_;
+    }
+
     // 收到查询时构造响应（transactionId 由 mock 自动回填）
     std::function<DhtMessage(const DhtMessage&)> responder;
     std::atomic<int> request_count{0};
@@ -150,6 +156,7 @@ private:
             {
                 std::lock_guard<std::mutex> lock(receivedMutex_);
                 received_.push_back(msg);
+                last_sender_port_ = ntohs(sender.sin_port);
             }
             request_count.fetch_add(1);
 
@@ -169,6 +176,7 @@ private:
     std::atomic<bool> stopped_{false};
     mutable std::mutex receivedMutex_;
     std::vector<DhtMessage> received_;
+    uint16_t last_sender_port_ = 0;
 };
 
 // BEP-005 compact node info：20 id + 4 ip + 2 port（大端序）
@@ -988,4 +996,35 @@ TEST_F(DhtClientTest, DuplicateResponderIdsReportedOnce) {
     EXPECT_EQ(std::count(reported.begin(), reported.end(), sharedId), 1);  // 只报一次
 
     client->stop();
+}
+
+TEST_F(DhtClientTest, HardRecvErrorFromDeadBootstrapIsIgnored) {
+    // 制造一个无监听的 UDP 死端口
+    int dead = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    ASSERT_GE(dead, 0);
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = 0;
+    ASSERT_EQ(bind(dead, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)), 0);
+    socklen_t len = sizeof(addr);
+    getsockname(dead, reinterpret_cast<sockaddr*>(&addr), &len);
+    const uint16_t dead_port = ntohs(addr.sin_port);
+    closeSocket(dead);
+
+    auto client = std::make_unique<DhtClient>(0);
+    client->clear_bootstrap_nodes();
+    client->addBootstrapNode("127.0.0.1", dead_port);
+    client->start();
+    ASSERT_TRUE(client->isRunning());
+
+    // 空路由表 → 查找向死端口候选发查询;随后 recvfrom 读到 ICMP 错误
+    client->findPeers(kTestInfoHash, [](const std::string&, const PeerList&) {});
+
+    // 给 receiveLoop 足够轮次经历「硬错误 → 100ms 休眠 → 继续」;
+    // 回调不等待(查找超时 30s),stop 的 join 即线程存活铁证
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+    client->stop();
+    EXPECT_FALSE(client->isRunning());
 }

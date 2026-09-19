@@ -2,6 +2,57 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-19 - 覆盖率批次 Y：行 96.2% → 96.3%（649 行余量再挖一轮，miss 649 → 633）
+- **13 新用例，cov 全量 ctest 2268 清单通过（2 例新增并行抖动
+  DownloadEngineTest.CancelTask / WsRpcClientEdge.AddUriRejectsNonStringGid
+  串行复跑即过——本轮全量与 ASan 重建并行跑，CPU 竞争放大时序抖动）
+  + ASan 七套件零真告警**；miss 649 → 633（净收敛 16 行）；全包覆盖
+  率（批次 C 同款 gcovr 口径）：**行 96.3% / 函数 98.8% / 分支 55.4%**
+- 新用例分布：run_test 5（例程命令抛非 std 异常引擎存活 / socket 回调
+  抛非 std 异常引擎存活 / unpauseAll 全量恢复 / cancelAll 覆盖排队+活动
+  任务 / 终态任务限速窗口清理）+ core 1（add_tasks 批量注入失败 URL
+  跳过）+ multi_source 2（FAILED 组滞留命令静默退役——错误消息 300ms
+  不变断言；初始连接镜像轮转重试耗尽双不可达端口 FAILED）+ resume 1
+  （If-Range Content-Range 溢出防御）+ config 1（HOME 空时配置目录
+  cwd 回落）+ dht 1（bootstrap 死路 recvfrom 硬错误忽略）+ segment 2
+  （merge temp 被目录占用抛 FileIOException / 兄弟段取消传播即停重试）
+  + http_edges 1（段文件路径被目录占用建段失败抛 FileIOException）
+- **修复 RawWsServer 析构竞态**（ASan 七套件负载下曝光的测试基建
+  缺陷，stack-use-after-return）：stop() 只 join accept 线程，
+  detach 的会话线程被 close_all 唤醒后还要走 retire_conn 访问
+  conns_——用例栈上 raw 析构先于其退出即踩已死栈帧。修复：spawn
+  时预登记 active_sessions_ 计数（spawn 与登记间无窗口，accept 线程
+  join 后不再有新会话线程）+ 线程体收尾注销（最后一次 this 访问）
+  + stop() 尾部轮询等待归零（5s 兜底）；ASan 三轮复跑零告警
+- **测量级发现**：① segment_downloader merge 失败经 start() 顶层
+  catch（350）吞 FileIOException 转返回 false——两段全 completed 且
+  无 failed/cancelled 时 start()==false 唯一路径即 merge 抛出，观测
+  判据三件套（start false + completed==2 + 成品不存在）；② 483 的
+  cancelled-break 死防御：mock 返回后的 450-451 同轮 cancelled 检查
+  先行 break，483 仅"记账恰好落在段 B mock 返回与 482 检查之间"的
+  亚毫秒竞态窗口可达，与 451 语义冗余；③ resume 恢复段 0 直接合并
+  路径的 merge temp = output_path + ".falcon.tmp.merge"，预置同名
+  目录即可确定性命中 521 throw
+- **本轮定性放弃（铁证齐全）**：http_handler 143（单连接 cancelled
+  局部 atomic 全库无 store(true) 置位点，中止恒经
+  CURLE_ABORTED_BY_CALLBACK → 152 return，634 竞态边界与之互斥）；
+  dht 650（DhtMessage::decode 全函数吞异常，非法报文永不抛，
+  receiveLoop catch 结构不可达）——**附带产品层发现：handleMessage
+  开头无条件把 sender 插入路由表，垃圾报文以空 id 节点污染路由表
+  （strace 铁证：后续查询发往垃圾 sender 的随机端口），记录不修**；
+  segment 184/345/415-417 死防御、301-305 墙钟、545 merge 中竞态；
+  metalink 388-389（verify 前产物必然在位）、481-487（无注入点）、
+  640-641（竞态）、659-660（结构不可达）、757（亚毫秒窗口）、780-781
+  （失败恒抛防御不可达）；incremental downloadRange 零尺寸守卫
+  （private 方法测试不可调，public 入口 ceil 切分保证无零尺寸分块，
+  纵深防御）；daemonize fork 后 _exit 路径测量盲区；
+  register_handler_factory 零效果 API（接口完整性）；upyun 84/94
+  死分支（修正既有定性）
+- **633 行终态构成（如实记录）**：TLS 故障注入/socket 硬错误/平台
+  分支（http_commands 145 为主）+ EVP/curl/sqlite OOM 注入防御 +
+  gcc 行归属伪影 + 接口存根与零调用方 + 时序竞态窗口 + 死防御与
+  结构不可达——与批次 X 收口定性一致，可测矿点至批次 Y 止全部收尽
+
 ### 2026-09-18 - 覆盖率批次 X：行 95.1% → 96.2% + incremental 零长度 memcpy UB 修复 + metalink 桥接测试挂死模式修复（98% 结构性不可达收口）
 - **74 新用例，cov 全量 ctest 零失败（3 例记录在案并行抖动串行
   复跑过）+ ASan 七套件零告警**；miss 816 → 649（净收敛 167 行）；

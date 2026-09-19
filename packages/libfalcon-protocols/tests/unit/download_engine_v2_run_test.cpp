@@ -309,20 +309,55 @@ private:
     bool throw_non_std_;
 };
 
-/// 每次执行都抛异常的例程命令
+/// 每次执行都抛异常的例程命令（可选抛非 std 异常，驱动例程 catch(...) 分支）
 class ThrowingRoutine : public AbstractCommand {
 public:
-    explicit ThrowingRoutine(std::shared_ptr<std::atomic<int>> counter)
-        : AbstractCommand(0), counter_(std::move(counter)) {}
+    explicit ThrowingRoutine(std::shared_ptr<std::atomic<int>> counter,
+                             bool throw_non_std = false)
+        : AbstractCommand(0), counter_(std::move(counter)),
+          throw_non_std_(throw_non_std) {}
 
     bool execute(DownloadEngineV2*) override {
         counter_->fetch_add(1);
+        if (throw_non_std_) {
+            throw 42;  // 非 std::exception：驱动例程 catch(...) 分支
+        }
         throw std::runtime_error("routine boom");
     }
 
     const char* name() const override { return "ThrowingRoutine"; }
 
 private:
+    std::shared_ptr<std::atomic<int>> counter_;
+    bool throw_non_std_;
+};
+
+/// 第一次执行注册 socket 事件后挂起；事件唤醒重入时抛非 std 异常——
+/// 驱动 socket 事件回调层 catch(...) 兜底分支
+class ParkThenThrowCommand : public AbstractCommand {
+public:
+    ParkThenThrowCommand(int fd, std::shared_ptr<std::atomic<int>> counter)
+        : AbstractCommand(0), fd_(fd), counter_(std::move(counter)) {}
+
+    bool execute(DownloadEngineV2* engine) override {
+        counter_->fetch_add(1);
+        if (counter_->load() == 1) {
+            if (!engine ||
+                !engine->register_socket_event(
+                    fd_, static_cast<int>(net::IOEvent::READ), id())) {
+                return handle_result(ExecutionResult::ERROR_OCCURRED);
+            }
+            mark_active();
+            return false;  // 挂起等待事件
+        }
+        throw 42;  // 非 std::exception：事件回调在 EventPoll 线程上下文，
+                   // 异常逃逸即 terminate，必须被回调层 catch(...) 吞掉
+    }
+
+    const char* name() const override { return "ParkThenThrowCommand"; }
+
+private:
+    int fd_;
     std::shared_ptr<std::atomic<int>> counter_;
 };
 
@@ -1560,4 +1595,181 @@ TEST(DownloadEngineV2RunTest, CommandExceptionWithUnknownTaskIdIsIgnored) {
         << "无组异常命令不得影响同轮其他命令";
     EXPECT_TRUE(engine.is_shutdown_requested());
     EXPECT_EQ(engine.request_group_man()->find_group(999), nullptr);
+}
+
+//==============================================================================
+// 覆盖率批次 Y：例程/socket 回调非 std 异常、resume_all/cancel_all、
+// 终态限速窗口清理
+//==============================================================================
+
+/// 例程抛非 std 异常：execute_routine_commands 的 catch(...) 只跳过
+/// 本轮，引擎照常运行（异常逃逸例程循环即 terminate 整个进程）
+TEST(DownloadEngineV2RunTest, NonStdExceptionRoutineSkipsRoundEngineSurvives) {
+    DownloadEngineV2 engine(fast_poll_config());
+
+    ASSERT_GT(engine.add_download("http://127.0.0.1:1/keepalive.bin",
+                                  keepalive_options()),
+              0);
+
+    auto routine_counter = std::make_shared<std::atomic<int>>(0);
+    engine.add_routine_command(
+        std::make_unique<ThrowingRoutine>(routine_counter, true));
+
+    auto routine = std::make_unique<CountdownShutdownRoutine>(3);
+    CountdownShutdownRoutine* routine_ptr = routine.get();
+    engine.add_routine_command(std::move(routine));
+
+    engine.run();  // 非 std 异常未被吞时此处 terminate
+
+    EXPECT_GT(routine_counter->load(), 0)
+        << "抛非 std 异常的例程应被执行过";
+    EXPECT_GE(routine_ptr->executions(), 3);
+    EXPECT_TRUE(engine.is_shutdown_requested());
+}
+
+/// socket 事件回调抛非 std 异常：回调在 EventPoll 线程上下文执行，
+/// catch(...) 兜底只丢失这一次唤醒，引擎继续运行
+TEST(DownloadEngineV2RunTest, SocketCallbackNonStdExceptionEngineSurvives) {
+    DownloadEngineV2 engine(fast_poll_config());
+
+    ASSERT_GT(engine.add_download("http://127.0.0.1:1/keepalive.bin",
+                                  keepalive_options()),
+              0);
+
+    auto pair = make_socket_pair_nb();
+    ASSERT_GE(pair[0], 0);
+    ASSERT_GE(pair[1], 0);
+
+    // 预写数据使读事件立即可触发
+    const char payload[] = "wake";
+#ifdef _WIN32
+    ASSERT_GT(send(pair[1], payload, static_cast<int>(sizeof(payload)), 0), 0);
+#else
+    ASSERT_GT(write(pair[1], payload, sizeof(payload)), 0);
+#endif
+
+    auto cmd_counter = std::make_shared<std::atomic<int>>(0);
+    engine.add_command(std::make_unique<ParkThenThrowCommand>(pair[0], cmd_counter));
+
+    auto routine = std::make_unique<CountdownShutdownRoutine>(3);
+    engine.add_routine_command(std::move(routine));
+
+    engine.run();  // 回调异常未被吞时 terminate
+
+    EXPECT_EQ(cmd_counter->load(), 2)
+        << "事件唤醒后重入的第二次 execute 应已发生（异常在回调层被吞）";
+
+    CLOSE_SOCKET(pair[0]);
+    CLOSE_SOCKET(pair[1]);
+}
+
+/// resume_all：遍历全部组并对 PAUSED 组逐个 resume_task——暂停后
+/// 一键恢复全部（修复前该公开方法零覆盖）
+TEST(DownloadEngineV2RunTest, ResumeAllUnpausesPausedGroups) {
+    DownloadEngineV2 engine(fast_poll_config());
+
+    const TaskId id = engine.add_download("http://127.0.0.1:1/keepalive.bin",
+                                          keepalive_options());
+    ASSERT_GT(id, 0u);
+    auto* group = engine.request_group_man()->find_group(id);
+    ASSERT_NE(group, nullptr);
+
+    std::thread runner([&engine] { engine.run(); });
+
+    // 等 run 循环把组激活（fill_request_group_from_reserver）
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (group->status() != RequestGroupStatus::ACTIVE &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_EQ(group->status(), RequestGroupStatus::ACTIVE);
+
+    ASSERT_TRUE(engine.pause_task(id));
+    EXPECT_EQ(group->status(), RequestGroupStatus::PAUSED);
+
+    engine.resume_all();
+
+    EXPECT_EQ(group->status(), RequestGroupStatus::WAITING)
+        << "resume_all 必须把 PAUSED 组送回等待队列重新激活";
+
+    engine.shutdown();
+    runner.join();
+}
+
+/// cancel_all：遍历全部组并对 ACTIVE/WAITING/PAUSED 三态组逐个
+/// cancel_task 后停机——暂停组不得被 cancel_all 漏掉
+TEST(DownloadEngineV2RunTest, CancelAllCoversPausedAndWaitingGroups) {
+    EngineConfigV2 config = single_slot_config();  // 单槽：第二个任务排队
+    DownloadEngineV2 engine(config);
+
+    const TaskId active_id = engine.add_download(
+        "http://127.0.0.1:1/keepalive.bin", keepalive_options());
+    ASSERT_GT(active_id, 0u);
+    const TaskId waiting_id = engine.add_download(
+        "http://127.0.0.1:1/keepalive2.bin", keepalive_options());
+    ASSERT_GT(waiting_id, 0u);
+    ASSERT_NE(waiting_id, active_id);
+
+    auto* active_group = engine.request_group_man()->find_group(active_id);
+    auto* waiting_group = engine.request_group_man()->find_group(waiting_id);
+    ASSERT_NE(active_group, nullptr);
+    ASSERT_NE(waiting_group, nullptr);
+
+    std::thread runner([&engine] { engine.run(); });
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (active_group->status() != RequestGroupStatus::ACTIVE &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_EQ(active_group->status(), RequestGroupStatus::ACTIVE);
+    EXPECT_EQ(waiting_group->status(), RequestGroupStatus::WAITING);
+
+    ASSERT_TRUE(engine.pause_task(active_id));
+    EXPECT_EQ(active_group->status(), RequestGroupStatus::PAUSED);
+
+    engine.cancel_all();  // 含 PAUSED 分支 + 尾部 shutdown
+
+    runner.join();  // cancel_all 自带 shutdown，run() 必须退出
+
+    EXPECT_EQ(active_group->status(), RequestGroupStatus::REMOVED)
+        << "PAUSED 组必须被 cancel_all 覆盖";
+}
+
+/// 限速任务完成后 1s 窗口内其限速窗口仍有样本：run 循环的
+/// prune_finished_task_windows 必须把终态组的窗口条目回收，
+/// 防止 map 无界增长
+TEST(DownloadEngineV2RunTest, PruneFinishedTaskWindowAfterSpeedLimitedDownload) {
+    const std::string body = make_body(8 * 1024);
+    MinimalHttpServer server;
+    ASSERT_TRUE(server.start(body));
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    const std::string dir = run_test_temp_dir("prune_window");
+    std::filesystem::create_directories(dir);
+    const std::string out_path = dir + "/limited.bin";
+
+    DownloadOptions options;
+    options.output_filename = out_path;
+    options.max_connections = 1;
+    options.speed_limit = 32 * 1024;  // 8KB 至少分 4 轮记账，窗口必有样本
+
+    const TaskId task_id = engine.add_download(server.url("/limited.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    long long elapsed_ms = 0;
+    ASSERT_TRUE(wait_group_terminal(engine, group, 20, elapsed_ms));
+
+    EXPECT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+    EXPECT_EQ(read_file_content(out_path), body);
+
+    // 完成瞬间样本未过期，run() 退出前的最后几轮循环里
+    // prune_finished_task_windows 必须走到终态判定与 erase
+    server.stop();
+    std::filesystem::remove_all(dir);
 }

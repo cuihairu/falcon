@@ -2,6 +2,7 @@
 
 #include <falcon/protocols/segment_downloader.hpp>
 #include <falcon/download_task.hpp>
+#include <falcon/exceptions.hpp>
 #include <falcon/download_options.hpp>
 
 #include <gtest/gtest.h>
@@ -1484,4 +1485,111 @@ TEST(SegmentDownloaderEdges, CancelMidFlightJoinsLiveMonitor) {
     EXPECT_FALSE(first_result.load());
     gate.set_value();  // 兜底放行（线程已退出，无害）
     std::remove(output_path.c_str());
+}
+
+//==============================================================================
+// 覆盖率批次 Y:merge 临时文件冲突与重试边界的兄弟段取消
+//==============================================================================
+
+// merge 的临时文件路径(<out>.falcon.tmp.merge)被目录占用时
+// ofstream 打开失败 → merge 抛 FileIOException,被 start() 顶层
+// catch 收为 false——两段 completed 且无 failed/cancelled 时,该
+// false 只能来自 merge 失败,成品绝不拼出。
+// 两阶段构造:阶段 1 只完成段 0(真实段文件留存);阶段 2 恢复加载
+// 段 0 直接置 completed,段 1 由 mock 补齐 → 全部完成后 merge 撞目录
+TEST(SegmentDownloaderBoundary, MergeTempOccupiedByDirectoryThrows) {
+    const std::string url = "http://test.example.com/merge.bin";
+    const std::string output_path = make_unique_temp_path("falcon_merge_occ.bin");
+
+    auto make_config = [] {
+        SegmentConfig config;
+        config.num_connections = 2;
+        config.min_segment_size = 1;
+        config.min_file_size = 1;
+        config.adaptive_sizing = false;  // 等分:64B → 两段各 32B
+        config.max_retries = 0;
+        config.retry_delay_ms = 0;
+        return config;
+    };
+
+    // 阶段 1:段 0 满尺寸落盘,段 1 失败
+    {
+        DownloadOptions options;
+        options.resume_enabled = true;
+        auto task = std::make_shared<MockDownloadTask>(1, url, options);
+        task->set_test_file_info(64);
+        SegmentDownloader downloader(task, url, output_path, make_config());
+        EXPECT_FALSE(downloader.start(
+            [](const std::string&, Bytes start, Bytes end,
+               const std::string& seg_path, std::atomic<bool>&) {
+                if (start != 0) return false;  // 段 1 失败
+                std::ofstream f(seg_path, std::ios::binary);
+                const Bytes n = end - start + 1;
+                const std::string payload(n, 'M');
+                f.write(payload.data(), static_cast<std::streamsize>(n));
+                return f.good();
+            }));
+    }
+
+    // merge 临时路径被目录占用
+    std::filesystem::create_directories(output_path + ".falcon.tmp.merge");
+
+    // 阶段 2:恢复加载段 0(满尺寸 → 直接 completed),段 1 补齐后
+    // merge → ofstream 打开目录失败
+    {
+        DownloadOptions options;
+        options.resume_enabled = true;
+        auto task = std::make_shared<MockDownloadTask>(2, url, options);
+        task->set_test_file_info(64);
+        SegmentDownloader downloader(task, url, output_path, make_config());
+        // merge 的 FileIOException 被 start() 的顶层 catch 吞为返回
+        // false——但两段均已 completed 且无 failed/cancelled,start()
+        // 返回 false 的唯一路径就是 merge 抛出(521)
+        EXPECT_FALSE(downloader.start(mock_segment_download));
+        EXPECT_EQ(downloader.completed_segments(), 2u);
+        EXPECT_FALSE(std::filesystem::exists(output_path));  // 成品未拼出
+    }
+
+    std::error_code ec;
+    std::filesystem::remove_all(output_path + ".falcon.tmp.merge", ec);
+    for (int i : {0, 1}) {
+        std::filesystem::remove(output_path + ".falcon.tmp.seg" + std::to_string(i), ec);
+    }
+    std::filesystem::remove(output_path, ec);
+}
+
+// 一段即时失败(重试耗尽 → 置全局 cancelled),另一段晚失败——其
+// 重试边界先见 cancelled 即 break,不再进入失败记账路径
+TEST(SegmentDownloaderBoundary, RetryBoundaryRespectsSiblingCancellation) {
+    DownloadOptions options;
+
+    auto task = std::make_shared<MockDownloadTask>(1, "http://test.example.com/race.bin", options);
+    task->set_test_file_info(64);  // 2 段 × 32B
+
+    const std::string output_path = make_unique_temp_path("falcon_retry_boundary.bin");
+
+    SegmentConfig config;
+    config.num_connections = 2;
+    config.min_segment_size = 1;
+    config.min_file_size = 1;
+    config.adaptive_sizing = false;
+    config.max_retries = 0;      // 一次失败即记账
+    config.retry_delay_ms = 0;
+
+    SegmentDownloader downloader(task, "http://test.example.com/race.bin",
+                                 output_path, config);
+
+    // 段 0(start=0)立即失败:重试边界记账 + 置全局 cancelled;
+    // 段 1(start=32)延迟失败:mock 返回后的 cancelled 检查(450-451)
+    // 命中 → 立即 break,绝不空转重试
+    EXPECT_FALSE(downloader.start([](const std::string&, Bytes start, Bytes,
+                                     const std::string&, std::atomic<bool>&) {
+        if (start == 0) return false;  // 即时失败
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        return false;  // 段 0 记账后才返回,兄弟段取消即时生效
+    }));
+    EXPECT_LT(downloader.progress(), 1.0f);
+
+    std::error_code ec;
+    std::filesystem::remove(output_path, ec);
 }

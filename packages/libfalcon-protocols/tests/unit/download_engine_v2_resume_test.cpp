@@ -237,6 +237,10 @@ public:
     /// 带 Range 的请求无视 Range 回 200 全量
     void set_range_liar(bool v) { range_liar_ = v; }
 
+    /// 206 的 Content-Range 起点写成超过 uint64 的数字(服务器侧数据
+    /// 损坏形态)——驱动客户端解析的 stoull 溢出防御
+    void set_overflow_content_range(bool v) { overflow_content_range_ = v; }
+
     /// 替换响应内容与 ETag（内容变更 → If-Range 失效）
     void set_resource(std::string body, std::string etag) {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -346,9 +350,12 @@ private:
             const std::string slice = body.substr(
                 static_cast<std::size_t>(range_start),
                 static_cast<std::size_t>(serve_end - range_start + 1));
+            const std::string cr_start = overflow_content_range_
+                ? std::string("99999999999999999999999")  // > uint64:stoull 溢出
+                : std::to_string(range_start);
             std::string header =
                 "HTTP/1.1 206 Partial Content\r\n" + common +
-                "Content-Range: bytes " + std::to_string(range_start) + "-" +
+                "Content-Range: bytes " + cr_start + "-" +
                 std::to_string(serve_end) + "/" +
                 std::to_string(body.size()) + "\r\n"
                 "Content-Length: " + std::to_string(slice.size()) + "\r\n\r\n";
@@ -397,6 +404,7 @@ private:
     std::vector<std::string> if_range_values_;
     std::size_t partial_first_bytes_ = 0;
     bool range_liar_ = false;
+    bool overflow_content_range_ = false;
 
     std::atomic<int> plain_gets_{0};
     std::atomic<int> range_gets_{0};
@@ -932,6 +940,56 @@ TEST(ResumeControlFile, SaveLoadRoundTripAndValidation) {
     // 正常文件删除后加载失败（文件不存在 = 首次下载语义）
     remove_resume_control(path);
     EXPECT_FALSE(load_resume_control(path, loaded));
+
+    std::filesystem::remove_all(dir);
+}
+
+//==============================================================================
+// 覆盖率批次 Y:Content-Range 起点溢出防御
+//==============================================================================
+
+// 206 响应的 Content-Range 起点是超过 uint64 的数字(服务器侧损坏
+// 形态):解析的 stoull 溢出必须按校验失败收口——放弃续传转全新
+// 下载,断点数据绝不接续起点无法确认的响应
+TEST(DownloadEngineV2Resume, OverflowContentRangeAbandonsResume) {
+    const std::string body = make_body(32 * 1024);
+    ResumeTestServer server;
+    ASSERT_TRUE(server.start(body, "\"etag-ovf\"", "Wed, 10 Sep 2026 08:00:00 GMT"));
+
+    const std::string dir = temp_dir_for("overflow_cr");
+    std::filesystem::create_directories(dir);
+    const std::string out_path = dir + "/file.bin";
+    auto options = single_connection_options(out_path);
+
+    server.set_partial_first_bytes(4096);
+    run_failing_first_phase(server, out_path, options);
+    ASSERT_EQ(read_file_content(out_path + ".falcon.tmp").size(), 4096u);
+
+    // 第二阶段:续传请求得到 206,但 Content-Range 起点溢出 → 校验失败
+    server.set_partial_first_bytes(0);
+    server.set_overflow_content_range(true);
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    const TaskId task_id = engine.add_download(server.url("/file.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    ASSERT_TRUE(run_until_terminal(engine, group, 20));
+
+    // abandon 后转全新下载:任务完成且成品逐字节一致(校验失败若被
+    // 当作通过,续传起点错位会在这里现形为内容损坏)
+    EXPECT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+    EXPECT_EQ(read_file_content(out_path), body);
+
+    // 服务器观测:一次带 Range 的续传请求 + abandon 后的无 Range 全新 GET
+    const auto starts = server.range_starts_snapshot();
+    ASSERT_FALSE(starts.empty());
+    EXPECT_EQ(starts.back(), 4096u);
+    EXPECT_GE(server.plain_gets(), 2)
+        << "溢出 Content-Range 应触发放弃续传并重新发起全新下载";
 
     std::filesystem::remove_all(dir);
 }

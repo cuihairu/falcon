@@ -808,3 +808,23 @@ TEST(DownloadEngineTest, CreateDirectoryFailureThrows) {
 //
 //     EXPECT_EQ(engine.get_all_tasks().size(), 0u);
 // }
+
+// 批次 Y：add_tasks 批量添加中单个 URL 抛异常（无 handler / 空 URL）
+// 只跳过该 URL，其余继续添加；返回列表仅含成功任务
+TEST(DownloadEngineTest, AddTasksSkipsFailedUrlAndContinues) {
+    falcon::DownloadEngine engine;
+    engine.register_handler(std::make_unique<TestProtocolHandler>());
+
+    // 中间夹一个无 handler 的 URL：add_task 抛 UnsupportedProtocolException，
+    // add_tasks 的 per-URL catch 必须吞掉并继续处理后续 URL
+    const auto tasks = engine.add_tasks(
+        {"test://example.com/first.bin",
+         "http://unregistered.example.com/no-handler.bin",
+         "test://example.com/second.bin"},
+        falcon::DownloadOptions{});
+
+    ASSERT_EQ(tasks.size(), 2u);
+    EXPECT_NE(tasks[0], nullptr);
+    EXPECT_NE(tasks[1], nullptr);
+    EXPECT_EQ(engine.get_all_tasks().size(), 2u);
+}

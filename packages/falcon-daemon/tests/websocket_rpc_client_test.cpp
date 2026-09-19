@@ -450,6 +450,15 @@ public:
             listen_fd_ = -1;
         }
         if (accept_thread_.joinable()) accept_thread_.join();
+        // 会话线程是 detach 的:close_all 只唤醒其 recv,线程此后还要走
+        // retire_conn 访问成员。等全部会话线程退出(retire_conn 后的
+        // 计数递减是其最后一次 this 访问),栈上实例析构后才无人触碰
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (active_sessions_.load() > 0 &&
+               std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
     }
 
 private:
@@ -484,7 +493,15 @@ private:
                 if (stopping_.load()) break;
                 continue;
             }
-            std::thread(&RawWsServer::handle_conn, this, fd).detach();
+            // spawn 时预登记计数(spawn 与登记之间无窗口;accept 线程被
+            // join 后不再有新会话线程),线程体收尾注销——注销是最后一
+            // 次 this 访问,计数归零即全部会话线程已离开成员
+            active_sessions_.fetch_add(1, std::memory_order_seq_cst);
+            const int session_fd = fd;
+            std::thread([this, session_fd] {
+                handle_conn(session_fd);
+                active_sessions_.fetch_sub(1, std::memory_order_seq_cst);
+            }).detach();
         }
     }
 
@@ -602,6 +619,7 @@ private:
     std::atomic<std::uint16_t> port_{0};
     std::thread accept_thread_;
     std::atomic<bool> stopping_{false};
+    std::atomic<int> active_sessions_{0};
 
     std::mutex conn_mutex_;
     std::set<int> conns_;

@@ -758,3 +758,30 @@ TEST_F(HttpHandlerEdgesTest, DownloadWithoutContentLengthCompletesWithUnknownTot
 }
 
 } // namespace
+
+// 段文件路径被目录占用:download_segment_curl 打开段文件失败 →
+// 段下载函数返回 false → 重试耗尽 → 分段下载失败收口(FileIOException),
+// 成品绝不发布
+TEST_F(HttpHandlerEdgesTest, SegmentFileOccupiedByDirectoryFailsCleanly) {
+    const std::string content(64 * 1024, 'd');
+    FakeResponse head;
+    head.headers = {{"Accept-Ranges", "bytes"}};
+    head.body = content;
+    head.support_range = true;
+    server().set_response("/segdir.bin", head);
+
+    DownloadOptions options;
+    options.max_connections = 4;
+    options.min_segment_size = 16 * 1024;  // 64KB 文件触发分段
+    options.max_retries = 1;
+    options.retry_delay_seconds = 0;
+
+    TempDir dir;
+    const std::string out = dir.file("segdir.bin");
+    // 段 0 文件路径(<out>.falcon.tmp.seg0)被目录占用 → 段打开即失败
+    fs::create_directories(out + ".falcon.tmp.seg0");
+
+    const auto task = makeTask(218, server().url("/segdir.bin"), out, options);
+    EXPECT_THROW(handler()->download(task, nullptr), FileIOException);
+    EXPECT_FALSE(fs::exists(out));
+}

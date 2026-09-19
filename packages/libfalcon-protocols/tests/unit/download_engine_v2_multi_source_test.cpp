@@ -611,3 +611,71 @@ TEST_F(MultiSourceDownload, ResumeResponseStageTimeoutSwitchesMirror) {
 }
 
 } // namespace
+
+//==============================================================================
+// 覆盖率批次 Y:组终态后滞留命令的静默收口
+//==============================================================================
+
+// 组被某段的换源重试耗尽判定 FAILED 后,仍在引擎队列/连接上的滞留
+// 命令必须静默退出,不得把终态改写成二次失败:
+// - 段 1..3 的 Range 请求两镜像一律 500 → 各自换源重试耗尽;第一个
+//   收口把组置 FAILED,其余段重试命令在其后 execute 时发现组已终态,
+//   入口静默返回(不再重复收口/不改写错误消息)
+// - 段 0 由慢发的初始 GET 承载,其下载命令在组 FAILED 后的下一轮
+//   execute 同样静默退出(断连 socket、不覆盖终态)
+TEST_F(MultiSourceDownload, FailedGroupSilentlyRetiresStrandedCommands) {
+    ScriptedHttpServer server;
+    server.start();
+    auto fail = range_response(body_);
+    fail.fail_nonzero_range = true;  // Range GET 一律 500(两镜像同剧本)
+    server.set_response("/a", fail);
+    server.set_response("/b", fail);
+    // 初始 GET(无 Range,承载段 0)200 全量但慢发:段 0 的下载命令
+    // 在组 FAILED 时必然仍挂在收数据的 execute 轮换中
+    server.set_slow_body("/a", 200 * 1000, 8);
+
+    const std::string out_path = dir_->string() + "/stranded.bin";
+    // 段级换源预算 2:首镜像 500 → 换下一镜像(1)→ 再 500 → 耗尽(2)
+    auto options = multi_source_options(out_path, 4, 16, 2);
+
+    DownloadEngineV2 engine;
+    const TaskId id = engine.add_download(
+        std::vector<std::string>{server.url("/a"), server.url("/b")}, options);
+    ASSERT_GT(id, 0u);
+    auto* group = engine.request_group_man()->find_group(id);
+    ASSERT_NE(group, nullptr);
+
+    ASSERT_TRUE(run_until_terminal(engine, group, 20));
+    EXPECT_EQ(group->status(), RequestGroupStatus::FAILED);
+    EXPECT_FALSE(group->error_message().empty());
+
+    // 组终态唯一的错误消息:滞留命令不得追加/改写
+    const auto first_error = group->error_message();
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    EXPECT_EQ(group->error_message(), first_error);
+}
+
+/// 初始连接镜像轮转的重试预算耗尽:全部镜像均连接拒绝且轮转计数
+/// 触顶时,make_connection_retry 返回 nullptr(不再构造 HttpRetry
+/// Command),组直接 FAILED 收口——镜像轮转与连接级重试共享同一
+/// 计数器
+TEST_F(MultiSourceDownload, InitialConnectionMirrorRetryExhausted) {
+    const std::string out_path = dir_->string() + "/init_exhausted.bin";
+    // 单连接不分段;两镜像都是不可达端口;预算 1:首连 u1 拒 →
+    // 轮转 u2(retry=1)→ 拒 → 1 >= 1 耗尽
+    auto options = multi_source_options(out_path, 1, 1 << 20, 1);
+    options.retry_delay_seconds = 0;
+
+    DownloadEngineV2 engine;
+    const TaskId id = engine.add_download(
+        std::vector<std::string>{"http://127.0.0.1:1/x", "http://127.0.0.1:2/y"},
+        options);
+    ASSERT_GT(id, 0u);
+    auto* group = engine.request_group_man()->find_group(id);
+    ASSERT_NE(group, nullptr);
+
+    ASSERT_TRUE(run_until_terminal(engine, group, 20));
+    EXPECT_EQ(group->status(), RequestGroupStatus::FAILED);
+    EXPECT_FALSE(group->error_message().empty());
+    EXPECT_FALSE(std::filesystem::exists(out_path));
+}

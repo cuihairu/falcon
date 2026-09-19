@@ -406,4 +406,19 @@ TEST(ConfigTest, DownloadHttpEngineTypeMismatchFails) {
               std::string::npos);
 }
 
+
+// 批次 Y：HOME 未设置时默认配置目录回落 /etc/falcon（而非崩溃或空串）
+TEST(ConfigTest, DefaultConfigDirFallsBackWithoutHome) {
+#ifdef _WIN32
+    GTEST_SKIP() << "POSIX-only: unsetenv HOME 分支";
+#else
+    const char* old = ::getenv("HOME");
+    const std::string old_str = old ? old : "";
+    ::unsetenv("HOME");
+    const auto dir = falcon::daemon::get_default_config_dir();
+    if (!old_str.empty()) ::setenv("HOME", old_str.c_str(), 1);
+    EXPECT_EQ(dir, "/etc/falcon");
+#endif
+}
+
 } // namespace
