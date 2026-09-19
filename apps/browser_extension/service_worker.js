@@ -7,6 +7,12 @@ const DEFAULT_SETTINGS = Object.freeze({
   sniffMaxItemsPerTab: 80,
   includeCookiesOnSend: false,
   disabledHosts: [],
+  // "desktop" = Falcon 桌面 IPC（/v1/add），"daemon" = aria2 兼容 JSON-RPC
+  sendTarget: "desktop",
+  daemonUrl: "http://127.0.0.1:6800",
+  daemonSecret: "",
+  // 接管浏览器下载的文件类型（小写扩展名数组）；空数组 = 全部接管
+  interceptExtensions: [],
 });
 
 function storageGet(keys) {
@@ -127,6 +133,95 @@ async function notify(title, message) {
     message,
   });
 }
+
+function rpcTimeoutSignal(ms) {
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), ms);
+  return controller.signal;
+}
+
+/** aria2 兼容 JSON-RPC 调用（token 前缀认证，daemon /jsonrpc 端点） */
+async function daemonRpc(daemonUrl, secret, method, params = []) {
+  const res = await fetch(`${daemonUrl.replace(/\/+$/, "")}/jsonrpc`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: Date.now(),
+      method,
+      params: secret ? [`token:${secret}`, ...params] : params,
+    }),
+    signal: rpcTimeoutSignal(3000),
+  });
+  const data = await res.json();
+  if (data && data.error) {
+    throw new Error(data.error.message || String(data.error.code));
+  }
+  return data ? data.result : null;
+}
+
+/** 发送到 Falcon daemon（aria2.addUri），返回是否成功 */
+async function sendToDaemon(settings, payload) {
+  const options = {};
+  if (payload.filename) options.out = payload.filename;
+  if (payload.referrer) options.referer = payload.referrer;
+  if (payload.user_agent) options["user-agent"] = payload.user_agent;
+  if (payload.cookies) options.header = `Cookie: ${payload.cookies}`;
+  const gid = await daemonRpc(settings.daemonUrl, settings.daemonSecret, "aria2.addUri", [
+    [payload.url],
+    options,
+  ]);
+  return typeof gid === "string" && gid.length > 0;
+}
+
+/** 按发送目标设置分发（桌面 IPC 或 daemon RPC） */
+async function sendDownload(settings, payload) {
+  if (settings.sendTarget === "daemon") {
+    return sendToDaemon(settings, payload);
+  }
+  return sendToFalcon(settings.apiBaseUrl, payload);
+}
+
+/** 归一化 daemon 任务（tellActive/tellWaiting/tellStopped 条目）为统一形状 */
+function normalizeDaemonTask(g) {
+  const file = Array.isArray(g && g.files) ? g.files[0] : null;
+  const total = Number((g && g.totalLength) || 0);
+  const done = Number((g && g.completedLength) || 0);
+  return {
+    id: (g && g.gid) || "",
+    url: (file && file.uris && file.uris[0] && file.uris[0].uri) || "",
+    path: (file && file.path) || "",
+    status: (g && g.status) || "",
+    progress: total > 0 ? done / total : 0,
+    totalBytes: total,
+    downloadedBytes: done,
+    speed: Number((g && g.downloadSpeed) || 0),
+    error: (g && g.errorMessage) || "",
+  };
+}
+
+/** 任务列表：desktop 走 /v1/tasks，daemon 走 tellActive+tellWaiting+tellStopped */
+async function getTaskList(settings) {
+  if (settings.sendTarget === "daemon") {
+    const [active, waiting, stopped] = await Promise.all([
+      daemonRpc(settings.daemonUrl, settings.daemonSecret, "aria2.tellActive"),
+      daemonRpc(settings.daemonUrl, settings.daemonSecret, "aria2.tellWaiting", [0, 100]),
+      daemonRpc(settings.daemonUrl, settings.daemonSecret, "aria2.tellStopped", [0, 100]),
+    ]);
+    return [
+      ...(Array.isArray(active) ? active : []),
+      ...(Array.isArray(waiting) ? waiting : []),
+      ...(Array.isArray(stopped) ? stopped : []),
+    ].map(normalizeDaemonTask);
+  }
+  const res = await fetch(`${settings.apiBaseUrl.replace(/\/+$/, "")}/v1/tasks`, {
+    signal: rpcTimeoutSignal(2000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  return Array.isArray(data && data.tasks) ? data.tasks : [];
+}
+
 
 function headerValue(headers, name) {
   if (!Array.isArray(headers)) return "";
@@ -249,9 +344,40 @@ async function tryLaunchFalcon(url) {
   }
 }
 
+/** 从 URL 或下载文件名提取扩展名（小写，无点） */
+function getExtensionForDownload(url, filename) {
+  const source = String(filename || "") || getFilenameFromUrl(url);
+  const m = source.match(/\.([a-z0-9]{1,10})(?:$|[?#])/i);
+  return m ? m[1].toLowerCase() : "";
+}
+
+/** 拦截过滤器：扩展名清单为空 = 全部接管（0.1.0 行为） */
+function shouldIntercept(item, settings) {
+  const list = Array.isArray(settings.interceptExtensions) ? settings.interceptExtensions : [];
+  if (list.length === 0) return true;
+  const ext = getExtensionForDownload(item.url, item.filename);
+  return ext !== "" && list.map((x) => String(x).toLowerCase().replace(/^\./, "")).includes(ext);
+}
+
+const MENU_LINK = "falcon-link";
+const MENU_PAGE = "falcon-page-links";
+
 chrome.runtime.onInstalled.addListener(async () => {
   const current = await getSettings();
   await storageSet(current);
+
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: MENU_LINK,
+      title: chrome.i18n.getMessage("ctxDownloadLink") || "Download with Falcon",
+      contexts: ["link", "video", "audio"],
+    });
+    chrome.contextMenus.create({
+      id: MENU_PAGE,
+      title: chrome.i18n.getMessage("ctxCollectPageLinks") || "Collect page links with Falcon",
+      contexts: ["page"],
+    });
+  });
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
@@ -268,19 +394,26 @@ chrome.downloads.onCreated.addListener(async (item) => {
   const host = getHostname(item.url);
   if (host && isHostDisabled(host, settings.disabledHosts)) return;
 
+  if (!shouldIntercept(item, settings)) return;
+
   if (typeof item.tabId === "number" && item.tabId >= 0) {
     const skip = await consumeSkipOnceForTab(item.tabId);
     if (skip) return;
   }
 
-  const ok = await sendToFalcon(settings.apiBaseUrl, {
-    url: item.url,
-    referrer: item.referrer || "",
-    filename: item.filename || "",
-  });
+  let ok = false;
+  try {
+    ok = await sendDownload(settings, {
+      url: item.url,
+      referrer: item.referrer || "",
+      filename: item.filename || "",
+    });
+  } catch {
+    // daemon 不可达 / RPC 错误——按发送失败收口，浏览器下载照常
+  }
 
   if (!ok) {
-    if (settings.launchFalconIfUnavailable) {
+    if (settings.launchFalconIfUnavailable && settings.sendTarget !== "daemon") {
       await tryLaunchFalcon(item.url);
     }
     await notify("Falcon", "Falcon API not reachable; using browser download.");
@@ -398,17 +531,76 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const settings = await getSettings();
       const cookies = settings.includeCookiesOnSend ? await getCookieHeaderForUrl(msg.url) : "";
       const cookiesSafe = cookies.length > 8192 ? cookies.slice(0, 8192) : cookies;
-      const ok = await sendToFalcon(settings.apiBaseUrl, {
-        url: msg.url,
-        referrer: msg.referrer || "",
-        filename: msg.filename || "",
-        user_agent: msg.userAgent || "",
-        cookies: cookiesSafe,
-      });
-      if (!ok && settings.launchFalconIfUnavailable) {
+      let ok = false;
+      let error = "";
+      try {
+        ok = await sendDownload(settings, {
+          url: msg.url,
+          referrer: msg.referrer || "",
+          filename: msg.filename || "",
+          user_agent: msg.userAgent || "",
+          cookies: cookiesSafe,
+        });
+      } catch (e) {
+        error = String((e && e.message) || e);
+      }
+      if (!ok && settings.launchFalconIfUnavailable && settings.sendTarget !== "daemon") {
         await tryLaunchFalcon(msg.url);
       }
-      sendResponse({ ok });
+      sendResponse({ ok, error });
+      return;
+    }
+    if (msg?.type === "sendUrlsToFalcon" && Array.isArray(msg.urls)) {
+      const settings = await getSettings();
+      let sent = 0;
+      let firstError = "";
+      for (const url of msg.urls) {
+        if (typeof url !== "string" || !url) continue;
+        try {
+          if (await sendDownload(settings, { url, referrer: msg.referrer || "" })) {
+            sent++;
+          }
+        } catch (e) {
+          if (!firstError) firstError = String((e && e.message) || e);
+        }
+      }
+      sendResponse({ ok: sent > 0, sent, error: firstError });
+      return;
+    }
+    if (msg?.type === "getTasks") {
+      const settings = await getSettings();
+      try {
+        const tasks = await getTaskList(settings);
+        sendResponse({ ok: true, tasks, target: settings.sendTarget });
+      } catch (e) {
+        sendResponse({ ok: false, error: String((e && e.message) || e) });
+      }
+      return;
+    }
+    if (msg?.type === "taskAction" && typeof msg.id === "string") {
+      const settings = await getSettings();
+      if (settings.sendTarget !== "daemon") {
+        sendResponse({ ok: false, error: "Desktop mode has no remote control; use the Falcon app." });
+        return;
+      }
+      const method =
+        msg.action === "pause"
+          ? "aria2.forcePause"
+          : msg.action === "resume"
+            ? "aria2.unpause"
+            : msg.action === "remove"
+              ? "aria2.remove"
+              : "";
+      if (!method) {
+        sendResponse({ ok: false, error: "Unknown action" });
+        return;
+      }
+      try {
+        await daemonRpc(settings.daemonUrl, settings.daemonSecret, method, [msg.id]);
+        sendResponse({ ok: true });
+      } catch (e) {
+        sendResponse({ ok: false, error: String((e && e.message) || e) });
+      }
       return;
     }
     if (msg?.type === "downloadInBrowser" && typeof msg.url === "string") {
@@ -424,4 +616,31 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ ok: false });
   })();
   return true;
+});
+
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  if (!info || typeof info.menuItemId !== "string") return;
+  if (info.menuItemId !== MENU_LINK && info.menuItemId !== MENU_PAGE) return;
+
+  const settings = await getSettings();
+  if (!settings.enabled) return;
+
+  if (info.menuItemId === MENU_LINK) {
+    const url = info.linkUrl || info.srcUrl || "";
+    if (!url) return;
+    try {
+      await sendDownload(settings, {
+        url,
+        referrer: info.pageUrl || (tab && tab.url) || "",
+      });
+      await notify("Falcon", "Sent download to Falcon.");
+    } catch (e) {
+      await notify("Falcon", `Send failed: ${String((e && e.message) || e)}`);
+    }
+    return;
+  }
+
+  // MENU_PAGE：打开批量链接选择页
+  const tabId = tab && typeof tab.id === "number" ? tab.id : "";
+  await tabsCreate({ url: chrome.runtime.getURL(`batch/batch.html?tabId=${tabId}`) });
 });

@@ -154,6 +154,10 @@ private:
     // 最近一轮任务快照的 URL 映射（错误通知里显示文件名用）
     QHash<qulonglong, QString> task_url_by_id_;
 
+    // 最近一轮快照缓存（浏览器扩展 IPC /v1/tasks、/v1/stats 的数据源）
+    std::vector<falcon::daemon::rpc::TaskSnapshot> latest_task_snapshots_;
+    falcon::daemon::rpc::GlobalStats latest_stats_{};
+
     // 边缘缩放光标当前是否由本类设置(true 才在离开边缘带时恢复箭头)
     bool resize_cursor_active_ = false;
 

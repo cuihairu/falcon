@@ -30,6 +30,35 @@
         <input type="text" id="apiBaseUrl" spellcheck="false" />
       </div>
 
+      <div class="row field">
+        <label id="sendTargetLabel"></label>
+        <div class="radioGroup">
+          <label class="radio">
+            <input type="radio" name="sendTarget" value="desktop" />
+            <span id="sendTargetDesktop"></span>
+          </label>
+          <label class="radio">
+            <input type="radio" name="sendTarget" value="daemon" />
+            <span id="sendTargetDaemon"></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="row field">
+        <label for="daemonUrl" id="daemonUrlLabel"></label>
+        <input type="text" id="daemonUrl" spellcheck="false" />
+      </div>
+
+      <div class="row field">
+        <label for="daemonSecret" id="daemonSecretLabel"></label>
+        <input type="password" id="daemonSecret" spellcheck="false" autocomplete="off" />
+      </div>
+
+      <div class="row field">
+        <label for="interceptExtensions" id="interceptFilterLabel"></label>
+        <textarea id="interceptExtensions" rows="5" spellcheck="false"></textarea>
+      </div>
+
       <label class="row toggle">
         <input type="checkbox" id="launchFalconIfUnavailable" />
         <span id="launchIfUnavailable"></span>

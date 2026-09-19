@@ -76,5 +76,98 @@
   },
   "failed": {
     "message": "失败"
+  },
+  "ctxDownloadLink": {
+    "message": "用 Falcon 下载"
+  },
+  "ctxCollectPageLinks": {
+    "message": "用 Falcon 收集本页链接"
+  },
+  "tasksTitle": {
+    "message": "任务"
+  },
+  "refresh": {
+    "message": "刷新"
+  },
+  "collectLinks": {
+    "message": "收集本页链接"
+  },
+  "tasksLoading": {
+    "message": "正在加载任务…"
+  },
+  "tasksEmpty": {
+    "message": "暂无任务"
+  },
+  "pauseTask": {
+    "message": "暂停"
+  },
+  "resumeTask": {
+    "message": "继续"
+  },
+  "stActive": {
+    "message": "下载中"
+  },
+  "stWaiting": {
+    "message": "等待中"
+  },
+  "stPaused": {
+    "message": "已暂停"
+  },
+  "stComplete": {
+    "message": "已完成"
+  },
+  "stError": {
+    "message": "失败"
+  },
+  "stRemoved": {
+    "message": "已取消"
+  },
+  "stUnknown": {
+    "message": "未知"
+  },
+  "batchTitle": {
+    "message": "选择要下载的链接"
+  },
+  "batchFilterPlaceholder": {
+    "message": "按关键字或扩展名过滤，如 .zip"
+  },
+  "batchSelectAll": {
+    "message": "全选"
+  },
+  "batchClear": {
+    "message": "全不选"
+  },
+  "batchSend": {
+    "message": "发送所选到 Falcon"
+  },
+  "batchLoading": {
+    "message": "正在收集链接…"
+  },
+  "batchEmpty": {
+    "message": "本页未找到链接"
+  },
+  "batchSent": {
+    "message": "已发送"
+  },
+  "batchNoneSelected": {
+    "message": "请至少选择一个链接"
+  },
+  "sendTargetLabel": {
+    "message": "发送目标"
+  },
+  "sendTargetDesktop": {
+    "message": "Falcon 桌面应用（本地 IPC）"
+  },
+  "sendTargetDaemon": {
+    "message": "Falcon daemon（aria2 兼容 RPC）"
+  },
+  "daemonUrlLabel": {
+    "message": "Daemon RPC 地址"
+  },
+  "daemonSecretLabel": {
+    "message": "Daemon RPC 密钥（token）"
+  },
+  "interceptFilterLabel": {
+    "message": "接管下载的文件类型（每行一个扩展名，留空 = 全部接管）"
   }
 }

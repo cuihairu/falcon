@@ -2,6 +2,29 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-19 - 浏览器扩展 IPC 只读查询端点 + /v1/add 应答被模态对话框绑架缺陷修复
+- **只读查询端点三件套**（浏览器扩展任务面板数据面）：`GET /v1/health`
+  （无副作用连通性探测，静态 JSON）/ `GET /v1/tasks`（任务快照数组）/
+  `GET /v1/stats`（全局统计）。数据源经 `JsonProvider`
+  （`std::function<QByteArray()>`）由 MainWindow 注入——快照在 GUI 线程
+  刷新（on_tasks_refreshed/on_stats_refreshed 缓存到
+  latest_task_snapshots_/latest_stats_），QTcpServer 信号同在 GUI 线程，
+  回调内直接读缓存无并发问题；provider 未注入时 503 兜底。状态串对齐
+  aria2 风格（Pending/Preparing→waiting、Downloading→active、Paused→
+  paused、Completed→complete、Failed→error、Cancelled→removed），序列化
+  用 Qt JSON（qulonglong→QJsonValue 歧义，须显式 qint64）。OPTIONS 预检
+  补 GET 方法声明，全部 JSON 响应统一带 CORS 头
+- **修复 /v1/add 应答被模态对话框绑架**（扩展联调回环冒烟曝光，离屏启动
+  真实 falcon-desktop + curl 实测）：`emit download_requested` 是同线程
+  直连，on_download_requested 弹模态添加对话框 `exec()` 阻塞到用户操作，
+  202 应答被推迟到对话框关闭之后——扩展 1.5s 超时必然先到，误判"Falcon
+  不可达"→ 不取消浏览器下载 → 文件重复下载。修复：先 write_json(202)
+  再 emit（202 = "请求已受理"，任务是否创建由对话框决定）；修复前 POST
+  3s 超时零字节，修复后即时 202
+- **验证方法**：`QT_QPA_PLATFORM=offscreen` 启动真实 falcon-desktop +
+  curl 回环——/v1/health、/v1/tasks（空数组）、/v1/stats、POST 202、
+  OPTIONS 预检、404/405 逐项断言
+
 ### 2026-09-18 - 导航信号重构 + 空壳入口删除 + 统一品牌视觉打磨（qt-ui-design 截图驱动）
 - **三 tab 同界面根因**（不是过滤缺失）：每个 tab 双 connect——具体信号
   （downloadingTabClicked/completedTabClicked）先发、downloadClicked 后发，

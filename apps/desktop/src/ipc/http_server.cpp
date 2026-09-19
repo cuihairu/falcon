@@ -114,9 +114,44 @@ void HttpIpcServer::handle_socket(QTcpSocket* socket)
             200,
             "OK",
             "Access-Control-Allow-Origin: *\r\n"
-            "Access-Control-Allow-Methods: POST, OPTIONS\r\n"
+            "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
             "Access-Control-Allow-Headers: content-type\r\n"
         );
+        socket->disconnectFromHost();
+        return;
+    }
+
+    const QByteArray cors_headers =
+        "Access-Control-Allow-Origin: *\r\n"
+        "Content-Type: application/json; charset=utf-8\r\n";
+
+    if (method == "get") {
+        // 只读查询端点（浏览器扩展任务面板/连通性探测）：
+        // /v1/health 无副作用，/v1/tasks 与 /v1/stats 走注入的快照提供者
+        if (path == "/v1/health") {
+            write_json(socket, 200, R"({"ok":true,"name":"falcon-desktop","api":"v1"})", cors_headers);
+            socket->disconnectFromHost();
+            return;
+        }
+        if (path == "/v1/tasks") {
+            if (!tasks_provider_) {
+                write_json(socket, 503, R"({"ok":false,"error":"tasks provider not ready"})", cors_headers);
+            } else {
+                write_json(socket, 200, tasks_provider_(), cors_headers);
+            }
+            socket->disconnectFromHost();
+            return;
+        }
+        if (path == "/v1/stats") {
+            if (!stats_provider_) {
+                write_json(socket, 503, R"({"ok":false,"error":"stats provider not ready"})", cors_headers);
+            } else {
+                write_json(socket, 200, stats_provider_(), cors_headers);
+            }
+            socket->disconnectFromHost();
+            return;
+        }
+        write_text(socket, 404, "Not found");
         socket->disconnectFromHost();
         return;
     }
@@ -154,8 +189,11 @@ void HttpIpcServer::handle_socket(QTcpSocket* socket)
     request.referrer = obj.value("referrer").toString();
     request.user_agent = obj.value("user_agent").toString();
     request.cookies = obj.value("cookies").toString();
-    emit download_requested(request);
 
+    // 先应答再派发：download_requested 是同线程直连，on_download_requested
+    // 会弹模态添加对话框并阻塞到用户操作——若先 emit 再应答，202 会被
+    // 对话框生命周期绑架（发送方 1.5s 超时必然先到，扩展误判不可达）。
+    // 202 = "请求已被桌面端受理"，后续由对话框决定是否创建任务。
     write_json(
         socket,
         202,
@@ -164,6 +202,8 @@ void HttpIpcServer::handle_socket(QTcpSocket* socket)
         "Content-Type: application/json; charset=utf-8\r\n"
     );
     socket->disconnectFromHost();
+
+    emit download_requested(request);
 }
 
 HttpIpcServer::ParseResult HttpIpcServer::parse_http_request(

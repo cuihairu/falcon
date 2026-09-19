@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Falcon</title>
+    <link rel="stylesheet" href="batch.css" />
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h1 id="title"></h1>
+        <span class="mono muted" id="sourceTab"></span>
+      </div>
+
+      <div class="toolbar">
+        <input type="text" id="filter" spellcheck="false" />
+        <button id="selectAll"></button>
+        <button id="selectNone"></button>
+        <span class="spacer"></span>
+        <span class="muted" id="countInfo"></span>
+      </div>
+
+      <div class="list" id="linkList"></div>
+      <div class="status" id="statusText"></div>
+
+      <div class="footer">
+        <span class="status inline" id="sendStatus"></span>
+        <span class="spacer"></span>
+        <button id="send" class="primary"></button>
+      </div>
+    </div>
+
+    <script type="module" src="batch.js"></script>
+  </body>
+</html>

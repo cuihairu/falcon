@@ -7,6 +7,10 @@ const DEFAULT_SETTINGS = Object.freeze({
   sniffMaxItemsPerTab: 80,
   includeCookiesOnSend: false,
   disabledHosts: [],
+  sendTarget: "desktop",
+  daemonUrl: "http://127.0.0.1:6800",
+  daemonSecret: "",
+  interceptExtensions: [],
 });
 
 function i18n(key) {
@@ -24,7 +28,7 @@ function storageSet(values) {
 function toLines(text) {
   return text
     .split(/\r?\n/)
-    .map((s) => s.trim())
+    .map((s) => s.trim().replace(/^\./, "").toLowerCase())
     .filter((s) => s.length > 0);
 }
 
@@ -34,6 +38,9 @@ async function loadSettings() {
     ...DEFAULT_SETTINGS,
     ...stored,
     disabledHosts: Array.isArray(stored.disabledHosts) ? stored.disabledHosts : DEFAULT_SETTINGS.disabledHosts,
+    interceptExtensions: Array.isArray(stored.interceptExtensions)
+      ? stored.interceptExtensions
+      : DEFAULT_SETTINGS.interceptExtensions,
   };
 }
 
@@ -47,6 +54,12 @@ async function main() {
   document.getElementById("apiEndpoint").textContent = i18n("apiEndpoint");
   document.getElementById("launchIfUnavailable").textContent = i18n("launchIfUnavailable");
   document.getElementById("includeCookiesOnSendLabel").textContent = i18n("includeCookiesOnSend");
+  document.getElementById("sendTargetLabel").textContent = i18n("sendTargetLabel");
+  document.getElementById("sendTargetDesktop").textContent = i18n("sendTargetDesktop");
+  document.getElementById("sendTargetDaemon").textContent = i18n("sendTargetDaemon");
+  document.getElementById("daemonUrlLabel").textContent = i18n("daemonUrlLabel");
+  document.getElementById("daemonSecretLabel").textContent = i18n("daemonSecretLabel");
+  document.getElementById("interceptFilterLabel").textContent = i18n("interceptFilterLabel");
   document.getElementById("save").textContent = i18n("save");
 
   const settings = await loadSettings();
@@ -58,6 +71,9 @@ async function main() {
   const launchEl = document.getElementById("launchFalconIfUnavailable");
   const cookiesEl = document.getElementById("includeCookiesOnSend");
   const disabledEl = document.getElementById("disabledHosts");
+  const daemonUrlEl = document.getElementById("daemonUrl");
+  const daemonSecretEl = document.getElementById("daemonSecret");
+  const interceptEl = document.getElementById("interceptExtensions");
   const statusEl = document.getElementById("status");
 
   enabledEl.checked = !!settings.enabled;
@@ -67,8 +83,15 @@ async function main() {
   launchEl.checked = settings.launchFalconIfUnavailable !== false;
   cookiesEl.checked = !!settings.includeCookiesOnSend;
   disabledEl.value = (settings.disabledHosts || []).join("\n");
+  daemonUrlEl.value = settings.daemonUrl || DEFAULT_SETTINGS.daemonUrl;
+  daemonSecretEl.value = settings.daemonSecret || "";
+  interceptEl.value = (settings.interceptExtensions || []).join("\n");
+
+  const target = settings.sendTarget === "daemon" ? "daemon" : "desktop";
+  document.querySelector(`input[name="sendTarget"][value="${target}"]`).checked = true;
 
   document.getElementById("save").addEventListener("click", async () => {
+    const chosen = document.querySelector('input[name="sendTarget"]:checked');
     const next = {
       enabled: enabledEl.checked,
       sniffMedia: sniffMediaEl.checked,
@@ -78,6 +101,10 @@ async function main() {
       launchFalconIfUnavailable: launchEl.checked,
       includeCookiesOnSend: cookiesEl.checked,
       disabledHosts: toLines(disabledEl.value),
+      sendTarget: chosen ? chosen.value : DEFAULT_SETTINGS.sendTarget,
+      daemonUrl: daemonUrlEl.value.trim() || DEFAULT_SETTINGS.daemonUrl,
+      daemonSecret: daemonSecretEl.value,
+      interceptExtensions: toLines(interceptEl.value),
     };
     await storageSet(next);
     statusEl.textContent = i18n("saved");

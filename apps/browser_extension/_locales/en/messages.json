@@ -76,5 +76,98 @@
   },
   "failed": {
     "message": "Failed"
+  },
+  "ctxDownloadLink": {
+    "message": "Download with Falcon"
+  },
+  "ctxCollectPageLinks": {
+    "message": "Collect page links with Falcon"
+  },
+  "tasksTitle": {
+    "message": "Tasks"
+  },
+  "refresh": {
+    "message": "Refresh"
+  },
+  "collectLinks": {
+    "message": "Collect page links"
+  },
+  "tasksLoading": {
+    "message": "Loading tasks…"
+  },
+  "tasksEmpty": {
+    "message": "No tasks"
+  },
+  "pauseTask": {
+    "message": "Pause"
+  },
+  "resumeTask": {
+    "message": "Resume"
+  },
+  "stActive": {
+    "message": "Active"
+  },
+  "stWaiting": {
+    "message": "Waiting"
+  },
+  "stPaused": {
+    "message": "Paused"
+  },
+  "stComplete": {
+    "message": "Complete"
+  },
+  "stError": {
+    "message": "Error"
+  },
+  "stRemoved": {
+    "message": "Removed"
+  },
+  "stUnknown": {
+    "message": "?"
+  },
+  "batchTitle": {
+    "message": "Select links to download"
+  },
+  "batchFilterPlaceholder": {
+    "message": "Filter by keyword or extension, e.g. .zip"
+  },
+  "batchSelectAll": {
+    "message": "All"
+  },
+  "batchClear": {
+    "message": "None"
+  },
+  "batchSend": {
+    "message": "Send selected to Falcon"
+  },
+  "batchLoading": {
+    "message": "Collecting links…"
+  },
+  "batchEmpty": {
+    "message": "No links found on this page"
+  },
+  "batchSent": {
+    "message": "Sent"
+  },
+  "batchNoneSelected": {
+    "message": "Select at least one link"
+  },
+  "sendTargetLabel": {
+    "message": "Send target"
+  },
+  "sendTargetDesktop": {
+    "message": "Falcon desktop app (local IPC)"
+  },
+  "sendTargetDaemon": {
+    "message": "Falcon daemon (aria2-compatible RPC)"
+  },
+  "daemonUrlLabel": {
+    "message": "Daemon RPC URL"
+  },
+  "daemonSecretLabel": {
+    "message": "Daemon RPC secret (token)"
+  },
+  "interceptFilterLabel": {
+    "message": "Intercept file types (one extension per line, empty = all)"
   }
 }
