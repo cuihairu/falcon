@@ -2486,20 +2486,27 @@ path-style）；网盘分享链识别（12 平台）+ 资源搜索；GUI 桌面�
    有意义，优先级低
 9. **客户端 TLS 证书**：V1/V2 均无（CURLOPT_SSLCERT 未接线）
    ——aria2 --certificate/--private-key，双向 TLS 场景需要
-10. **RustFS / MinIO 系 S3 兼容服务的真鉴权**（2026-09-19 立项，
-    用户点名）：MinIO 社区版闭源化后 RustFS（S3 兼容、Apache-2.0）
-    成为自建替代主流。**真缺口是 s3_browser 无 SigV4**——
-    s3_browser.cpp perform_s3_request 自注释「简化签名（实际应使
-    用AWS签名V4）」实际连 Authorization 头都不发（只发 Date/Host，
-    mock 测试服务器不校验鉴权所以全绿），对 MinIO/RustFS 等强制
-    鉴权服务必 403 AccessDenied。增量三件：① perform_s3_request
-    接 SigV4 头签名（复用 s3_plugin.cpp 的 S3Authenticator 机器
-    ——x-amz-content-sha256/x-amz-date/Authorization 四件套已有
-    生产实现）；② s3_browser mock 测试加 Authorization 头格式断
-    言（服务器侧校验签名结构而非放行一切）；③ README MinIO 表
-    述扩为 MinIO/RustFS + 桌面云盘页 endpoint 提示语核对。浏览器
-    才是桌面云盘页活跃路径（create_browser("s3")），s3_plugin 的
-    presigned 下载是另一条路不受影响
+10. ~~**RustFS / MinIO 系 S3 兼容服务的真鉴权**~~（2026-09-19 已落地）：
+    MinIO 社区版闭源化后 RustFS（S3 兼容、Apache-2.0）成为自建替代
+    主流。**真缺口是 s3_browser 无 SigV4**——perform_s3_request 原本
+    只发 Date/Host 匿名请求，对强制鉴权服务必 403 AccessDenied。落地
+    三件：① SigV4 头签名接入 perform_s3_request（有凭据即签：host +
+    x-amz-date + x-amz-content-sha256 + Authorization，线上头与参与签
+    名头一一对应；**计划修正——「复用 s3_plugin.cpp 的 S3Authenticator」
+    前提为假**，nm 实证该文件从未接入任何构建目标、库符号零
+    S3Authenticator、生产零消费方，按 websocket_server/http_plugin_v2
+    先例整体删除死文件，提取为活代码 s3_authenticator.{hpp,cpp} 并
+    扩展：sign_request 增 query_params 参签（ListObjectsV2 带查询串必
+    须进规范请求）、sha256 公有化；OpenSSL 缺席构建回落匿名模式，
+    FALCON_ENABLE_CRYPTO_STORAGE_BROWSERS 门控）；② mock 测试加带请
+    求头的 RawHandler 形态 + s3_browser_auth_test 3 用例（**测试侧
+    OpenSSL 独立重导签名全程**与线上 Authorization 精确比对——不经
+    S3Authenticator，避免同 bug 自我印证；HEAD 对象无查询签名相等 /
+    ListObjectsV2 查询规范化——prefix=docs/ 线上 docs%2F 签名前解码
+    还原再规范重编码排序，二次编码 %252F 或乱序即红 / 无凭据匿名路
+    径保持）；③ README 双语 MinIO → MinIO/RustFS（标注 SigV4 签名）
+    + 桌面云盘页核对（endpoint/access_key/secret_key 已透传 options，
+    库层签名自动生效，零改动）
 
 **记录不修的假缺口：** HTTP Digest（V1 CURLAUTH_ANY 已含，V2
 经适配层 401 回退 V1 兜底）、socks/HTTPS 代理（V2 判 Unsupported

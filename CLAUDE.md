@@ -2,6 +2,52 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-19 - S3 兼容服务 SigV4 真鉴权（MinIO/RustFS 可用）+ 死代码 s3_plugin 整体删除
+- **真缺口**：s3_browser 的 perform_s3_request 自注释「简化签名」实际
+  连 Authorization 头都不发（只发 Date/Host 匿名请求），对 MinIO/
+  RustFS/AWS 等强制鉴权服务必 403 AccessDenied——mock 测试服务器不
+  校验鉴权所以全绿，属于"测试放行一切"掩盖的生产缺陷
+- **计划修正（立项前提证伪）**：「复用 s3_plugin.cpp 的
+  S3Authenticator」前提为假——该文件从未接入任何构建目标（全部
+  CMakeLists 零引用），nm 实证 libfalcon_storage.a 零 S3Authenticator
+  符号（对比 S3Browser 284 个），presigned 下载零生产调用方。按
+  websocket_server/xml_rpc_server/http_plugin_v2 先例整体删除
+  s3_plugin.{cpp,hpp} + 兼容 shim（git 历史可查）
+- **S3Authenticator 提取为活代码**（plugins/s3/s3_authenticator.{hpp,cpp}
+  + include/falcon/storage/s3_authenticator.hpp，OpenSSL 门控编译进
+  FALCON_ENABLE_CRYPTO_STORAGE_BROWSERS 块）：完整 SigV4——规范请求
+  （方法/规范 URI/**规范查询**/规范头/SignedHeaders/载荷哈希）→ 待签
+  串 → AWS4 四段密钥派生（date→region→service→aws4_request）。两处
+  扩展：sign_request 增加 query_params 参签（ListObjectsV2 等带查询
+  串请求必须进规范请求，此前死代码版本只有无查询形态）；sha256 公有
+  化（x-amz-content-sha256 头取值）；presigned URL 生成随死代码删除
+  （唯一消费者已不存在）
+- **perform_s3_request 签名接入**：有凭据（access_key_id 与
+  secret_access_key 均非空）即签——签名集合 = 调用方头（键小写化）+
+  host（含端口）+ x-amz-date（同源 request_time）+
+  x-amz-content-sha256，线上发出的头与参与签名的头一一对应；**线上
+  查询值先 url_decode 还原再交签名器规范编码排序**（防二次编码 % →
+  %25）；无凭据保持匿名路径（Date/Host，公共桶可读，与旧行为一致，
+  OpenSSL 缺席构建同样回落）；支持 path-style endpoint（MinIO/
+  RustFS 私有化部署主形态，既有）
+- **测试：服务器侧独立验签**（s3_browser_auth_test.cpp 3 用例，挂
+  falcon_storage_tests OpenSSL 门控块）：mock_http_server.hpp 增加
+  RawHandler 形态（带请求头，键小写化；既有 2 参 Handler 与 6 个消
+  费测试文件零改动）。测试侧用 OpenSSL **独立重导签名全程**（规范请
+  求组装→待签串→四段派生），与线上收到的 Authorization 精确比对
+  ——不经 S3Authenticator，避免"同一个 bug 自我印证"三用例：HEAD
+  对象无查询（含 Credential/scope/SignedHeaders 结构断言 +
+  x-amz-content-sha256==SHA256("") + connect 桶探测 GET 签名）/
+  ListObjectsV2 查询规范化（prefix=docs/ 线上编码 docs%2F，签名前
+  解码还原再规范重编码排序——二次编码 %252F 或乱序即红）/ 无凭据
+  匿名保持（无 Authorization、Date/Host 在位、请求可用）
+- **桌面零改动**：云盘页 storage_service 已透传 endpoint/access_key/
+  secret_key 进 options，库层签名自动生效——S3 类网盘配置凭据即可
+  连 MinIO/RustFS
+- **验证**：falcon_storage_tests 全量 388 用例（cov 树 + ASan 树）双
+  绿零告警；ASan 树首跑含鉴权链（curl + OpenSSL HMAC）内存检查
+- README 双语 MinIO 表述扩为 MinIO/RustFS（标注 SigV4 签名）
+
 ### 2026-09-19 - conditional-get 端到端（aria2 --conditional-get 同语义 + 任务状态文件 v4）+ 覆盖率徽章与 CI 口径修复 + RustFS 立项
 - **`DownloadOptions::conditional_get`（默认 false）端到端生效**：
   目标文件已存在时按其修改时间生成 If-Modified-Since（RFC 7231

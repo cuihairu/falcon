@@ -50,7 +50,7 @@
   - HTTP proxy (plain and CONNECT tunneling) & SOCKS5
 - **Cloud Storage Integration**:
   - Amazon S3, Alibaba Cloud OSS, Tencent COS, Qiniu Kodo, Upyun
-  - Custom endpoints for MinIO / private-gateway deployments
+  - Custom endpoints for MinIO / RustFS / private-gateway deployments (AWS SigV4 signing)
 - **Remote Resource Browsing**: Browse FTP/SFTP/S3/OSS/COS/Kodo/Upyun directories
 - **Resource Search**: Built-in search provider framework for torrent and file resources
 - **Secure Configuration**: AES-256-GCM encrypted credential storage with master password protection
@@ -146,8 +146,9 @@ Run `falcon-cli --help` for the full parameter list.
 Library-level browsing is implemented for Amazon S3, Alibaba Cloud OSS, Tencent COS,
 Qiniu Kodo, and Upyun (`packages/libfalcon-storage`): listing, tree views, object info,
 mkdir / rename / recursive delete, quota queries, and custom-endpoint (MinIO /
-private-gateway) support. The desktop application ships a cloud storage page backed by
-these modules.
+RustFS / private-gateway) support with AWS Signature V4 request signing for
+S3-compatible services that require authentication. The desktop application ships a
+cloud storage page backed by these modules.
 
 > **Note**: the CLI currently does not expose storage-browsing commands. Flags like
 > `--list`, `--tree`, `--search`, `--add-config`, `--set-master-password` shown in some

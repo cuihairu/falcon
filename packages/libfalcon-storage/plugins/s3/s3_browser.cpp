@@ -12,10 +12,19 @@
 
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
+#include <cctype>
+#include <cstdlib>
 #include <sstream>
 #include <algorithm>
+#include <chrono>
 #include <ctime>
 #include <iomanip>
+#include <utility>
+#include <vector>
+
+#ifdef FALCON_ENABLE_CRYPTO_STORAGE_BROWSERS
+#include <falcon/storage/s3_authenticator.hpp>
+#endif
 
 #ifdef FALCON_BROWSER_NO_JSON
 #pragma message "Warning: Compiling S3 browser without JSON support. Some features may not work."
@@ -45,6 +54,73 @@ S3Url S3UrlParser::parse(const std::string& url) {
     }
 
     return s3_url;
+}
+
+// ---- SigV4 签名辅助（仅凭证路径使用；匿名路径保持既有 Date/Host） ----
+
+/// ASCII 小写化（SigV4 规范形态要求签名头名一律小写）
+static std::string to_lower_ascii(const std::string& s) {
+    std::string out = s;
+    for (auto& c : out) {
+        if (c >= 'A' && c <= 'Z') {
+            c = static_cast<char>(c - 'A' + 'a');
+        }
+    }
+    return out;
+}
+
+/// x-amz-date 取值（ISO 8601 基本格式，UTC）
+static std::string amz_date_of(const std::chrono::system_clock::time_point& tp) {
+    auto time_t = std::chrono::system_clock::to_time_t(tp);
+    struct tm* timeinfo = gmtime(&time_t);
+    char buffer[32];
+    strftime(buffer, sizeof(buffer), "%Y%m%dT%H%M%SZ", timeinfo);
+    return std::string(buffer);
+}
+
+/// 查询串拆键值对（按 '&' 分段、首个 '=' 分键值；解码由调用方完成）
+static std::vector<std::pair<std::string, std::string>> split_query(
+    const std::string& query) {
+    std::vector<std::pair<std::string, std::string>> pairs;
+    size_t start = 0;
+    while (start <= query.size()) {
+        size_t amp = query.find('&', start);
+        if (amp == std::string::npos) {
+            amp = query.size();
+        }
+        const std::string piece = query.substr(start, amp - start);
+        if (!piece.empty()) {
+            const size_t eq = piece.find('=');
+            if (eq == std::string::npos) {
+                pairs.emplace_back(piece, "");
+            } else {
+                pairs.emplace_back(piece.substr(0, eq), piece.substr(eq + 1));
+            }
+        }
+        if (amp == query.size()) {
+            break;
+        }
+        start = amp + 1;
+    }
+    return pairs;
+}
+
+/// %XX 十六进制解码（查询值还原为原始字节；不做 '+' 转空格——
+/// S3 规范编码只用 %XX 形态）
+static std::string url_decode(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '%' && i + 2 < s.size() && std::isxdigit(static_cast<unsigned char>(s[i + 1])) &&
+            std::isxdigit(static_cast<unsigned char>(s[i + 2]))) {
+            const std::string hex = s.substr(i + 1, 2);
+            out += static_cast<char>(std::strtol(hex.c_str(), nullptr, 16));
+            i += 2;
+        } else {
+            out += s[i];
+        }
+    }
+    return out;
 }
 
 /**
@@ -128,15 +204,61 @@ public:
             curl_easy_setopt(curl_, CURLOPT_CUSTOMREQUEST, method.c_str());
         }
 
-        // 添加AWS签名头部
-        std::map<std::string, std::string> signed_headers = headers;
-        if (config_.access_key_id.empty()) {
-            FALCON_LOG_WARN("No AWS credentials provided");
-        }
+        // 请求头：有凭据时 SigV4 头签名（MinIO/RustFS/AWS 等强制鉴权
+        // 服务必需——此前只发 Date/Host 的匿名请求对这类服务必然 403
+        // AccessDenied）；无凭据保持匿名请求（公共桶可读），与旧行为
+        // 一致。OpenSSL 不可用的构建同样回落匿名模式
+        std::map<std::string, std::string> signed_headers;
+#ifdef FALCON_ENABLE_CRYPTO_STORAGE_BROWSERS
+        if (!config_.access_key_id.empty() && !config_.secret_access_key.empty()) {
+            // URL 拆规范 URI（path 部分）与查询参数（原始值——规范编
+            // 码与排序由签名器完成；线上查询值先解码还原，避免二次编码）
+            std::string canonical_uri = "/";
+            std::map<std::string, std::string> query_params;
+            const size_t scheme_end = url.find("://");
+            const size_t authority_start =
+                (scheme_end == std::string::npos) ? 0 : scheme_end + 3;
+            const size_t query_begin = url.find('?', authority_start);
+            const size_t path_begin = url.find('/', authority_start);
+            if (path_begin != std::string::npos) {
+                canonical_uri = url.substr(
+                    path_begin,
+                    (query_begin == std::string::npos ? url.size() : query_begin) -
+                        path_begin);
+            }
+            if (query_begin != std::string::npos) {
+                for (const auto& pair : split_query(url.substr(query_begin + 1))) {
+                    query_params[url_decode(pair.first)] = url_decode(pair.second);
+                }
+            }
 
-        // 简化签名（实际应使用AWS签名V4）
-        signed_headers["Date"] = get_current_time();
-        signed_headers["Host"] = get_host_from_url(url);
+            // SigV4 规范形态：签名头名一律小写；签名集合 = 调用方头 +
+            // host + x-amz-date + x-amz-content-sha256，线上发出的头与
+            // 参与签名的头保持一一对应
+            for (const auto& [key, value] : headers) {
+                signed_headers[to_lower_ascii(key)] = value;
+            }
+            signed_headers["host"] = get_host_from_url(url);
+            const auto now = std::chrono::system_clock::now();
+            signed_headers["x-amz-date"] = amz_date_of(now);
+            signed_headers["x-amz-content-sha256"] =
+                S3Authenticator::sha256(body);
+            signed_headers["Authorization"] = S3Authenticator::sign_request(
+                method, canonical_uri, signed_headers, body,
+                config_.access_key_id, config_.secret_access_key,
+                config_.region, "s3", now, query_params);
+        } else {
+            FALCON_LOG_WARN("No AWS credentials provided, sending anonymous request");
+        }
+#else
+        FALCON_LOG_WARN("No AWS credentials provided");
+#endif
+
+        if (signed_headers.empty()) {
+            // 匿名路径保持既有形态（Date/Host）
+            signed_headers["Date"] = get_current_time();
+            signed_headers["Host"] = get_host_from_url(url);
+        }
 
         curl_slist* header_list = nullptr;
         for (const auto& [key, value] : signed_headers) {

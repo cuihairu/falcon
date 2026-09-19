@@ -60,6 +60,7 @@ if(FALCON_ENABLE_RESOURCE_BROWSER)
 
         if(OPENSSL_FOUND AND TARGET OpenSSL::Crypto)
             target_sources(falcon_storage PRIVATE
+                plugins/s3/s3_authenticator.cpp
                 plugins/oss/oss_browser.cpp
                 plugins/cos/cos_browser.cpp
                 plugins/kodo/kodo_browser.cpp

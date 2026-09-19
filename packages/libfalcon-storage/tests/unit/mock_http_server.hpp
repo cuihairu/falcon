@@ -52,8 +52,15 @@ public:
     };
     using Handler = std::function<Response(const std::string& method,
                                            const std::string& path)>;
+    /// 带请求头的 handler（键小写化）——鉴权/头部传播断言用
+    using RawHandler =
+        std::function<Response(const std::string& method,
+                               const std::string& path,
+                               const std::map<std::string, std::string>& headers)>;
 
     explicit MockHttpServer(Handler handler) : handler_(std::move(handler)) {}
+    explicit MockHttpServer(RawHandler raw_handler)
+        : raw_handler_(std::move(raw_handler)) {}
     ~MockHttpServer() { stop(); }
 
     MockHttpServer(const MockHttpServer&) = delete;
@@ -154,8 +161,35 @@ private:
             requests_.emplace_back(line.substr(0, sp1), line.substr(sp1 + 1, sp2 - sp1 - 1));
         }
 
-        const Response resp = handler_(line.substr(0, sp1),
-                                       line.substr(sp1 + 1, sp2 - sp1 - 1));
+        // 请求头解析（键小写化、值去首尾空格）
+        std::map<std::string, std::string> request_headers;
+        {
+            size_t line_start = request.find("\r\n") + 2;
+            while (line_start < request.size()) {
+                const size_t line_end = request.find("\r\n", line_start);
+                if (line_end == std::string::npos || line_end == line_start) break;
+                const size_t colon = request.find(':', line_start);
+                if (colon != std::string::npos && colon < line_end) {
+                    std::string name = request.substr(line_start, colon - line_start);
+                    size_t v_start = colon + 1;
+                    while (v_start < line_end && request[v_start] == ' ') ++v_start;
+                    std::string value = request.substr(v_start, line_end - v_start);
+                    for (auto& c : name) {
+                        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+                    }
+                    request_headers[name] = value;
+                }
+                line_start = line_end + 2;
+            }
+        }
+
+        const Response resp =
+            raw_handler_
+                ? raw_handler_(line.substr(0, sp1),
+                               line.substr(sp1 + 1, sp2 - sp1 - 1),
+                               request_headers)
+                : handler_(line.substr(0, sp1),
+                           line.substr(sp1 + 1, sp2 - sp1 - 1));
         // 自定义头与固定头冲突时（如 HEAD 用例自定 Content-Length）以自定义为准，
         // 重复且不一致的 Content-Length 会被 curl 拒绝（Weird server reply）
         const bool has_cl = resp.headers.count("Content-Length") > 0;
@@ -195,6 +229,7 @@ private:
     }
 
     Handler handler_;
+    RawHandler raw_handler_;
     int listen_fd_ = -1;
     uint16_t port_ = 0;
     std::atomic<bool> running_{false};

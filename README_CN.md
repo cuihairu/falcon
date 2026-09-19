@@ -46,7 +46,7 @@
   - HTTP 代理(明文与 CONNECT 隧道)与 SOCKS5
 - **云存储集成**:
   - 亚马逊 S3、阿里云 OSS、腾讯云 COS、七牛云 Kodo、又拍云
-  - 自定义 endpoint,支持 MinIO / 私有化网关
+  - 自定义 endpoint,支持 MinIO / RustFS / 私有化网关（AWS SigV4 请求签名）
 - **远程资源浏览**: 浏览 FTP/SFTP/S3/OSS/COS/Kodo/又拍云目录
 - **资源搜索**: 内置搜索提供者框架,支持种子和文件资源搜索
 - **安全配置**: AES-256-GCM 加密存储凭据,主密码保护
@@ -140,7 +140,8 @@ falcon-cli -d /tmp/downloads -o custom_name.zip https://example.com/file.zip
 
 仓库已实现库层级的云存储浏览（`packages/libfalcon-storage`），覆盖亚马逊 S3、阿里云
 OSS、腾讯云 COS、七牛云 Kodo、又拍云：列举、树形视图、对象信息、建目录/改名/
-递归删除、配额查询，并支持自定义 endpoint（MinIO / 私有化网关）。桌面应用的云盘页
+递归删除、配额查询，并支持自定义 endpoint（MinIO / RustFS / 私有化网关），对要求
+鉴权的 S3 兼容服务自动进行 AWS Signature V4 请求签名。桌面应用的云盘页
 面即基于这些模块构建。
 
 > **注意**：CLI 目前未提供存储浏览命令。部分旧示例中出现的 `--list`、`--tree`、
