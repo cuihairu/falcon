@@ -784,4 +784,18 @@ TEST_F(HttpHandlerEdgesTest, SegmentFileOccupiedByDirectoryFailsCleanly) {
     const auto task = makeTask(218, server().url("/segdir.bin"), out, options);
     EXPECT_THROW(handler()->download(task, nullptr), FileIOException);
     EXPECT_FALSE(fs::exists(out));
+
+    // 路径诊断:分段失败于段 0 打开时零 GET(打开先于 curl),单连接
+    // 成功则恰 1 次无 Range GET——CI(vcpkg curl)曾出现后者,请求序
+    // 列落进失败消息直接判别路径
+    std::string req_dump;
+    size_t head_n = 0, get_n = 0;
+    for (const auto& r : server().requests()) {
+        if (r.method == "HEAD") ++head_n;
+        if (r.method == "GET") ++get_n;
+        req_dump += r.method + " " + r.path +
+                    (r.range.empty() ? "" : " Range=" + r.range) + "; ";
+    }
+    EXPECT_EQ(head_n, 1u) << "请求序列: " << req_dump;
+    EXPECT_LE(get_n, 4u) << "请求序列: " << req_dump;
 }
