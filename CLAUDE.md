@@ -2,6 +2,30 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-19 - content-encoding 缺口收口（Accept-Encoding: identity + 原样落盘钉住，aria2/wget 同语义）
+- **todo #4 前提纠偏**：原条目「V1 curl 自动解压」不成立——libcurl
+  不设 CURLOPT_ACCEPT_ENCODING 就不协商也不解压，全库 grep 零命中；
+  V1/V2 现状一致（强制 gzip 响应原样落盘），真缺口是「服务器无视
+  协商强制压缩时客户端毫无告警」
+- **不做透明解码的定性**：输出文件与 URL 响应体逐字节一致是下载器
+  不变式（多段拼接、断点续传、metalink 哈希校验等内容寻址流程依赖
+  它）；解码需 V1/V2 数据面同步改且偏离 aria2 语义。真需要解码应
+  是显式特性（未来 --compressed 选项），不是引擎隐式行为
+- **落地三件事**（V2，wget/aria2 同语义）：① GET 请求恒带
+  `Accept-Encoding: identity`（prepare_http_request，正常服务器不
+  再压缩；用户自定义同名头可覆盖——std::map 后写胜出）；②
+  HttpResponseCommand 解析 content-encoding（小写保留），2xx 且非
+  identity 时记 INFO「服务器无视压缩协商…按字节原样落盘」——观测
+  替代静默；③ `content_encoding_` 成员仅服务日志，不参与任何调度
+  判定
+- **测试 2 用例**（http_commands_edges_test）：ForcedGzipResponse
+  StoredVerbatim（线上断言 identity 头 + 落盘与 gzip 流逐字节一致）
+  + ForcedGzipChunkedStoredVerbatim（压缩流过分块状态机后原样落盘
+  ——帧协议与载荷正交）。gzip 剧本用手工构造的真实 gzip 流
+  （stored deflate 块 + 预计算 CRC32/ISIZE，防将来有人按魔数做聪
+  明事；教训：164 字符 hex 手抄必丢段，改构造式生成 + python 往返
+  验证）；protocols 249 相关子集 + ASan 27 用例绿
+
 ### 2026-09-19 - auto_file_renaming 零消费端落地（aria2 --auto-file-renaming 同语义 + 任务状态文件 v3）
 - **`DownloadOptions::auto_file_renaming`（默认 false）端到端生效**：目标
   文件已存在且未授权覆盖时，输出路径自动改为扩展名前插 ".N"（1..9999，

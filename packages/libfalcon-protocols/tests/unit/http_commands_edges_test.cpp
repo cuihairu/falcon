@@ -58,6 +58,7 @@
 #include <cerrno>
 #include <chrono>
 #include <csignal>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -66,6 +67,7 @@
 #include <fstream>
 #include <functional>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -1755,6 +1757,146 @@ TEST(DownloadEngineV2Edges, MalformedHeaderBareLfLineSkipped) {
     server.stop();
 
     EXPECT_EQ(read_file_content(out_path), body);
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+//==============================================================================
+// 强制压缩响应（content-encoding）
+//==============================================================================
+
+/// 手工构造的真实 gzip 流（stored 块）：未压缩载荷 = "FALCON-GZIP-
+/// VERBATIM-" × 400（8400 字节），CRC32/ISIZE 预计算。引擎不解析响应
+/// 体，但要的是「服务器真的发了合法 gzip 流」的忠实剧本——防止将来
+/// 有人按魔数 1f 8b 对载荷做聪明事
+std::string make_gzip_blob() {
+    static const char kPayloadUnit[] = "FALCON-GZIP-VERBATIM-";
+    std::string payload;
+    payload.reserve(400 * 21);
+    for (int i = 0; i < 400; ++i) {
+        payload.append(kPayloadUnit, 21);
+    }
+    const std::uint32_t crc = 0x33579d7eu;  // zlib.crc32(payload)
+    const std::uint16_t len =
+        static_cast<std::uint16_t>(payload.size());          // 0x20d0
+    const std::uint16_t nlen =
+        static_cast<std::uint16_t>(~len);                    // 0xdf2f
+
+    std::string blob;
+    blob.reserve(10 + 5 + payload.size() + 8);
+    // gzip 头：magic、CM=deflate、FLG=0、MTIME=0、XFL=0、OS=unix
+    blob += "\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03";
+    // deflate stored 块：BFINAL=1 + BTYPE=00 填充成整字节 0x01，
+    // 随后 LEN/NLEN（小端）与原始载荷
+    blob += "\x01";
+    blob.append(reinterpret_cast<const char*>(&len), 2);
+    blob.append(reinterpret_cast<const char*>(&nlen), 2);
+    blob += payload;
+    // gzip 尾：CRC32 + ISIZE（小端）
+    blob.append(reinterpret_cast<const char*>(&crc), 4);
+    const std::uint32_t isize = static_cast<std::uint32_t>(payload.size());
+    blob.append(reinterpret_cast<const char*>(&isize), 4);
+    return blob;
+}
+
+/// 请求恒带 Accept-Encoding: identity（wget 同语义——不协商压缩）；
+/// 服务器无视协商强制 gzip 时，响应体按字节原样落盘（aria2 同语义，
+/// 输出文件与 URL 响应体逐字节一致），任务正常 COMPLETED
+TEST(DownloadEngineV2Edges, ForcedGzipResponseStoredVerbatim) {
+    const std::string blob = make_gzip_blob();
+    auto captured_head = std::make_shared<std::string>();
+
+    ScriptableServer server;
+    ASSERT_TRUE(server.start());
+    server.script({[blob, captured_head](int conn, ScriptableServer& srv) {
+        std::string request;
+        if (!read_headers_plain(conn, request)) return;
+        *captured_head = request;
+        srv.record_target(request_target_of(request));
+        std::string header =
+            "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: " +
+            std::to_string(blob.size()) + "\r\nConnection: close\r\n\r\n";
+        (void)send_all_plain(conn, header.data(), header.size());
+        (void)send_all_plain(conn, blob.data(), blob.size());
+    }});
+
+    const std::string dir = temp_dir_for("gzip");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options = base_options(out_path);
+    const TaskId task_id = engine.add_download(
+        server.http_url("/f.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    EdgesEngineRunner runner(engine);
+    ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
+    ASSERT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+
+    runner.shutdown_and_join();
+    server.stop();
+
+    // 线上有 identity 协商（compressed 响应只能来自服务器无视协商）
+    ASSERT_NE(captured_head->find("Accept-Encoding: identity"),
+              std::string::npos);
+    // 落盘字节与响应体逐字节一致（压缩数据原样存储，不解码不损坏）
+    EXPECT_EQ(read_file_content(out_path), blob);
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+/// 强制 gzip + chunked 组合：压缩流先过分块状态机解帧、再原样落盘
+/// ——帧协议与载荷正交，分块路径同样不碰 content-encoding
+TEST(DownloadEngineV2Edges, ForcedGzipChunkedStoredVerbatim) {
+    const std::string blob = make_gzip_blob();
+    const std::string first = blob.substr(0, 30);
+    const std::string rest = blob.substr(30);
+    std::ostringstream size1, size2;
+    size1 << std::hex << first.size();
+    size2 << std::hex << rest.size();
+    const std::string raw =
+        "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\n"
+        "Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n" +
+        size1.str() + "\r\n" + first + "\r\n" + size2.str() + "\r\n" + rest +
+        "\r\n0\r\n\r\n";
+
+    ScriptableServer server;
+    ASSERT_TRUE(server.start());
+    server.script({serve_raw(raw, {})});
+
+    const std::string dir = temp_dir_for("gzipchunked");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options = base_options(out_path);
+    const TaskId task_id = engine.add_download(
+        server.http_url("/f.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    EdgesEngineRunner runner(engine);
+    ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
+    ASSERT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+
+    runner.shutdown_and_join();
+    server.stop();
+
+    EXPECT_EQ(read_file_content(out_path), blob);
 
     std::error_code rm_ec;
     std::filesystem::remove_all(dir, rm_ec);

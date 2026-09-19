@@ -580,6 +580,10 @@ private:
     /// Transfer-Encoding: chunked（RFC 7230：优先于 Content-Length，
     /// 总长未知——headers 解析完成后统一置零长度与 Range 标志）
     bool is_chunked_response_ = false;
+    /// Content-Encoding 原值（小写；无则空）。Falcon 不协商压缩
+    /// （Accept-Encoding: identity），此字段仅用于强制压缩响应的
+    /// 观测日志——响应体恒按字节原样落盘（aria2 同语义）
+    std::string content_encoding_;
 };
 
 /**

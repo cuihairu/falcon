@@ -1080,6 +1080,12 @@ bool HttpInitiateConnectionCommand::prepare_http_request() {
     http_request_->set_header("Host", host_);
     http_request_->set_header("User-Agent", options_.user_agent);
     http_request_->set_header("Accept", "*/*");
+    // 不协商压缩：显式只接受 identity（wget 同语义）。下载器不变式是
+    // 输出文件与 URL 响应体逐字节一致（分段拼接、断点续传、metalink
+    // 哈希校验等内容寻址流程都依赖它）；协商压缩会改变落盘字节。服务
+    // 器无视协商强制压缩时，响应命令按 aria2 同语义原样落盘并记录
+    // 日志（parse_headers 的 content-encoding 观测点）
+    http_request_->set_header("Accept-Encoding", "identity");
     http_request_->set_header("Connection", "close");
 
     // 代理认证只随明文代理请求发出（CONNECT 隧道的凭据已在 CONNECT
@@ -1521,6 +1527,10 @@ bool HttpResponseCommand::parse_header_line(const std::string& line) {
         // 分块解析；实际置零在 headers 解析完成后统一做——头序不定）
         is_chunked_response_ =
             value.find("chunked") != std::string::npos;
+    } else if (key == "content-encoding") {
+        // 强制压缩响应的观测记录（值可能是逗号分隔编码链，整串小写
+        // 保留；原样落盘的日志判定在 headers 解析完成后统一做）
+        content_encoding_ = to_lower(value);
     } else if (key == "location") {
         redirect_url_ = value;
         is_redirect_ = (status_code_ >= 300 && status_code_ < 400);
@@ -2041,6 +2051,18 @@ bool HttpResponseCommand::parse_headers() {
         content_length_ = 0;
         accepts_range_ = false;
         supports_resume_ = false;
+    }
+
+    // 强制压缩的观测点：请求恒带 Accept-Encoding: identity，服务器仍
+    // 回 content-encoding 即无视协商（透明代理/动态压缩网关常见）。
+    // 按 aria2 同语义原样落盘——输出文件与 URL 响应体逐字节一致是
+    // 下载器不变式，这里只记录不改动；静默处理会让用户拿到压缩数据
+    // 却毫无线索
+    if (status_code_ >= 200 && status_code_ < 300 &&
+        !content_encoding_.empty() && content_encoding_ != "identity") {
+        FALCON_LOG_INFO_STREAM("服务器无视压缩协商（content-encoding: "
+                               << content_encoding_
+                               << "），响应体按字节原样落盘");
     }
 
     http_response_ = std::make_shared<HttpResponse>();

@@ -2459,14 +2459,22 @@ path-style）；网盘分享链识别（12 平台）+ 资源搜索；GUI 桌面�
 3. **BT 做种策略**：seed-ratio/seed-time 全库零命中——下载完
    即停，无法做种保活（PT 站核心需求）。需要 BT handler 增加
    完成后保留会话 + 上传计量 + 条件退出
-4. **gzip/deflate content-encoding**：V2 无 Accept-Encoding/
-   content-encoding 处理（grep 零命中）——不主动协商所以多数
-   服务器不压缩，但强制 gzip 响应会把压缩体原样落盘。V1 curl
-   自动解压，V2 需补 zlib 解帧（可挂 chunked 状态机尾部）
-5. **auto-file-renaming**：CLI 有 --auto-file-renaming 参数
-   （arg_parser.cpp:256）但 DownloadOptions 零消费——引擎侧
-   是"拒绝或覆盖"二值，无 .1/.2 自动改名（与限速当年的
-   "零消费端"同型）
+4. ~~**gzip/deflate content-encoding**~~（2026-09-19 收口，方案与本
+   条原始设想不同）：原条目前提「V1 curl 自动解压」有误——libcurl
+   不设 CURLOPT_ACCEPT_ENCODING 就不协商也不解压，全库 grep 零命中，
+   即 V1/V2 现状一致（原样落盘）。真缺口是「服务器无视协商强制压缩
+   时客户端毫无告警」。落地为 aria2/wget 同语义三件事：① V2 GET 恒
+   带 `Accept-Encoding: identity`（wget 同语义，正常服务器不再压缩）；
+   ② 2xx 响应带非 identity content-encoding 时记 INFO 日志（原样
+   落盘不再静默）；③ 测试钉住「强制 gzip → 字节原样落盘」不变式
+   （含 chunked 组合）。**不做透明解码**：输出文件与 URL 响应体逐
+   字节一致是下载器不变式（分段拼接/断点续传/metalink 哈希校验依
+   赖它），解码需 V1/V2 同步改且偏离 aria2——真需要解码时应是显式
+   特性（如未来「--compressed」选项）而非引擎隐式行为
+5. ~~**auto-file-renaming**~~（2026-09-19 已落地）：CLI 有
+   --auto-file-renaming 参数（arg_parser.cpp:256）但
+   DownloadOptions 零消费——引擎侧是"拒绝或覆盖"二值，无 .1/.2
+   自动改名（与限速当年的"零消费端"同型）
 6. **conditional-get**：If-Modified-Since/If-Match 零命中
    （aria2 --conditional-get，配合镜像同步场景）
 7. **V2 IPv6**：resolve_host 已 AF_UNSPEC，数据面 socket
