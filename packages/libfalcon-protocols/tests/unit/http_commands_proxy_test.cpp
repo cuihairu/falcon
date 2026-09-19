@@ -1008,6 +1008,11 @@ TEST(DownloadEngineV2Proxy, ConnectResponseSplitAcrossSegmentsSucceeds) {
 /// 错误消息指向 CONNECT。回环上 RST 抢在客户端首个 send 之前到达是
 /// 亚毫秒竞态，注入点确定性命中
 TEST(DownloadEngineV2Proxy, ConnectSendHardErrorFailsCleanly) {
+#ifdef _WIN32
+    // 本用例不经 ProxyTestServer（裸 socket 前无任何 start()），
+    // Winsock 必须显式初始化，否则 socket() 恒返 INVALID_SOCKET
+    ensure_winsock_for_proxy_test();
+#endif
     // 纯监听 socket：连接在 accept 队列完成握手即可，无需 accept——
     // 客户端 send 注入失败发生在任何代理应答之前
     const int listen_fd = ::socket(AF_INET, SOCK_STREAM, 0);
