@@ -266,7 +266,7 @@ void show_help() {
     using term::Color;
     auto R = term::reset();
 
-    std::cout << bold() << "Falcon CLI v0.2.0" << R << " - aria2-style multi-thread downloader\n\n";
+    std::cout << bold() << "Falcon CLI v" FALCON_CLI_VERSION << R << " - aria2-style multi-thread downloader\n\n";
     std::cout << fg(Color::Cyan) << "Usage:" << R << "\n";
     std::cout << "  falcon-cli [OPTIONS] <URL...>\n\n";
     std::cout << fg(Color::Cyan) << "Options:" << R << "\n";
@@ -605,7 +605,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (args.show_version) {
-        std::cout << term::bold() << "Falcon CLI" << term::reset() << " v0.2.0\n";
+        std::cout << term::bold() << "Falcon CLI" << term::reset() << " v" FALCON_CLI_VERSION << "\n";
         return 0;
     }
 

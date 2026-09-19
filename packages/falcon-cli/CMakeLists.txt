@@ -35,6 +35,11 @@ endif()
 
 target_compile_features(falcon-cli PRIVATE cxx_std_17)
 
+# 版本号单一事实源 = project(VERSION)；CLI 内不得再硬编码版本字符串
+target_compile_definitions(falcon-cli PRIVATE
+    FALCON_CLI_VERSION="${PROJECT_VERSION}"
+)
+
 # ============================================================================
 # Optional dependencies
 # ============================================================================

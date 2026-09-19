@@ -6,52 +6,53 @@
 
   [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
   [![Build Status](https://github.com/cuihairu/falcon/workflows/CMake%20Build/badge.svg)](https://github.com/cuihairu/falcon/actions)
-  [![codecov](https://codecov.io/gh/cuihairu/falcon/branch/main/graph/badge.svg)](https://codecov.io/gh/cuihairu/falcon)
   [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/cuihairu/falcon)
   [![Version](https://img.shields.io/badge/version-0.1.0-green.svg)](https://github.com/cuihairu/falcon/releases)
 
   **A modern, high-performance, cross-platform download accelerator**
 
+  [English](README.md) | [中文文档](README_CN.md)
+
 </div>
 
 ## Features 🚀
 
-- **aria2-Compatible Architecture**:
-  - Event-driven command pattern
-  - I/O multiplexing (epoll/kqueue/poll)
-  - Socket connection pooling
-  - Request group management
-- **Multi-Protocol Support**: HTTP/HTTPS, FTP, Metalink, BitTorrent, Magnet links, Private protocols
-  - Thunder (迅雷)
-  - QQDL (腾讯旋风)
-  - FlashGet
-  - ED2K (电驴)
-  - HLS/DASH streaming
+- **Dual Download Engines**
+  - **V1 engine** (default): libcurl-based, multi-threaded segmented downloading, resume, per-task speed limits
+  - **V2 engine** (experimental, `--http-engine v2`): aria2-style event-driven rewrite —
+    non-blocking I/O over epoll/kqueue/poll/WSAPoll, command pattern with connection
+    reuse, persistent resume via `.falcon.ctrl` control files (If-Range protected),
+    multi-source segmented downloading (P2SP) across mirrors, global & per-task speed
+    limits, connection-level retries, task timeouts, chunked transfer encoding,
+    overwrite protection, and atomic temporary-file publishing
+- **Multi-Protocol Support**: HTTP/HTTPS, FTP, Metalink, BitTorrent, Magnet links, private protocols
+  - Thunder (迅雷), QQDL (腾讯旋风), FlashGet, ED2K (电驴), HLS/DASH streaming
+- **Metalink**: RFC 5854 `.meta4` / Metalink3 `.metalink` mirror lists, multi-mirror
+  P2SP segmented download through the V2 engine, whole-file hash verification before publish
 - **Daemon & RPC Service** (`falcon-daemon`): aria2-compatible JSON-RPC over HTTP +
-  WebSocket event stream, task persistence (SQLite), `daemon.json` config with SIGHUP
-  reload
-- **Desktop Application** (Qt6): Fluent-design UI, light/dark themes, table & grid task
-  views, cloud storage browsing, daemon RPC backend
+  WebSocket on a single port (works with AriaNg), live event stream (download start /
+  pause / complete / error / progress), SQLite task persistence with restart recovery,
+  `daemon.json` config with SIGHUP hot reload
+- **Desktop Application** (Qt6): Fluent-design UI, light/dark themes, frameless window,
+  table & grid task views, cloud storage browsing, resource search, dual backend
+  (in-process engine or daemon RPC with WebSocket event refresh)
+- **CLI** (`falcon-cli`): 60+ aria2-compatible parameters, batch input files, JSON config
 - **High Performance**:
-  - Multi-threaded segmented downloading
+  - Multi-connection segmented downloading with adaptive sizing
   - Non-blocking I/O with event-driven architecture
   - Connection pooling for reduced latency
-  - Speed control and bandwidth throttling
+  - Speed control and bandwidth throttling (global & per-task)
 - **Advanced Features**:
   - File hash verification (MD5/SHA1/SHA256/SHA512)
   - Resume support for interrupted downloads
   - Multi-mirror failover
-  - 30+ aria2-compatible CLI parameters
+  - HTTP proxy (plain and CONNECT tunneling) & SOCKS5
 - **Cloud Storage Integration**:
-  - Amazon S3
-  - Alibaba Cloud OSS (阿里云OSS)
-  - Tencent COS (腾讯云)
-  - Qiniu Kodo (七牛云)
-  - Upyun USS (又拍云)
-- **Remote Resource Browsing**: Browse FTP/SFTP/S3 directories with rich information
-- **Resource Search**: Built-in search engine for torrent and file resources
-- **Secure Configuration**: AES-256 encrypted credential storage with master password protection
-- **Proxy Support**: HTTP/HTTPS/SOCKS5 proxy support
+  - Amazon S3, Alibaba Cloud OSS, Tencent COS, Qiniu Kodo, Upyun
+  - Custom endpoints for MinIO / private-gateway deployments
+- **Remote Resource Browsing**: Browse FTP/SFTP/S3/OSS/COS/Kodo/Upyun directories
+- **Resource Search**: Built-in search provider framework for torrent and file resources
+- **Secure Configuration**: AES-256-GCM encrypted credential storage with master password protection
 
 ## Quick Start ⚡
 
@@ -64,10 +65,12 @@ cd falcon
 
 # Build from source
 cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release
+cmake --build build -j
 ```
 
-The current documented path is source build. Package manager distribution and prebuilt installers should be treated as future release work unless a tagged release says otherwise.
+Nightly CI builds (Windows zip / Linux AppImage / macOS app) are attached to the
+[Releases](https://github.com/cuihairu/falcon/releases) page. Source build is the
+documented path.
 
 ### Basic Usage
 
@@ -91,11 +94,12 @@ falcon-cli -i urls.txt -j 3
 falcon-cli --proxy http://127.0.0.1:7890 \
   -H "Authorization: Bearer TOKEN" \
   https://example.com/file.bin
+
+# Try the experimental V2 engine
+falcon-cli --http-engine v2 https://example.com/file.zip
 ```
 
 ### aria2-Compatible Parameters
-
-Falcon CLI supports aria2-compatible parameters:
 
 ```bash
 # Connection settings
@@ -112,22 +116,14 @@ falcon-cli --timeout 30 https://example.com/file.zip
 # HTTP authentication
 falcon-cli --http-user=user --http-passwd=pass https://example.com/file.zip
 
-# Custom headers
-falcon-cli --header="Authorization: Bearer TOKEN" https://example.com/api/file
-
-# Proxy support
-falcon-cli --proxy http://proxy.example.com:8080 \
-  --proxy-user user --proxy-passwd pass https://example.com/file.zip
-
 # User agent
 falcon-cli --user-agent="Falcon/1.0" https://example.com/file.zip
 
-# Output directory
+# Output directory and file name
 falcon-cli -d /tmp/downloads -o custom_name.zip https://example.com/file.zip
-
-# Speed limits
-falcon-cli --max-download-limit 5M https://example.com/file.zip
 ```
+
+Run `falcon-cli --help` for the full parameter list.
 
 ## Supported Protocols 📡
 
@@ -176,59 +172,24 @@ library API for integration.
 COS, Kodo, and Upyun — format-tree/table listings, path validation, and recursive
 operations. The desktop cloud storage page is built on it.
 
-### Download Management
-```bash
-# Batch download from file
-falcon-cli --input urls.txt
-
-# Resume interrupted download (enabled by default; explicit aria2-style switch)
-falcon-cli --continue true https://example.com/partial.zip
-
-# Custom headers and user agent
-falcon-cli https://example.com/file.bin \
-  --header "Authorization: Bearer TOKEN" \
-  --user-agent "Falcon/1.0"
-
-# Proxy support
-falcon-cli https://example.com/file.zip \
-  --proxy http://proxy.example.com:8080 \
-  --proxy-user user \
-  --proxy-passwd pass
-```
-
 ## Architecture 🏗️
 
 Falcon follows a modular architecture with aria2-inspired event-driven design:
 
-```
-┌─────────────────────────────────────────────┐
-│              Applications                   │
-│  falcon-cli · falcon-daemon · desktop (Qt6) │
-└──────────────────────┬──────────────────────┘
-                      │
-┌──────────────────────▼──────────────────────┐
-│         Falcon Core (aria2-style)           │
-│  ┌───────────────────────────────────┐      │
-│  │  DownloadEngineV2 (Event Loop)    │      │
-│  │  ├─ Command Queue                 │      │
-│  │  ├─ Routine Commands              │      │
-│  │  └─ Event Poll (epoll/kqueue)     │      │
-│  ├───────────────────────────────────┤      │
-│  │  RequestGroupMan                  │      │
-│  │  ├─ Active Tasks                  │      │
-│  │  └─ Waiting Queue                 │      │
-│  ├───────────────────────────────────┤      │
-│  │  Socket Pool                      │      │
-│  │  └─ Connection Reuse              │      │
-│  └───────────────────────────────────┘      │
-└──────────────────────┬──────────────────────┘
-                      │
-┌──────────────────────▼──────────────────────┐
-│              Protocol Plugins               │
-│  ┌─────┐ ┌────┐ ┌────┐ ┌────────┐ ┌─────┐   │
-│  │ HTTP│ │ FTP│ │ BT │ │Metalink│ │ ... │   │
-│  └─────┘ └────┘ └────┘ └────────┘ └─────┘   │
-└─────────────────────────────────────────────┘
+```mermaid
+graph TD
+    APP["<b>Applications</b><br/>falcon-cli · falcon-daemon · desktop (Qt6)"]
+    CORE["<b>Falcon Core</b> (aria2-style)<br/>DownloadEngineV2 event loop · command queue<br/>request groups · socket reuse · task manager"]
+    PROTO["<b>libfalcon-protocols</b><br/>HTTP · FTP · BitTorrent · Metalink · HLS · private protocols"]
+    STOR["<b>libfalcon-storage</b><br/>S3 · OSS · COS · Kodo · Upyun resource browsing"]
+    DRV["<b>libfalcon-drives</b><br/>cloud drives · resource search · encrypted config"]
+    INFRA["<b>Infrastructure</b><br/>libcurl · OpenSSL · libtorrent · spdlog · SQLite · nlohmann/json"]
+
+    APP --> CORE
+    PROTO --> CORE
+    STOR --> CORE
+    DRV --> CORE
+    CORE --> INFRA
 ```
 
 ### Event-Driven Architecture
@@ -262,15 +223,30 @@ Falcon uses an event-driven command pattern inspired by aria2:
 
 ### Build Options
 ```bash
-# Enable/disable features
+# Enable/disable components and protocol plugins
 cmake -B build -S . \
+  -DFALCON_BUILD_CLI=ON \
+  -DFALCON_BUILD_DAEMON=ON \
+  -DFALCON_BUILD_DESKTOP=ON \
   -DFALCON_ENABLE_HTTP=ON \
   -DFALCON_ENABLE_FTP=ON \
+  -DFALCON_ENABLE_METALINK=ON \
   -DFALCON_ENABLE_BITTORRENT=ON \
+  -DFALCON_ENABLE_SFTP=ON \
+  -DFALCON_ENABLE_THUNDER=ON \
+  -DFALCON_ENABLE_QQDL=ON \
+  -DFALCON_ENABLE_FLASHGET=ON \
+  -DFALCON_ENABLE_ED2K=ON \
+  -DFALCON_ENABLE_HLS=ON \
   -DFALCON_ENABLE_CLOUD_STORAGE=ON \
   -DFALCON_ENABLE_RESOURCE_BROWSER=ON \
-  -DFALCON_ENABLE_RESOURCE_SEARCH=ON
+  -DFALCON_ENABLE_RESOURCE_SEARCH=ON \
+  -DFALCON_ENABLE_CONFIG_MANAGER=ON
 ```
+
+HTTP, FTP, Metalink, cloud storage, resource browsing/search, and the config manager
+are ON by default; BitTorrent, SFTP, and the private-protocol plugins are OFF by
+default.
 
 ## Contributing 🤝
 
@@ -299,6 +275,4 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 
 <div align="center">
   Made with ❤️ by the Falcon Team
-
-  [中文文档](README_CN.md)
 </div>
