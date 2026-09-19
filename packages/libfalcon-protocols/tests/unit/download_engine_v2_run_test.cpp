@@ -39,6 +39,7 @@
 #include <algorithm>
 #include <atomic>
 #include <array>
+#include <cctype>
 #include <cerrno>
 #include <chrono>
 #include <cstring>
@@ -946,6 +947,189 @@ private:
     std::vector<std::thread> conn_threads_;
 };
 
+/// conditional-get 测试服务器：记录最近一次请求的 If-Modified-Since
+/// 头，按模式应答——kImsNotModified（携带 IMS 才回 304，否则正常出
+/// 体）/ kAlwaysNotModified（无条件 304，验证未武装的 304 干净失
+/// 败）/ kFresh（恒 200 出体，验证条件未命中走全新下载）
+class ConditionalHttpServer {
+public:
+    enum class Mode { kImsNotModified, kAlwaysNotModified, kFresh };
+
+    ~ConditionalHttpServer() { stop(); }  // RAII：joinable 线程析构即 terminate
+
+    bool start(std::string body, Mode mode) {
+#ifdef _WIN32
+        ensure_winsock_for_run_test();
+#endif
+        body_ = std::move(body);
+        mode_ = mode;
+
+        listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (listen_fd_ < 0) return false;
+
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = 0;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 ||
+            ::listen(listen_fd_, 8) != 0) {
+            CLOSE_SOCKET(listen_fd_);
+            listen_fd_ = -1;
+            return false;
+        }
+
+        sockaddr_in bound{};
+        sock_len len = sizeof(bound);
+        if (::getsockname(listen_fd_, reinterpret_cast<sockaddr*>(&bound), &len) != 0) {
+            stop();
+            return false;
+        }
+        port_ = ntohs(bound.sin_port);
+
+        running_ = true;
+        accept_thread_ = std::thread([this] { accept_loop(); });
+        return true;
+    }
+
+    void stop() {
+        running_ = false;
+        if (listen_fd_ >= 0) {
+            CLOSE_SOCKET(listen_fd_);
+            listen_fd_ = -1;
+        }
+        if (accept_thread_.joinable()) accept_thread_.join();
+        for (auto& t : conn_threads_) {
+            if (t.joinable()) t.join();
+        }
+        conn_threads_.clear();
+    }
+
+    std::string url(const std::string& path) const {
+        return "http://127.0.0.1:" + std::to_string(port_) + path;
+    }
+
+    /// 最近一次请求携带的 If-Modified-Since（未携带时为空）
+    std::string last_if_modified_since() {
+        std::lock_guard<std::mutex> lock(mu_);
+        return last_if_modified_since_;
+    }
+
+private:
+    void accept_loop() {
+        while (running_) {
+            struct pollfd pfd;
+            pfd.fd = listen_fd_;
+            pfd.events = POLLIN;
+            pfd.revents = 0;
+            if (POLL(&pfd, 1, 500) <= 0) {
+                continue;
+            }
+            sockaddr_in peer{};
+            sock_len peer_len = sizeof(peer);
+            int conn = ::accept(listen_fd_, reinterpret_cast<sockaddr*>(&peer), &peer_len);
+            if (conn < 0) {
+                if (!running_) return;
+                continue;
+            }
+            conn_threads_.emplace_back([this, conn] { serve(conn); });
+        }
+    }
+
+    // HTTP 头名大小写不敏感（RFC 9110 §5.1）——客户端按 set_header 的
+    // 原样拼写上线，测试服务器必须不敏感匹配
+    static std::size_t ifind(const std::string& text, const std::string& needle) {
+        if (needle.empty() || needle.size() > text.size()) return std::string::npos;
+        for (std::size_t i = 0; i + needle.size() <= text.size(); ++i) {
+            std::size_t j = 0;
+            while (j < needle.size() &&
+                   std::tolower(static_cast<unsigned char>(text[i + j])) ==
+                       std::tolower(static_cast<unsigned char>(needle[j]))) {
+                ++j;
+            }
+            if (j == needle.size()) return i;
+        }
+        return std::string::npos;
+    }
+
+    static std::string header_value(const std::string& request,
+                                    const std::string& lower_name) {
+        std::size_t pos = ifind(request, lower_name + ":");
+        if (pos == std::string::npos) return {};
+        pos += lower_name.size() + 1;
+        while (pos < request.size() && request[pos] == ' ') ++pos;
+        std::size_t end = request.find("\r\n", pos);
+        if (end == std::string::npos) end = request.size();
+        return request.substr(pos, end - pos);
+    }
+
+    void serve(int conn) {
+        std::string request;
+        char buf[2048];
+        while (request.find("\r\n\r\n") == std::string::npos &&
+               request.size() < 16 * 1024) {
+            recv_ssize n = ::recv(conn, buf, sizeof(buf), 0);
+            if (n <= 0) {
+                CLOSE_SOCKET(conn);
+                return;
+            }
+            request.append(buf, static_cast<std::size_t>(n));
+        }
+
+        const bool have_ims =
+            ifind(request, "if-modified-since:") != std::string::npos;
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            last_if_modified_since_ =
+                have_ims ? header_value(request, "if-modified-since") : std::string();
+        }
+
+        const bool not_modified =
+            mode_ == Mode::kAlwaysNotModified ||
+            (mode_ == Mode::kImsNotModified && have_ims);
+        if (not_modified) {
+            const std::string header =
+                "HTTP/1.1 304 Not Modified\r\nConnection: close\r\n\r\n";
+            send_all(conn, header.data(), header.size());
+            CLOSE_SOCKET(conn);
+            return;
+        }
+
+        std::string header = "HTTP/1.1 200 OK\r\n"
+                             "Content-Type: application/octet-stream\r\n"
+                             "Content-Length: " + std::to_string(body_.size()) + "\r\n"
+                             "Accept-Ranges: none\r\n"
+                             "Connection: close\r\n\r\n";
+        send_all(conn, header.data(), header.size());
+        send_all(conn, body_.data(), body_.size());
+        CLOSE_SOCKET(conn);
+    }
+
+    void send_all(int conn, const char* data, std::size_t size) {
+        std::size_t sent = 0;
+        while (sent < size) {
+            recv_ssize n = ::send(conn, data + sent,
+#ifdef _WIN32
+                                  static_cast<int>(size - sent),
+#else
+                                  size - sent,
+#endif
+                                  0);
+            if (n <= 0) return;
+            sent += static_cast<std::size_t>(n);
+        }
+    }
+
+    std::string body_;
+    Mode mode_ = Mode::kFresh;
+    std::mutex mu_;
+    std::string last_if_modified_since_;
+    int listen_fd_ = -1;
+    int port_ = 0;
+    std::atomic<bool> running_{false};
+    std::thread accept_thread_;
+    std::vector<std::thread> conn_threads_;
+};
+
 /// 部分响应后挂起的服务器：发出完整响应头 + 前 partial_bytes 字节
 /// 响应体后保持连接不关不读——模拟"传了一半对端卡死"。磁盘写缓冲
 /// 的异常路径用例据此制造"数据已接收但滞留缓冲"的状态
@@ -1282,6 +1466,152 @@ TEST(DownloadEngineV2RunTest, AutoFileRenamingDownloadsToNewPath) {
     EXPECT_EQ(read_file_content(out_path), "OLD-FILE-STAYS");
     // 无临时文件残留（重命名后的路径语义下收口）
     EXPECT_FALSE(std::filesystem::exists(renamed + ".falcon.tmp"));
+
+    std::filesystem::remove_all(dir);
+    server.stop();
+}
+
+/// conditional-get 命中端到端：目标文件已存在 + conditional_get=true
+/// → 初始 GET 携带 If-Modified-Since，服务器回 304 → 任务 COMPLETED
+/// 且本地文件原样保留（304 无响应体，绝不能落进下载路径把文件截零）
+TEST(DownloadEngineV2RunTest, ConditionalGetHitKeepsLocalFile) {
+    const std::string body = make_body(32 * 1024);
+    ConditionalHttpServer server;
+    ASSERT_TRUE(server.start(body, ConditionalHttpServer::Mode::kImsNotModified));
+
+    const std::string dir = run_test_temp_dir("condget");
+    std::filesystem::create_directories(dir);
+    const std::string out_path = dir + "/cached.bin";
+    const std::string existing = "LOCAL-UP-TO-DATE-CONTENT";
+    {
+        std::ofstream out(out_path, std::ios::binary);
+        out << existing;
+    }
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options;
+    options.output_filename = out_path;
+    options.max_connections = 1;
+    options.conditional_get = true;  // 隐含覆盖授权，不触发已存在门禁
+
+    const TaskId task_id = engine.add_download(server.url("/cached.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    long long elapsed_ms = 0;
+    ASSERT_TRUE(wait_group_terminal(engine, group, 20, elapsed_ms));
+
+    EXPECT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+    // 服务器侧铁证：请求确实携带了 If-Modified-Since（IMS-fixdate 结构）
+    const std::string ims = server.last_if_modified_since();
+    ASSERT_EQ(ims.size(), 29u) << "IMS: " << ims;
+    EXPECT_EQ(ims.substr(3, 2), ", ");
+    EXPECT_EQ(ims.substr(26), "GMT");
+
+    // 本地文件一个字节都没被碰；进度记为本地尺寸（304 无响应体）
+    EXPECT_EQ(read_file_content(out_path), existing);
+    auto task = group->download_task();
+    ASSERT_NE(task, nullptr);
+    EXPECT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(task->total_bytes(), existing.size());
+    EXPECT_EQ(task->downloaded_bytes(), existing.size());
+    // 无临时文件残留
+    EXPECT_FALSE(std::filesystem::exists(out_path + ".falcon.tmp"));
+
+    std::filesystem::remove_all(dir);
+    server.stop();
+}
+
+/// conditional-get 未命中端到端：携带 If-Modified-Since 但服务器回
+/// 200 全量 → 旧内容被全新下载完整替换（304 分支不吞 200 响应）
+TEST(DownloadEngineV2RunTest, ConditionalGetMissDownloadsFreshCopy) {
+    const std::string body = make_body(32 * 1024);
+    ConditionalHttpServer server;
+    ASSERT_TRUE(server.start(body, ConditionalHttpServer::Mode::kFresh));
+
+    const std::string dir = run_test_temp_dir("condmiss");
+    std::filesystem::create_directories(dir);
+    const std::string out_path = dir + "/stale.bin";
+    {
+        std::ofstream out(out_path, std::ios::binary);
+        out << "STALE-CONTENT";
+    }
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options;
+    options.output_filename = out_path;
+    options.max_connections = 1;
+    options.conditional_get = true;
+
+    const TaskId task_id = engine.add_download(server.url("/stale.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    long long elapsed_ms = 0;
+    ASSERT_TRUE(wait_group_terminal(engine, group, 20, elapsed_ms));
+
+    EXPECT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+    // 条件头确实发出了，只是条件未命中（200）
+    EXPECT_FALSE(server.last_if_modified_since().empty());
+    // 旧内容被完整替换
+    EXPECT_EQ(read_file_content(out_path), body);
+
+    std::filesystem::remove_all(dir);
+    server.stop();
+}
+
+/// 未武装的 304 干净失败：conditional_get 未开启（服务器病态地无条件
+/// 回 304）→ 组 FAILED 且本地文件不被截零——304 无响应体，落进下载
+/// 路径即销毁数据，此用例钉住该危害
+TEST(DownloadEngineV2RunTest, Unsolicited304FailsCleanly) {
+    const std::string body = make_body(32 * 1024);
+    ConditionalHttpServer server;
+    ASSERT_TRUE(
+        server.start(body, ConditionalHttpServer::Mode::kAlwaysNotModified));
+
+    const std::string dir = run_test_temp_dir("condraw304");
+    std::filesystem::create_directories(dir);
+    const std::string out_path = dir + "/precious.bin";
+    const std::string existing = "PRECIOUS-LOCAL-CONTENT";
+    {
+        std::ofstream out(out_path, std::ios::binary);
+        out << existing;
+    }
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options;
+    options.output_filename = out_path;
+    options.max_connections = 1;
+    options.overwrite_existing = true;  // 授权覆盖让请求发出（门禁放行）
+    // conditional_get 保持 false：客户端不发 If-Modified-Since
+
+    const TaskId task_id = engine.add_download(server.url("/precious.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    long long elapsed_ms = 0;
+    ASSERT_TRUE(wait_group_terminal(engine, group, 20, elapsed_ms));
+
+    EXPECT_EQ(group->status(), RequestGroupStatus::FAILED);
+    EXPECT_NE(group->error_message().find("304"), std::string::npos)
+        << "错误应指向 304 而非其他: " << group->error_message();
+    // 客户端确实没发条件头（未武装）
+    EXPECT_TRUE(server.last_if_modified_since().empty());
+    // 本地文件原样保留（绝不能被 304 截零）
+    EXPECT_EQ(read_file_content(out_path), existing);
+    EXPECT_FALSE(std::filesystem::exists(out_path + ".falcon.tmp"));
 
     std::filesystem::remove_all(dir);
     server.stop();

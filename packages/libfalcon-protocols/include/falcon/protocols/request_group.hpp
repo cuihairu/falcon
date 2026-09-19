@@ -342,6 +342,10 @@ public:
         return resume_if_range_value(resume_);
     }
 
+    /// If-Modified-Since 请求头取值（conditional-get：目标文件已存在
+    /// 时由 init() 依其修改时间生成；文件不存在或未开启时为空）
+    const std::string& if_modified_since() const { return if_modified_since_; }
+
     /**
      * @brief 建立本次下载的续传追踪（全新下载调度成功后调用）
      *
@@ -403,6 +407,8 @@ private:
     // 下载状态
     Bytes downloaded_bytes_ = 0;
     std::string error_message_;
+    /// conditional-get 条件头（init() 置一次，命令线程此后只读）
+    std::string if_modified_since_;
 
     // 多分段下载跟踪（多连接模式；单段模式 total_ == 0）
     mutable std::mutex segment_mutex_;

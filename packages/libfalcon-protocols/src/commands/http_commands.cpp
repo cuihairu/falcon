@@ -257,6 +257,14 @@ bool parse_content_range_start(const std::string& value, Bytes& start) {
 bool apply_group_resume_range(HttpInitiateConnectionCommand& cmd,
                               const RequestGroup& group) {
     if (!group.has_resume_state()) {
+        // 条件下载（conditional-get）：非续传初始连接携带组级
+        // If-Modified-Since。续传连接不走此路（Range + If-Range 与
+        // 条件头互斥——304 语义只在整文件 GET 上解释）。本函数同时
+        // 服务于初始命令创建与连接级重试重建，两个站点一次覆盖
+        const std::string& ims = group.if_modified_since();
+        if (!ims.empty()) {
+            cmd.set_if_modified_since(ims);
+        }
         return false;
     }
     const ResumeControl plan = group.resume_plan();
@@ -1111,6 +1119,11 @@ bool HttpInitiateConnectionCommand::prepare_http_request() {
         if (!if_range_.empty()) {
             http_request_->set_header("If-Range", if_range_);
         }
+    } else if (!if_modified_since_.empty()) {
+        // 条件下载：仅全新 GET 携带（与 Range 互斥由本分支结构性保证
+        // ——304 命中即"本地文件已是最新"，无响应体，响应命令按成功
+        // 收口并保留本地文件，aria2 --conditional-get 同语义）
+        http_request_->set_header("If-Modified-Since", if_modified_since_);
     }
 
     if (!options_.referer.empty()) {
@@ -1399,6 +1412,41 @@ bool HttpResponseCommand::execute(DownloadEngineV2* engine) {
                         "\" (status " + std::to_string(status_code_) + ")");
         }
         return handle_result(ExecutionResult::OK);  // 本命令完成，新命令接管
+    }
+
+    if (status_code_ == 304) {
+        // RFC 7232 §4.1：条件请求命中——本地文件仍是最新，按成功收口
+        // 且原样保留（aria2 --conditional-get 同语义）。仅当本组确实
+        // 携带过 If-Modified-Since（全新条件 GET）才走此路：304 没有
+        // 响应体，无条件下误当成功会把"空响应"当成果，落进下载路径
+        // 更会把本地文件截断成零字节——必须按失败收口
+        const auto group_status = group ? group->status()
+                                        : RequestGroupStatus::REMOVED;
+        const bool conditional_armed =
+            group && task && !group->if_modified_since().empty() &&
+            group_status != RequestGroupStatus::PAUSED &&
+            group_status != RequestGroupStatus::REMOVED &&
+            group_status != RequestGroupStatus::COMPLETED &&
+            group_status != RequestGroupStatus::FAILED;
+        if (conditional_armed) {
+            FALCON_LOG_INFO_STREAM("条件请求命中（304 Not Modified），本地文件"
+                                   "已是最新: " << task->output_path());
+            std::error_code size_ec;
+            const auto local_size =
+                std::filesystem::file_size(task->output_path(), size_ec);
+            const auto total =
+                size_ec ? static_cast<std::uintmax_t>(task->downloaded_bytes())
+                        : local_size;
+            // 终态进度不经节流（监听者必须看到 100%）；无网络传输，
+            // 进度取自本地文件尺寸
+            task->update_progress(total, total, 0);
+            task->set_status(TaskStatus::Completed);
+            group->set_status(RequestGroupStatus::COMPLETED);
+            close_socket_fd(socket_fd_);
+            socket_fd_ = -1;
+            return handle_result(ExecutionResult::OK);
+        }
+        return fail("Unexpected HTTP status: 304 (conditional-get not armed)");
     }
 
     if (status_code_ < 200 || status_code_ >= 300) {
@@ -1700,6 +1748,15 @@ bool HttpResponseCommand::handle_redirect(DownloadEngineV2* engine) {
     if (segment_id_ > 0 || segment_retry_routing_) {
         follow->set_range(segment_id_, range_offset_, range_length_);
         follow->set_segment_retry(true);
+    } else {
+        // 条件下载：条件作用于最终资源——重定向后的全新 GET 仍携带
+        // If-Modified-Since（段连接无条件头，组级值非空才有效）
+        auto* group_man = engine->request_group_man();
+        auto* group =
+            group_man ? group_man->find_group(get_task_id()) : nullptr;
+        if (group && !group->if_modified_since().empty()) {
+            follow->set_if_modified_since(group->if_modified_since());
+        }
     }
     schedule_next(engine, std::move(follow));
     return true;

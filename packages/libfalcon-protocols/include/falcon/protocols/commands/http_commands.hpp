@@ -253,6 +253,18 @@ public:
     void set_if_range(std::string value) { if_range_ = std::move(value); }
 
     /**
+     * @brief 设置 If-Modified-Since 条件头（conditional-get）
+     *
+     * 仅全新 GET 携带（prepare_http_request 对带 Range 的连接不附加
+     * ——304 语义只在整文件请求上解释）：目标文件未变更时服务器回
+     * 304 无响应体，响应命令按成功收口并保留本地文件（aria2
+     * --conditional-get 同语义）
+     */
+    void set_if_modified_since(std::string value) {
+        if_modified_since_ = std::move(value);
+    }
+
+    /**
      * @brief 标记本连接是段级换源重试的重建连接
      *
      * 带 Range 的初始连接有两种来源：暂停恢复的续传响应（走
@@ -345,6 +357,9 @@ private:
 
     // If-Range 验证值（续传请求附带；非续传请求为空）
     std::string if_range_;
+
+    // If-Modified-Since 条件值（conditional-get 全新 GET 携带；否则为空）
+    std::string if_modified_since_;
 
     std::string resolved_ip_;
     bool connect_in_progress_ = false;

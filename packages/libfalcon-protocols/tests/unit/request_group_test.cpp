@@ -17,6 +17,7 @@
 #include <falcon/protocols/resume_control.hpp>
 #include <atomic>
 #include <chrono>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -1497,6 +1498,90 @@ TEST(RequestGroupAutoRename, OutputPathOverrideNeverRenamed) {
     EXPECT_FALSE(group.init());
     EXPECT_EQ(group.status(), RequestGroupStatus::FAILED);
     EXPECT_NE(group.error_message().find("已存在"), std::string::npos);
+}
+
+//==============================================================================
+// 条件下载（aria2 --conditional-get 同语义）
+//==============================================================================
+
+namespace {
+
+RequestGroup make_conditional_group(falcon::TaskId id,
+                                    const std::string& dir,
+                                    const std::string& filename,
+                                    bool conditional_get,
+                                    bool auto_renaming = false) {
+    DownloadOptions options;
+    options.output_directory = dir;
+    options.output_filename = filename;
+    options.conditional_get = conditional_get;
+    options.auto_file_renaming = auto_renaming;
+    return RequestGroup(id, {"http://127.0.0.1:1/" + filename}, options);
+}
+
+} // namespace
+
+// IMF-fixdate 形状校验："Www, DD Mon YYYY HH:MM:SS GMT"（29 字符）
+void expect_imf_fixdate(const std::string& ims) {
+    ASSERT_EQ(ims.size(), 29u);
+    EXPECT_EQ(ims.substr(3, 2), ", ");
+    EXPECT_TRUE(std::isdigit(static_cast<unsigned char>(ims[5])));
+    EXPECT_TRUE(std::isdigit(static_cast<unsigned char>(ims[6])));
+    EXPECT_EQ(ims[7], ' ');
+    EXPECT_TRUE(std::isalpha(static_cast<unsigned char>(ims[8])));
+    EXPECT_TRUE(std::isalpha(static_cast<unsigned char>(ims[9])));
+    EXPECT_TRUE(std::isalpha(static_cast<unsigned char>(ims[10])));
+    EXPECT_EQ(ims[11], ' ');
+    EXPECT_TRUE(std::isdigit(static_cast<unsigned char>(ims[12])));
+    EXPECT_TRUE(std::isdigit(static_cast<unsigned char>(ims[13])));
+    EXPECT_TRUE(std::isdigit(static_cast<unsigned char>(ims[14])));
+    EXPECT_TRUE(std::isdigit(static_cast<unsigned char>(ims[15])));
+    EXPECT_EQ(ims[16], ' ');
+    EXPECT_EQ(ims[19], ':');
+    EXPECT_EQ(ims[22], ':');
+    EXPECT_EQ(ims.substr(26), "GMT");
+}
+
+// 目标已存在 + conditional-get → 路径不变（条件即覆盖授权），组级
+// If-Modified-Since 按文件修改时间生成（RFC 7231 IMF-fixdate 形状）
+TEST(RequestGroupConditionalGet, ExistingFileArmsIfModifiedSince) {
+    const std::string dir = make_unique_temp_dir("cg1");
+    touch_file(std::filesystem::path(dir) / "out.bin");
+
+    RequestGroup group = make_conditional_group(11, dir, "out.bin", true);
+    ASSERT_TRUE(group.init());
+
+    EXPECT_EQ(std::filesystem::path(group.download_task()->output_path())
+                  .filename()
+                  .string(),
+              "out.bin");
+    expect_imf_fixdate(group.if_modified_since());
+}
+
+// 目标不存在 → 不携带条件头（无对象可比），正常全新下载
+TEST(RequestGroupConditionalGet, MissingFileNoHeader) {
+    const std::string dir = make_unique_temp_dir("cg2");
+
+    RequestGroup group = make_conditional_group(12, dir, "fresh.bin", true);
+    ASSERT_TRUE(group.init());
+    EXPECT_TRUE(group.if_modified_since().empty());
+}
+
+// conditional-get 与 auto_file_renaming 同时开启 → 条件优先：不改名
+// （改名出的空路径无条件可谈），条件头照常生成
+TEST(RequestGroupConditionalGet, SuppressesAutoRenaming) {
+    const std::string dir = make_unique_temp_dir("cg3");
+    touch_file(std::filesystem::path(dir) / "out.bin", "OLD-CONTENT");
+
+    RequestGroup group = make_conditional_group(13, dir, "out.bin", true,
+                                                /*auto_renaming=*/true);
+    ASSERT_TRUE(group.init());
+
+    EXPECT_EQ(std::filesystem::path(group.download_task()->output_path())
+                  .filename()
+                  .string(),
+              "out.bin");
+    EXPECT_FALSE(group.if_modified_since().empty());
 }
 
 //==============================================================================

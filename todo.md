@@ -2475,8 +2475,8 @@ path-style）；网盘分享链识别（12 平台）+ 资源搜索；GUI 桌面�
    --auto-file-renaming 参数（arg_parser.cpp:256）但
    DownloadOptions 零消费——引擎侧是"拒绝或覆盖"二值，无 .1/.2
    自动改名（与限速当年的"零消费端"同型）
-6. **conditional-get**：If-Modified-Since/If-Match 零命中
-   （aria2 --conditional-get，配合镜像同步场景）
+6. ~~**conditional-get**~~（2026-09-19 已落地）：If-Modified-Since/
+   If-Match 零命中（aria2 --conditional-get，配合镜像同步场景）
 7. **V2 IPv6**：resolve_host 已 AF_UNSPEC，数据面 socket
    AF_INET-only——IPv6 目标在 V2 判失败（ip6-localhost 有干净
    失败分支，批次 D 测试钉住）；生产默认 V1 不受影响，V2 灰度
@@ -2486,6 +2486,20 @@ path-style）；网盘分享链识别（12 平台）+ 资源搜索；GUI 桌面�
    有意义，优先级低
 9. **客户端 TLS 证书**：V1/V2 均无（CURLOPT_SSLCERT 未接线）
    ——aria2 --certificate/--private-key，双向 TLS 场景需要
+10. **RustFS / MinIO 系 S3 兼容服务的真鉴权**（2026-09-19 立项，
+    用户点名）：MinIO 社区版闭源化后 RustFS（S3 兼容、Apache-2.0）
+    成为自建替代主流。**真缺口是 s3_browser 无 SigV4**——
+    s3_browser.cpp perform_s3_request 自注释「简化签名（实际应使
+    用AWS签名V4）」实际连 Authorization 头都不发（只发 Date/Host，
+    mock 测试服务器不校验鉴权所以全绿），对 MinIO/RustFS 等强制
+    鉴权服务必 403 AccessDenied。增量三件：① perform_s3_request
+    接 SigV4 头签名（复用 s3_plugin.cpp 的 S3Authenticator 机器
+    ——x-amz-content-sha256/x-amz-date/Authorization 四件套已有
+    生产实现）；② s3_browser mock 测试加 Authorization 头格式断
+    言（服务器侧校验签名结构而非放行一切）；③ README MinIO 表
+    述扩为 MinIO/RustFS + 桌面云盘页 endpoint 提示语核对。浏览器
+    才是桌面云盘页活跃路径（create_browser("s3")），s3_plugin 的
+    presigned 下载是另一条路不受影响
 
 **记录不修的假缺口：** HTTP Digest（V1 CURLAUTH_ANY 已含，V2
 经适配层 401 回退 V1 兜底）、socks/HTTPS 代理（V2 判 Unsupported

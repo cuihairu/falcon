@@ -648,6 +648,44 @@ TEST(TaskManagerEdgesTest, AutoFileRenamingVersionGatedRoundTrip) {
     std::filesystem::remove(v2_path);
 }
 
+// version 4 落盘的 conditional_get 尾字段往返；version 3 旧档（v4 读取
+// 方）保留 auto_file_renaming、conditional_get 按默认 false 解析
+TEST(TaskManagerEdgesTest, ConditionalGetVersionGatedRoundTrip) {
+    DownloadOptions opts;
+    opts.conditional_get = true;
+    auto task = make_task(320, "https://example.com/v4.bin", opts);
+
+    auto path = unique_temp_file("falcon_tm_v4_");
+    {
+        TaskManager tm(base_config(), nullptr);
+        ASSERT_EQ(tm.add_task(task, TaskPriority::Normal), 320u);
+        ASSERT_TRUE(tm.save_state(path.string()));
+    }
+
+    TaskManager tm2(base_config(), nullptr);
+    ASSERT_TRUE(tm2.load_state(path.string()));
+    auto loaded = tm2.get_task(320);
+    ASSERT_NE(loaded, nullptr);
+    EXPECT_TRUE(loaded->options().conditional_get);
+
+    // version 3 行格式（仅有 auto_file_renaming 尾字段）：v4 读取方
+    // 版本门控跳过 conditional_get（默认 false），v3 字段原样保留
+    const std::string v3_line = basic_task_prefix(321, 0, 1) + " " +
+                                join(option_field_groups(DownloadOptions{})) +
+                                " 1 0";  // auto_file_renaming=1, header_count=0
+    auto v3_path = unique_temp_file("falcon_tm_v3compat_");
+    write_state_file(v3_path, {v3_line}, 3);
+    TaskManager tm3(base_config(), nullptr);
+    ASSERT_TRUE(tm3.load_state(v3_path.string()));
+    auto legacy = tm3.get_task(321);
+    ASSERT_NE(legacy, nullptr);
+    EXPECT_TRUE(legacy->options().auto_file_renaming);
+    EXPECT_FALSE(legacy->options().conditional_get);
+
+    std::filesystem::remove(path);
+    std::filesystem::remove(v3_path);
+}
+
 TEST(TaskManagerEdgesTest, SaveLoadRoundTripAllOptionFields) {
     DownloadOptions opts;
     opts.max_connections = 8;
@@ -673,6 +711,7 @@ TEST(TaskManagerEdgesTest, SaveLoadRoundTripAllOptionFields) {
     opts.create_directory = false;
     opts.overwrite_existing = true;
     opts.auto_file_renaming = true;
+    opts.conditional_get = true;
     opts.headers = {{"X-A \"quoted\"", "back\\slash"},
                     {"X-B", "space value"}};
 
@@ -727,6 +766,7 @@ TEST(TaskManagerEdgesTest, SaveLoadRoundTripAllOptionFields) {
     EXPECT_FALSE(ro.create_directory);
     EXPECT_TRUE(ro.overwrite_existing);
     EXPECT_TRUE(ro.auto_file_renaming);
+    EXPECT_TRUE(ro.conditional_get);
     EXPECT_EQ(ro.headers, opts.headers);
 
     std::filesystem::remove(state_path);

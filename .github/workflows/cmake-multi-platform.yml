@@ -136,7 +136,7 @@ jobs:
   coverage:
     name: Coverage (Ubuntu)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
         with:
@@ -151,7 +151,8 @@ jobs:
         timeout-minutes: 10
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build gcovr
+          sudo apt-get install -y cmake ninja-build
+          pipx install gcovr==8.6
           ./vcpkg/vcpkg install --triplet x64-linux
 
       - name: Configure CMake
@@ -163,9 +164,9 @@ jobs:
           -DCMAKE_BUILD_TYPE=Debug
           -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
           -DFALCON_BUILD_TESTS=ON
-          -DFALCON_BUILD_CLI=OFF
+          -DFALCON_BUILD_CLI=ON
           -DFALCON_BUILD_DESKTOP=OFF
-          -DFALCON_BUILD_DAEMON=OFF
+          -DFALCON_BUILD_DAEMON=ON
           -DFALCON_BUILD_EXAMPLES=OFF
           -DFALCON_ENABLE_COVERAGE=ON
           -S ${{ github.workspace }}
@@ -175,24 +176,24 @@ jobs:
         run: cmake --build ${{ github.workspace }}/build-coverage --config Debug --parallel
 
       - name: Test
-        timeout-minutes: 15
+        timeout-minutes: 30
         working-directory: ${{ github.workspace }}/build-coverage
-        run: ctest --build-config Debug --output-on-failure --timeout 120 --verbose
+        run: ctest --build-config Debug --output-on-failure --timeout 120
 
+      # 口径与本地铁账一致（gcovr 8.6 + merge flag + 只扫 packages/）：
+      # 缺 --merge-mode-functions 时 gcc 15 行归属差异会使合并直接抛异常，
+      # 旧配置在 continue-on-error 掩护下产出残缺 coverage.xml（Codecov
+      # 曾显示 89% 的虚假口径）。CLI/daemon 打开使口径覆盖全部包
+      # （desktop 无 Qt 环境保持 OFF，与本地铁账一致）
       - name: Generate coverage (gcovr)
-        timeout-minutes: 5
+        timeout-minutes: 10
         working-directory: ${{ github.workspace }}/build-coverage
-        continue-on-error: true
         run: |
           gcovr -r ${{ github.workspace }} \
-            --gcov-ignore-parse-errors=negative_hits.warn \
-            --exclude '.*(/|\\\\)build.*' \
-            --exclude '.*(/|\\\\)vcpkg_installed.*' \
-            --exclude '.*(/|\\\\)third_party.*' \
-            --exclude '.*(/|\\\\)packages(/|\\\\)libfalcon-core(/|\\\\)tests(/|\\\\).*' \
-            --exclude '.*(/|\\\\)packages(/|\\\\)libfalcon-protocols(/|\\\\)tests(/|\\\\).*' \
-            --exclude '.*(/|\\\\)packages(/|\\\\)libfalcon-storage(/|\\\\)tests(/|\\\\).*' \
-            --exclude '.*(/|\\\\)packages(/|\\\\)libfalcon-drives(/|\\\\)tests(/|\\\\).*' \
+            --filter '../packages/' \
+            -e '.*/tests/.*' \
+            --merge-mode-functions=merge-use-line-min \
+            --gcov-ignore-parse-errors=negative_hits.warn_once_per_file \
             --xml-pretty -o coverage.xml
 
       - name: Upload to Codecov

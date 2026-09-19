@@ -2,6 +2,59 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-19 - conditional-get 端到端（aria2 --conditional-get 同语义 + 任务状态文件 v4）+ 覆盖率徽章与 CI 口径修复 + RustFS 立项
+- **`DownloadOptions::conditional_get`（默认 false）端到端生效**：
+  目标文件已存在时按其修改时间生成 If-Modified-Since（RFC 7231
+  IMF-fixdate，file_clock→system_clock 无 clock_cast 用 epoch 差
+  技巧 + 手写 wday/month 表），304 视为成功并保留本地文件，200 才
+  真正覆盖重下——CLI `--conditional-download` 旗标与 config
+  `conditional_download` 字段此前解析齐全但引擎侧零消费
+- **覆盖门禁四路化**：init() 现为「失败 / 自动改名 / 条件下载 /
+  显式覆盖」四分支——conditional_get 隐含覆盖授权（改名出的"新"
+  路径无可条件之物，抑制 auto_file_renaming），且与覆盖门禁互斥
+  通过；IMS 头在 init() 置一次，命令线程此后只读
+- **304 危害钉死**：304 无响应体，落进下载路径即截零本地文件。三
+  层防护：① prepare_http_request 的 `else if` 结构保证 If-
+  Modified-Since 只在非 Range 的全新 GET 上发出（与续传 Range +
+  If-Range 结构性互斥）；② 304 分支仅当组确实武装过条件头且组处
+  于活动状态才 COMPLETED（进度记为本地尺寸），未武装的病态 304 按
+  语义失败收口；③ apply_group_resume_range 的 !has_resume_state
+  路径挂 IMS——初始命令创建与连接级重试重建两个站点一次覆盖，重
+  定向跟随命令同步携带
+- **TaskManager 状态文件 v3 → v4**：save 追加 conditional_get 尾
+  字段（位于 header_count 之前）；load 按版本门控（>=3 auto_file_
+  renaming、>=4 conditional_get），v4 能读 v3 旧档（v3 字段保留 +
+  新字段按默认 false），旧 v3 loader 拒读 v4 档（可接受）
+- **测试 14 用例三树绿**：request_group 3（已存在武装 IMS 且路径
+  不变/文件缺失无头/抑制自动改名）+ download_engine_v2_run e2e 3
+  （304 命中本地文件逐字节保留 + 服务器侧 IMS 头铁证/200 未命中
+  全新替换/未武装 304 干净失败不截零）+ task_manager_edges 2（v4
+  尾字段往返 + v3 旧档兼容：v4 读取方保留 auto_file_renaming 且
+  conditional_get 默认 false）+ 全字段往返补 conditional_get；
+  ASan 双树绿。**测量级教训**：测试服务器解析 HTTP 头名必须大小
+  写不敏感（RFC 9110 §5.1）——客户端按 set_header 原样拼写上线
+  （`If-Modified-Since:`），服务器按小写 find 恒 miss，一度误诊
+  为生产侧管道断裂
+- **daemon TaskStorage 不加该字段**（与 auto_file_renaming 同姿
+  态）：daemon 路径无置位点，恢复恒默认 false 零可观察变化
+- **覆盖率徽章 + CI 口径修复**（用户要求 README 有覆盖率图标且
+  ≥98%）：README/README_CN 补 codecov 徽章；CI coverage job 的
+  gcovr 配置与本地铁账口径不一致（缺 merge-mode-functions、apt
+  旧版 gcovr、continue-on-error 掩盖半截 XML、CLI/daemon 关闭
+  分母虚胖 31k 行）导致 codecov 显示假数字 89%——统一为 gcovr
+  8.6 (pipx) + 本地同款旗标。**最新铁账口径（两树合并）：行
+  97.2% / 函数 99.0% / 分支 56.3%**；98% 行覆盖需再收 137 行，
+  缺口定性沿批次 Z（TLS 故障注入/socket 硬错误/OOM 防御/伪影），
+  专项批次排队中
+- **RustFS 立项（todo #10，用户点名 MinIO 闭源化替代）**：真缺
+  口是 s3_browser 零鉴权（perform_s3_request 只发 Date/Host，
+  mock 服务器不验签所以全绿），对 MinIO/RustFS 等强制鉴权服务必
+  403——增量 = perform_s3_request 接 SigV4（复用 s3_plugin 的
+  S3Authenticator）+ mock 断言 Authorization 头 + README 表述，
+  排队在下一个增量
+- 下一个 todo 候选：#10 RustFS/MinIO 真鉴权、#3 BT 做种、#7 V2
+  IPv6 数据面
+
 ### 2026-09-19 - content-encoding 缺口收口（Accept-Encoding: identity + 原样落盘钉住，aria2/wget 同语义）
 - **todo #4 前提纠偏**：原条目「V1 curl 自动解压」不成立——libcurl
   不设 CURLOPT_ACCEPT_ENCODING 就不协商也不解压，全库 grep 零命中；

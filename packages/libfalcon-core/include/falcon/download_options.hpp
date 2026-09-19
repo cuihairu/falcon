@@ -90,6 +90,14 @@ struct DownloadOptions {
     /// applies to self-derived output paths; explicit overwrite_existing
     /// takes precedence.
     bool auto_file_renaming = false;
+
+    /// Conditional download: when the output file already exists, send
+    /// If-Modified-Since with its modification time and treat a 304
+    /// response as success keeping the local file (aria2
+    /// --conditional-get). Implies overwrite authorization for the
+    /// existing file (auto-renaming a "new" path has nothing to be
+    /// conditional about), so it suppresses auto_file_renaming.
+    bool conditional_get = false;
 };
 
 /// Global engine configuration

@@ -12,6 +12,9 @@
 #include <falcon/protocols/resume_control.hpp>
 
 #include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <ctime>
 #include <filesystem>
 #include <limits>
 #include <string_view>
@@ -88,6 +91,40 @@ std::string find_auto_renamed_path(const std::string& path) {
     return {};
 }
 
+/// conditional-get 条件头取值：文件修改时间 → RFC 7231 IMF-fixdate
+///（"Wed, 21 Oct 2015 07:28:00 GMT"）。读取失败返回空串（调用方退化
+/// 为无条件下载）。C++17 无 clock_cast，file_clock → system_clock 用
+/// "两时钟当前值之差"换算（偏差在进程生命周期内视为恒定——夏令时/
+/// 闰秒调整级别的漂移对 If-Modified-Since 秒级比较无影响）
+std::string http_date_from_last_write_time(const std::string& path) {
+    std::error_code ec;
+    const auto tp = std::filesystem::last_write_time(path, ec);
+    if (ec) {
+        return {};
+    }
+    namespace chrono = std::chrono;
+    const auto sys_tp = chrono::system_clock::now() +
+                        (tp - std::filesystem::file_time_type::clock::now());
+    const std::time_t t = chrono::system_clock::to_time_t(sys_tp);
+    std::tm tm_buf{};
+#ifdef _WIN32
+    gmtime_s(&tm_buf, &t);
+#else
+    gmtime_r(&t, &tm_buf);
+#endif
+    // 固定英文名数组——strftime 依赖 locale，不可用
+    static const char* const kWday[] = {"Sun", "Mon", "Tue",
+                                        "Wed", "Thu", "Fri", "Sat"};
+    static const char* const kMon[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                       "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%s, %02d %s %04d %02d:%02d:%02d GMT",
+                  kWday[tm_buf.tm_wday], tm_buf.tm_mday, kMon[tm_buf.tm_mon],
+                  tm_buf.tm_year + 1900, tm_buf.tm_hour, tm_buf.tm_min,
+                  tm_buf.tm_sec);
+    return buf;
+}
+
 bool starts_with(std::string_view s, std::string_view prefix) {
     return s.size() >= prefix.size() && s.substr(0, prefix.size()) == prefix;
 }
@@ -159,10 +196,25 @@ bool RequestGroup::init() {
     // 换一个不冲突的名字继续下载（数字插在扩展名前，file.zip ->
     // file.1.zip）。只作用于自推导路径——桥接注入的 override 双侧必须
     // 写同一文件，擅自改名会破坏该不变式；显式 overwrite_existing 优先。
-    if (!options_.overwrite_existing) {
-        std::error_code exists_ec;
-        const std::string out_path = download_task_->output_path();
-        if (std::filesystem::exists(out_path, exists_ec) && !exists_ec) {
+    // conditional_get 提供第四条路（aria2 --conditional-get 同语义）：
+    // 已存在的文件授权覆盖（改名出的空路径无条件可谈），并按其修改
+    // 时间生成 If-Modified-Since——服务器回 304 时本地文件就是成果
+    // （HTTP 响应命令处理），回 200 才真正覆盖重下
+    std::error_code exists_ec;
+    const std::string out_path = download_task_->output_path();
+    const bool output_exists = std::filesystem::exists(out_path, exists_ec) && !exists_ec;
+    if (output_exists && options_.conditional_get) {
+        if_modified_since_ = http_date_from_last_write_time(out_path);
+        if (if_modified_since_.empty()) {
+            FALCON_LOG_WARN_STREAM("conditional-get: 读取文件修改时间失败，"
+                                   "退化为无条件下载: " << out_path);
+        } else {
+            FALCON_LOG_INFO_STREAM("conditional-get: 目标文件已存在，携带 If-"
+                                   "Modified-Since: " << if_modified_since_);
+        }
+    }
+    if (!options_.overwrite_existing && !options_.conditional_get) {
+        if (output_exists) {
             std::string renamed_path;
             if (options_.auto_file_renaming && output_path_override_.empty()) {
                 renamed_path = find_auto_renamed_path(out_path);
