@@ -69,6 +69,25 @@ std::string build_output_path_for_options(const std::string& url, const Download
     return out_path.string();
 }
 
+/// aria2 --auto-file-renaming 同语义：在最后一个组件的扩展名前插入
+/// ".N"（1..9999，扩展名取最后一截——archive.tar.gz -> archive.tar.1.gz；
+/// 无扩展名/点文件则尾部追加，file -> file.1），返回第一个不存在的
+/// 候选；全部占用返回空串。exists 竞态与覆盖门禁同性质（TOCTOU），
+/// 极小概率下由首段 trunc 语义兜底
+std::string find_auto_renamed_path(const std::string& path) {
+    const std::filesystem::path p(path);
+    std::error_code ec;
+    for (int n = 1; n <= 9999; ++n) {
+        const std::filesystem::path candidate =
+            p.parent_path() /
+            (p.stem().string() + "." + std::to_string(n) + p.extension().string());
+        if (!std::filesystem::exists(candidate, ec)) {
+            return candidate.string();
+        }
+    }
+    return {};
+}
+
 bool starts_with(std::string_view s, std::string_view prefix) {
     return s.size() >= prefix.size() && s.substr(0, prefix.size()) == prefix;
 }
@@ -136,18 +155,31 @@ bool RequestGroup::init() {
     // （overwrite_existing=false）也会静默销毁已存在的同名文件；断点
     // 续传接管了"已存在半成品"的语义：失败/中断留下的临时文件 + 控制
     // 文件可恢复下载，最终名文件仍然受覆盖保护。
+    // auto_file_renaming 提供第三条路（aria2 --auto-file-renaming 同语义）：
+    // 换一个不冲突的名字继续下载（数字插在扩展名前，file.zip ->
+    // file.1.zip）。只作用于自推导路径——桥接注入的 override 双侧必须
+    // 写同一文件，擅自改名会破坏该不变式；显式 overwrite_existing 优先。
     if (!options_.overwrite_existing) {
         std::error_code exists_ec;
-        const std::string& out_path = download_task_->output_path();
+        const std::string out_path = download_task_->output_path();
         if (std::filesystem::exists(out_path, exists_ec) && !exists_ec) {
-            const std::string reason =
-                "输出文件已存在（设置 overwrite_existing = true 以覆盖）: " + out_path;
-            FALCON_LOG_WARN_STREAM("任务组失败: id=" << id_ << ", " << reason);
-            set_error_message(reason);
-            download_task_->set_error(reason);
-            download_task_->set_status(TaskStatus::Failed);
-            status_ = RequestGroupStatus::FAILED;
-            return false;
+            std::string renamed_path;
+            if (options_.auto_file_renaming && output_path_override_.empty()) {
+                renamed_path = find_auto_renamed_path(out_path);
+            }
+            if (renamed_path.empty()) {
+                const std::string reason =
+                    "输出文件已存在（设置 overwrite_existing = true 以覆盖）: " + out_path;
+                FALCON_LOG_WARN_STREAM("任务组失败: id=" << id_ << ", " << reason);
+                set_error_message(reason);
+                download_task_->set_error(reason);
+                download_task_->set_status(TaskStatus::Failed);
+                status_ = RequestGroupStatus::FAILED;
+                return false;
+            }
+            FALCON_LOG_INFO_STREAM(
+                "输出文件已存在，自动重命名: " << out_path << " -> " << renamed_path);
+            download_task_->set_output_path(renamed_path);
         }
     }
 

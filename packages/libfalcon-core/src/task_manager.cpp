@@ -21,7 +21,7 @@
 namespace falcon {
 
 namespace {
-constexpr int kTaskManagerStateVersion = 2;
+constexpr int kTaskManagerStateVersion = 3;
 constexpr const char* kTaskManagerStateMagic = "falcon_task_state";
 
 template <typename Int>
@@ -53,8 +53,11 @@ TaskStatus sanitize_status_for_restore(TaskStatus status) {
 
 /**
  * @brief 从流中读取下载选项
+ *
+ * version >= 3 才读取 auto_file_renaming 尾字段——旧版本状态文件
+ * 按默认值（false）解析，保证升级后旧档可继续恢复
  */
-bool read_download_options(std::istream& in, DownloadOptions& options) {
+bool read_download_options(std::istream& in, int version, DownloadOptions& options) {
     if (!(in >> options.max_connections >> options.timeout_seconds >> options.max_retries >>
           options.retry_delay_seconds)) {
         return false;
@@ -114,6 +117,14 @@ bool read_download_options(std::istream& in, DownloadOptions& options) {
     }
     options.create_directory = create_dir != 0;
     options.overwrite_existing = overwrite != 0;
+
+    if (version >= 3) {
+        int auto_rename = 0;
+        if (!read_int(in, auto_rename)) {
+            return false;
+        }
+        options.auto_file_renaming = auto_rename != 0;
+    }
 
     std::size_t header_count = 0;
     if (!(in >> header_count)) {
@@ -575,6 +586,7 @@ public:
             file << options.progress_interval_ms << " ";
             file << (options.create_directory ? 1 : 0) << " ";
             file << (options.overwrite_existing ? 1 : 0) << " ";
+            file << (options.auto_file_renaming ? 1 : 0) << " ";
             file << options.headers.size();
 
             for (const auto& [k, v] : options.headers) {
@@ -603,7 +615,7 @@ public:
         }
 
         int version = 0;
-        if (!(file >> version) || (version != 1 && version != kTaskManagerStateVersion)) {
+        if (!(file >> version) || version < 1 || version > kTaskManagerStateVersion) {
             return false;
         }
 
@@ -653,7 +665,7 @@ public:
 
             // Read download options
             DownloadOptions options;
-            if (!read_download_options(in, options)) {
+            if (!read_download_options(in, version, options)) {
                 continue;
             }
 

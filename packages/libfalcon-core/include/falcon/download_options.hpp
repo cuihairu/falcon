@@ -83,6 +83,13 @@ struct DownloadOptions {
 
     /// Overwrite existing file
     bool overwrite_existing = false;
+
+    /// Auto-rename output when the target file already exists instead of
+    /// failing: a number (1..9999) is inserted before the extension
+    /// ("file.zip" -> "file.1.zip", aria2 --auto-file-renaming). Only
+    /// applies to self-derived output paths; explicit overwrite_existing
+    /// takes precedence.
+    bool auto_file_renaming = false;
 };
 
 /// Global engine configuration

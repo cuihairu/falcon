@@ -1380,5 +1380,125 @@ TEST(RequestGroupSegmentBase, ResetMultiSegmentTrackingClearsCounters) {
 }
 
 //==============================================================================
+// 自动重命名（aria2 --auto-file-renaming 同语义）
+//==============================================================================
+
+namespace {
+
+RequestGroup make_group_in_dir(falcon::TaskId id,
+                               const std::string& dir,
+                               const std::string& filename,
+                               bool auto_renaming) {
+    DownloadOptions options;
+    options.output_directory = dir;
+    options.output_filename = filename;
+    options.auto_file_renaming = auto_renaming;
+    return RequestGroup(id, {"http://127.0.0.1:1/" + filename}, options);
+}
+
+void touch_file(const std::filesystem::path& p, const std::string& body = "x") {
+    std::ofstream f(p, std::ios::binary);
+    f << body;
+}
+
+} // namespace
+
+// 目标已存在 → 扩展名前插入 ".1"（file.bin -> file.1.bin）
+TEST(RequestGroupAutoRename, InsertsNumberBeforeExtension) {
+    const std::string dir = make_unique_temp_dir("ren1");
+    touch_file(std::filesystem::path(dir) / "out.bin");
+
+    RequestGroup group = make_group_in_dir(1, dir, "out.bin", true);
+    ASSERT_TRUE(group.init());
+
+    const std::filesystem::path out(group.download_task()->output_path());
+    EXPECT_EQ(out.filename().string(), "out.1.bin");
+    EXPECT_EQ(group.status(), RequestGroupStatus::WAITING);
+}
+
+// 基名与 .1 候选都被占用 → 顺延取 .2
+TEST(RequestGroupAutoRename, SkipsTakenCandidates) {
+    const std::string dir = make_unique_temp_dir("ren2");
+    touch_file(std::filesystem::path(dir) / "out.bin");
+    touch_file(std::filesystem::path(dir) / "out.1.bin");
+
+    RequestGroup group = make_group_in_dir(2, dir, "out.bin", true);
+    ASSERT_TRUE(group.init());
+
+    const std::filesystem::path out(group.download_task()->output_path());
+    EXPECT_EQ(out.filename().string(), "out.2.bin");
+}
+
+// 无扩展名 → 尾部追加 ".1"
+TEST(RequestGroupAutoRename, NoExtensionAppendsSuffix) {
+    const std::string dir = make_unique_temp_dir("ren3");
+    touch_file(std::filesystem::path(dir) / "out");
+
+    RequestGroup group = make_group_in_dir(3, dir, "out", true);
+    ASSERT_TRUE(group.init());
+
+    const std::filesystem::path out(group.download_task()->output_path());
+    EXPECT_EQ(out.filename().string(), "out.1");
+}
+
+// 多点扩展名取最后一截（archive.tar.gz -> archive.tar.1.gz）
+TEST(RequestGroupAutoRename, MultiDotExtension) {
+    const std::string dir = make_unique_temp_dir("ren4");
+    touch_file(std::filesystem::path(dir) / "archive.tar.gz");
+
+    RequestGroup group = make_group_in_dir(4, dir, "archive.tar.gz", true);
+    ASSERT_TRUE(group.init());
+
+    const std::filesystem::path out(group.download_task()->output_path());
+    EXPECT_EQ(out.filename().string(), "archive.tar.1.gz");
+}
+
+// 默认关闭（回归）：目标已存在保持既有失败语义
+TEST(RequestGroupAutoRename, DefaultOffStillFailsOnExisting) {
+    const std::string dir = make_unique_temp_dir("ren5");
+    touch_file(std::filesystem::path(dir) / "out.bin");
+
+    RequestGroup group = make_group_in_dir(5, dir, "out.bin", false);
+    EXPECT_FALSE(group.init());
+    EXPECT_EQ(group.status(), RequestGroupStatus::FAILED);
+    EXPECT_NE(group.error_message().find("已存在"), std::string::npos);
+}
+
+// 显式 overwrite_existing 优先于自动重命名：路径不变走覆盖
+TEST(RequestGroupAutoRename, OverwriteTakesPrecedence) {
+    const std::string dir = make_unique_temp_dir("ren6");
+    touch_file(std::filesystem::path(dir) / "out.bin");
+
+    DownloadOptions options;
+    options.output_directory = dir;
+    options.output_filename = "out.bin";
+    options.auto_file_renaming = true;
+    options.overwrite_existing = true;
+    RequestGroup group(6, {"http://127.0.0.1:1/out.bin"}, options);
+    ASSERT_TRUE(group.init());
+
+    EXPECT_EQ(std::filesystem::path(group.download_task()->output_path())
+                  .filename()
+                  .string(),
+              "out.bin");
+}
+
+// 桥接注入路径不参与重命名（adapter/metalink 两侧写同一文件的不变式）
+TEST(RequestGroupAutoRename, OutputPathOverrideNeverRenamed) {
+    const std::string dir = make_unique_temp_dir("ren7");
+    touch_file(std::filesystem::path(dir) / "bridge.bin");
+
+    DownloadOptions options;
+    options.output_directory = dir;
+    options.output_filename = "bridge.bin";
+    options.auto_file_renaming = true;
+    RequestGroup group(7, {"http://127.0.0.1:1/bridge.bin"}, options,
+                       (std::filesystem::path(dir) / "bridge.bin").string());
+    EXPECT_FALSE(group.init());
+    EXPECT_EQ(group.status(), RequestGroupStatus::FAILED);
+    EXPECT_NE(group.error_message().find("已存在"), std::string::npos);
+}
+
+//==============================================================================
 // 主函数
 //==============================================================================

@@ -405,6 +405,7 @@ static void merge_config_with_file(CliArgs& args) {
     if (!file_config.resume_enabled && args.continue_download) {
         args.continue_download = false;
     }
+    if (file_config.auto_renaming) args.auto_renaming = true;
     if (!file_config.verify_ssl) args.verify_ssl = false;
     // 合并 headers
     for (const auto& [k, v] : file_config.headers) {
@@ -446,6 +447,7 @@ static falcon::DownloadOptions setup_download_options(const CliArgs& args) {
     options.max_retries = static_cast<size_t>(args.max_retries);
     options.retry_delay_seconds = static_cast<size_t>(std::max(0, args.retry_wait));
     options.resume_enabled = args.continue_download;
+    options.auto_file_renaming = args.auto_renaming;
     options.speed_limit = args.speed_limit;
     options.min_segment_size = args.min_segment_size;
     options.adaptive_segment_sizing = args.adaptive_sizing;

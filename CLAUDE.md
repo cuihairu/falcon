@@ -2,6 +2,49 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-19 - auto_file_renaming 零消费端落地（aria2 --auto-file-renaming 同语义 + 任务状态文件 v3）
+- **`DownloadOptions::auto_file_renaming`（默认 false）端到端生效**：目标
+  文件已存在且未授权覆盖时，输出路径自动改为扩展名前插 ".N"（1..9999，
+  `file.zip → file.1.zip`；多点扩展名取最后一截 `archive.tar.gz →
+  archive.tar.1.gz`；无扩展名/点文件尾部追加 `file → file.1`）——此前
+  CLI `--auto-file-renaming` 旗标与 config `auto_renaming` 字段解析齐全
+  但引擎侧零消费（愿望式配置）
+- **RequestGroup::init() 覆盖门禁重构**：失败单路 → 失败/重命名双路。
+  `find_auto_renamed_path` 返回第一个不存在的候选，全部占用（9999 耗
+  尽）回落既有失败语义；`set_output_path` 先于 try_load_resume_state，
+  控制文件查找按重命名后路径进行。TOCTOU exists 竞态与覆盖门禁同性质，
+  极小概率由首段 trunc 语义兜底
+- **两条不变式**：① `output_path_override` 非空绝不重命名（adapter/
+  metalink 桥接"两侧写同一文件"不变式）；② 显式 `overwrite_existing
+  =true` 优先于自动重命名（授权覆盖时路径不变）。V1（curl）数据面不
+  消费该字段——与 overwrite_existing 先例同姿态（V1 行为改动需评估
+  停机恢复流），特性语义归属 V2 引擎
+- **TaskManager 任务状态文件 v2 → v3**：save 追加 auto_file_renaming
+  尾字段；load 按版本门控读取（version >= 3 才解析，旧档按默认 false
+  解析），版本接受区间改为 `1..kTaskManagerStateVersion`（v3 能读 v1/v2
+  旧档，升级无缝）
+- **CLI 接线收口**：`options.auto_file_renaming = args.auto_renaming`
+  （旗标既有、消费缺失）+ config 文件 `auto_renaming` 字段合并进 args
+  （对齐 resume_enabled/verify_ssl 合并模式）。daemon TaskStorage 的
+  options JSON 序列化未加该字段——daemon 路径今日无置位点，恢复恒默
+  认 false 零可观察变化（RPC per-download "auto-file-renaming" 选项
+  映射留作独立增量）
+- **测试 11 用例三树绿**：request_group 7（插 ".1"/顺延 ".2"/无扩展名/
+  多点扩展名/默认关闭回归/覆盖优先/override 不重命名）+
+  download_engine_v2_run e2e 1（已存在文件下载落 replace.1.bin、原件
+  逐字节保留、无临时残留——注意 download_task() 在引擎激活前为 null，
+  路径断言必须后置于终态等待）+ task_manager_edges 2（v3 尾字段往返 +
+  v2 旧档兼容加载）；ASan 23 用例零告警
+- **顺带修复 CLI 版本回归（4c68912 遗留）**：「CLI 版本单一事实源」重构
+  把 main.cpp 硬编码 "v0.2.0" 改为注入 PROJECT_VERSION，但
+  project(VERSION) 没同步升 0.2.0——CLI 自报版本静默降级 0.1.0，三个
+  既有集成用例（HelpLong/VersionLong/VersionShort）恒红。修复：
+  project VERSION 0.1.0 → 0.2.0；全量 ctest 首轮 5 红中另 2 红
+  （TaskManagerTest.TaskControl / FileHashTest.PerformanceLargeFile）
+  串行复跑即过，负载抖动定性
+- 下一个 todo 候选：#4 gzip/deflate content-encoding（V2）、#6
+  conditional-get、#3 BT seeding
+
 ### 2026-09-19 - 浏览器扩展 0.2.0（类迅雷化：右键菜单/批量收集/任务面板/双发送目标）+ 桌面 IPC 只读端点 + /v1/add 应答绑架缺陷修复
 - **扩展 0.1.0 → 0.2.0**（apps/browser_extension，兼容 Chrome/Edge/Brave
   等 Chromium ≥ 114）：manifest 补 contextMenus + scripting 权限

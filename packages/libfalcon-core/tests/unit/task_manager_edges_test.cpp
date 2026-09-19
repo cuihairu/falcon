@@ -615,6 +615,39 @@ TEST(TaskManagerEdgesTest, LoadStateSanitizesPriorityAndActiveStatus) {
     std::filesystem::remove(path);
 }
 
+// version 3 落盘的 auto_file_renaming 尾字段往返；version 2 旧档
+// 无该字段，按默认值 false 解析（升级兼容）
+TEST(TaskManagerEdgesTest, AutoFileRenamingVersionGatedRoundTrip) {
+    DownloadOptions opts;
+    opts.auto_file_renaming = true;
+    auto task = make_task(310, "https://example.com/v3.bin", opts);
+
+    auto path = unique_temp_file("falcon_tm_v3_");
+    {
+        TaskManager tm(base_config(), nullptr);
+        ASSERT_EQ(tm.add_task(task, TaskPriority::Normal), 310u);
+        ASSERT_TRUE(tm.save_state(path.string()));
+    }
+
+    TaskManager tm2(base_config(), nullptr);
+    ASSERT_TRUE(tm2.load_state(path.string()));
+    auto loaded = tm2.get_task(310);
+    ASSERT_NE(loaded, nullptr);
+    EXPECT_TRUE(loaded->options().auto_file_renaming);
+
+    // version 2 行格式（无尾字段）：加载成功且新字段取默认 false
+    auto v2_path = unique_temp_file("falcon_tm_v2compat_");
+    write_state_file(v2_path, {full_task_line(311, 0, 1)}, 2);
+    TaskManager tm3(base_config(), nullptr);
+    ASSERT_TRUE(tm3.load_state(v2_path.string()));
+    auto legacy = tm3.get_task(311);
+    ASSERT_NE(legacy, nullptr);
+    EXPECT_FALSE(legacy->options().auto_file_renaming);
+
+    std::filesystem::remove(path);
+    std::filesystem::remove(v2_path);
+}
+
 TEST(TaskManagerEdgesTest, SaveLoadRoundTripAllOptionFields) {
     DownloadOptions opts;
     opts.max_connections = 8;
@@ -639,6 +672,7 @@ TEST(TaskManagerEdgesTest, SaveLoadRoundTripAllOptionFields) {
     opts.progress_interval_ms = 250;
     opts.create_directory = false;
     opts.overwrite_existing = true;
+    opts.auto_file_renaming = true;
     opts.headers = {{"X-A \"quoted\"", "back\\slash"},
                     {"X-B", "space value"}};
 
@@ -692,6 +726,7 @@ TEST(TaskManagerEdgesTest, SaveLoadRoundTripAllOptionFields) {
     EXPECT_EQ(ro.progress_interval_ms, 250u);
     EXPECT_FALSE(ro.create_directory);
     EXPECT_TRUE(ro.overwrite_existing);
+    EXPECT_TRUE(ro.auto_file_renaming);
     EXPECT_EQ(ro.headers, opts.headers);
 
     std::filesystem::remove(state_path);

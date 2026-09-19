@@ -1237,6 +1237,56 @@ TEST(DownloadEngineV2RunTest, OverwriteEnabledReplacesExistingFile) {
     std::filesystem::remove_all(dir);
 }
 
+/// auto_file_renaming=true + 输出文件已存在：目标自动改为扩展名前插 ".1"
+/// （replace.bin -> replace.1.bin），下载落在新路径且原文件原样保留
+TEST(DownloadEngineV2RunTest, AutoFileRenamingDownloadsToNewPath) {
+    const std::string body = make_body(32 * 1024);
+    MinimalHttpServer server;
+    ASSERT_TRUE(server.start(body));
+
+    const std::string dir = run_test_temp_dir("autorename");
+    std::filesystem::create_directories(dir);
+    const std::string out_path = dir + "/replace.bin";
+    {
+        std::ofstream out(out_path, std::ios::binary);
+        out << "OLD-FILE-STAYS";
+    }
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options;
+    options.output_filename = out_path;
+    options.max_connections = 1;
+    options.auto_file_renaming = true;
+
+    const TaskId task_id = engine.add_download(server.url("/replace.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    long long elapsed_ms = 0;
+    ASSERT_TRUE(wait_group_terminal(engine, group, 20, elapsed_ms));
+
+    EXPECT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+    // init 时目标路径已改写：任务落在扩展名前插 ".1" 的新路径
+    ASSERT_NE(group->download_task(), nullptr);
+    EXPECT_EQ(std::filesystem::path(group->download_task()->output_path())
+                  .filename()
+                  .string(),
+              "replace.1.bin");
+    const std::string renamed = dir + "/replace.1.bin";
+    EXPECT_EQ(read_file_content(renamed), body);
+    // 原文件一个字节都没被碰
+    EXPECT_EQ(read_file_content(out_path), "OLD-FILE-STAYS");
+    // 无临时文件残留（重命名后的路径语义下收口）
+    EXPECT_FALSE(std::filesystem::exists(renamed + ".falcon.tmp"));
+
+    std::filesystem::remove_all(dir);
+    server.stop();
+}
+
 //==============================================================================
 // 停机排水测试：run() 退出必须关闭命令持有的 fd
 //==============================================================================
