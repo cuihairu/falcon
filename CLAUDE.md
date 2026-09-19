@@ -2,6 +2,80 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-19 - 浏览器扩展 0.2.0（类迅雷化：右键菜单/批量收集/任务面板/双发送目标）+ 桌面 IPC 只读端点 + /v1/add 应答绑架缺陷修复
+- **扩展 0.1.0 → 0.2.0**（apps/browser_extension，兼容 Chrome/Edge/Brave
+  等 Chromium ≥ 114）：manifest 补 contextMenus + scripting 权限
+  - **右键菜单**：链接/视频/音频 →「用 Falcon 下载」（linkUrl/srcUrl 直发）；
+    页面 →「用 Falcon 收集本页链接」打开批量选择页（batch/batch.html，
+    扩展自有目录）
+  - **批量链接收集页**：`chrome.scripting.executeScript` 在目标 tab 内提取
+    全部 http(s) 链接（去重 + 链接文本，上限 500），关键字/扩展名过滤、
+    全选/全不选、计数实时显示，批量 sendUrlsToFalcon（worker 逐条发送，
+    回报 sent/total）
+  - **任务面板**（popup）：desktop 模式读 `/v1/tasks` 快照、daemon 模式聚合
+    `aria2.tellActive/tellWaiting/tellStopped`（归一化为统一形状：进度/
+    速度/字节/状态），进度条 + 状态徽章渲染；daemon 模式下 active/waiting
+    可暂停（forcePause）、paused 可继续（unpause）——desktop IPC 无控制
+    面时按钮隐藏并说明
+  - **双发送目标**（Options 单选）：desktop 本地 IPC（默认，/v1/add 弹添加
+    对话框）或 daemon aria2 兼容 JSON-RPC（`{url}/jsonrpc`，`token:` 前缀
+    认证，aria2.addUri 带 out/referer/user-agent/Cookie 选项）——daemon
+    模式不弹窗直接入队；发送失败回落 falcon:// 深链仅限 desktop 模式
+  - **下载接管过滤**：`interceptExtensions`（扩展名清单，留空 = 全部接管
+    保持 0.1.0 行为），非空时仅匹配清单的下载被转发并取消浏览器下载
+  - i18n en/zh_CN 全量补齐（脚本核对：双 locale 键集合一致、代码引用键
+    全部存在、manifest __MSG__ 键全部存在）；node --check 四 JS 全过
+- **桌面 IPC 只读查询端点**（falcon-desktop，与扩展任务面板配套）：
+  `GET /v1/health`（无副作用连通性探测）/ `GET /v1/tasks` / `GET /v1/stats`。
+  数据经 `JsonProvider`（std::function<QByteArray()>）由 MainWindow 注入
+  ——快照缓存于 on_tasks_refreshed/on_stats_refreshed（GUI 线程），与
+  QTcpServer 信号同线程，回调直读无并发问题；未注入 503。状态串对齐
+  aria2 风格；序列化 Qt JSON（qulonglong→QJsonValue 歧义须显式 qint64）
+- **修复 /v1/add 应答被模态对话框绑架**（离屏启动真实桌面 + curl 回环
+  冒烟曝光的既有流程缺陷）：`emit download_requested` 同线程直连 →
+  on_download_requested 弹模态添加对话框 exec() 阻塞 → 202 应答被推迟
+  到用户关闭对话框——扩展 1.5s 超时必然先到，误判不可达 → 不取消浏览器
+  下载 → 文件重复下载。修复：先 write_json(202) 再 emit（202 = 请求已
+  受理，任务是否创建由对话框决定）。修复前 POST 3s 零字节超时，修复后
+  即时 202；/v1/health、/v1/tasks、/v1/stats、OPTIONS 预检、404/405
+  逐项回环断言通过
+- **测量级教训**：扩展页（chrome-extension:// origin）持 host_permissions
+  即可直调 chrome.scripting.executeScript，无需 service_worker 转发；
+  daemon JSON-RPC 无需 CORS 改动——MV3 扩展页/service worker 有
+  host_permissions 时 fetch 豁免 CORS
+
+### 2026-09-19 - 覆盖率批次 Z：故障注入框架（编译期零成本）+ 15 处泄漏式注入接线修复 + 全量 2309 绿
+- **故障注入框架**（packages/libfalcon-core/include/falcon/detail/
+  injection.hpp，新增）：`inject_failure(InjectPoint)` + `ScopedInjection`
+  RAII + `set_injection` 位图。生产构建 `FALCON_FAILURE_INJECTION` 未定义
+  时为 `inline constexpr` 恒 false——零运行时成本、零分支；测试构建
+  （FALCON_BUILD_TESTS 或 FALCON_ENABLE_FAILURE_INJECTION）经根
+  CMakeLists `add_compile_definitions` 全局定义（跨 TU 布局一致性是 ODR
+  红线，必须在全局层定义而非单 target）。37 个注入点：curl/EVP ctx
+  创建、socket/listen 创建、WS 发送、引擎循环异常、incremental 哈希链、
+  proxy CONNECT 发送等
+- **修复 15 处泄漏式注入接线**（9 文件；LSan 实证 25424 字节/12 处，cov
+  树无 LSan 故全绿掩盖）：`res = create(); if (inject(...) || !res) throw;`
+  形态在注入命中时已创建真实句柄随即泄漏——改为短路创建
+  `res = inject(...) ? nullptr : create();`。涉及 curl_easy_init ×7
+  （http_handler 2/ftp_plugin 2/resource_search/五 storage browser 之
+  kodo、s3、cos、oss、upyun）与 EVP_CIPHER_CTX/EVP_MD_CTX new ×8
+  （config_manager 加解密 2/file_hash 流式与内存 2/cos sha256/upyun
+  签名 MD5）。event_poll_epoll 既有写法为正确范本
+- **新增注入测试**：storage_injection_test.cpp 新文件 14 用例 + 既有
+  套件扩展（download_engine_v2_run 引擎循环异常×2、event_poll 等待失败、
+  file_hash 全链×8、ftp/http_handler curl init、proxy CONNECT 发送硬
+  失败——https 目标才可达（CONNECT 隧道仅用于 HTTPS 经代理，明文
+  HTTP absolute-form 直发不经 send_proxy_connect）、config_manager
+  EVP×8、json_rpc_server socket/listen、ws_client 发送失败、dht socket
+  创建、incremental 哈希链×3）
+- **顺带收口**（drives）：init_patterns 表驱动重构（逐平台赋值块 →
+  模式表循环构造，消行归属测量伪影）；ISearchProvider 零调用方纯虚
+  validate_url/get_details 接口删除（批次 Q 已定性生产零调用）
+- **全量验证**：cov 全量 ctest 2309 用例 100% 通过零失败（含修复
+  ConnectSendHardErrorFailsCleanly 的 https URL 修正）+ ASan 重建后
+  相关套件零泄漏零告警；批量 Z 收口时 miss 定性沿批次 Y 口径不变
+
 ### 2026-09-19 - CI 收口轮：SegmentFileOccupied 根因闭环（段文件删除点 is_regular_file 守卫）+ Windows ResumeAll 双根因 + metalink 两用例修复
 - **SegmentFileOccupied 三连红根因闭环（真产品缺陷，423da46）**：
   段路径被目录占用时，恢复检测/重试记账的 ifstream 打开目录同样
