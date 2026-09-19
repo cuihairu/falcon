@@ -61,6 +61,8 @@ struct FakeResponse {
     bool support_range = false;  // 请求带 Range 时自动 206 + 切片
     bool fail_nonzero_range = false;  // 起始 >0 的 Range 请求一律 500（段失败收口）
     bool no_length = false;  // 不发 Content-Length，body 以连接关闭为界（未知总长）
+    bool single_write = false;  // 头与 body 拼成一次 send（构造"首包即含
+                                // body"的初始批次数据，如 /dev/full 首写失败）
 };
 
 class ScriptedHttpServer {
@@ -383,6 +385,14 @@ private:
                 }
             }
             out += "\r\n";
+            if (resp.single_write && rec.method != "HEAD" && !body.empty()) {
+                // 头 + body 单次 send：客户端首个 recv 必然同时拿到
+                // 响应头与首批 body 字节
+                std::string combined = out;
+                combined += body;
+                send_all(fd, combined);
+                break;
+            }
             if (!send_all(fd, out)) break;
             if (rec.method != "HEAD") {
                 if (abort_match && abort_after > 0 && abort_after < body.size()) {

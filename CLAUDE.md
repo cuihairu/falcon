@@ -2,6 +2,62 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-19 - 覆盖率批次 Z2：TLS/socket/磁盘满故障注入专项（16 用例）+ 顺序脆弱缺陷修复
+- **7 个新注入点**（injection.hpp）：`HttpSocketCreate`/
+  `HttpConnectHardFail`——回环上 socket() 创建失败与非阻塞 connect
+  立即硬失败本地不可构造（connect 恒报 in-progress，失败在
+  getsockopt 阶段才暴露），注入确定性命中收口分支（错误码一并注入
+  ENETUNREACH）；TLS 链五点 `TlsMethodFail`/`TlsCtxNewFail`/
+  `TlsSslNewFail`/`TlsSetFdFail`/`TlsSetHostFail`/`TlsHandshakeWantWrite`/
+  `TlsRequestWriteFail`——创建类注入短路真实创建（批次 Z 短路形态
+  防泄漏），SSL_write 注入时未发出任何字节故 SSL_get_error 前置条件
+  不成立、错误码一并注入 SSL_ERROR_SYSCALL
+- **测试基建抽取**：`tls_loopback_server.hpp`（自 http_commands_tls_
+  test.cpp 抽出，TLS e2e 与注入测试共用）——自签证书回环服务器 +
+  `handshakes()` 握手计数（创建类注入服务器侧零握手 = "失败发生在
+  ClientHello 之前"的观测证据）+ SNI 观测 + 引擎线程 RAII 守卫 +
+  终态等待辅助；scripted_http_server 增加 `single_write` 形态（头 +
+  body 单次 send，构造"首包即含 body"的完成路径冲刷失败场景）
+- **16 新用例**（http_commands_injection_test.cpp）：TLS 创建链 5
+  参数化（任务 FAILED 且 `handshakes()==0`——五点全部在握手前收口，
+  set1_host 参数化带 verify_ssl=true 因该调用仅校验开启时发生）+
+  握手首轮 WANT_WRITE 重入续推后下载自然完成（进行中语义非失败，
+  `handshakes()==1` 钉住无重连）+ 真实握手完成后 SSL_write 硬失败
+  FAILED 干净收口 + socket 创建失败/connect 硬失败/域名解析失败
+  （.invalid 无需注入）三无服务器用例（半成品不顶最终名）+
+  **/dev/full 四失败面**（磁盘满绝不假报 COMPLETED）：容量触发的
+  中途冲刷失败 / 直写 seekp 冲刷失败 / 收满后完成路径冲刷失败
+  （receive 后与首次 execute 两种完成形态）/ 大缓冲全程不触发容量
+  冲刷的完成冲刷失败——**测量级定性：初始批次写失败分支经
+  /dev/full 实证结构性不可达**（初始批次 ≤ 4KB 被 ofstream filebuf
+  8KB 吞入用户态缓冲，ENOSPC 到后续冲刷/收口点才浮现）
+- **条件下载 × 重定向交点钉住**：conditional_get + 302 跟随连接
+  必须原样携带组级 If-Modified-Since（条件作用于最终资源；回环可
+  构造、非注入路径）
+- **修复既有顺序脆弱缺陷**（批次 Z 遗留）：`LoopBodyStdException
+  StopsRunSafely` 硬编码 `find_group(1)`——任务 ID 计数器是进程
+  全局只增原子（V2 宿主化引入），全量二进制里任何先执行的测试都
+  消耗小 id，该用例只在单跑时成立（本轮全量与 ASan 双双曝光）。
+  修复：用 `add_download` 返回 id 寻址
+- **顺带收口**：schedule_resume_download 的 is_multi_segment
+  reset 分支删除（函数入口防御恒先收口——同进程 pause→resume 后
+  组保持 multi_segment 的场景在入口即 abandon+reset+return，此处
+  条件与彼处恒同值，校验与 abandon 均不触碰段计数）
+- **验证**：build-cov 全量 ctest 2420 清单（1 例记录在案并行抖动
+  DownloadEngineTest.ResumeTask 串行复跑即过后 core 二进制全量重跑
+  恢复 gcda）+ build-ci 全量 2420 全绿 + ASan V2 引擎命令链 225
+  用例零告警；**铁账（build-cov 单树新鲜数据，miss 460）：行
+  97.4% / 函数 99.1% / 分支 56.6%**（上一口径 97.2/99.0/56.3）；
+  **http_commands.cpp gcov miss 135 → 92**（剩余定性沿批次 X/Y
+  口径：TLS 深层防御/socket 硬错误/竞态窗口/防御代码/行归属伪影，
+  距 98% 全包还差 111 行）
+- **测量级教训**：coverage 插桩树是 `build-cov`（`--coverage -g`，
+  CLI OFF/daemon ON），build-ci（nightly 等价功能树）与 build-asan
+  均无插桩——gcovr `-r ..` 会扫到 build-cov 存量旧 gcda（上会话
+  遗留的部分套件数据不可信，146 个 gcda 同 42ms 窗口 mtime = 各
+  测试二进制退出批量写出）；覆盖率流程必须落在 build-cov：全量
+  重建 → 清该树 gcda → 全量 ctest → gcovr
+
 ### 2026-09-19 - S3 兼容服务 SigV4 真鉴权（MinIO/RustFS 可用）+ 死代码 s3_plugin 整体删除
 - **真缺口**：s3_browser 的 perform_s3_request 自注释「简化签名」实际
   连 Authorization 头都不发（只发 Date/Host 匿名请求），对 MinIO/

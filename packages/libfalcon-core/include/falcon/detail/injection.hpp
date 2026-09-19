@@ -72,6 +72,20 @@ enum class InjectPoint : uint32_t {
     // HTTP 代理隧道：CONNECT 请求发送硬错误（回环上 RST 先于客户端
     // 首个 send 到达是亚毫秒竞态，注入点确定性命中收口分支）
     ProxyConnectSendFail,
+    // V2 HTTP 命令：socket 创建 / connect 硬失败（回环上非阻塞 connect
+    // 恒报 in-progress，立即硬失败在本地网络环境不可构造）
+    HttpSocketCreate,
+    HttpConnectHardFail,
+    // V2 HTTP 命令 TLS 链：method/ctx/ssl 创建、fd 绑定、主机名绑定、
+    // 首轮握手 WANT_WRITE、请求发送硬失败（创建类注入短路真实创建，
+    // 防泄漏遵循批次 Z 形态）
+    TlsMethodFail,
+    TlsCtxNewFail,
+    TlsSslNewFail,
+    TlsSetFdFail,
+    TlsSetHostFail,
+    TlsHandshakeWantWrite,
+    TlsRequestWriteFail,
 };
 
 #if FALCON_FAILURE_INJECTION

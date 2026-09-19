@@ -2171,9 +2171,12 @@ TEST(DownloadEngineV2RunTest, PruneFinishedTaskWindowAfterSpeedLimitedDownload) 
 /// 收尾而非 std::terminate；引擎对象此后仍可查询
 TEST(DownloadEngineV2RunTest, LoopBodyStdExceptionStopsRunSafely) {
     DownloadEngineV2 engine(fast_poll_config());
-    ASSERT_GT(engine.add_download("http://127.0.0.1:1/keepalive.bin",
-                                  keepalive_options()),
-              0);
+    // 任务 ID 计数器是进程全局只增原子：全量二进制里先于本用例执行的
+    // 任意 add_download 都会消耗小 id，这里必须用返回值寻址，
+    // find_group(1) 仅在单跑时成立（顺序脆弱）
+    const TaskId task_id = engine.add_download("http://127.0.0.1:1/keepalive.bin",
+                                               keepalive_options());
+    ASSERT_GT(task_id, 0);
 
     ::falcon::detail::ScopedInjection guard(
         ::falcon::detail::InjectPoint::EngineLoopThrowStd);
@@ -2182,7 +2185,7 @@ TEST(DownloadEngineV2RunTest, LoopBodyStdExceptionStopsRunSafely) {
     // catch 只 break 退出循环（"安全停机"= 排水收尾，非显式 shutdown
     // 标志）；run() 正常返回、引擎对象此后仍可查询
     EXPECT_FALSE(engine.is_running());
-    EXPECT_NE(engine.request_group_man()->find_group(1), nullptr);
+    EXPECT_NE(engine.request_group_man()->find_group(task_id), nullptr);
 }
 
 /// 循环体抛非 std 异常：同上，走 catch (...) 分支

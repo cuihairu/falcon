@@ -686,7 +686,10 @@ bool HttpInitiateConnectionCommand::resolve_host(
 }
 
 bool HttpInitiateConnectionCommand::create_socket() {
-    socket_fd_ = socket(AF_INET, SOCK_STREAM, 0);
+    socket_fd_ = ::falcon::detail::inject_failure(
+                     ::falcon::detail::InjectPoint::HttpSocketCreate)
+                     ? -1
+                     : socket(AF_INET, SOCK_STREAM, 0);
     if (socket_fd_ < 0) {
         FALCON_LOG_ERROR_STREAM("socket() 失败: " << sock_err_str(sock_errno()));
         return false;
@@ -752,11 +755,19 @@ bool HttpInitiateConnectionCommand::connect_socket() {
         }
     }
 
-    int ret = connect(socket_fd_,
-                     reinterpret_cast<struct sockaddr*>(&addr),
-                     sizeof(addr));
+    // 回环上非阻塞 connect 恒报 in-progress（失败在 getsockopt 阶段
+    // 才暴露），立即硬失败本地不可构造——注入点确定性命中收口分支
+    int ret = ::falcon::detail::inject_failure(
+                  ::falcon::detail::InjectPoint::HttpConnectHardFail)
+                  ? -1
+                  : connect(socket_fd_,
+                            reinterpret_cast<struct sockaddr*>(&addr),
+                            sizeof(addr));
     if (ret < 0) {
-        const int err = sock_errno();
+        const int err = ::falcon::detail::inject_failure(
+                            ::falcon::detail::InjectPoint::HttpConnectHardFail)
+                            ? ENETUNREACH
+                            : sock_errno();
         // 非阻塞 connect 的“进行中”语义：Winsock 一律报 WSAEWOULDBLOCK
         //（兼容 WSAEINPROGRESS），BSD 系报 EINPROGRESS（EINTR 视为可重试）
 #ifdef _WIN32
@@ -784,13 +795,20 @@ TlsHandshakeResult HttpInitiateConnectionCommand::setup_tls() {
     if (!tls_started_) {
         if (!ssl_ctx_) {
             // 创建 SSL_CTX
-            const SSL_METHOD* method = TLS_client_method();
+            const SSL_METHOD* method =
+                ::falcon::detail::inject_failure(
+                    ::falcon::detail::InjectPoint::TlsMethodFail)
+                    ? nullptr
+                    : TLS_client_method();
             if (!method) {
                 FALCON_LOG_ERROR_STREAM("无法获取 TLS 方法: " << ERR_error_string(ERR_get_error(), nullptr));
                 return TlsHandshakeResult::FAILED;
             }
 
-            ssl_ctx_ = SSL_CTX_new(method);
+            ssl_ctx_ = ::falcon::detail::inject_failure(
+                           ::falcon::detail::InjectPoint::TlsCtxNewFail)
+                           ? nullptr
+                           : SSL_CTX_new(method);
             if (!ssl_ctx_) {
                 FALCON_LOG_ERROR_STREAM("无法创建 SSL_CTX: " << ERR_error_string(ERR_get_error(), nullptr));
                 return TlsHandshakeResult::FAILED;
@@ -816,14 +834,21 @@ TlsHandshakeResult HttpInitiateConnectionCommand::setup_tls() {
         }
 
         // 创建 SSL 连接（共享句柄：命令链上的响应/下载命令继续使用）
-        ssl_conn_ = HttpTlsSessionPtr(SSL_new(ssl_ctx_), HttpTlsSessionDeleter{});
+        ssl_conn_ = HttpTlsSessionPtr(
+            ::falcon::detail::inject_failure(
+                ::falcon::detail::InjectPoint::TlsSslNewFail)
+                ? nullptr
+                : SSL_new(ssl_ctx_),
+            HttpTlsSessionDeleter{});
         if (!ssl_conn_) {
             FALCON_LOG_ERROR_STREAM("无法创建 SSL 连接: " << ERR_error_string(ERR_get_error(), nullptr));
             return TlsHandshakeResult::FAILED;
         }
 
         // 绑定 Socket 到 SSL
-        if (SSL_set_fd(ssl_conn_.get(), static_cast<int>(socket_fd_)) != 1) {
+        if (::falcon::detail::inject_failure(
+                ::falcon::detail::InjectPoint::TlsSetFdFail) ||
+            SSL_set_fd(ssl_conn_.get(), static_cast<int>(socket_fd_)) != 1) {
             FALCON_LOG_ERROR_STREAM("无法绑定 Socket 到 SSL: " << ERR_error_string(ERR_get_error(), nullptr));
             return TlsHandshakeResult::FAILED;
         }
@@ -834,7 +859,10 @@ TlsHandshakeResult HttpInitiateConnectionCommand::setup_tls() {
         // 证书校验绑定期望主机名：verify 开启时 SSL_get_verify_result
         // 的结论因此同时覆盖证书链与主机名——替代此前的 WARN-only
         // 主机名检查（告警后照常收数据，校验形同虚设）
-        if (options_.verify_ssl && SSL_set1_host(ssl_conn_.get(), host_.c_str()) != 1) {
+        if (options_.verify_ssl &&
+            (::falcon::detail::inject_failure(
+                 ::falcon::detail::InjectPoint::TlsSetHostFail) ||
+             SSL_set1_host(ssl_conn_.get(), host_.c_str()) != 1)) {
             FALCON_LOG_ERROR_STREAM("无法设置证书主机名校验: " << host_);
             return TlsHandshakeResult::FAILED;
         }
@@ -846,7 +874,11 @@ TlsHandshakeResult HttpInitiateConnectionCommand::setup_tls() {
     // 执行/继续 TLS 握手（非阻塞 socket：WANT_* 属进行中而非失败）
     const int ret = SSL_connect(ssl_conn_.get());
     if (ret != 1) {
-        const int error = SSL_get_error(ssl_conn_.get(), ret);
+        const int error =
+            ::falcon::detail::inject_failure(
+                ::falcon::detail::InjectPoint::TlsHandshakeWantWrite)
+                ? SSL_ERROR_WANT_WRITE
+                : SSL_get_error(ssl_conn_.get(), ret);
 
         if (error == SSL_ERROR_WANT_READ) {
             FALCON_LOG_DEBUG_STREAM("TLS 握手等待可读: " << host_);
@@ -1159,10 +1191,21 @@ AbstractCommand::ExecutionResult HttpInitiateConnectionCommand::send_http_reques
         ssize_t n = 0;
 #ifdef FALCON_ENABLE_OPENSSL
         if (use_https_ && ssl_conn_) {
-            // 使用 SSL_write 发送 HTTPS 数据
-            n = SSL_write(ssl_conn_.get(), data, static_cast<int>(remaining));
+            // 使用 SSL_write 发送 HTTPS 数据（注入时未发出任何字节，
+            // SSL_get_error 的前置条件"真实失败操作"不成立，故错误码
+            // 一并注入取 SSL_ERROR_SYSCALL）
+            const bool write_injected =
+                ::falcon::detail::inject_failure(
+                    ::falcon::detail::InjectPoint::TlsRequestWriteFail);
+            n = write_injected
+                    ? -1
+                    : SSL_write(ssl_conn_.get(), data,
+                                static_cast<int>(remaining));
             if (n <= 0) {
-                int ssl_error = SSL_get_error(ssl_conn_.get(), static_cast<int>(n));
+                int ssl_error = write_injected
+                                    ? SSL_ERROR_SYSCALL
+                                    : SSL_get_error(ssl_conn_.get(),
+                                                    static_cast<int>(n));
                 if (ssl_error == SSL_ERROR_WANT_WRITE || ssl_error == SSL_ERROR_WANT_READ) {
                     engine->register_socket_event(
                         socket_fd_, static_cast<int>(net::IOEvent::WRITE), id());
@@ -1900,13 +1943,11 @@ bool HttpResponseCommand::schedule_resume_download(DownloadEngineV2* engine,
                               << ", content-range=" << headers_["content-range"]
                               << "），放弃续传: task=" << get_task_id());
         group.abandon_resume();
-        // 同进程 pause→resume 后组保持 multi_segment 状态：abandon 后
-        // 重启的全新下载若再次分段，残留段计数会让完成判定错乱
-        if (group.is_multi_segment()) {
-            group.reset_multi_segment_tracking();
-        }
         // 本连接的响应体起点与全新请求不符，不能复用——重新发起无
-        // Range 的全新下载
+        // Range 的全新下载。（同进程 pause→resume 后组保持 multi_segment
+        // 状态的场景由函数入口的防御收口：is_multi_segment 为真在
+        // 1908 处即 abandon+reset+return，此处条件与彼处恒同值——
+        // 校验与 abandon 均不触碰段计数）
         schedule_next(engine, std::make_unique<HttpInitiateConnectionCommand>(
                                   get_task_id(), source_url_, options_));
         return true;
