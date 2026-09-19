@@ -1689,7 +1689,15 @@ TEST(DownloadEngineV2RunTest, ResumeAllUnpausesPausedGroups) {
 
     engine.resume_all();
 
-    EXPECT_EQ(group->status(), RequestGroupStatus::WAITING)
+    // resume_all 返回后 run 循环会异步重新激活(keepalive 任务连接
+    // 失败再进延迟重试,Windows 上失败路径亚毫秒完成)——钉死瞬态
+    // WAITING 是竞态断言,改为轮询确认组已离开 PAUSED 进入调度
+    const auto resume_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (group->status() == RequestGroupStatus::PAUSED &&
+           std::chrono::steady_clock::now() < resume_deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    EXPECT_NE(group->status(), RequestGroupStatus::PAUSED)
         << "resume_all 必须把 PAUSED 组送回等待队列重新激活";
 
     engine.shutdown();

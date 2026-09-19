@@ -29,14 +29,9 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <random>
 #include <string>
 #include <vector>
-
-#ifdef _WIN32
-#include <process.h>
-#else
-#include <unistd.h>
-#endif
 
 namespace {
 
@@ -54,19 +49,17 @@ using HttpTestServer = falcon::testscripts::ScriptedHttpServer;
 
 int uniqueSuffix() {
     static int counter = 0;
-    // pid 参与:ctest 每用例独立进程并行跑,counter 各自从 0 起,仅靠
-    // 时钟低 6 位截断跨进程可撞——同名 TempDir 会被并行进程的析构
-    // remove_all 连树删掉,下载期间目录消失即静默改变被测行为
-    // (CI Coverage 实证:并行进程删掉段 0 占位目录 → 分段全成功,
-    // "目录占用必须失败"的用例反而下载成功)
-#ifdef _WIN32
-    const auto pid = static_cast<long long>(_getpid());
-#else
-    const auto pid = static_cast<long long>(getpid());
-#endif
-    const auto tick = static_cast<long long>(
-        std::chrono::steady_clock::now().time_since_epoch().count());
-    return static_cast<int>((pid * 1000003 + tick) % 1000000000) + (counter++);
+    // 熵源用 random_device 而非 pid+时钟:CI VM 的 steady_clock 粒度是
+    // 粗的(毫秒级),pid*质数+时钟截断的跨进程同名概率在千级并行下
+    // 不可忽略——同名 TempDir 会被并行进程的析构 remove_all 连树删掉,
+    // 下载期间目录消失即静默改变被测行为(CI Coverage 两轮实证:并行
+    // 进程删掉段 0 占位目录 → 分段全成功,"目录占用必须失败"的用例
+    // 反而下载成功)。random_device 读内核熵池,与时钟粒度彻底解耦
+    static const int base = [] {
+        std::random_device rd;
+        return static_cast<int>(rd() % 1000000000);
+    }();
+    return base + (counter++);
 }
 
 class TempDir {
