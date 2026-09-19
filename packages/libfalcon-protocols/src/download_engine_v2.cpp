@@ -13,8 +13,12 @@
 #include <algorithm>
 #include <chrono>
 #include <limits>
+#include <mutex>
 #ifndef _WIN32
 #include <unistd.h>  // close
+#else
+#include <winsock2.h>
+#include <windows.h>
 #endif
 
 namespace falcon {
@@ -58,6 +62,23 @@ public:
 };
 } // namespace
 
+#ifdef _WIN32
+namespace {
+// 引擎数据面直接使用 Winsock,不依赖调用方先经其他组件初始化——
+// daemon 碰巧由 RPC 层构造时的 WSAStartup 覆盖,CLI/桌面进程内引擎
+// 没有该路径,缺初始化时 socket() 全部报 WSA 10093。构造时幂等初始
+// 化,进程生命周期内不清理(进程退出自动回收,与 daemon RPC 层做法
+// 一致)
+void ensure_winsock_initialized() {
+    static std::once_flag once;
+    std::call_once(once, [] {
+        WSADATA data{};
+        WSAStartup(MAKEWORD(2, 2), &data);
+    });
+}
+} // namespace
+#endif
+
 //==============================================================================
 // DownloadEngineV2 实现
 //==============================================================================
@@ -71,6 +92,11 @@ DownloadEngineV2::DownloadEngineV2(const EngineConfigV2& config)
     , global_speed_limit_(config.global_speed_limit)
     , config_(config)
 {
+#ifdef _WIN32
+    // 先于任何 socket 操作(成员初始化不涉 winsock,下载路径均在
+    // run()/add_download 之后)
+    ensure_winsock_initialized();
+#endif
     FALCON_LOG_INFO_STREAM("创建 DownloadEngineV2");
     FALCON_LOG_INFO_STREAM("  最大并发任务: " << config.max_concurrent_tasks);
     FALCON_LOG_INFO_STREAM("  全局限速: " << config.global_speed_limit);
