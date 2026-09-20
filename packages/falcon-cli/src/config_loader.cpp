@@ -258,6 +258,7 @@ bool ConfigLoader::save(const CliConfig& config, const std::string& config_path)
         j["use_head"] = config.use_head;
         j["conditional_download"] = config.conditional_download;
         j["auto_renaming"] = config.auto_renaming;
+        j["file_allocation"] = config.file_allocation;
         j["create_directory"] = config.create_directory;
         j["overwrite_existing"] = config.overwrite_existing;
 
@@ -466,6 +467,9 @@ std::optional<CliConfig> ConfigLoader::load_from_file(const std::string& path) {
         }
         if (j.contains("auto_renaming")) {
             config.auto_renaming = j["auto_renaming"].get<bool>();
+        }
+        if (j.contains("file_allocation")) {
+            config.file_allocation = j["file_allocation"].get<std::string>();
         }
         if (j.contains("create_directory")) {
             config.create_directory = j["create_directory"].get<bool>();

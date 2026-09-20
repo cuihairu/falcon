@@ -73,6 +73,9 @@ struct CliConfig {
     bool use_head = false;
     bool conditional_download = false;
     bool auto_renaming = false;
+    /// 输出文件预分配策略（none/trunc/falloc/prealloc，aria2
+    /// --file-allocation 同语义；非法值按 none 处理）
+    std::string file_allocation;
     bool create_directory = true;
     bool overwrite_existing = false;
 

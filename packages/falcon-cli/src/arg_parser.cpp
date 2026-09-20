@@ -263,6 +263,10 @@ CliArgs parse_args(int argc, char* argv[]) {
             args.conditional_download = true;
         } else if (arg == "--auto-file-renaming") {
             args.auto_renaming = true;
+        } else if (arg == "--file-allocation") {
+            if (i + 1 < argc) {
+                args.file_allocation = argv[++i];
+            }
         } else if (arg == "--rpc-secret") {
             if (i + 1 < argc) {
                 args.rpc_secret = argv[++i];

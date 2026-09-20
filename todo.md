@@ -2499,9 +2499,26 @@ path-style）；网盘分享链识别（12 平台）+ 资源搜索；GUI 桌面�
    重定向 https 硬拒过时代码删除（M1.1 TLS 放行后遗留）。代理
    IPv6 字面量保持 Unsupported（既有决策）。dual-stack 测试基建
    （scripted/TLS 服务器 V6ONLY=0 + 证书 SAN ::1）+ 8 用例
-8. **file-allocation**：连 CLI 参数都没有——V2 稀疏临时文件 /
-   V1 curl 直写；大文件预分配（falloc）对机械盘碎片与空间预留
-   有意义，优先级低
+8. ~~**file-allocation**~~（2026-09-20 已落地）：aria2
+   --file-allocation 同语义。`DownloadOptions::file_allocation`
+   字符串字段（none/trunc/falloc/prealloc，默认 none = 现状稀疏零
+   变化；非法值按 none 处理不打扰）——V2 首段命令文件打开块执行
+   （segment_id_==0 && truncate_output_ 全新下载天然单次，续传/
+   多段非首段不触碰）；总长优先组 total（多段 begin_multi_segment
+   时设置）、单连接回落 length_（Content-Length），chunked 等未知
+   总长不分配。平台 API：trunc = resize_file（三平台稀疏）；falloc
+   = Linux posix_fallocate / macOS fcntl F_PREALLOCATE+F_TRUNC /
+   Windows 退化 resize（无常规权限快速分配）；prealloc = 写零块
+   256KB 全平台真实占盘。分配失败按段错误收口（/dev/full 实证
+   ENOSPC → FAILED，绝不退化成稀疏假装分配）。配置面：CLI
+   --file-allocation + config file_allocation（字符串合并模式）；
+   V1 不消费（与 overwrite_existing 先例同姿态）；状态文件不加
+   （分配只在首建发生）。测试 4 用例（download_engine_v2_run）：
+   五模式中途 st_size 观测（PartialThenHangServer 冻结观测窗口；
+   稀疏断言 < total 因 ofstream filebuf 时滞非被测行为）+ 五模式
+   完成逐字节 + 多段 prealloc 中途 st_size==组 total（total 来自
+   组而非段长铁证，4×1MB 慢发）+ prealloc+/dev/full ENOSPC 干净
+   失败
 9. ~~**客户端 TLS 证书**~~（2026-09-20 已落地）：aria2
    --certificate/--private-key 同语义。`DownloadOptions::
    client_certificate/client_private_key`（PEM 路径）——V2 在

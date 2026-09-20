@@ -107,6 +107,15 @@ struct DownloadOptions {
     /// existing file (auto-renaming a "new" path has nothing to be
     /// conditional about), so it suppresses auto_file_renaming.
     bool conditional_get = false;
+
+    /// File pre-allocation policy for brand-new downloads with a known
+    /// total size (aria2 --file-allocation): "none" (default, sparse
+    /// file grows as data arrives), "trunc" (resize to total up front),
+    /// "falloc" (filesystem-allocated space; platforms without a fast
+    /// fallocate API fall back to "trunc"), "prealloc" (write zero
+    /// blocks to occupy real disk space). Applies once at output-file
+    /// creation only; resume and rename paths are unaffected.
+    std::string file_allocation = "none";
 };
 
 /// Global engine configuration

@@ -53,6 +53,9 @@ struct CliArgs {
     bool use_head = false;
     bool conditional_download = false;
     bool auto_renaming = false;
+    /// 输出文件预分配（aria2 --file-allocation 同语义）：空 = 未指定
+    /// （引擎默认 none）；有效值 none/trunc/falloc/prealloc
+    std::string file_allocation;
     std::string rpc_secret;
     int rpc_listen_port = 6800;
     bool rpc_allow_origin_all = false;

@@ -2,6 +2,35 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-20 - file-allocation 端到端（aria2 --file-allocation 同语义，默认 none 零变化）
+- **`DownloadOptions::file_allocation`（string，默认 "none"）端到端
+  生效**：none/trunc/falloc/prealloc 四模式——trunc = ftruncate 稀
+  疏扩到总长（三平台 resize_file）；falloc = 文件系统快速分配
+  （Linux posix_fallocate / macOS fcntl F_PREALLOCATE+F_TRUNC，
+  Windows 无常规权限快速分配退化 resize）；prealloc = 256KB 零块
+  循环写真实占盘（全平台一致）。非法值按 none 处理（稀疏，不打扰）
+- **挂点与总长语义**：V2 `HttpDownloadCommand::execute` 文件打开块
+  （`segment_id_==0 && truncate_output_` 全新下载天然单次；续传/
+  多段非首段不触碰）。总长优先组 total（**仅在多段分支设置**——
+  单连接组 total 恒 0，首轮实现因此静默跳过分派，回落 length_
+  （Content-Length）修复），chunked 等未知总长不分配。分配失败按
+  段错误收口（/dev/full ENOSPC 实证 FAILED，绝不退化成稀疏假装分
+  配）；分配后 st_size==total 恒定，直写/缓冲两路径不受影响
+- **配置面**：CLI `--file-allocation <none|trunc|falloc|prealloc>` +
+  config `file_allocation` 字段（字符串合并模式，对齐 proxy 惯例）；
+  V1 不消费（与 overwrite_existing 先例同姿态）；状态文件不加
+  （分配只在首建发生）
+- **测试 4 用例**：五模式中途 st_size 观测（PartialThenHangServer
+  只发 4KB 后挂起冻结观测窗口；trunc/falloc/prealloc == total 铁证
+  + none/bogus 稀疏对照——**稀疏断言 < total**：末批字节滞留
+  ofstream filebuf 不冲刷，st_size 短于记账下载量是流缓冲时滞而非
+  被测行为）+ 五模式完成逐字节一致 + **多段 prealloc 中途
+  st_size==组 total**（4×1MB 慢发；total 来自组而非段 0 长度的铁
+  证——误用段长 st_size 只会是 1MB）+ prealloc+/dev/full 干净失败
+- 下一个 todo 候选：#3 BT 做种（= libtorrent 数据面真实化【监控
+  线程 + alert 循环 + 完成/pause/resume 接线】+ 做种策略，测试需
+  libtorrent 构建树）、#2 SFTP（SSH2 mock 阻塞）
+
 ### 2026-09-20 - CI 红面收口：metalink 退出活锁（V2 宿主窗口竞速根因）+ Windows TLS 计数断言机制性修正
 - **红面**（run 35484110282）：Coverage (Ubuntu) 的 metalink
   V2EngineShutdownDuringBridgeFallsBackToSerial Timeout 120s +

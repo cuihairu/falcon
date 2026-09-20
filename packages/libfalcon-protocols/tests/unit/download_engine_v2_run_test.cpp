@@ -35,6 +35,7 @@
 #include <falcon/protocols/download_engine_v2.hpp>
 #include <falcon/detail/injection.hpp>
 #include <falcon/protocols/commands/command.hpp>
+#include "scripted_http_server.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -2287,3 +2288,252 @@ TEST(DownloadEngineV2RunTest, DiskWriteFailureOnReceiveCompletionFlush) {
 }
 
 #endif  // !_WIN32
+
+//==============================================================================
+// 输出文件预分配（DownloadOptions::file_allocation，aria2 --file-allocation）
+//==============================================================================
+
+namespace {
+
+/// 等待组记账下载量达到 want（轮询 downloaded_bytes；记账在数据落盘
+/// 之后，返回为真时字节已全部在文件里）
+bool wait_downloaded_at_least(RequestGroup* group, Bytes want,
+                              int timeout_ms) {
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(timeout_ms);
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (group->downloaded_bytes() >= want) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return false;
+}
+
+uintmax_t file_size_or_zero(const std::string& path) {
+    std::error_code ec;
+    const auto sz = std::filesystem::file_size(path, ec);
+    return ec ? uintmax_t{0} : sz;
+}
+
+}  // namespace
+
+/// 各预分配模式下下载中途的临时文件尺寸：trunc/falloc/prealloc 在任何
+/// 数据到达之前就把文件扩到总长（st_size == total）；none 与非法值保持
+/// 稀疏（st_size == 已收字节）。PartialThenHangServer 只发 partial 字节
+/// 后挂起——观测窗口由服务器冻结，无时序竞争
+TEST(DownloadEngineV2FileAllocation, MidFileSizePerMode) {
+    constexpr std::size_t kTotal = 64 * 1024;
+    constexpr std::size_t kPartial = 4 * 1024;
+    const std::string body = make_body(kTotal);
+    const struct {
+        const char* mode;
+        bool preallocated;
+    } cases[] = {
+        {"trunc", true}, {"falloc", true}, {"prealloc", true},
+        {"none", false}, {"bogus", false},
+    };
+
+    for (const auto& c : cases) {
+        SCOPED_TRACE(c.mode);
+        PartialThenHangServer server;
+        ASSERT_TRUE(server.start(body, kPartial));
+
+        EngineConfigV2 config;
+        config.poll_timeout_ms = 10;
+        config.enable_disk_cache = false;  // 直写：none 模式 st_size 精确
+        DownloadEngineV2 engine(config);
+
+        std::filesystem::remove_all(run_test_temp_dir("alloc_mid"));
+        const std::string dir = run_test_temp_dir("alloc_mid");
+        std::filesystem::create_directories(dir);
+        const std::string out_path = dir + "/out.bin";
+
+        DownloadOptions options;
+        options.output_filename = out_path;
+        options.max_connections = 1;
+        options.file_allocation = c.mode;
+
+        const TaskId task_id =
+            engine.add_download(server.url("/out.bin"), options);
+        ASSERT_GT(task_id, 0u);
+        auto* group = engine.request_group_man()->find_group(task_id);
+        ASSERT_NE(group, nullptr);
+
+        std::thread runner([&engine] { engine.run(); });
+        ASSERT_TRUE(wait_downloaded_at_least(group, Bytes{kPartial}, 10000));
+
+        const std::string temp_path = out_path + ".falcon.tmp";
+        const uintmax_t st_size = file_size_or_zero(temp_path);
+        if (c.preallocated) {
+            EXPECT_EQ(st_size, kTotal)
+                << "预分配未生效：中途 st_size != 总长";
+        } else {
+            // 稀疏对照：文件按到达增长，中途绝不提前到达总长。（不
+            // 断言 == kPartial：末批字节滞留在 ofstream 用户态缓冲、
+            // 未攒满不冲刷，st_size 短于已记账下载量是流缓冲时滞而
+            // 非被测行为）
+            EXPECT_LT(st_size, kTotal)
+                << "稀疏对照：未预分配时中途 st_size 不应到达总长";
+        }
+        EXPECT_FALSE(std::filesystem::exists(out_path))
+            << "未完成任务不应产生最终名文件";
+
+        engine.force_shutdown();
+        runner.join();
+        server.stop();
+        std::filesystem::remove_all(dir);
+    }
+}
+
+/// 各模式（含非法值回落 none）下载完成后成品逐字节一致 + 临时文件
+/// 消失——预分配只改变"文件何时变大"，绝不改变内容
+TEST(DownloadEngineV2FileAllocation, CompletedContentMatchesPerMode) {
+    const std::string body = make_body(32 * 1024);
+    for (const char* mode : {"none", "trunc", "falloc", "prealloc",
+                             "bogus"}) {
+        SCOPED_TRACE(mode);
+        MinimalHttpServer server;
+        ASSERT_TRUE(server.start(body));
+
+        EngineConfigV2 config;
+        config.poll_timeout_ms = 10;
+        DownloadEngineV2 engine(config);
+
+        std::filesystem::remove_all(run_test_temp_dir("alloc_done"));
+        const std::string dir = run_test_temp_dir("alloc_done");
+        std::filesystem::create_directories(dir);
+        const std::string out_path = dir + "/done.bin";
+
+        DownloadOptions options;
+        options.output_filename = out_path;
+        options.max_connections = 1;
+        options.file_allocation = mode;
+
+        const TaskId task_id =
+            engine.add_download(server.url("/done.bin"), options);
+        ASSERT_GT(task_id, 0u);
+        auto* group = engine.request_group_man()->find_group(task_id);
+        ASSERT_NE(group, nullptr);
+
+        long long elapsed_ms = 0;
+        ASSERT_TRUE(wait_group_terminal(engine, group, 20, elapsed_ms));
+
+        EXPECT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+        EXPECT_EQ(read_file_content(out_path), body);
+        EXPECT_FALSE(std::filesystem::exists(out_path + ".falcon.tmp"));
+
+        std::filesystem::remove_all(dir);
+        server.stop();
+    }
+}
+
+/// 多段下载 + prealloc：段 0 打开文件后按组 total（而非段 0 的长度）
+/// 分配——下载中途 st_size == 总长是"total 来自组"的铁证；分段计划把
+/// 4MB 切成 4×1MB，若实现误用段 0 的 length_ 分配，中途 st_size 只会
+/// 是 1MB
+TEST(DownloadEngineV2FileAllocation, MultiSegmentPreallocCoversGroupTotal) {
+    constexpr std::size_t kTotal = 4 * 1024 * 1024;
+    std::string body(kTotal, '\0');
+    for (std::size_t i = 0; i < kTotal; ++i) {
+        body[i] = static_cast<char>('a' + (i % 26));
+    }
+
+    falcon::testscripts::ScriptedHttpServer server;
+    server.start();
+    falcon::testscripts::FakeResponse resp;
+    resp.status = 200;
+    resp.body = body;
+    resp.support_range = true;  // 多段判定由 GET 响应显式头驱动
+    resp.headers = {{"Accept-Ranges", "bytes"}};
+    server.set_response("/multi.bin", resp);
+    // 全段慢发拉长观测窗口（32B/250µs ≈ 128KB/s）
+    server.set_slow_body("/multi.bin", 250, 32);
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    std::filesystem::remove_all(run_test_temp_dir("alloc_multi"));
+    const std::string dir = run_test_temp_dir("alloc_multi");
+    std::filesystem::create_directories(dir);
+    const std::string out_path = dir + "/multi.bin";
+
+    DownloadOptions options;
+    options.output_filename = out_path;
+    options.max_connections = 4;
+    options.min_segment_size = 1024 * 1024;  // 4 段 × 1MB
+    options.file_allocation = "prealloc";
+
+    const TaskId task_id =
+        engine.add_download(server.url("/multi.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    std::thread runner([&engine] { engine.run(); });
+    ASSERT_TRUE(wait_downloaded_at_least(group, Bytes{256 * 1024}, 30000));
+
+    // 全段并发下段 0 打开文件最先发生（其连接建立早于其余段的响应头），
+    // 组已记账 256KB 时分配必已完成
+    const std::string temp_path = out_path + ".falcon.tmp";
+    EXPECT_TRUE(group->is_multi_segment());
+    EXPECT_EQ(file_size_or_zero(temp_path), kTotal)
+        << "多段预分配未按组 total 生效";
+
+    // 手动 runner 已在跑 run()，等终态用轮询（wait_group_terminal 会
+    // 再起一个 runner，run() 不可重入）
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::seconds(120);
+    while (group->status() != RequestGroupStatus::COMPLETED &&
+           group->status() != RequestGroupStatus::FAILED &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+    EXPECT_EQ(read_file_content(out_path), body);
+    EXPECT_FALSE(std::filesystem::exists(temp_path));
+
+    engine.force_shutdown();
+    runner.join();
+    server.stop();
+    std::filesystem::remove_all(dir);
+}
+
+#ifndef _WIN32
+/// prealloc + /dev/full：分配写零即 ENOSPC，失败按段错误收口（组
+/// FAILED、错误消息含 pre-allocation）——磁盘满绝不退化成"稀疏下载
+/// 假装预分配"
+TEST(DownloadEngineV2FileAllocation, PreallocDiskFullFailsCleanly) {
+    const std::string body = make_body(64 * 1024);
+    MinimalHttpServer server;
+    ASSERT_TRUE(server.start(body));
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    config.temp_extension = "";  // 数据直写 /dev/full
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options;
+    options.output_filename = "/dev/full";
+    options.max_connections = 1;
+    options.file_allocation = "prealloc";
+    options.overwrite_existing = true;  // /dev/full 已存在，授权让门禁放行
+
+    const TaskId task_id =
+        engine.add_download(server.url("/full.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    long long elapsed_ms = 0;
+    ASSERT_TRUE(wait_group_terminal(engine, group, 20, elapsed_ms));
+
+    EXPECT_EQ(group->status(), RequestGroupStatus::FAILED);
+    EXPECT_NE(group->error_message().find("pre-allocation"),
+              std::string::npos)
+        << "错误消息应指明预分配失败: " << group->error_message();
+
+    server.stop();
+}
+#endif

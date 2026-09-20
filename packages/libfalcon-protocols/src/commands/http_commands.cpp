@@ -2292,6 +2292,146 @@ bool HttpResponseCommand::parse_headers() {
 }
 
 //==============================================================================
+// 输出文件预分配（DownloadOptions::file_allocation 消费点）
+//==============================================================================
+
+namespace {
+
+/// 预分配策略（aria2 --file-allocation 同语义）
+enum class AllocMode { None, Trunc, Falloc, Prealloc };
+
+/// "none" 与一切未知值都按稀疏处理（现状行为，不分配）
+AllocMode parse_file_allocation(const std::string& mode) {
+    if (mode == "trunc") return AllocMode::Trunc;
+    if (mode == "falloc") return AllocMode::Falloc;
+    if (mode == "prealloc") return AllocMode::Prealloc;
+    return AllocMode::None;
+}
+
+/// 写零块真实占盘（prealloc 语义，全平台一致）。输出文件已被
+/// ofstream 以 trunc 创建，这里独立 fd 写入互不干扰
+bool write_zero_fill(const std::string& path, uint64_t total,
+                     std::string& err) {
+#ifdef _WIN32
+    const int fd = ::_open(path.c_str(), _O_WRONLY | _O_BINARY);
+#else
+    const int fd = ::open(path.c_str(), O_WRONLY);
+#endif
+    if (fd < 0) {
+        err = "open failed: " + std::string(std::strerror(errno));
+        return false;
+    }
+    // 零块写满 total；写失败（磁盘满 ENOSPC 最常见）立即收口
+    static char zero_block[256 * 1024] = {0};
+    uint64_t remaining = total;
+    bool ok = true;
+    while (remaining > 0) {
+        const std::size_t chunk = static_cast<std::size_t>(
+            remaining < sizeof(zero_block) ? remaining : sizeof(zero_block));
+#ifdef _WIN32
+        const int n = ::_write(fd, zero_block, static_cast<unsigned>(chunk));
+#else
+        const ssize_t n = ::write(fd, zero_block, chunk);
+#endif
+        if (n <= 0) {
+            if (n < 0 && errno == EINTR) {
+                continue;
+            }
+            err = "zero-fill write failed: " +
+                  std::string(std::strerror(errno));
+            ok = false;
+            break;
+        }
+        remaining -= static_cast<uint64_t>(n);
+    }
+#ifdef _WIN32
+    ::_close(fd);
+#else
+    ::close(fd);
+#endif
+    return ok;
+}
+
+/// 按策略把输出文件预分配到 total 字节
+/// @return false 分配失败（err 携带原因；磁盘满是典型）
+bool preallocate_file(const std::string& path, uint64_t total,
+                      AllocMode mode, std::string& err) {
+    if (mode == AllocMode::Prealloc) {
+        return write_zero_fill(path, total, err);
+    }
+    if (mode == AllocMode::Trunc) {
+        // ftruncate 语义（稀疏：st_size == total 但不占块），三平台一致
+        std::error_code ec;
+        std::filesystem::resize_file(path, total, ec);
+        if (ec) {
+            err = ec.message();
+            return false;
+        }
+        return true;
+    }
+    // AllocMode::Falloc：文件系统层快速分配
+#if defined(__APPLE__)
+    // F_PREALLOCATE 只保留空间不改文件大小，预分配后补一次 resize
+    const int fd = ::open(path.c_str(), O_WRONLY);
+    if (fd < 0) {
+        err = "open failed: " + std::string(std::strerror(errno));
+        return false;
+    }
+    fstore_t fst = {};
+    fst.fst_flags = F_ALLOCATECONTIG;
+    fst.fst_posmode = F_PEOFPOSMODE;
+    fst.fst_length = static_cast<off_t>(total);
+    int rc = ::fcntl(fd, F_PREALLOCATE, &fst);
+    if (rc < 0) {
+        // 连续空间不足：允许碎片化分配再试一次
+        fst.fst_flags = F_ALLOCATEALL;
+        rc = ::fcntl(fd, F_PREALLOCATE, &fst);
+    }
+    if (rc >= 0) {
+        // ftruncate 伸出文件尾至 total（F_PREALLOCATE 后此调用只改尺寸）
+        if (::ftruncate(fd, static_cast<off_t>(total)) < 0) {
+            err = std::string(std::strerror(errno));
+            rc = -1;
+        }
+    } else {
+        err = std::string(std::strerror(errno));
+    }
+    ::close(fd);
+    if (rc < 0) {
+        return false;
+    }
+    return true;
+#elif defined(_WIN32)
+    // 无常规权限可用的快速 fallocate（SetFileValidData 需要
+    // SE_MANAGE_VOLUME_NAME 特权）：退化 resize（trunc 语义）
+    std::error_code ec;
+    std::filesystem::resize_file(path, total, ec);
+    if (ec) {
+        err = ec.message();
+        return false;
+    }
+    return true;
+#else
+    // Linux/其他 POSIX：posix_fallocate（预留块且内容零）
+    const int fd = ::open(path.c_str(), O_WRONLY);
+    if (fd < 0) {
+        err = "open failed: " + std::string(std::strerror(errno));
+        return false;
+    }
+    const int rc = ::posix_fallocate(fd, 0,
+                                     static_cast<off_t>(total));
+    ::close(fd);
+    if (rc != 0) {
+        err = std::string(std::strerror(rc));
+        return false;
+    }
+    return true;
+#endif
+}
+
+}  // namespace
+
+//==============================================================================
 // HttpDownloadCommand 实现
 //==============================================================================
 
@@ -2407,6 +2547,46 @@ bool HttpDownloadCommand::execute(DownloadEngineV2* engine) {
                                         : ExecutionResult::OK);
         }
         file_opened_ = true;
+
+        // 文件预分配（aria2 --file-allocation 消费点）：仅全新下载的
+        // 首段/单连接（文件刚按 trunc 创建）且总长已知时执行一次；
+        // 续传（truncate_output_=false）与多段的非首段不触碰。分配
+        // 失败按段错误收口——磁盘满绝不退化成"稀疏下载假装预分配"
+        if (segment_id_ == 0 && truncate_output_) {
+            const AllocMode alloc_mode =
+                parse_file_allocation(group->options().file_allocation);
+            if (alloc_mode != AllocMode::None) {
+                // 总长优先取组 total（多段在 begin_multi_segment 时
+                // set_total_size）；单连接组 total 保持 0（仅多段设置），
+                // 回落 length_（Content-Length）。两者皆未知（chunked
+                // 等）保持 0 → 不分配
+                const uint64_t alloc_total = static_cast<uint64_t>(
+                    group->file_info().total_size > 0
+                        ? group->file_info().total_size
+                        : length_);
+                if (alloc_total > 0) {
+                    std::string alloc_err;
+                    if (!preallocate_file(write_path_, alloc_total,
+                                          alloc_mode, alloc_err)) {
+                        task->set_error("File pre-allocation failed (" +
+                                        group->options().file_allocation +
+                                        "): " + alloc_err);
+                        const bool failed =
+                            fail_group_on_segment_error(engine, *group,
+                                                        task);
+                        close_socket_fd(socket_fd_);
+                        socket_fd_ = -1;
+                        return handle_result(
+                            failed ? ExecutionResult::ERROR_OCCURRED
+                                   : ExecutionResult::OK);
+                    }
+                    FALCON_LOG_INFO_STREAM("输出文件已预分配 ("
+                                           << group->options().file_allocation
+                                           << "): " << write_path_ << " ("
+                                           << alloc_total << " bytes)");
+                }
+            }
+        }
 
         // 磁盘写缓冲容量取定（引擎级配置，任务选项无法承载）：
         // enable_disk_cache=false 或容量为 0 时保持直写

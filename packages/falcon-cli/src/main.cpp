@@ -318,7 +318,8 @@ void show_help() {
     std::cout << "      --http-engine <v1|v2>  HTTP 下载引擎（默认 v1；v2 实验性）\n";
     std::cout << "      --use-head             aria2: 使用 HEAD 方法获取文件信息\n";
     std::cout << "      --conditional-download aria2: 条件下载（仅当远程文件更新时）\n";
-    std::cout << "      --auto-file-renaming   aria2: 自动重命名文件\n\n";
+    std::cout << "      --auto-file-renaming   aria2: 自动重命名文件\n";
+    std::cout << "      --file-allocation <模式> aria2: 文件预分配 (none|trunc|falloc|prealloc)\n\n";
 
     std::cout << "RPC 选项 (预留):\n";
     std::cout << "      --rpc-secret <令牌>    aria2: RPC 密钥\n";
@@ -415,6 +416,9 @@ static void merge_config_with_file(CliArgs& args) {
     }
     if (file_config.auto_renaming) args.auto_renaming = true;
     if (file_config.conditional_download) args.conditional_download = true;
+    if (!file_config.file_allocation.empty() && args.file_allocation.empty()) {
+        args.file_allocation = file_config.file_allocation;
+    }
     if (!file_config.verify_ssl) args.verify_ssl = false;
     // 合并 headers
     for (const auto& [k, v] : file_config.headers) {
@@ -458,6 +462,11 @@ static falcon::DownloadOptions setup_download_options(const CliArgs& args) {
     options.resume_enabled = args.continue_download;
     options.auto_file_renaming = args.auto_renaming;
     options.conditional_get = args.conditional_download;
+    // file_allocation：CLI/config 空值保持引擎默认 "none"；非法值由
+    // 引擎侧 parse_file_allocation 按 none 处理（稀疏，不告警不打扰）
+    if (!args.file_allocation.empty()) {
+        options.file_allocation = args.file_allocation;
+    }
     options.speed_limit = args.speed_limit;
     options.min_segment_size = args.min_segment_size;
     options.adaptive_segment_sizing = args.adaptive_sizing;
