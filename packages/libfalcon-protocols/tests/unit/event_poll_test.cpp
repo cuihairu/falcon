@@ -7,6 +7,7 @@
 
 #include <gtest/gtest.h>
 #include <falcon/protocols/net/event_poll.hpp>
+#include <falcon/detail/injection.hpp>
 #include <thread>
 #include <chrono>
 #include <array>
@@ -331,6 +332,44 @@ TEST(EventPollTest, PollWithoutEvents) {
     int events = poll->poll(100);
     EXPECT_EQ(events, 0);
 }
+
+#ifndef _WIN32
+// 注入：poll() 返回 EINTR——按"被信号中断"语义返回 0，不视为错误
+TEST(EventPollTest, PollSyscallEintrReturnsZero) {
+    PollEventPoll poller;
+    auto [fd0, fd1] = create_socket_pair();
+    ASSERT_GE(fd0, 0);
+    ASSERT_TRUE(poller.add_event(fd0, static_cast<int>(IOEvent::READ),
+                                 [](int, int, void*) {}));
+    {
+        ::falcon::detail::ScopedInjection guard(
+            ::falcon::detail::InjectPoint::PollSyscallEintr);
+        EXPECT_EQ(poller.poll(50), 0);
+    }
+    EXPECT_EQ(std::string(poller.get_error()), "");
+    CLOSE_SOCKET(fd0);
+    CLOSE_SOCKET(fd1);
+}
+
+// 注入：poll() 硬失败（EBADF）——set_error + 返回 -1
+TEST(EventPollTest, PollSyscallHardFailReturnsMinusOne) {
+    PollEventPoll poller;
+    auto [fd0, fd1] = create_socket_pair();
+    ASSERT_GE(fd0, 0);
+    ASSERT_TRUE(poller.add_event(fd0, static_cast<int>(IOEvent::READ),
+                                 [](int, int, void*) {}));
+    {
+        ::falcon::detail::ScopedInjection guard(
+            ::falcon::detail::InjectPoint::PollSyscallFail);
+        EXPECT_EQ(poller.poll(50), -1);
+        EXPECT_NE(std::string(poller.get_error()).find("poll() 失败"),
+                  std::string::npos)
+            << "错误消息: " << poller.get_error();
+    }
+    CLOSE_SOCKET(fd0);
+    CLOSE_SOCKET(fd1);
+}
+#endif
 
 //==============================================================================
 // 回调测试

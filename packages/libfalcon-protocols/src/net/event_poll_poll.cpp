@@ -7,6 +7,7 @@
 
 #include <falcon/protocols/net/event_poll.hpp>
 #include <falcon/logger.hpp>
+#include <falcon/detail/injection.hpp>
 
 #ifdef _WIN32
     #include <winsock2.h>
@@ -137,7 +138,20 @@ int PollEventPoll::poll(int timeout_ms) {
         set_error("poll() 失败: 文件描述符数量超出 nfds_t 范围");
         return -1;
     }
-    int nfds = ::poll(poll_fds_snapshot.data(), static_cast<nfds_t>(poll_fds_snapshot.size()), timeout_ms);
+    int nfds;
+    if (::falcon::detail::inject_failure(
+            ::falcon::detail::InjectPoint::PollSyscallEintr)) {
+        errno = EINTR;
+        nfds = -1;
+    } else if (::falcon::detail::inject_failure(
+                   ::falcon::detail::InjectPoint::PollSyscallFail)) {
+        errno = EBADF;
+        nfds = -1;
+    } else {
+        nfds = ::poll(poll_fds_snapshot.data(),
+                      static_cast<nfds_t>(poll_fds_snapshot.size()),
+                      timeout_ms);
+    }
     if (nfds < 0) {
         if (errno == EINTR) {
             return 0;  // 被信号中断

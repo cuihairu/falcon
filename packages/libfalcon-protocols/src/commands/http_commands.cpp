@@ -25,6 +25,8 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+#include <io.h>      // _open/_write/_close（file-allocation 直写预分配）
+#include <fcntl.h>   // _O_WRONLY/_O_BINARY
 // Windows 没有 ssize_t，使用 SSIZE_T 或 ptrdiff_t
 typedef SSIZE_T ssize_t;
 #else

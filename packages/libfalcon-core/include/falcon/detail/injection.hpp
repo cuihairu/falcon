@@ -86,6 +86,23 @@ enum class InjectPoint : uint32_t {
     TlsSetHostFail,
     TlsHandshakeWantWrite,
     TlsRequestWriteFail,
+    // daemon 守护化：fork / setsid 失败（回环上 fork 恒成功、setsid
+    // 在有控制终端的会话首进程才失败，均不可自然构造）
+    DaemonizeForkFail,
+    DaemonizeSetsidFail,
+    DaemonizeFork2Fail,
+    // V2 引擎 socket 事件回调异常（std / 非 std 两形态，覆盖回调
+    // lambda 顶层兜底 catch——handle_socket_ready 内部异常已有边界，
+    // 兜底只在异常逃出该函数时可达）
+    SocketReadyThrowStd,
+    SocketReadyThrowNonStd,
+    // V2 引擎 socket 事件注册失败（event_poll add_event 返回 false
+    // 在回环上不可自然构造——fd 新鲜且有效）
+    EventPollAddFail,
+    // poll 后端系统调用失败（EINTR / 非 EINTR 硬错误两形态；回环
+    // 测试下 poll 恒成功或超时）
+    PollSyscallEintr,
+    PollSyscallFail,
 };
 
 #if FALCON_FAILURE_INJECTION

@@ -9,6 +9,8 @@
 
 #include "daemon/daemon.hpp"
 
+#include <falcon/detail/injection.hpp>
+
 #include <gtest/gtest.h>
 
 #include <atomic>
@@ -619,4 +621,82 @@ TEST(DaemonDaemonizeTest, DaemonizeWithoutPidFileHandlesSigint) {
     ::close(probe.fd);
 
     EXPECT_FALSE(file_exists(tmp.path + "/unused.pid"));
+}
+
+// Injection: the first fork() short-circuits to -1 — no real fork, no
+// _exit(0), so daemonize() fails in-process and the error message is
+// directly assertable.
+TEST(DaemonManagerTest, DaemonizeForkFailFailsCleanly) {
+    falcon::daemon::DaemonConfig cfg;
+    cfg.redirect_stdio = false;
+    falcon::daemon::DaemonManager dm(cfg);
+    ::falcon::detail::ScopedInjection guard(
+        ::falcon::detail::InjectPoint::DaemonizeForkFail);
+    EXPECT_FALSE(dm.daemonize());
+    EXPECT_EQ(dm.get_last_error(), "First fork failed");
+    EXPECT_FALSE(dm.is_daemon());
+}
+
+// Injection: setsid() failure. daemonize() only reaches setsid() inside the
+// child of the first fork, so this runs as a probe: the probe process X forks
+// Y via daemonize() and is then _exit(0)-ed as the "parent of the first
+// fork"; Y is where the injection fires and the failure is collected. The
+// 'F' byte therefore comes from Y (which exits immediately — no grandchild
+// is left behind). alarm() is cleared across fork, but Y's path is pure
+// in-memory work plus one pipe write, so there is nothing to hang on.
+TEST(DaemonDaemonizeTest, DaemonizeSetsidFailFailsCleanly) {
+    TempDirGuard tmp(make_temp_dir());
+    Probe probe;
+    ASSERT_TRUE(spawn_probe(probe));
+    if (probe.pid == 0) {
+        const int wfd = probe.wfd;
+        falcon::daemon::DaemonConfig cfg;
+        cfg.pid_file = tmp.path + "/setsid.pid";
+        cfg.working_dir = tmp.path;
+        cfg.redirect_stdio = false;
+        cfg.create_pid_file = false;
+        falcon::daemon::DaemonManager dm(cfg);
+        ::falcon::detail::ScopedInjection guard(
+            ::falcon::detail::InjectPoint::DaemonizeSetsidFail);
+        report_byte(wfd, dm.daemonize() ? 'D' : 'F');
+        ::close(wfd);
+        std::exit(0);
+    }
+
+    const auto res = read_pipe(probe.fd, 1, kTimeoutMs);
+    ASSERT_TRUE(res.has_value()) << "probe produced no report";
+    EXPECT_EQ((*res)[0], 'F');
+    int status = 0;
+    ASSERT_EQ(::waitpid(probe.pid, &status, 0), probe.pid);
+    ::close(probe.fd);
+}
+
+// Injection: the second fork fails. Same probe shape as the setsid case —
+// X is _exit(0)-ed after the first fork, Y passes setsid (not injected
+// here) and collects the second-fork failure.
+TEST(DaemonDaemonizeTest, DaemonizeSecondForkFailFailsCleanly) {
+    TempDirGuard tmp(make_temp_dir());
+    Probe probe;
+    ASSERT_TRUE(spawn_probe(probe));
+    if (probe.pid == 0) {
+        const int wfd = probe.wfd;
+        falcon::daemon::DaemonConfig cfg;
+        cfg.pid_file = tmp.path + "/fork2.pid";
+        cfg.working_dir = tmp.path;
+        cfg.redirect_stdio = false;
+        cfg.create_pid_file = false;
+        falcon::daemon::DaemonManager dm(cfg);
+        ::falcon::detail::ScopedInjection guard(
+            ::falcon::detail::InjectPoint::DaemonizeFork2Fail);
+        report_byte(wfd, dm.daemonize() ? 'D' : 'F');
+        ::close(wfd);
+        std::exit(0);
+    }
+
+    const auto res = read_pipe(probe.fd, 1, kTimeoutMs);
+    ASSERT_TRUE(res.has_value()) << "probe produced no report";
+    EXPECT_EQ((*res)[0], 'F');
+    int status = 0;
+    ASSERT_EQ(::waitpid(probe.pid, &status, 0), probe.pid);
+    ::close(probe.fd);
 }

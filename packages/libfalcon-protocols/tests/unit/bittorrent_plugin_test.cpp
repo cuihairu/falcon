@@ -747,6 +747,24 @@ TEST_F(BitTorrentHandlerTest, DownloadMagnetWithoutInfoHashSkipsDhtLookup) {
     lc->cancel(task);
 }
 
+TEST_F(BitTorrentHandlerTest, DownloadRestartsDhtLazilyWithoutInfoHash) {
+    // 同上一用例剧本，但客户端被显式停止：download() 内部的惰性
+    // startDht 分支（dhtEnabled_ 默认 true）由此命中——构造函数
+    // 已自动启动的客户端永远走不到该分支。info-hash 为空不触发
+    // findPeers，无查询发出（UDP socket 绑定纯本地；端口争用时
+    // 惰性启动失败静默，用例不受影响）
+    handler->stopDht();
+    EXPECT_FALSE(handler->isDhtRunning());
+
+    auto task = makeTask(7706, "magnet:?dn=file.zip");
+    handler->download(task, nullptr);
+    EXPECT_EQ(task->status(), TaskStatus::Pending);
+    EXPECT_NE(task->start_time(), TimePoint{});
+    waitALittle();
+    handler->cancel(task);
+    handler->stopDht();
+}
+
 TEST_F(BitTorrentHandlerTest, PexHandlerLookupMissingReturnsNull) {
     EXPECT_EQ(handler->getPexHandler("nonexistent-hash"), nullptr);
     handler->removePexHandler("nonexistent-hash");  // 不存在：无操作不崩溃

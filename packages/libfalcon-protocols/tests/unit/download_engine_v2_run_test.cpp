@@ -2203,6 +2203,84 @@ TEST(DownloadEngineV2RunTest, LoopBodyNonStdExceptionStopsRunSafely) {
     EXPECT_FALSE(engine.is_running());
 }
 
+/// socket 事件回调抛 std 异常：回调 lambda 顶层兜底 catch 接住 →
+/// 该次唤醒丢失，挂起命令由任务级超时清理收口（组 FAILED、run 正常
+/// 退出）——异常逃出回调即 std::terminate 的旧行为绝不复活
+TEST(DownloadEngineV2RunTest, SocketReadyStdExceptionSurvives) {
+    MinimalHttpServer server;
+    ASSERT_TRUE(server.start(make_body(4 * 1024)));
+
+    EngineConfigV2 config = fast_poll_config();
+    config.command_wait_timeout_seconds = 1;  // 挂起命令 1s 后被清理收口
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options;
+    options.max_retries = 0;
+    const TaskId task_id = engine.add_download(server.url("/body.bin"),
+                                               options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    ::falcon::detail::ScopedInjection guard(
+        ::falcon::detail::InjectPoint::SocketReadyThrowStd);
+    engine.run();  // 首个 socket 事件即命中注入，超时清理后退出
+
+    EXPECT_FALSE(engine.is_running());
+    ASSERT_NE(engine.request_group_man()->find_group(task_id), nullptr);
+    EXPECT_EQ(group->status(), RequestGroupStatus::FAILED);
+    server.stop();
+}
+
+/// socket 事件回调抛非 std 异常：同上，走 catch (...) 分支
+TEST(DownloadEngineV2RunTest, SocketReadyNonStdExceptionSurvives) {
+    MinimalHttpServer server;
+    ASSERT_TRUE(server.start(make_body(4 * 1024)));
+
+    EngineConfigV2 config = fast_poll_config();
+    config.command_wait_timeout_seconds = 1;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options;
+    options.max_retries = 0;
+    const TaskId task_id = engine.add_download(server.url("/body.bin"),
+                                               options);
+    ASSERT_GT(task_id, 0u);
+
+    ::falcon::detail::ScopedInjection guard(
+        ::falcon::detail::InjectPoint::SocketReadyThrowNonStd);
+    engine.run();
+
+    EXPECT_FALSE(engine.is_running());
+    server.stop();
+}
+
+/// socket 事件注册失败（event_poll add_event 返回 false）：初始连接
+/// 命令按连接失败收口，组干净进 FAILED 而非悬空 Downloading
+TEST(DownloadEngineV2RunTest, EventPollAddFailFailsCleanly) {
+    MinimalHttpServer server;
+    ASSERT_TRUE(server.start(make_body(4 * 1024)));
+
+    DownloadEngineV2 engine(fast_poll_config());
+
+    DownloadOptions options;
+    options.max_retries = 0;  // 一次注册失败即终态，不进重试链
+    const TaskId task_id = engine.add_download(server.url("/body.bin"),
+                                               options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    ::falcon::detail::ScopedInjection guard(
+        ::falcon::detail::InjectPoint::EventPollAddFail);
+    engine.run();
+
+    EXPECT_FALSE(engine.is_running());
+    ASSERT_NE(engine.request_group_man()->find_group(task_id), nullptr);
+    EXPECT_EQ(group->status(), RequestGroupStatus::FAILED);
+    server.stop();
+}
+
 /// 终态组周期回收（wait_when_idle 常驻引擎）：组进 FAILED 后跨过
 /// 10s purge 周期，组表被回收（不回收则常驻引擎组表无界增长）
 TEST(DownloadEngineV2RunTest, PurgePeriodicallyReclaimsFinishedGroups) {
@@ -2519,6 +2597,77 @@ TEST(DownloadEngineV2FileAllocation, PreallocDiskFullFailsCleanly) {
     options.max_connections = 1;
     options.file_allocation = "prealloc";
     options.overwrite_existing = true;  // /dev/full 已存在，授权让门禁放行
+
+    const TaskId task_id =
+        engine.add_download(server.url("/full.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    long long elapsed_ms = 0;
+    ASSERT_TRUE(wait_group_terminal(engine, group, 20, elapsed_ms));
+
+    EXPECT_EQ(group->status(), RequestGroupStatus::FAILED);
+    EXPECT_NE(group->error_message().find("pre-allocation"),
+              std::string::npos)
+        << "错误消息应指明预分配失败: " << group->error_message();
+
+    server.stop();
+}
+
+/// falloc + /dev/full：posix_fallocate 对字符设备报 ENODEV（macOS 走
+/// fcntl F_PREALLOCATE 失败、Windows 无此用例）——快速分配 API 的
+/// 失败必须走同一收口，绝不退化成无分配继续下载
+TEST(DownloadEngineV2FileAllocation, FallocDiskFullFailsCleanly) {
+    const std::string body = make_body(64 * 1024);
+    MinimalHttpServer server;
+    ASSERT_TRUE(server.start(body));
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    config.temp_extension = "";
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options;
+    options.output_filename = "/dev/full";
+    options.max_connections = 1;
+    options.file_allocation = "falloc";
+    options.overwrite_existing = true;
+
+    const TaskId task_id =
+        engine.add_download(server.url("/full.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    long long elapsed_ms = 0;
+    ASSERT_TRUE(wait_group_terminal(engine, group, 20, elapsed_ms));
+
+    EXPECT_EQ(group->status(), RequestGroupStatus::FAILED);
+    EXPECT_NE(group->error_message().find("pre-allocation"),
+              std::string::npos)
+        << "错误消息应指明预分配失败: " << group->error_message();
+
+    server.stop();
+}
+
+/// trunc + /dev/full：resize_file(ftruncate) 对字符设备报 EINVAL——
+/// 稀疏扩容失败同样按段错误收口
+TEST(DownloadEngineV2FileAllocation, TruncDiskFullFailsCleanly) {
+    const std::string body = make_body(64 * 1024);
+    MinimalHttpServer server;
+    ASSERT_TRUE(server.start(body));
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    config.temp_extension = "";
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options;
+    options.output_filename = "/dev/full";
+    options.max_connections = 1;
+    options.file_allocation = "trunc";
+    options.overwrite_existing = true;
 
     const TaskId task_id =
         engine.add_download(server.url("/full.bin"), options);

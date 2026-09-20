@@ -890,6 +890,16 @@ void DownloadEngineV2::sweep_task_connections(TaskId task_id) {
 }
 
 void DownloadEngineV2::handle_socket_ready(int socket_fd, int ready_events) {
+    // 异常注入闸门（仅测试构建生效）：socket 事件就绪是回环测试必经
+    // 路径，注入在事件到达瞬间命中，覆盖回调 lambda 顶层兜底 catch
+    if (::falcon::detail::inject_failure(
+            ::falcon::detail::InjectPoint::SocketReadyThrowStd)) {
+        throw std::runtime_error("注入: socket 回调异常");
+    }
+    if (::falcon::detail::inject_failure(
+            ::falcon::detail::InjectPoint::SocketReadyThrowNonStd)) {
+        throw 42;  // 非 std 异常形态
+    }
     std::unique_ptr<Command> resumed;
     CommandId cmd_id = 0;
     {
@@ -956,7 +966,9 @@ bool DownloadEngineV2::register_socket_event(int fd, int events, CommandId comma
             return false;
         }
     } else {
-        if (!event_poll_->add_event(fd, events, callback)) {
+        if (::falcon::detail::inject_failure(
+                ::falcon::detail::InjectPoint::EventPollAddFail) ||
+            !event_poll_->add_event(fd, events, callback)) {
             FALCON_LOG_ERROR_STREAM("注册 Socket 事件失败: fd=" << fd);
             return false;
         }

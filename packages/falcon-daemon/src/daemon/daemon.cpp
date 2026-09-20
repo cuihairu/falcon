@@ -7,6 +7,7 @@
 
 #include "daemon.hpp"
 #include <falcon/logger.hpp>
+#include <falcon/detail/injection.hpp>
 
 #include <fstream>
 #include <sstream>
@@ -118,7 +119,10 @@ bool DaemonManager::daemonize() {
     // Unix: 使用 fork() + setsid() 守护化
 
     // 1. 第一次 fork
-    pid_t pid = fork();
+    pid_t pid = ::falcon::detail::inject_failure(
+                    ::falcon::detail::InjectPoint::DaemonizeForkFail)
+                    ? -1
+                    : fork();
     if (pid < 0) {
         last_error_ = "First fork failed";
         FALCON_LOG_ERROR_STREAM(last_error_);
@@ -130,14 +134,19 @@ bool DaemonManager::daemonize() {
     }
 
     // 2. 创建新会话
-    if (setsid() < 0) {
+    if (::falcon::detail::inject_failure(
+            ::falcon::detail::InjectPoint::DaemonizeSetsidFail) ||
+        setsid() < 0) {
         last_error_ = "setsid() failed";
         FALCON_LOG_ERROR_STREAM(last_error_);
         return false;
     }
 
     // 3. 第二次 fork（确保永远不会获取终端）
-    pid = fork();
+    pid = ::falcon::detail::inject_failure(
+              ::falcon::detail::InjectPoint::DaemonizeFork2Fail)
+              ? -1
+              : fork();
     if (pid < 0) {
         last_error_ = "Second fork failed";
         FALCON_LOG_ERROR_STREAM(last_error_);

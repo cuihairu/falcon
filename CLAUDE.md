@@ -2,6 +2,61 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-20 - 覆盖率批次 A1+A2：故障注入收尾（daemon 守护化三点 + socket 回调异常 + 事件注册/poll 失败 + BT 惰性 DHT）+ Windows file-allocation 编译错修复
+- **批次铁账（build-cov 单树新鲜数据）**：行覆盖 **97.30% →
+  97.51%**（miss 474 → 438，A1 净 28 行 + A2 净 8 行）；98% 需
+  miss ≤352，剩余 438 行经逐点定性 = 头文件水分/伪影 + 历史定性
+  不可测（TLS 深层/socket 硬错误/时序竞态窗口/daemonize _exit
+  测量盲区——gcov 对 `_exit` 路径不 flush gcda 属结构性盲区）+
+  收益递减的真窗口项（json_rpc 375 通知需引擎 pause/unpause 对
+  阻塞 worker 的语义验证，暂缓）
+- **A1 新注入点**（injection.hpp，daemon 组三点 + V2 引擎三组）：
+  `DaemonizeForkFail`/`DaemonizeSetsidFail`/`DaemonizeFork2Fail`
+  （fork 恒成功、setsid 仅会话首进程失败，均不可自然构造）+
+  `SocketReadyThrowStd/NonStd`（socket 事件回调 lambda 顶层兜底
+  catch——异常逃出 handle_socket_ready 才可达）+
+  `EventPollAddFail`（回环上 fd 新鲜有效，add_event 恒成功）+
+  `PollSyscallEintr/PollSyscallFail`（poll 后端系统调用失败两
+  形态，POSIX poll.cpp 三分支接线）
+- **A1 接线**：daemon.cpp 第一 fork + setsid 各挂注入（返回值判
+  定前短路）；download_engine_v2.cpp 的 handle_socket_ready 兜底
+  catch 与 run 循环事件注册处；event_poll_poll.cpp poll 返回值
+  三分支（<0 且 EINTR / <0 硬错误 / 正常）
+- **A2 拆分注入点**：第二 fork 从 DaemonizeForkFail 换独立
+  `DaemonizeFork2Fail`——注入全程挂时第一 fork 先命中永远到不了
+  第二 fork（无状态注入点的顺序限制，同 EventPollModifyFail 不
+  可做的判定）
+- **测试 13 用例**：daemon_lifecycle 3（fork 失败 last_error
+  "First fork failed" 直调断言 / setsid + 第二 fork 用 fork+pipe
+  探针——子进程 report_byte 回传 D/F 单字节，std::exit 前完成；
+  两用例为 daemonize 成功路径注入失败，_exit(0) 不执行故探针可
+  存活）+ download_engine_v2_run 5（socket 回调 std/非 std 异常
+  引擎存活、事件注册失败干净收口）+ event_poll 3（EINTR 重试/
+  硬错误返回 false/正常路径回归）+ bittorrent 1（**惰性 startDht
+  **：构造函数自动启动的客户端走不到 download 内部分支，先
+  stopDht 再 download 无 infoHash magnet——分叉点 378 行由此命
+  中；infoHash 为空不进 findPeers 无公网流量，端口争用静默不影
+  响断言）
+- **Windows 编译错修复（CI 35500263647 build (windows) 红，file
+  -allocation 批次遗留）**：`write_zero_fill` 的 `#ifdef _WIN32`
+  分支用 `::_open/::_write/::_close/_O_WRONLY/_O_BINARY` 但头文
+  件区 Windows 分支缺 `<io.h>`/`<fcntl.h>`——MSVC 报 C2039/C2065
+  /C3861 共 8 错。Linux 分支不触及该块，本机三树绿系统性掩盖。
+  修复：`#include <io.h>` + `<fcntl.h>` 入 Windows include 区
+- **测量级教训（memory 已录）**：① 全量 ctest 进行中改生产源文
+  件（哪怕 `#ifdef _WIN32` 块内加 include）= 文件级行号整体偏移
+  ，已写 gcda 全作废——重建+清 gcda+重跑；② 抖动串行复跑本身
+  是 filter 运行，重写该二进制链接全部 TU 的 gcda——复跑后必须
+  全量跑同二进制恢复，铁账统计永远放最后
+- **验证**：build-cov 全量 ctest 2376 清单（2 例 DownloadEngine
+  V2RunTest 30s 级并行抖动串行复跑过，记录在案）+ gcda 恢复跑
+  protocols 921 + lifecycle 27 全绿 + gcovr 铁账 438；build-asan
+  daemon lifecycle 27 + BT 全套件零告警；CI 35500263647 其余
+  6 job（Coverage/Linux gcc+clang/macOS/Qt6 Linux+macOS）绿
+- 下一个 todo 候选：#3 BT 做种（libtorrent 数据面真实化 +
+  seed-ratio/seed-time）、#2 SFTP（阻塞：SSH2 协议栈无轻量
+  mock 方案）
+
 ### 2026-09-20 - file-allocation 端到端（aria2 --file-allocation 同语义，默认 none 零变化）
 - **`DownloadOptions::file_allocation`（string，默认 "none"）端到端
   生效**：none/trunc/falloc/prealloc 四模式——trunc = ftruncate 稀
