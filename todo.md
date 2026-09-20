@@ -2670,3 +2670,10 @@ libtorrent 强依赖（当前 FALCON_ENABLE_BITTORRENT=OFF 为默认
   断言改条件式：观察到 handshakes≥1 才断言 ==1（Linux/macOS 收敛
   路径仍钉死恰一次），Windows RST 路径不硬断言；注入命中本身即
   「握手已完成」的结构性证据，服务器侧计数降级为观测补充
+- **run 35488059307 二轮红面**：V1 mTLS e2e
+  MutualTlsClientCertPropagatesToCurl 在 Windows 报 CURL error
+  "Problem with the local SSL certificate"——vcpkg curl 默认
+  Schannel 后端不认 PEM 客户端证书（需 PFX），加载即
+  CURLE_SSL_CERTPROBLEM；属后端能力限制非接线缺陷，用例加
+  curl_version_info 运行时检测 skip，V2 mTLS 用例三平台全绿；
+  V1 mTLS Windows 支持待 PFX 转换特性再放开

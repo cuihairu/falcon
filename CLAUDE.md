@@ -30,6 +30,15 @@
   直接返回由数据面自然失败收口
 - **验证**：60 轮压力循环全 PASSED 零挂死（修复前同环境约 5% 命中
   率）；ASan metalink 桥接 16 + 宿主生命周期 5 用例零告警
+- **run 35488059307 二轮红面**（V1 mTLS e2e，本批新增用例 Windows
+  首跑曝光）：`MutualTlsClientCertPropagatesToCurl` 报 CURL error
+  "Problem with the local SSL certificate"——CI Windows 的 curl 是
+  vcpkg 默认 **Schannel 后端**，不认 PEM 客户端证书（需 PFX），
+  CURLOPT_SSLCERT 加载即 CURLE_SSL_CERTPROBLEM；Linux/macOS 的
+  curl 是 OpenSSL 后端故绿。属后端能力限制非接线缺陷——用例加
+  curl_version_info 运行时检测（ssl_version 含 "Schannel" 则
+  GTEST_SKIP 注明），V2 引擎（OpenSSL 直连）mTLS 用例三平台全绿；
+  V1 mTLS 的 Windows 支持待 PFX 转换特性再放开
 - **Windows TlsRequestWriteFail**：等待式断言对 Windows 机制性结果
   不成立——TLS 1.3 NewSessionTicket 未读即 closesocket → Windows 对
   接收缓冲非空的连接发 RST → 服务器 SSL_accept 被重置打断恒失败 →
