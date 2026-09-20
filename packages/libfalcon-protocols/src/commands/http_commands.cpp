@@ -221,6 +221,17 @@ void fail_group_terminal(DownloadEngineV2* engine, TaskId task_id,
     }
 }
 
+/// 判断文本是否为指定地址族的 IP 字面量（IPv6 字面量在 URL 中带括号，
+/// 此处收剥括号后的裸地址）
+bool is_ip_literal(int family, const std::string& text) {
+    if (family == AF_INET6) {
+        in6_addr v6 = {};
+        return inet_pton(AF_INET6, text.c_str(), &v6) == 1;
+    }
+    in_addr v4 = {};
+    return inet_pton(AF_INET, text.c_str(), &v4) == 1;
+}
+
 std::string to_lower(std::string s) {
     for (auto& ch : s) {
         ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
@@ -445,7 +456,9 @@ HttpInitiateConnectionCommand::HttpInitiateConnectionCommand(
     , options_(options)
     , socket_fd_(-1)
 {
-    // 解析 URL（最小实现：http://host[:port]/path?query）
+    // 解析 URL（最小实现：http://host[:port]/path?query）。IPv6 字面量
+    // 按 RFC 3986 §3.2.2 为 [...] 括号包裹（括号内有 ':'，端口在 ] 之后
+    // ——对括号形态直接 rfind(':') 会把 host 切成 "["、端口解析成错值）
     std::string rest = url_;
     if (rest.rfind("https://", 0) == 0) {
         use_https_ = true;
@@ -471,12 +484,27 @@ HttpInitiateConnectionCommand::HttpInitiateConnectionCommand(
         if (path_.empty()) path_ = "/";
     }
 
-    const auto port_pos = authority.rfind(':');
-    if (port_pos != std::string::npos && port_pos + 1 < authority.size()) {
-        host_ = authority.substr(0, port_pos);
-        port_ = static_cast<uint16_t>(std::stoi(authority.substr(port_pos + 1)));
+    if (!authority.empty() && authority[0] == '[') {
+        is_ipv6_literal_ = true;
+        const auto close = authority.find(']');
+        if (close == std::string::npos) {
+            // 畸形（无闭合 ]）：host 剥去 '[' 后在连接层按不可解析收口
+            host_ = authority.substr(1);
+        } else {
+            host_ = authority.substr(1, close - 1);
+            if (close + 1 < authority.size() && authority[close + 1] == ':') {
+                port_ = static_cast<uint16_t>(
+                    std::stoi(authority.substr(close + 2)));
+            }
+        }
     } else {
-        host_ = authority;
+        const auto port_pos = authority.rfind(':');
+        if (port_pos != std::string::npos && port_pos + 1 < authority.size()) {
+            host_ = authority.substr(0, port_pos);
+            port_ = static_cast<uint16_t>(std::stoi(authority.substr(port_pos + 1)));
+        } else {
+            host_ = authority;
+        }
     }
 
     connection_state_ = HttpConnectionState::DISCONNECTED;
@@ -528,7 +556,16 @@ bool HttpInitiateConnectionCommand::execute(DownloadEngineV2* engine) {
         switch (connection_state_) {
             case HttpConnectionState::DISCONNECTED:
                 // 创建新连接
-                // 步骤 1: 创建 Socket
+                // 步骤 1: 解析连接端点（字面量家族判定或 DNS 解析；失败
+                // 与连接失败同收口——重试链重建连接时再次解析）
+                if (!resolve_connect_endpoint()) {
+                    FALCON_LOG_ERROR_STREAM("连接失败: " << host_);
+                    notify_segment_failure(engine, "Failed to connect: " + host_);
+                    return handle_result(ExecutionResult::ERROR_OCCURRED);
+                }
+
+                // 步骤 2: 创建 Socket（按端点地址族——IPv6 目标此前恒以
+                // AF_INET 创建，连接必败）
                 if (!create_socket()) {
                     FALCON_LOG_ERROR_STREAM("创建 Socket 失败");
                     notify_segment_failure(engine, "Failed to create socket");
@@ -644,7 +681,8 @@ bool HttpInitiateConnectionCommand::execute(DownloadEngineV2* engine) {
 
 bool HttpInitiateConnectionCommand::resolve_host(
     const std::string& host,
-    std::string& ip)
+    std::string& ip,
+    int* family)
 {
     struct addrinfo hints = {};
     hints.ai_family = AF_UNSPEC;     // IPv4 或 IPv6
@@ -679,9 +717,45 @@ bool HttpInitiateConnectionCommand::resolve_host(
     }
 
     ip = addr_str;
+    if (family) {
+        *family = chosen->ai_family;
+    }
     freeaddrinfo(result);
 
     FALCON_LOG_INFO_STREAM(host << " 解析为 " << ip);
+    return true;
+}
+
+bool HttpInitiateConnectionCommand::resolve_connect_endpoint() {
+    // 代理生效时连接对象是代理主机（v6 字面量代理已被 parse_http_proxy
+    // 拒绝；代理主机名可解析出 v6，家族判定同路径）
+    const bool use_proxy = proxy_cfg_.kind == HttpProxyKind::HttpProxy;
+    const std::string& connect_host = use_proxy ? proxy_cfg_.host : host_;
+
+    // 字面量快路径（IPv6 字面量 host_ 已剥括号，两者同为裸地址判定）
+    in_addr v4 = {};
+    if (inet_pton(AF_INET, connect_host.c_str(), &v4) == 1) {
+        connect_family_ = AF_INET;
+        return true;
+    }
+    in6_addr v6 = {};
+    if (inet_pton(AF_INET6, connect_host.c_str(), &v6) == 1) {
+        connect_family_ = AF_INET6;
+        return true;
+    }
+
+    // 主机名解析（resolved_ip_ 跨连接级重试缓存，家族随缓存）
+    if (resolved_ip_.empty()) {
+        std::string ip;
+        int family = AF_INET;
+        if (!resolve_host(connect_host, ip, &family)) {
+            FALCON_LOG_ERROR_STREAM("解析主机失败: " << connect_host);
+            return false;
+        }
+        resolved_ip_ = ip;
+        resolved_family_ = family;
+    }
+    connect_family_ = resolved_family_;
     return true;
 }
 
@@ -689,7 +763,7 @@ bool HttpInitiateConnectionCommand::create_socket() {
     socket_fd_ = ::falcon::detail::inject_failure(
                      ::falcon::detail::InjectPoint::HttpSocketCreate)
                      ? -1
-                     : socket(AF_INET, SOCK_STREAM, 0);
+                     : socket(connect_family_, SOCK_STREAM, 0);
     if (socket_fd_ < 0) {
         FALCON_LOG_ERROR_STREAM("socket() 失败: " << sock_err_str(sock_errno()));
         return false;
@@ -726,34 +800,41 @@ bool HttpInitiateConnectionCommand::create_socket() {
 bool HttpInitiateConnectionCommand::connect_socket() {
     // 代理生效时连接代理服务器（absolute-form 请求与 CONNECT 隧道均在
     // 代理连接上承载）；目标主机名的解析延迟到隧道建立之后（TLS 握手
-    // 也只与目标主机相关）
+    // 也只与目标主机相关）。端点解析已在 resolve_connect_endpoint 完成
+    // （execute 的连接步骤 1），此处只按家族组装地址并 connect
     const bool use_proxy = proxy_cfg_.kind == HttpProxyKind::HttpProxy;
     const std::string& connect_host = use_proxy ? proxy_cfg_.host : host_;
     const uint16_t connect_port = use_proxy ? proxy_cfg_.port : port_;
 
-    struct sockaddr_in addr = {};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(connect_port);
+    // 连接地址：字面量直接用，主机名用解析缓存
+    std::string addr_text = connect_host;
+    if (!is_ip_literal(connect_family_, addr_text) && !resolved_ip_.empty()) {
+        addr_text = resolved_ip_;
+    }
 
-    connect_in_progress_ = false;
-
-    std::string ip = connect_host;
-    if (inet_pton(AF_INET, connect_host.c_str(), &addr.sin_addr) <= 0) {
-        if (!resolved_ip_.empty()) {
-            ip = resolved_ip_;
-        } else {
-            if (!resolve_host(connect_host, ip)) {
-                FALCON_LOG_ERROR_STREAM("解析主机失败: " << connect_host);
-                return false;
-            }
-            resolved_ip_ = ip;
-        }
-
-        if (inet_pton(AF_INET, ip.c_str(), &addr.sin_addr) <= 0) {
-            FALCON_LOG_ERROR_STREAM("inet_pton 失败: " << ip);
+    struct sockaddr_storage addr_ss = {};
+    socklen_t addr_len = 0;
+    if (connect_family_ == AF_INET6) {
+        auto* addr6 = reinterpret_cast<struct sockaddr_in6*>(&addr_ss);
+        addr6->sin6_family = AF_INET6;
+        addr6->sin6_port = htons(connect_port);
+        if (inet_pton(AF_INET6, addr_text.c_str(), &addr6->sin6_addr) <= 0) {
+            FALCON_LOG_ERROR_STREAM("inet_pton 失败: " << addr_text);
             return false;
         }
+        addr_len = sizeof(*addr6);
+    } else {
+        auto* addr4 = reinterpret_cast<struct sockaddr_in*>(&addr_ss);
+        addr4->sin_family = AF_INET;
+        addr4->sin_port = htons(connect_port);
+        if (inet_pton(AF_INET, addr_text.c_str(), &addr4->sin_addr) <= 0) {
+            FALCON_LOG_ERROR_STREAM("inet_pton 失败: " << addr_text);
+            return false;
+        }
+        addr_len = sizeof(*addr4);
     }
+
+    connect_in_progress_ = false;
 
     // 回环上非阻塞 connect 恒报 in-progress（失败在 getsockopt 阶段
     // 才暴露），立即硬失败本地不可构造——注入点确定性命中收口分支
@@ -761,8 +842,8 @@ bool HttpInitiateConnectionCommand::connect_socket() {
                   ::falcon::detail::InjectPoint::HttpConnectHardFail)
                   ? -1
                   : connect(socket_fd_,
-                            reinterpret_cast<struct sockaddr*>(&addr),
-                            sizeof(addr));
+                            reinterpret_cast<struct sockaddr*>(&addr_ss),
+                            addr_len);
     if (ret < 0) {
         const int err = ::falcon::detail::inject_failure(
                             ::falcon::detail::InjectPoint::HttpConnectHardFail)
@@ -853,18 +934,37 @@ TlsHandshakeResult HttpInitiateConnectionCommand::setup_tls() {
             return TlsHandshakeResult::FAILED;
         }
 
-        // 设置 SNI 主机名
-        SSL_set_tlsext_host_name(ssl_conn_.get(), host_.c_str());
+        // IP 直连（v4/v6 字面量）与 DNS 主机名在此分流：SNI 与证书
+        // 校验的绑定 API 都不一样（见下）
+        const bool ip_target =
+            is_ip_literal(is_ipv6_literal_ ? AF_INET6 : AF_INET, host_);
+
+        // SNI：RFC 6066 规定 HostName 不得是 IP 字面量（服务器应忽略
+        // 该扩展），curl 同语义——IP 直连不发 SNI；DNS 主机名照发
+        if (!ip_target) {
+            SSL_set_tlsext_host_name(ssl_conn_.get(), host_.c_str());
+        }
 
         // 证书校验绑定期望主机名：verify 开启时 SSL_get_verify_result
         // 的结论因此同时覆盖证书链与主机名——替代此前的 WARN-only
-        // 主机名检查（告警后照常收数据，校验形同虚设）
-        if (options_.verify_ssl &&
-            (::falcon::detail::inject_failure(
-                 ::falcon::detail::InjectPoint::TlsSetHostFail) ||
-             SSL_set1_host(ssl_conn_.get(), host_.c_str()) != 1)) {
-            FALCON_LOG_ERROR_STREAM("无法设置证书主机名校验: " << host_);
-            return TlsHandshakeResult::FAILED;
+        // 主机名检查（告警后照常收数据，校验形同虚设）。
+        // SSL_set1_host 只做 DNS 匹配——IP 字面量实测恒 hostname
+        // mismatch（X509_check_host 不比对 IP SAN），IP 直连须走
+        // X509_VERIFY_PARAM_set1_ip_asc 的 IP SAN 匹配路径
+        if (options_.verify_ssl) {
+            const bool bound_ok =
+                ::falcon::detail::inject_failure(
+                    ::falcon::detail::InjectPoint::TlsSetHostFail)
+                    ? false
+                    : (ip_target
+                           ? X509_VERIFY_PARAM_set1_ip_asc(
+                                 SSL_get0_param(ssl_conn_.get()),
+                                 host_.c_str()) == 1
+                           : SSL_set1_host(ssl_conn_.get(), host_.c_str()) == 1);
+            if (!bound_ok) {
+                FALCON_LOG_ERROR_STREAM("无法设置证书主机名校验: " << host_);
+                return TlsHandshakeResult::FAILED;
+            }
         }
 
         FALCON_LOG_INFO_STREAM("开始 TLS 握手: " << host_);
@@ -975,9 +1075,9 @@ HttpInitiateConnectionCommand::send_proxy_connect(
     DownloadEngineV2* engine) {
     if (proxy_request_.empty()) {
         // RFC 7231 §4.3.6：CONNECT 的 target 是 authority-form
-        proxy_request_ = "CONNECT " + host_ + ":" + std::to_string(port_) +
+        proxy_request_ = "CONNECT " + host_authority() + ":" + std::to_string(port_) +
                          " HTTP/1.1\r\n"
-                         "Host: " + host_ + ":" + std::to_string(port_) + "\r\n";
+                         "Host: " + host_authority() + ":" + std::to_string(port_) + "\r\n";
         if (!options_.user_agent.empty()) {
             proxy_request_ += "User-Agent: " + options_.user_agent + "\r\n";
         }
@@ -1117,7 +1217,7 @@ bool HttpInitiateConnectionCommand::prepare_http_request() {
         proxy_cfg_.kind == HttpProxyKind::HttpProxy && !use_https_;
     http_request_->set_url(plain_via_proxy ? url_ : path_);
 
-    http_request_->set_header("Host", host_);
+    http_request_->set_header("Host", host_authority());
     http_request_->set_header("User-Agent", options_.user_agent);
     http_request_->set_header("Accept", "*/*");
     // 不协商压缩：显式只接受 identity（wget 同语义）。下载器不变式是
@@ -1765,12 +1865,6 @@ bool HttpResponseCommand::handle_redirect(DownloadEngineV2* engine) {
     if (redirect_url.empty()) {
         FALCON_LOG_WARN_STREAM("Location 无法解析: \"" << redirect_url_
                               << "\"，按失败收口: task=" << get_task_id());
-        return false;
-    }
-    if (redirect_url.rfind("https://", 0) == 0) {
-        // V2 socket 链路尚未放行 TLS（M1.1），明确报错而非静默失败
-        FALCON_LOG_WARN_STREAM("重定向目标为 https（V2 暂不支持），"
-                              "按失败收口: " << redirect_url);
         return false;
     }
 

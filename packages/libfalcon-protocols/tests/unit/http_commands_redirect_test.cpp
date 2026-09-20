@@ -10,8 +10,8 @@
  * - RFC 3986 引用解析四形态：绝对 URL / 协议相对 //host/path /
  *   绝对路径 /path / 相对路径（含 ../ 上跳归一化）
  * - 防护：重定向环在 kMaxRedirects 内截断按失败收口（有界连接数）；
- *   重定向到 https 目标暂不支持（直接 https:// 请求已放行），明确
- *   失败而非静默
+ *   https 目标已被跟随（与直连同路径），不可达目标按连接失败干净
+ *   收口；跟随 https 完成（TLS 服务器承接）的全链用例
  */
 
 #ifdef _WIN32
@@ -34,6 +34,10 @@
 
 #include <gtest/gtest.h>
 #include <falcon/protocols/download_engine_v2.hpp>
+
+#ifdef FALCON_ENABLE_OPENSSL
+#include "tls_loopback_server.hpp"
+#endif
 
 #include <atomic>
 #include <chrono>
@@ -447,11 +451,12 @@ TEST(DownloadEngineV2Redirect, RedirectLoopFailsBounded) {
     std::filesystem::remove_all(dir, rm_ec);
 }
 
-/// 重定向到 https 目标：暂不支持，明确失败而非静默或崩溃
-TEST(DownloadEngineV2Redirect, HttpsTargetFailsCleanly) {
+/// 重定向到不可达 https 目标：跟随 https 已放行（TLS 与直连同路径），
+/// 不可达目标按连接失败干净收口（127.0.0.1:1 恒连接拒绝，不依赖网络）
+TEST(DownloadEngineV2Redirect, HttpsUnreachableTargetFailsCleanly) {
     RedirectServer server;
     ASSERT_TRUE(server.start());
-    server.add_redirect("/tohttps", 302, "https://example.com/secure.bin");
+    server.add_redirect("/tohttps", 302, "https://127.0.0.1:1/secure.bin");
 
     const std::string dir = temp_dir_for("https");
     std::filesystem::create_directories(dir);
@@ -470,12 +475,62 @@ TEST(DownloadEngineV2Redirect, HttpsTargetFailsCleanly) {
     RedirectEngineRunner runner(engine);
     ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
     EXPECT_EQ(group->status(), RequestGroupStatus::FAILED)
-        << "重定向到 https 目标必须干净失败";
+        << "重定向到不可达 https 目标必须干净失败";
 
     runner.shutdown_and_join();
     server.stop();
     std::error_code rm_ec;
     std::filesystem::remove_all(dir, rm_ec);
 }
+
+#ifdef FALCON_ENABLE_OPENSSL
+/// http → https 重定向跟随：跳转目标由 TLS 服务器承接，成品逐字节
+/// 一致（跟随与直连同一条命令链；verify 开启按 DNS SAN 匹配）
+TEST(DownloadEngineV2Redirect, HttpsTargetFollowedAndCompleted) {
+    const std::string dir = temp_dir_for("https_follow");
+    std::filesystem::create_directories(dir);
+    const auto key_path =
+        (std::filesystem::path(dir) / "k.pem").string();
+    const auto cert_path =
+        (std::filesystem::path(dir) / "c.pem").string();
+
+    falcon::testtls::TlsTestServer tls;
+    ASSERT_TRUE(tls.start(key_path, cert_path));
+    const std::string body = falcon::testtls::make_body(4096);
+    tls.set_body(body);
+
+    RedirectServer server;
+    ASSERT_TRUE(server.start());
+    server.add_redirect("/secure", 302, tls.url("localhost", "/f.bin"));
+
+    const std::string out_path =
+        (std::filesystem::path(dir) / "s.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    const TaskId task_id = engine.add_download(
+        server.url("/secure"), redirect_options(out_path));
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    // verify_ssl 默认开：信任自签证书（SAN 含 DNS:localhost）
+    falcon::testtls::ScopedEnvVar cert_env("SSL_CERT_FILE", cert_path);
+
+    RedirectEngineRunner runner(engine);
+    ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
+    EXPECT_EQ(group->status(), RequestGroupStatus::COMPLETED)
+        << "重定向到 https 目标应被跟随并完成";
+    EXPECT_EQ(read_file_content(out_path), body);
+
+    runner.shutdown_and_join();
+    tls.stop();
+    server.stop();
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+#endif  // FALCON_ENABLE_OPENSSL
 
 } // namespace

@@ -2,6 +2,55 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-20 - V2 引擎 IPv6 数据面（双栈全链路 + 两个既有 TLS 缺陷顺带修复）
+- **立项实证四缺口 + 两生产缺陷**：① URL authority 解析无 `[...]`
+  括号处理（`http://[::1]:8080/` 解析出 host_=`[`、
+  `stoi("1]")`=1）；② create_socket AF_INET 硬编码；③ connect_
+  socket sockaddr_in 硬编码（解析出的 v6 地址二次 inet_pton(AF_
+  INET) 必败）；④ **生产缺陷 A**：`SSL_set1_host(IP字面量)` 恒
+  hostname mismatch——openssl 3.5.5 CLI 探针实证（`-verify_
+  hostname 127.0.0.1` 报 error 62、`-verify_ip ::1` OK），即 **v4
+  IP 直连 https + verify_ssl=true 也是坏的**（既有缺陷，v6 会继
+  承）；⑤ SNI 发 IP 违 RFC 6066；⑥ **生产缺陷 B**：重定向 https
+  目标硬拒（M1.1 放行 TLS 后遗留过时代码，直接 https 已可达）
+- **双栈全链路**：构造函数括号解析（剥 `[...]`，端口取 `]` 后，
+  畸形无闭合括号连接层收口）→ 新 `resolve_connect_endpoint()`
+  （execute DISCONNECTED case 首步：代理主机或 IP 字面量走
+  inet_pton 快路径，主机名走既有 resolve_host 新增 family 出参，
+  失败按连接失败收口进重试链）→ `create_socket` 按 connect_
+  family_ 创建 → `connect_socket` sockaddr_storage 双栈组装
+  （AF_INET6 → sockaddr_in6，v4 原路径不变）→ Host 头与 CONNECT
+  请求行经 `host_authority()` 保留括号形态（RFC 3986 §3.2.2）
+- **TLS IP 字面量分流（缺陷 A 修复）**：setup_tls 判定 ip_target
+  ——SNI 仅非 IP 设置（RFC 6066，curl 同语义）；verify_ssl 时
+  IP 走 `X509_VERIFY_PARAM_set1_ip_asc`（按证书 IP SAN 匹配）、
+  DNS 保持 `SSL_set1_host`；重定向 https 硬拒删除（缺陷 B，跟
+  随与直连同一条命令链/TLS 路径，既有 loopback TLS 测试基建直
+  接复用）。代理 IPv6 字面量保持 Unsupported（既有决策）
+- **测试基建 dual-stack 化 + 8 用例**：scripted_http_server 增
+  start_v6()（AF_INET6 + V6ONLY=0 + in6addr_any，失败返回 false
+  供 GTEST_SKIP）；tls_loopback_server start 增 dual_stack 形态
+  （in6addr_loopback）；证书 SAN 追加 ::1（16 字节二进制形态）。
+  `http_commands_ipv6_test.cpp` 8 用例：[::1] 字面量下载+Host
+  括号断言 / dual-stack 上 v4 回归 / AAAA-only 主机名回落 v6
+  解析族（POSIX only + getaddrinfo 预检跳过）/ 多段 4MB 分段 /
+  v6 括号基准相对 Location 重定向 / 畸形括号干净失败 / v6+v4
+  IP 直连 TLS verify via IP SAN（v4 侧是缺陷 A 回归钉子，SNI 空
+  断言）；代理套件 +1（v6 目标经明文代理请求行括号形态）；重定
+  向套件改造：不可达 https 用例改 127.0.0.1:1（删除硬拒后原用例
+  302 到真 example.com 成网络依赖）+ 新增 https 跟随成功 e2e
+  （RedirectServer 302 → TlsTestServer localhost，SSL_CERT_FILE
+  信任自签，COMPLETED + 字节一致）
+- **验证**：protocols 全量 906 用例绿；ASan IPv6/TLS/redirect/
+  proxy 46 用例零告警；build-cov 全仓 ctest 2357 清单 exit 0
+  零失败（11 skipped 设计内）
+- **测量级教训**：新测试"单跑绿"若与全量结果矛盾，先核对二进制
+  是否重建——本轮 https 跟随用例漏设 SSL_CERT_FILE（verify_ssl
+  默认开，自签证书无信任锚恒 FAILED），"单跑绿"是跑了未重建旧
+  二进制的假象；修复后单跑立即复现恒红
+- 下一个 todo 候选：#3 BT 做种、#2 SFTP、#8 file-allocation、
+  #9 客户端 TLS 证书
+
 ### 2026-09-19 - 覆盖率批次 Z2：TLS/socket/磁盘满故障注入专项（16 用例）+ 顺序脆弱缺陷修复
 - **7 个新注入点**（injection.hpp）：`HttpSocketCreate`/
   `HttpConnectHardFail`——回环上 socket() 创建失败与非阻塞 connect

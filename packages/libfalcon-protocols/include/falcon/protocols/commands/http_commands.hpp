@@ -317,7 +317,18 @@ public:
     int redirect_depth() const noexcept { return redirect_depth_; }
 
 private:
-    bool resolve_host(const std::string& host, std::string& ip);
+    /// Host 头 / CONNECT authority / 日志用主机形态：IPv6 字面量按
+    /// RFC 3986 §3.2.2 保留方括号，其余原样（v4 行为逐字节不变）
+    std::string host_authority() const {
+        return is_ipv6_literal_ ? "[" + host_ + "]" : host_;
+    }
+
+    /// 连接端点地址族判定（字面量快路径 + 主机名解析缓存；
+    /// 填 connect_family_ / resolved_ip_，供 socket 创建与 connect 使用）
+    bool resolve_connect_endpoint();
+
+    bool resolve_host(const std::string& host, std::string& ip,
+                      int* family = nullptr);
     bool create_socket();
     bool connect_socket();
     TlsHandshakeResult setup_tls();  // 始终声明，实现根据 FALCON_ENABLE_OPENSSL 条件编译
@@ -338,6 +349,14 @@ private:
     std::string path_ = "/";
     uint16_t port_ = 80;
     bool use_https_ = false;
+    // URL authority 为 IPv6 字面量（[...] 括号形态）——host_ 存剥括号
+    // 后的主机，Host 头/CONNECT 等报文位置经 host_authority() 还原括号
+    bool is_ipv6_literal_ = false;
+
+    // 连接端点地址族（resolve_connect_endpoint 填定：字面量或解析结果
+    // 的家族；v4 主机恒 AF_INET，行为与历史版本一致）
+    int connect_family_ = AF_INET;
+    int resolved_family_ = AF_INET;
 
     // 连接级重试计数（max_retries 语义：首连 + max_retries 次重试）
     int retry_count_ = 0;

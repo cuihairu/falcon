@@ -2447,12 +2447,20 @@ ED2K、HLS/DASH；云存储浏览（S3/OSS/COS/Kodo/Upyun，endpoint
 path-style）；网盘分享链识别（12 平台）+ 资源搜索；GUI 桌面。
 
 **缺口（按价值排序，附实证）：**
-1. **Metalink（aria2 语义）**：现 metalink 插件是 2025-12 旧接口
-   占位（getSupportedSchemes/canHandle 旧 API、自造 "metalink:"
-   scheme、独立 CMake 子项目未编入主库；builtin 注册表仅 8 个
-   handler 无 metalink）。缺 aria2 的真语义：.metalink4/.meta4
-   文件输入 → 多源镜像并行 + piece 级哈希校验。**立项首选**——
-   可复用 V2 分段骨架（多源=多段来源）+ file_hash 分块哈希
+1. ~~**Metalink（aria2 语义）**~~（2026-09-18 已落地，两阶段）：
+   旧 metalink 插件整体删除（regex 解析器 parse() 从不赋值 text
+   的硬 bug、零真实能力），新实现为 `plugins/metalink`。
+   **阶段1（委托模式）**：RFC 5854/.meta4 与 Metalink3/.metalink
+   双兼容（手写 mini XML 解析器，零新依赖）→ 镜像排序 → 逐个
+   委托 HTTP/FTP handler（继承 V1 分段/续传/限速能力）→ 流式
+   整文件哈希校验（FileHasher::calculate_streaming/verify_
+   streaming）→ 校验通过才 rename 发布；失败删 part 换下一镜像。
+   **阶段2（V2 原生多源分段）**：门禁通过（无 curl 专属能力、
+   http/https 镜像 ≥2、有整文件哈希）走共享 V2 引擎 P2SP——
+   段级换源重试 + 初始连接镜像轮转 + 桥接三态（完成校验发布/
+   挂起保留断点/失败回落阶段1）。**如实记录**：`<pieces>` 分片
+   哈希未消费——委托模式下整文件流式校验已足够，piece 级校验
+   留给未来 V2 原生多源+逐段校验的演进
 2. **SFTP**：同上形态（plugins/sftp 449 行旧接口未接入注册表）；
    aria2 原生支持。可经 V1 curl 的 SCP/SFTP 能力低成本接入
    （需 libssh2 构建项）
@@ -2477,10 +2485,20 @@ path-style）；网盘分享链识别（12 平台）+ 资源搜索；GUI 桌面�
    自动改名（与限速当年的"零消费端"同型）
 6. ~~**conditional-get**~~（2026-09-19 已落地）：If-Modified-Since/
    If-Match 零命中（aria2 --conditional-get，配合镜像同步场景）
-7. **V2 IPv6**：resolve_host 已 AF_UNSPEC，数据面 socket
-   AF_INET-only——IPv6 目标在 V2 判失败（ip6-localhost 有干净
-   失败分支，批次 D 测试钉住）；生产默认 V1 不受影响，V2 灰度
-   面收窄项
+7. ~~**V2 IPv6**~~（2026-09-20 已落地）：resolve_host 已 AF_UNSPEC
+   但数据面 socket/connect AF_INET 硬编码——落地为全链路双栈：
+   ① URL authority `[...]` 括号解析（RFC 3986 §3.2.2，此前
+   `[::1]/` 解析出 host=`[`、端口 stoi("1]")=1）；② resolve_
+   connect_endpoint 家族判定（字面量 inet_pton 快路径 + 主机名
+   解析带 family 出参）→ socket 按家族创建 → sockaddr_storage
+   双栈 connect；③ Host/CONNECT authority 保留括号形态；④ TLS
+   IP 字面量分流——SNI 跳过（RFC 6066）+ verify 走
+   X509_VERIFY_PARAM_set1_ip_asc（**顺带修复既有缺陷：v4/v6 IP
+   直连 https + verify_ssl=true 恒 hostname mismatch**，openssl
+   3.5.5 探针实证 SSL_set1_host 对 IP 字面量报 error 62）；⑤
+   重定向 https 硬拒过时代码删除（M1.1 TLS 放行后遗留）。代理
+   IPv6 字面量保持 Unsupported（既有决策）。dual-stack 测试基建
+   （scripted/TLS 服务器 V6ONLY=0 + 证书 SAN ::1）+ 8 用例
 8. **file-allocation**：连 CLI 参数都没有——V2 稀疏临时文件 /
    V1 curl 直写；大文件预分配（falloc）对机械盘碎片与空间预留
    有意义，优先级低

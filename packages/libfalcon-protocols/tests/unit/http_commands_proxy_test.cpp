@@ -814,6 +814,48 @@ TEST(DownloadEngineV2Proxy, PlainProxySendsBasicAuthFromUserinfo) {
     std::filesystem::remove_all(dir, rm_ec);
 }
 
+/// IPv6 字面量目标经明文代理：absolute-form 请求行保留方括号形态
+/// （RFC 3986 §3.2.2——authority 中的 v6 字面量不因代理转发丢失括号）
+TEST(DownloadEngineV2Proxy, Ipv6TargetViaPlainProxyKeepsBrackets) {
+    const std::string body = make_body(16 * 1024);
+
+    ProxyTestServer server;
+    ASSERT_TRUE(server.start(ProxyTestServer::Mode::kPlainProxy));
+    server.set_body(body);
+
+    const std::string dir = temp_dir_for("v6_target");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options = base_proxy_options(out_path);
+    options.proxy = server.proxy_url();
+
+    const TaskId task_id = engine.add_download(
+        "http://[::1]:81/f.bin", options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    ProxyEngineRunner runner(engine);
+    ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
+    ASSERT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+
+    runner.shutdown_and_join();
+    server.stop();
+
+    EXPECT_EQ(server.last_request_line(),
+              "GET http://[::1]:81/f.bin HTTP/1.1");
+    EXPECT_EQ(read_file_content(out_path), body);
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
 //==============================================================================
 // HTTPS 经代理：CONNECT 隧道 → 同连接 TLS 切换
 //==============================================================================

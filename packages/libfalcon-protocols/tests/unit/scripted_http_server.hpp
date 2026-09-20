@@ -98,6 +98,44 @@ public:
         accept_thread_ = std::thread([this] { accept_loop(); });
     }
 
+    /// dual-stack 监听（AF_INET6 + IPV6_V6ONLY=0）：同一端口同时接受
+    /// 127.0.0.1 与 [::1]。socket/bind 失败（环境无 IPv6）返回 false，
+    /// 调用方 GTEST_SKIP——不 abort（与 start() 的确定性环境假设不同）
+    bool start_v6() {
+#ifdef _WIN32
+        static std::once_flag wsa_once;
+        std::call_once(wsa_once, [] {
+            WSADATA data{};
+            WSAStartup(MAKEWORD(2, 2), &data);
+        });
+#endif
+        listen_fd_ = ::socket(AF_INET6, SOCK_STREAM, 0);
+        if (listen_fd_ < 0) {
+            return false;
+        }
+        int v6only = 0;
+        ::setsockopt(listen_fd_, IPPROTO_IPV6, IPV6_V6ONLY,
+                     reinterpret_cast<const char*>(&v6only), sizeof(v6only));
+        sockaddr_in6 addr{};
+        addr.sin6_family = AF_INET6;
+        addr.sin6_addr = in6addr_any;
+        addr.sin6_port = 0;
+        if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr),
+                   sizeof(addr)) != 0 ||
+            ::listen(listen_fd_, 8) != 0) {
+            CLOSE_SOCKET(listen_fd_);
+            listen_fd_ = -1;
+            return false;
+        }
+        sockaddr_in6 bound{};
+        socklen_t len = sizeof(bound);
+        ::getsockname(listen_fd_, reinterpret_cast<sockaddr*>(&bound), &len);
+        port_ = ntohs(bound.sin6_port);
+        running_ = true;
+        accept_thread_ = std::thread([this] { accept_loop(); });
+        return true;
+    }
+
     void stop() {
         if (!running_.exchange(false)) return;
         ::shutdown(listen_fd_, SHUT_RDWR);  // Linux close() 不唤醒 accept
@@ -108,6 +146,10 @@ public:
     int port() const { return port_; }
     std::string url(const std::string& path) const {
         return "http://127.0.0.1:" + std::to_string(port_) + path;
+    }
+    /// IPv6 字面量形态 URL（start_v6 的 dual-stack 监听下与 v4 同端口）
+    std::string url_v6(const std::string& path) const {
+        return "http://[::1]:" + std::to_string(port_) + path;
     }
 
     // ---- 应答编程 ----

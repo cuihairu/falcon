@@ -160,7 +160,11 @@ class TlsTestServer {
 public:
     ~TlsTestServer() { stop(); }
 
-    bool start(const std::string& key_path, const std::string& cert_path) {
+    /// dual_stack=true：AF_INET6 + IPV6_V6ONLY=0 监听回环（同一端口
+    /// 同时接受 [::1] 与 127.0.0.1）。环境无 IPv6（socket/bind 失败）
+    /// 返回 false，调用方 GTEST_SKIP
+    bool start(const std::string& key_path, const std::string& cert_path,
+               bool dual_stack = false) {
 #ifdef _WIN32
         ensure_winsock_for_tls_test();
 #endif
@@ -185,31 +189,64 @@ public:
             return false;
         }
 
-        listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
-        if (listen_fd_ < 0) {
-            stop();
-            return false;
+        int v6only = 0;
+        sockaddr_in6 addr6{};
+        if (dual_stack) {
+            listen_fd_ = ::socket(AF_INET6, SOCK_STREAM, 0);
+            if (listen_fd_ < 0) {
+                stop();
+                return false;
+            }
+            ::setsockopt(listen_fd_, IPPROTO_IPV6, IPV6_V6ONLY,
+                         reinterpret_cast<const char*>(&v6only),
+                         sizeof(v6only));
+            addr6.sin6_family = AF_INET6;
+            addr6.sin6_port = 0;
+            addr6.sin6_addr = in6addr_loopback;
+            if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr6),
+                       sizeof(addr6)) != 0 ||
+                ::listen(listen_fd_, 8) != 0) {
+                stop();
+                return false;
+            }
+        } else {
+            listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+            if (listen_fd_ < 0) {
+                stop();
+                return false;
+            }
+
+            sockaddr_in addr{};
+            addr.sin_family = AF_INET;
+            addr.sin_port = 0;
+            addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr),
+                       sizeof(addr)) != 0 ||
+                ::listen(listen_fd_, 8) != 0) {
+                stop();
+                return false;
+            }
         }
 
-        sockaddr_in addr{};
-        addr.sin_family = AF_INET;
-        addr.sin_port = 0;
-        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-        if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr),
-                   sizeof(addr)) != 0 ||
-            ::listen(listen_fd_, 8) != 0) {
-            stop();
-            return false;
+        if (dual_stack) {
+            sock_len len = sizeof(sockaddr_in6);
+            sockaddr_in6 bound{};
+            if (::getsockname(listen_fd_,
+                              reinterpret_cast<sockaddr*>(&bound), &len) != 0) {
+                stop();
+                return false;
+            }
+            port_ = ntohs(bound.sin6_port);
+        } else {
+            sockaddr_in bound{};
+            sock_len len = sizeof(bound);
+            if (::getsockname(listen_fd_,
+                              reinterpret_cast<sockaddr*>(&bound), &len) != 0) {
+                stop();
+                return false;
+            }
+            port_ = ntohs(bound.sin_port);
         }
-
-        sockaddr_in bound{};
-        sock_len len = sizeof(bound);
-        if (::getsockname(listen_fd_, reinterpret_cast<sockaddr*>(&bound),
-                          &len) != 0) {
-            stop();
-            return false;
-        }
-        port_ = ntohs(bound.sin_port);
 
         running_ = true;
         accept_thread_ = std::thread([this] { accept_loop(); });

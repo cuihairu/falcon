@@ -97,6 +97,16 @@ inline bool generate_self_signed_cert(const std::string& key_path,
         ip->d.iPAddress = ip_str;
         (void)sk_GENERAL_NAME_push(san, ip);
 
+        // IPv6 回环（16 字节二进制形态）——v6 IP 直连的 IP SAN 匹配
+        GENERAL_NAME* ip6 = GENERAL_NAME_new();
+        ASN1_OCTET_STRING* ip6_str = ASN1_OCTET_STRING_new();
+        unsigned char ip6_bytes[16] = {};
+        ip6_bytes[15] = 1;
+        ASN1_STRING_set(ip6_str, ip6_bytes, sizeof(ip6_bytes));
+        ip6->type = GEN_IPADD;
+        ip6->d.iPAddress = ip6_str;
+        (void)sk_GENERAL_NAME_push(san, ip6);
+
         X509_EXTENSION* san_ext = X509V3_EXT_i2d(NID_subject_alt_name, 0, san);
         GENERAL_NAMES_free(san);
         if (!san_ext || X509_add_ext(x509, san_ext, -1) != 1) {
