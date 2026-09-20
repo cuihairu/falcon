@@ -308,7 +308,11 @@ private:
             if (POLL(&pfd, 1, 500) <= 0) {
                 continue;
             }
-            sockaddr_in peer{};
+            // 缓冲按 listen 家族给足：dual_stack 形态返回 sockaddr_in6
+            //（28 字节），sockaddr_in(16) 在 Linux/macOS 被截断放行、
+            // Windows 报 WSAEFAULT 恒失败——accept 永远收不到连接，
+            // 客户端 TLS 握手挂到命令超时
+            sockaddr_storage peer{};
             sock_len peer_len = sizeof(peer);
             int conn = ::accept(listen_fd_,
                                 reinterpret_cast<sockaddr*>(&peer), &peer_len);

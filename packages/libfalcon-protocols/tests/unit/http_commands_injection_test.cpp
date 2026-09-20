@@ -376,6 +376,11 @@ TEST(DownloadEngineV2Injection, TlsRequestWriteFailFailsCleanly) {
     }
     server.stop();
 
+    // 服务器在 SSL_accept 返回（Finished 已发出）之后才计数，客户端
+    // 收到 Finished → 注入失败 → 断言可快于服务器线程调度到计数行
+    //（Windows CI 实证 handshakes()==0 假失败）——等待式收敛
+    EXPECT_TRUE(testtls::wait_for(
+        [&] { return server.handshakes() >= 1; }, 5000));
     EXPECT_EQ(server.handshakes(), 1);
     EXPECT_TRUE(inj_read_file(out_path).empty());
 

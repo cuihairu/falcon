@@ -1352,6 +1352,17 @@ TEST_F(MetalinkV2BridgeTest, V2EngineShutdownDuringBridgeFallsBackToSerial) {
 
     std::thread killer([&] {
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        // 先撤组再停机：直接 shutdown_and_join 的 pause_all 会把活动组
+        // 置 PAUSED，桥接轮询若在 shutdown 完成前观察到 PAUSED，即按
+        // "用户暂停"转发为 kSuspended（parent Paused，不回落）——排水
+        // 窗口在 CI 负载下拉长超过 200ms 轮询间隔时必命中（Windows 实
+        // 证）。cancel_task 先行摘表使组消失，桥接无论观察到"组丢失"
+        // 还是"引擎已停机"都走 kFailed 回落，与排水竞速解耦；停机后
+        // 回落串行经宿主重建引擎完成
+        if (auto engine = V2EngineHost::instance().try_engine()) {
+            engine->cancel_task(task->id());
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
         V2EngineHost::instance().shutdown_and_join();
     });
     handler_->download(task, nullptr);

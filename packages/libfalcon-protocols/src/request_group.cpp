@@ -103,8 +103,13 @@ std::string http_date_from_last_write_time(const std::string& path) {
         return {};
     }
     namespace chrono = std::chrono;
+    // duration_cast 显式转换：libc++(Apple) 的 system_clock::duration 是
+    // microseconds 而 file_clock 差值是 nanoseconds（rep 含 __int128），
+    // 隐式转换不成立（no viable conversion）；libstdc++ 两者同为
+    // nanoseconds 才碰巧通过。If-Modified-Since 是秒级比较，截断无影响
     const auto sys_tp = chrono::system_clock::now() +
-                        (tp - std::filesystem::file_time_type::clock::now());
+                        chrono::duration_cast<chrono::system_clock::duration>(
+                            tp - std::filesystem::file_time_type::clock::now());
     const std::time_t t = chrono::system_clock::to_time_t(sys_tp);
     std::tm tm_buf{};
 #ifdef _WIN32

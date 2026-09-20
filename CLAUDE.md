@@ -2,6 +2,50 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-20 - CI 三平台红面收口（libc++ chrono 编译错 + WSAEFAULT accept 缓冲 + 两处时序脆弱）
+- **双 run 红面盘点**（批次 Z2 35477484650 + IPv6 35480073040）：Linux
+  全绿 + Coverage 绿；macOS build/Qt6 编译错（两 run 皆红，与 IPv6 无
+  关）；Windows build 测试红。IPv6 run 的 Windows 失败收敛为 IPv6 新
+  用例一个（TlsV6IpLiteral 挂 30s）；Z2 的两个失败在 IPv6 run 未复现
+  ——抖动，另修
+- **macOS 编译错**（conditional-get 批次遗留）：
+  `http_date_from_last_write_time` 的 file_clock→system_clock"两时钟
+  差"换算在 libc++(Apple) 不成立——system_clock::duration 是
+  microseconds 而 file_clock 差值是 nanoseconds（rep 含 __int128），
+  隐式转换 no viable conversion；libstdc++ 两者同为 nanoseconds 碰巧
+  通过。修复 `duration_cast<system_clock::duration>` 显式转换（IMS
+  秒级比较，截断无影响）
+- **IPv6 Windows 挂 30s 根因（测试基建，非引擎）**：TlsTestServer
+  accept_loop 的 peer 缓冲是 sockaddr_in(16B)，dual_stack
+  listen(AF_INET6) 返回 sockaddr_in6(28B)——Linux/macOS 对长度不足
+  截断放行（本机绿掩盖），**Windows 报 WSAEFAULT 恒失败**：服务器
+  500ms poll 空转永不 accept，客户端 connect 内核层立即成功、
+  ClientHello 发出后等 ServerHello 挂到命令超时（引擎日志"开始 TLS
+  握手"后零推进的铁证）。缓冲改 sockaddr_storage；引擎侧 IPv6 数据
+  面零缺陷
+- **TlsRequestWriteFail handshakes()==0 抖动**：服务器 SSL_accept 返
+  回（Finished 已发出）之后才 fetch_add 计数，客户端收 Finished→注入
+  失败→断言可快于服务器线程调度到计数行（79ms 假失败）。等待式收敛
+  （wait_for ≥1 后再断言 ==1）
+- **V2EngineShutdownDuringBridge 平台分叉根因（测量级）**：gtest 输
+  出 `<03-00>` 实为 TaskStatus::Paused=3（枚举序 Pending/Preparing/
+  Downloading/Paused/Completed/...），Windows 上任务不是 Failed 而是
+  **Paused**。真实路径：shutdown_and_join 先 pause_all → 组 PAUSED →
+  桥接 200ms 轮询在 shutdown 完成前观察到 PAUSED → 按"用户暂停"转发
+  kSuspended（parent Paused，不回落）。Linux 恒绿是排水窗口 <200ms、
+  轮询相位恰好错过的竞速，非平台本质差异。pause→kSuspended 是产品正
+  确语义（宿主停机保断点挂起），保留；用例改为 killer 先 cancel_task
+  摘表再停机——组消失后桥接无论观察到"组丢失"还是"引擎已停机"都走
+  kFailed 回落，与排水竞速解耦，原断言（Completed+逐字节+无残留）
+  不变
+- **验证**：IPv6+injection+metalink 35 用例 + TLS/redirect/conditional
+  40 用例绿；build-cov 全量 ctest 重跑恢复 gcda（生产代码改动铁律）
+- **测量级教训**：gtest 枚举断言的 `<NN-00>` 值必须先对枚举定义表再
+  下结论——本轮曾把 `<03-00>` 误读为 Failed(RequestGroupStatus)，
+  实为 Paused(TaskStatus)，两个枚举的值序完全不同；"accept 缓冲按
+  listen 家族给足"是跨平台测试服务器的通则（sockaddr_storage 恒安
+  全），Linux 截断放行会系统性掩盖缓冲过小
+
 ### 2026-09-20 - V2 引擎 IPv6 数据面（双栈全链路 + 两个既有 TLS 缺陷顺带修复）
 - **立项实证四缺口 + 两生产缺陷**：① URL authority 解析无 `[...]`
   括号处理（`http://[::1]:8080/` 解析出 host_=`[`、
