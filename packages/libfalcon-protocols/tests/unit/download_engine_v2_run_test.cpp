@@ -2214,8 +2214,14 @@ TEST(DownloadEngineV2RunTest, SocketReadyStdExceptionSurvives) {
     config.command_wait_timeout_seconds = 1;  // 挂起命令 1s 后被清理收口
     DownloadEngineV2 engine(config);
 
+    // 超时必须任务级显式设置：threshold 选择「任务 timeout_seconds>0
+    // 优先」，而 DownloadOptions 该字段默认 30——引擎兜底恒被任务默
+    // 认值抢占，不显式设置则清理拖到 30s+，组 FAILED 必然撞上 run()
+    // 生存期内的 10s purge 窗口（终态组被回收，下方 find_group 断言
+    // 即红）。显式 1s 让清理在 t≈1.4 完成，远早于首个 purge（t=10）
     DownloadOptions options;
     options.max_retries = 0;
+    options.timeout_seconds = 1;
     const TaskId task_id = engine.add_download(server.url("/body.bin"),
                                                options);
     ASSERT_GT(task_id, 0u);
@@ -2241,8 +2247,10 @@ TEST(DownloadEngineV2RunTest, SocketReadyNonStdExceptionSurvives) {
     config.command_wait_timeout_seconds = 1;
     DownloadEngineV2 engine(config);
 
+    // 同上：任务级显式超时压过默认 30，收口远离 purge 窗口
     DownloadOptions options;
     options.max_retries = 0;
+    options.timeout_seconds = 1;
     const TaskId task_id = engine.add_download(server.url("/body.bin"),
                                                options);
     ASSERT_GT(task_id, 0u);
@@ -2525,8 +2533,14 @@ TEST(DownloadEngineV2FileAllocation, MultiSegmentPreallocCoversGroupTotal) {
     resp.support_range = true;  // 多段判定由 GET 响应显式头驱动
     resp.headers = {{"Accept-Ranges", "bytes"}};
     server.set_response("/multi.bin", resp);
-    // 全段慢发拉长观测窗口（32B/250µs ≈ 128KB/s）
+    // 全段慢发拉长观测窗口。Windows 默认定时器粒度 ~15.6ms，250µs
+    // sleep 实际 ≈15ms，32B/15ms ≈ 2KB/s，4MB 跑不完必超时——放大
+    // 单块尺寸（4KB/15ms ≈ 265KB/s，4MB ≈ 16s），观测窗口语义不变
+#ifdef _WIN32
+    server.set_slow_body("/multi.bin", 15000, 4096);
+#else
     server.set_slow_body("/multi.bin", 250, 32);
+#endif
 
     EngineConfigV2 config;
     config.poll_timeout_ms = 10;

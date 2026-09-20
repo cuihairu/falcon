@@ -2,6 +2,109 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-20 - 覆盖率批次 A4：A3 遗留 17 行注册失败收口锚定（7 用例）+ 行 97.42% → 97.55%（98% 结构性不可达终局收口）
+- **目标**：锚定 A3 新增收口代码中「WANT_* 挂起后的注册失败」17 行
+  （延迟置位 EventPollAddFail 类）——这些行此前不可达的原因不是
+  缺注入点，而是缺确定性时序：one-shot 事件语义下每次挂起都会重
+  新 add_event（注入必命中），但「挂起稳定窗」需要锚——置位太早
+  会拦下前置注册命中已覆盖的 connect 阶段收口（FAILED 断言太宽测
+  不出目标行），太晚则组已超时
+- **锚定模式（本批方法论，memory 已录）**：① 注入点先放挂起前的
+  注册成功（持续位 WantWrite 注入保证重入后再报 EAGAIN 重新注
+  册），`wait_for` 观测断言（连接数/请求计数）+ 200-400ms sleep
+  锚住挂起稳定窗后再置 EventPollAddFail；② **前提是服务器不发数
+  据**——SSL_connect 注入只在 `ret != 1` 时生效，ServerHello 已
+  在接收缓冲则重入直接完成、注入分支永不执行 → TlsTestServer 新
+  增 `set_handshake_delay_ms` 钩子挡住服务器（accept 后、
+  SSL_accept 前 sleep）；③ 「SSL_connect#1 的 WANT_READ 注册」
+  （http_commands.cpp:1099）不可锚——connect 完成唤醒与首调之间
+  <1 poll 周期（回环 fd 微秒级可写），定性跳过；2908（下载命令
+  注册入口前置）同跳；④ 全程挂 AddFail 的设计偏差只有 gcov 核对
+  目标行才能发现（单跑 FAILED 断言绿但绿在错误的行）
+- **SIGPIPE 基建修复（ProxyTestServer）**：OpenSSL 内部写
+  （SSL_accept 失败的 fatal alert、TLS 1.3 NewSessionTicket）不经
+  MSG_NOSIGNAL——客户端收口关 fd 后服务器触发 RST，alert 写入即
+  EPIPE 杀整个测试进程（exit=141，gdb 回溯定位）；accept 线程
+  pthread_sigmask(SIG_BLOCK, SIGPIPE)（TlsTestServer 既有，本批
+  补齐 ProxyTestServer——**每个做 OpenSSL BIO 裸写的服务器线程都
+  要屏蔽**）
+- **7 用例**（2 改造 + 2 新增 + 3 proxy，全部单跑绿 + gcov 目标行
+  核对命中）：明文 send（1428，WantWrite 全程 + 连接锚 + GET==0
+  锚后置位）/ 响应头 recv（1753，FakeResponse 新增 defer_partial_
+  ms 形态——1.5s 后只发状态行前缀挂住，400ms 置位远早于前缀）/
+  下载 body recv（2939，set_slow_body 慢发持续 EAGAIN 消竞速）/
+  TLS 握手（1106，握手延迟 1500ms + TlsHandshakeWantWrite 全程，
+  handshakes()==0 断言收口发生在 SSL_accept 之前）+ 代理 CONNECT
+  三态（1183 发送挂起/1206 应答等待——SendWantWrite 置位后放行 +
+  connect_reply_delay 2000ms 挂住应答/1231 应答 recv——split
+  response + connect_count 锚）
+- **批次铁账（build-cov 单树新鲜数据）**：miss 455 → **433**（净
+  收敛 22 行；分母 17660 不变），行覆盖 **97.42% → 97.55%**，分支
+  56.85%。98% 需 miss ≤353，剩余 433 行经 A1-A4 四批逐行定性 =
+  头文件水分/伪影 + TLS 深层（1099 类时序窗口）/socket 硬错误/
+  daemonize _exit 测量盲区——**98% 结构性不可达结论终局维持**，
+  可测矿点至 A4 止全部收尽
+- 下一个 todo 候选：#3 BT 做种（libtorrent 数据面真实化 + 
+  seed-ratio/seed-time）、#2 SFTP（阻塞：SSH2 协议栈无轻量
+  mock 方案）
+
+### 2026-09-20 - 覆盖率批次 A3：V2 引擎 socket 事件注册失败 12 处收口（产品缺陷）+ WANT_WRITE 三形态注入 + 超时×purge 相位竞速定案
+- **产品缺陷修复（register_socket_event 返回 false 被裸调忽略）**：
+  12 处调用点在 add_event/modify_event 失败（fd 上限/ENOMEM/注入
+  命中）后不检查返回值——命令带着 socket_wait_map_ 条目挂起等永
+  远不会来的事件，30s 超时兜底才收口。全部接线失败收口：connect
+  等待注册（CONNECTING 挂起点）notify_segment_failure + ERROR；
+  TLS 握手 WANT_READ/WRITE 两处 break 落既有握手失败块；代理
+  CONNECT 三态（发送/应答等待/应答 recv）close_socket_fd + ERROR；
+  明文/SSL 请求发送、响应头 recv、下载命令三处 ERROR 收口
+- **产品缺陷修复（CONNECTED 状态重入假失败）**：明文 send WANT_
+  WRITE 挂起重入后 execute 的 fallthrough 撞进 TLS_HANDSHAKING
+  case 对非 SSL 会话判失败——重入路径按 CONNECTED 正确续推
+- **A3 新注入点**（injection.hpp）：`HttpSendWantWrite` +
+  `TlsRequestWriteWantWrite`——send/SSL_write 首轮报 WANT_WRITE
+  （进行中语义），重入续推后下载自然完成；非失败形态注入
+- **新用例 10 个**：WANT_WRITE 三形态（明文/TLS/代理 CONNECT 发
+  送挂起重入，TLS 版时序叠加——WantWrite 先置位，等握手完成
+  handshakes()>=1 + 200ms 静置再嵌套置位 EventPollAddFail，防拦
+  下握手自身注册永远到不了 SSL_write）+ 注册失败收口 4（明文双
+  注入/TLS 握手注册失败/代理路径 EventPollAddFail 单注入）+
+  If-Range 连接级剥离（重定向换镜像必不带 ETag 归属者的条件头）
+  + run_test 补 2（SocketReady 异常两用例超时修正）
+- **超时×purge 相位竞速定案（本批 debug 主战役）**：
+  SocketReadyStd/NonStd 30s 之谜 + EventPollAddFailFailsCleanly
+  全量假抖动同一根因链——① `DownloadOptions::timeout_seconds`
+  **默认 30**，cleanup threshold「任务 >0 即优先」无法区分默认/
+  显式 → 引擎 `command_wait_timeout_seconds=1` 兜底恒被任务默认
+  值抢占，清理在 t≈30+；② 30s 级收口让组 FAILED 必落 run() 生
+  存期内某个 10s purge 窗口附近（相位随每轮日志开销漂移）→ 终态
+  组被回收 → find_group null 断言红；all_groups_ 清空后
+  all_completed 恒 true → 「所有任务已完成」紧跟清理日志（单跑
+  PASSED 但 30s+ 的假绿同源）。修复：两用例任务级显式
+  `options.timeout_seconds = 1`——收口 t≈1.4 远早于首个 purge
+  （t=10），用例 30s+ → 2s。产品 threshold 语义（任务默认 30 优
+  先）为 aria2 同语义合理行为，不改
+- **Windows file-allocation 慢发修复（CI 35502645680 红面）**：
+  MultiSegmentPreallocCoversGroupTotal 的 set_slow_body(250µs,32B)
+  依赖高精度 sleep——Windows 定时器粒度 ~15.6ms 实际 2KB/s，4MB
+  超 ctest 120s 超时；_WIN32 分支改 4KB/15000µs（≈265KB/s，4MB
+  ≈16s），观测窗口语义不变
+- **测量级教训**：① 「connect 回环恒立即成功」不成立——服务器
+  未 accept 时连接挂完成队列报 EINPROGRESS（代理用例 connect_
+  count()==0 实证），依赖连接计数断言的用例会被 accept 时序打
+  翻；② 注入点在 handle_socket_ready 锁前 = LT 语义下每轮 poll
+  刷异常且什么都不摘（432KB 日志 = 事件触发次数的直接观测）；
+  ③ 「单跑 PASSED 但 30s」的假绿与「全量偶发红」是同一相位竞
+  速的两面——时长秒级以上的收口用例必须核对收口时刻与周期性
+  回收（purge/清理/超时）的相对关系
+- **批次铁账（build-cov 单树新鲜数据）**：miss 455（A2
+  438 → 455，分母 17540 → 17660 = A3 新增 12 处收口代码；新增收口
+  覆盖 8 行、余 17 行待 A4 锚定）；行覆盖 97.42%。剩余缺口定性沿批次 X/V
+  口径：头文件水分/伪影 + TLS 深层/socket 硬错误/时序竞态窗口 +
+  daemonize _exit 测量盲区——98% 结构性不可达结论维持
+- 下一个 todo 候选：#3 BT 做种（libtorrent 数据面真实化 + 
+  seed-ratio/seed-time）、#2 SFTP（阻塞：SSH2 协议栈无轻量
+  mock 方案）
+
 ### 2026-09-20 - 覆盖率批次 A1+A2：故障注入收尾（daemon 守护化三点 + socket 回调异常 + 事件注册/poll 失败 + BT 惰性 DHT）+ Windows file-allocation 编译错修复
 - **批次铁账（build-cov 单树新鲜数据）**：行覆盖 **97.30% →
   97.51%**（miss 474 → 438，A1 净 28 行 + A2 净 8 行）；98% 需

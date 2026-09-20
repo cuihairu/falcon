@@ -24,6 +24,7 @@
 #include <gtest/gtest.h>
 #include <falcon/detail/injection.hpp>
 #include <falcon/protocols/download_engine_v2.hpp>
+#include <falcon/protocols/resume_control.hpp>
 
 #include "scripted_http_server.hpp"
 
@@ -278,6 +279,317 @@ TEST(DownloadEngineV2Injection, ConditionalGetRedirectCarriesIfModifiedSince) {
     std::filesystem::remove_all(dir, rm_ec);
 }
 
+// 请求发送 WANT_WRITE（模拟内核发送缓冲满——回环上请求恒小于发送
+// 缓冲，不可自然构造）：注入置位期间请求 send 恒被拦，「连接已建立
+// 且请求未到达」即注入生效的服务器侧铁证；清注入后 socket 恒可写
+// 唤醒重入，请求续推后下载自然完成（进行中语义非失败、无重连）
+TEST(DownloadEngineV2Injection, PlainRequestSendWantWriteSuspendsThenRecovers) {
+    testscripts::ScriptedHttpServer server;
+    server.start();
+    const std::string body(32 * 1024, 'w');
+    testscripts::FakeResponse resp;
+    resp.body = body;
+    server.set_response("/f.bin", resp);
+
+    const std::string dir = inj_temp_dir("sendww");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    config.temp_extension = "";
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options;
+    options.output_filename = out_path;
+    options.max_connections = 1;
+    options.max_retries = 0;
+
+    // 注入先于任务创建置位：初始连接的请求 send 必然被拦
+    detail::set_injection(detail::InjectPoint::HttpSendWantWrite, true);
+    const TaskId task_id = engine.add_download(server.url("/f.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    testtls::TlsEngineRunner runner(engine);
+    // 锚点：连接已到达（connect 完成）而请求被拦（GET 计数保持 0）
+    ASSERT_TRUE(testtls::wait_for(
+        [&] { return server.connections() >= 1; }, 10000));
+    // 连接完成后 CONNECTING→send 在下一轮 poll 唤醒（毫秒级）发生；
+    // 静置窗口保证首个 send 已被拦下，清注入不早于挂起
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    ASSERT_EQ(server.count_requests("/f.bin", "GET"), 0u)
+        << "注入置位期间请求必须被拦下（WANT_WRITE 挂起中）";
+    detail::set_injection(detail::InjectPoint::HttpSendWantWrite, false);
+
+    ASSERT_TRUE(testtls::wait_group_terminal(engine, group, 30000));
+    ASSERT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+    runner.shutdown_and_join();
+    server.stop();
+
+    EXPECT_EQ(inj_read_file(out_path), body);
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+// 请求发送 WANT_WRITE 挂起后的事件注册失败（fd 上限/ENOMEM）：命令
+// 不得带着 socket_wait_map_ 条目挂起等永远不会来的唤醒——注册失败
+// 立即按发送失败收口。HttpSendWantWrite 是持续位：先放挂起前的
+// WRITE 注册成功，锚定挂起稳定窗后再置 EventPollAddFail——持续位
+// 让每次重入 send 仍报 EAGAIN，重新注册必然命中已置位的注入
+TEST(DownloadEngineV2Injection, PlainSendWantWriteRegistrationFailsCleanly) {
+    testscripts::ScriptedHttpServer server;
+    server.start();
+    const std::string body(32 * 1024, 'w');
+    testscripts::FakeResponse resp;
+    resp.body = body;
+    server.set_response("/f.bin", resp);
+
+    const std::string dir = inj_temp_dir("sendwwreg");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options;
+    options.output_filename = out_path;
+    options.max_connections = 1;
+    options.max_retries = 0;
+    options.timeout_seconds = 10;
+
+    {
+        detail::ScopedInjection send_ww(
+            detail::InjectPoint::HttpSendWantWrite);
+        const TaskId task_id =
+            engine.add_download(server.url("/f.bin"), options);
+        ASSERT_GT(task_id, 0u);
+        auto* group = engine.request_group_man()->find_group(task_id);
+        ASSERT_NE(group, nullptr);
+
+        testtls::TlsEngineRunner runner(engine);
+        // 锚点：连接已到达而请求被拦（GET 计数保持 0）——此时挂起前的
+        // WRITE 注册已成功（AddFail 未置位）。持续位保持挂起：可写事件
+        // 重入 send 再报 EAGAIN，随后的重新注册命中置位后的 AddFail
+        ASSERT_TRUE(testtls::wait_for(
+            [&] { return server.connections() >= 1; }, 10000));
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        ASSERT_EQ(server.count_requests("/f.bin", "GET"), 0u)
+            << "请求必须被拦下（WANT_WRITE 挂起中）";
+        detail::ScopedInjection add_fail(
+            detail::InjectPoint::EventPollAddFail);
+
+        ASSERT_TRUE(testtls::wait_group_terminal(engine, group, 30000));
+        ASSERT_EQ(group->status(), RequestGroupStatus::FAILED);
+        runner.shutdown_and_join();
+    }
+    server.stop();
+
+    EXPECT_TRUE(inj_read_file(out_path).empty());
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+// 响应头接收 EAGAIN 重注册失败（fd 上限/ENOMEM）：服务器延迟后只发
+// 半截响应头再挂住——首个 READ 注册（AddFail 未置位）成功挂起等
+// 前缀，前缀到达后 recv 得部分头仍不完整，重新注册命中置位后的
+// EventPollAddFail，按响应头接收失败收口
+TEST(DownloadEngineV2Injection, ResponseHeaderRecvRegistrationFailFailsCleanly) {
+    testscripts::ScriptedHttpServer server;
+    server.start();
+    const std::string body(8 * 1024, 'h');
+    testscripts::FakeResponse resp;
+    resp.body = body;
+    // 1.5s 后只发 "HTTP/1.1 200 OK\r\n" 前缀再挂住（等客户端断开）
+    resp.defer_partial_ms = 1500;
+    server.set_response("/f.bin", resp);
+
+    const std::string dir = inj_temp_dir("hdrrecvreg");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options;
+    options.output_filename = out_path;
+    options.max_connections = 1;
+    options.max_retries = 0;
+    options.timeout_seconds = 10;
+
+    const TaskId task_id = engine.add_download(server.url("/f.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    testtls::TlsEngineRunner runner(engine);
+    // 400ms 置位（远晚于首个 READ 注册的毫秒级窗口、远早于 1.5s 前缀）
+    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+    detail::ScopedInjection add_fail(detail::InjectPoint::EventPollAddFail);
+
+    ASSERT_TRUE(testtls::wait_group_terminal(engine, group, 30000));
+    ASSERT_EQ(group->status(), RequestGroupStatus::FAILED);
+    runner.shutdown_and_join();
+    server.stop();
+
+    EXPECT_TRUE(inj_read_file(out_path).empty());
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+// 下载体接收 EAGAIN 重注册失败（fd 上限/ENOMEM）：慢发体持续滴流——
+// 锚定 body 中途（GET 已达 + 静置）置位 EventPollAddFail，慢发的
+// EAGAIN 间隙让下一次 recv 后的重新注册必然命中，按接收失败收口
+TEST(DownloadEngineV2Injection, DownloadBodyRecvRegistrationFailFailsCleanly) {
+    testscripts::ScriptedHttpServer server;
+    server.start();
+    const std::string body(64 * 1024, 'b');
+    testscripts::FakeResponse resp;
+    resp.body = body;
+    server.set_response("/f.bin", resp);
+    server.set_slow_body("/f.bin", 250, 32);  // ~128KB/s：64KB 约 0.5s
+
+    const std::string dir = inj_temp_dir("bodyrecvreg");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options;
+    options.output_filename = out_path;
+    options.max_connections = 1;
+    options.max_retries = 0;
+    options.timeout_seconds = 10;
+
+    const TaskId task_id = engine.add_download(server.url("/f.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    testtls::TlsEngineRunner runner(engine);
+    // 锚点：请求已到达（响应头阶段已过、body 命令已接管）+ 静置进
+    // body 中途；慢发的持续 EAGAIN 让置位后的重新注册必然命中
+    ASSERT_TRUE(testtls::wait_for(
+        [&] { return server.count_requests("/f.bin", "GET") >= 1; }, 10000));
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    detail::ScopedInjection add_fail(detail::InjectPoint::EventPollAddFail);
+
+    ASSERT_TRUE(testtls::wait_group_terminal(engine, group, 30000));
+    ASSERT_EQ(group->status(), RequestGroupStatus::FAILED);
+    runner.shutdown_and_join();
+    server.stop();
+
+    EXPECT_TRUE(inj_read_file(out_path).empty());
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+// 多镜像恢复连接轮转到非主镜像必须剥离 If-Range（连接级重试链剥离
+// 分支）：断点续传的 If-Range/ETag 归属主镜像，轮转承接的镜像与该
+// ETag 无关——误带会让有效续传被整体拒绝。主镜像 A 对恢复连接
+// 「收下请求后立即断连」（响应头阶段失败 → 连接级重试链），换源
+// 落在 B：断言 A 的请求武装了 Range + If-Range（apply 路径铁证）、
+// B 的请求带 Range 且无 If-Range（剥离分支执行铁证），206 续传完成
+TEST(DownloadEngineV2Injection, ResumeRetryOnNonPrimaryMirrorStripsIfRange) {
+    const std::string body(8 * 1024, 'r');
+    testscripts::ScriptedHttpServer server;
+    server.start();
+    testscripts::FakeResponse resp;
+    resp.body = body;
+    resp.support_range = true;
+    server.set_response("/g.bin", resp);
+    server.set_fail_immediate("/f.bin");  // 主镜像：恢复连接一律断连
+
+    const std::string dir = inj_temp_dir("mirr");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    // 手工构造断点现场：主镜像 = /f.bin、1KB 已落盘进度。半成品按
+    // 默认 temp_extension 落在 .falcon.tmp（最终名不存在，覆盖门禁
+    // 放行——恢复场景的正确形态）
+    const std::string url_primary = server.url("/f.bin");
+    ResumeControl control;
+    control.url = url_primary;
+    control.total = body.size();
+    control.etag = "\"falcon-mirror-etag\"";
+    control.segments = {{0, body.size(), 1024}};
+    ASSERT_TRUE(save_resume_control(out_path + kResumeControlExtension,
+                                    control));
+    {
+        std::ofstream temp(out_path + ".falcon.tmp", std::ios::binary);
+        temp << body.substr(0, 1024);
+    }
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options;
+    options.output_filename = out_path;
+    options.max_connections = 1;
+    options.max_retries = 1;
+    options.retry_delay_seconds = 0;
+
+    const TaskId task_id = engine.add_download(
+        std::vector<std::string>{url_primary, server.url("/g.bin")}, options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    testtls::TlsEngineRunner runner(engine);
+    // 主镜像响应头阶段断连 → 换源重试落在非主镜像（剥 If-Range）→
+    // 206 续传完成
+    ASSERT_TRUE(testtls::wait_group_terminal(engine, group, 30000));
+    ASSERT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+    runner.shutdown_and_join();
+    server.stop();
+
+    EXPECT_EQ(inj_read_file(out_path), body);
+
+    bool primary_had_if_range = false;
+    bool primary_had_range = false;
+    bool mirror_had_range = false;
+    bool mirror_had_if_range = false;
+    for (const auto& r : server.requests()) {
+        if (r.method != "GET") continue;
+        if (r.path == "/f.bin") {
+            if (!r.range.empty()) primary_had_range = true;
+            const auto it = r.headers.find("if-range");
+            if (it != r.headers.end() && !it->second.empty())
+                primary_had_if_range = true;
+        }
+        if (r.path == "/g.bin") {
+            if (!r.range.empty()) mirror_had_range = true;
+            const auto it = r.headers.find("if-range");
+            if (it != r.headers.end() && !it->second.empty())
+                mirror_had_if_range = true;
+        }
+    }
+    EXPECT_TRUE(primary_had_range && primary_had_if_range)
+        << "主镜像恢复连接必须武装 Range + If-Range（剥离前的 apply 铁证）";
+    EXPECT_TRUE(mirror_had_range)
+        << "轮转承接连接必须携带 Range（续传范围原样传递）";
+    EXPECT_FALSE(mirror_had_if_range)
+        << "非主镜像承接的恢复连接不应携带 If-Range";
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
 #ifdef FALCON_ENABLE_OPENSSL
 
 // 握手首轮 WANT_WRITE 属进行中而非失败：重入续推后下载自然完成
@@ -322,6 +634,64 @@ TEST(DownloadEngineV2Injection, TlsHandshakeWantWriteRecovers) {
         ASSERT_EQ(group->status(), RequestGroupStatus::COMPLETED);
         runner.shutdown_and_join();
     }
+    server.stop();
+
+    EXPECT_EQ(inj_read_file(out_path), body);
+    EXPECT_EQ(server.handshakes(), 1);
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+// 请求发送 SSL_write WANT_WRITE（进行中语义非失败）：握手真实完成
+// 后请求写入被注入拦下（未发出任何字节），清注入后重入以真实
+// SSL_write 续推，下载自然完成——恰一次握手钉住无重连
+TEST(DownloadEngineV2Injection, TlsRequestSendWantWriteSuspendsThenRecovers) {
+    const std::string body = testtls::make_body(64 * 1024);
+
+    const std::string dir = inj_temp_dir("tlswrite");
+    std::filesystem::create_directories(dir);
+    const std::string key_path =
+        (std::filesystem::path(dir) / "key.pem").string();
+    const std::string cert_path =
+        (std::filesystem::path(dir) / "cert.pem").string();
+
+    testtls::TlsTestServer server;
+    ASSERT_TRUE(server.start(key_path, cert_path));
+    server.set_body(body);
+
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options;
+    options.output_filename = out_path;
+    options.max_connections = 1;
+    options.max_retries = 0;
+    options.verify_ssl = false;
+
+    // 注入先于任务创建置位：握手完成后的请求 SSL_write 必然被拦
+    detail::set_injection(detail::InjectPoint::TlsRequestWriteWantWrite, true);
+    const TaskId task_id = engine.add_download(
+        server.url("localhost", "/f.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    testtls::TlsEngineRunner runner(engine);
+    // 锚点：服务器观测到完整握手（客户端收 Finished 后立刻落入请求
+    // 发送）；静置窗口保证 SSL_write 已被拦下，清注入不早于挂起
+    ASSERT_TRUE(testtls::wait_for(
+        [&] { return server.handshakes() >= 1; }, 10000));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    detail::set_injection(detail::InjectPoint::TlsRequestWriteWantWrite, false);
+
+    ASSERT_TRUE(testtls::wait_group_terminal(engine, group, 30000));
+    ASSERT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+    runner.shutdown_and_join();
     server.stop();
 
     EXPECT_EQ(inj_read_file(out_path), body);
@@ -393,6 +763,138 @@ TEST(DownloadEngineV2Injection, TlsRequestWriteFailFailsCleanly) {
                           5000)) {
         EXPECT_EQ(server.handshakes(), 1);
     }
+    EXPECT_TRUE(inj_read_file(out_path).empty());
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+// 请求发送 SSL_write WANT_WRITE 挂起后的事件注册失败：同明文版——
+// 注册失败立即按发送失败收口。EventPollAddFail 不能提前置位（会拦下
+// 握手自身的挂起注册），时序叠加：握手真实完成且 SSL_write 已被拦
+// 挂起后置位——重入续推仍被拦（WantWrite 未清），挂起前的 WRITE
+// 注册失败即收口
+TEST(DownloadEngineV2Injection, TlsSendWantWriteRegistrationFailsCleanly) {
+    const std::string body = testtls::make_body(64 * 1024);
+
+    const std::string dir = inj_temp_dir("tlswritereg");
+    std::filesystem::create_directories(dir);
+    const std::string key_path =
+        (std::filesystem::path(dir) / "key.pem").string();
+    const std::string cert_path =
+        (std::filesystem::path(dir) / "cert.pem").string();
+
+    testtls::TlsTestServer server;
+    ASSERT_TRUE(server.start(key_path, cert_path));
+    server.set_body(body);
+
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options;
+    options.output_filename = out_path;
+    options.max_connections = 1;
+    options.max_retries = 0;
+    options.verify_ssl = false;
+
+    {
+        detail::ScopedInjection send_ww(
+            detail::InjectPoint::TlsRequestWriteWantWrite);
+        const TaskId task_id = engine.add_download(
+            server.url("localhost", "/f.bin"), options);
+        ASSERT_GT(task_id, 0u);
+        auto* group = engine.request_group_man()->find_group(task_id);
+        ASSERT_NE(group, nullptr);
+
+        testtls::TlsEngineRunner runner(engine);
+        // 锚点：握手真实完成（SSL_write 才会执行）且请求已被拦挂起；
+        // 此时置位 EventPollAddFail——WANT_WRITE 挂起是循环的，重入
+        // 续推仍被拦，随后的事件注册必然失败
+        ASSERT_TRUE(testtls::wait_for(
+            [&] { return server.handshakes() >= 1; }, 10000));
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        detail::ScopedInjection add_fail(
+            detail::InjectPoint::EventPollAddFail);
+
+        ASSERT_TRUE(testtls::wait_group_terminal(engine, group, 30000));
+        ASSERT_EQ(group->status(), RequestGroupStatus::FAILED);
+        runner.shutdown_and_join();
+    }
+    server.stop();
+
+    EXPECT_EQ(server.handshakes(), 1);
+    EXPECT_TRUE(inj_read_file(out_path).empty());
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+// TLS 握手推进后的事件注册失败（WANT_WRITE 注册）：服务器延迟握手
+//（ServerHello 1.5s 后才来）让 SSL_connect 持续报 WANT_READ，
+// TlsHandshakeWantWrite 把非完成返回改写为 WANT_WRITE（持续位）——
+// fd 恒可写形成「注册 WRITE → 唤醒重入 → 伪造 WANT_WRITE」循环，
+// 锚定循环稳定窗置位 EventPollAddFail 必然命中下一轮 WRITE 注册，
+// 跳出 switch 按握手失败收口。全程 AddFail 会把 connect 阶段的注册
+// 一并拦下（命中已覆盖的 586 收口），故必须延迟置位
+TEST(DownloadEngineV2Injection, TlsHandshakeRegistrationFailFailsCleanly) {
+    const std::string body = testtls::make_body(32 * 1024);
+
+    const std::string dir = inj_temp_dir("tlsreg");
+    std::filesystem::create_directories(dir);
+    const std::string key_path =
+        (std::filesystem::path(dir) / "key.pem").string();
+    const std::string cert_path =
+        (std::filesystem::path(dir) / "cert.pem").string();
+
+    testtls::TlsTestServer server;
+    ASSERT_TRUE(server.start(key_path, cert_path));
+    server.set_body(body);
+    server.set_handshake_delay_ms(1500);
+
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options;
+    options.output_filename = out_path;
+    options.max_connections = 1;
+    options.max_retries = 0;
+    options.verify_ssl = false;
+    options.timeout_seconds = 10;
+
+    {
+        detail::ScopedInjection hand_ww(
+            detail::InjectPoint::TlsHandshakeWantWrite);
+        const TaskId task_id = engine.add_download(
+            server.url("localhost", "/f.bin"), options);
+        ASSERT_GT(task_id, 0u);
+        auto* group = engine.request_group_man()->find_group(task_id);
+        ASSERT_NE(group, nullptr);
+
+        testtls::TlsEngineRunner runner(engine);
+        // 锚点：改写循环已稳定运转（首调 ClientHello 已真实写出，
+        // ServerHello 被服务器延迟挡住，每轮伪造 WANT_WRITE）——
+        // 静置窗口远大于一个 poll 周期
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        detail::ScopedInjection add_fail(
+            detail::InjectPoint::EventPollAddFail);
+
+        ASSERT_TRUE(testtls::wait_group_terminal(engine, group, 30000));
+        ASSERT_EQ(group->status(), RequestGroupStatus::FAILED);
+        runner.shutdown_and_join();
+    }
+    server.stop();
+
+    // 客户端在服务器开始 SSL_accept 前已收口关闭：握手从未完成，
+    // 服务器侧零握手（若意外推进完成则下载会继续，终态断言已红）
+    EXPECT_EQ(server.handshakes(), 0);
     EXPECT_TRUE(inj_read_file(out_path).empty());
 
     std::error_code rm_ec;

@@ -86,6 +86,11 @@ enum class InjectPoint : uint32_t {
     TlsSetHostFail,
     TlsHandshakeWantWrite,
     TlsRequestWriteFail,
+    TlsRequestWriteWantWrite,
+    // V2 HTTP 命令：请求发送阶段的 WANT_WRITE 重入（回环上请求恒
+    // 小于内核发送缓冲，明文 send / SSL_write / 代理 CONNECT 三处
+    // 的非阻塞挂起不可自然构造）
+    HttpSendWantWrite,
     // daemon 守护化：fork / setsid 失败（回环上 fork 恒成功、setsid
     // 在有控制终端的会话首进程才失败，均不可自然构造）
     DaemonizeForkFail,

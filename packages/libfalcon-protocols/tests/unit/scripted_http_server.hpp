@@ -63,6 +63,11 @@ struct FakeResponse {
     bool no_length = false;  // 不发 Content-Length，body 以连接关闭为界（未知总长）
     bool single_write = false;  // 头与 body 拼成一次 send（构造"首包即含
                                 // body"的初始批次数据，如 /dev/full 首写失败）
+    int defer_partial_ms = 0;   // >0：延迟后只发 partial_prefix（半截响应头）
+                                // ——客户端收到前缀后继续 recv 得 EAGAIN 走
+                                // 重注册路径（响应头 recv 注册失败注入的
+                                // 确定性命中窗口）
+    std::string partial_prefix = "HTTP/1.1 200 OK\r\n";
 };
 
 class ScriptedHttpServer {
@@ -194,6 +199,14 @@ public:
         black_holes_[path] = SlowSpec{0, 0, range_start};
     }
 
+    /// 立即断连：对匹配 Range（range_start<0 则任意请求）收下请求
+    /// 后不回任何字节直接关连接（响应头阶段断连，客户端按连接失败
+    /// 收口 → 连接级重试链；与黑洞的区别是不等客户端先断）
+    void set_fail_immediate(const std::string& path, long range_start = -1) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        fail_immediates_[path] = SlowSpec{0, 0, range_start};
+    }
+
     /// HEAD 专用应答（GET 保持 set_response/script 剧本不变）。引擎
     /// 数据面（V2）纯 GET 不会产生 HEAD,而 HEAD 探测只出现在下载
     /// 入口——可借此按阶段切换剧本。flip_get=true 时首个 HEAD 之后
@@ -220,6 +233,10 @@ public:
         return n;
     }
 
+    // 已 accept 的连接数（与请求计数解耦：观测"连接已建立但请求
+    // 未到达"——请求发送被 WANT_WRITE 注入拦下的服务器侧证据）
+    int connections() { return connections_.load(std::memory_order_relaxed); }
+
 private:
     static bool send_all(int fd, const std::string& text) {
         size_t sent = 0;
@@ -238,6 +255,7 @@ private:
                 if (!running_) return;
                 continue;
             }
+            connections_.fetch_add(1, std::memory_order_relaxed);
             timeval tv{15, 0};
             ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO,
                          reinterpret_cast<const char*>(&tv), sizeof(tv));
@@ -311,6 +329,7 @@ private:
             }
             {
                 bool is_black_hole = false;
+                bool is_fail_immediate = false;
                 {
                     std::lock_guard<std::mutex> lock(mutex_);
                     auto bh = black_holes_.find(route);
@@ -318,6 +337,11 @@ private:
                         bh != black_holes_.end() &&
                         (bh->second.range_start < 0 ||
                          bh->second.range_start == request_range_start);
+                    auto fi = fail_immediates_.find(route);
+                    is_fail_immediate =
+                        fi != fail_immediates_.end() &&
+                        (fi->second.range_start < 0 ||
+                         fi->second.range_start == request_range_start);
                 }
                 if (is_black_hole) {
                     // 黑洞：不回任何字节，recv 阻塞到客户端断开或
@@ -326,6 +350,10 @@ private:
                     char drain[4096];
                     while (::recv(fd, drain, sizeof(drain), 0) > 0) {
                     }
+                    CLOSE_SOCKET(fd);
+                    return;
+                }
+                if (is_fail_immediate) {
                     CLOSE_SOCKET(fd);
                     return;
                 }
@@ -413,6 +441,19 @@ private:
                 }
             }
 
+            if (resp.defer_partial_ms > 0) {
+                // 延迟后只发响应头前缀，然后挂住等客户端断开（注册失败
+                // 收口后命令关闭 fd）：不主动关是给客户端留出稳定的
+                // 「前缀已到、剩余永不来」的 EAGAIN 状态
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(resp.defer_partial_ms));
+                (void)send_all(fd, resp.partial_prefix);
+                char drain[256];
+                (void)::recv(fd, drain, sizeof(drain), 0);
+                CLOSE_SOCKET(fd);
+                break;
+            }
+
             std::string out = "HTTP/1.1 " + std::to_string(status) + " " + status_text + "\r\n";
             bool has_len = false;
             for (const auto& [k, v] : resp.headers) {
@@ -470,10 +511,12 @@ private:
     std::unordered_map<std::string, SlowSpec> slow_;
     std::unordered_map<std::string, SlowSpec> abort_;
     std::unordered_map<std::string, SlowSpec> black_holes_;
+    std::unordered_map<std::string, SlowSpec> fail_immediates_;
     std::unordered_map<std::string, FakeResponse> head_responses_;
     std::unordered_map<std::string, bool> head_flip_get_;
 
     std::atomic<bool> running_{false};
+    std::atomic<int> connections_{0};
     int listen_fd_ = -1;
     int port_ = 0;
     std::thread accept_thread_;

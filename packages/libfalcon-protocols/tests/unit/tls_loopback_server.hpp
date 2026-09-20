@@ -307,6 +307,14 @@ public:
 
     int handshakes() const { return handshakes_.load(); }
 
+    /// 握手延迟（accept 后、SSL_accept 前）：服务器不发 ServerHello，
+    /// 客户端 SSL_connect 持续报 WANT_READ——注入改写类用例的确定性
+    /// 前提（无延迟时 ServerHello 早已在接收缓冲，SSL_connect 重入
+    /// 直接完成，注入分支永不执行）
+    void set_handshake_delay_ms(int ms) {
+        handshake_delay_ms_ = ms;
+    }
+
     /// 出示了客户端证书的握手数（mTLS 用例：服务器侧观测证据）
     int client_certs() const { return client_certs_.load(); }
 
@@ -373,6 +381,12 @@ private:
             return;
         }
         SSL_set_fd(ssl, conn);
+
+        // 握手延迟挂点（见 set_handshake_delay_ms）
+        if (handshake_delay_ms_ > 0) {
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(handshake_delay_ms_));
+        }
 
         // 阻塞握手：引擎侧异步推进，直到完成或告警中止
         if (SSL_accept(ssl) != 1) {
@@ -460,6 +474,7 @@ private:
     int port_ = 0;
     std::atomic<bool> running_{false};
     std::atomic<int> handshakes_{0};
+    std::atomic<int> handshake_delay_ms_{0};
     std::atomic<int> client_certs_{0};
     std::atomic<int> served_{0};  // 响应完整发出的连接数
     std::thread accept_thread_;

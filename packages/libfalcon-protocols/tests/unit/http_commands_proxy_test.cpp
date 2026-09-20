@@ -46,6 +46,11 @@
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 
+#ifndef _WIN32
+#include <pthread.h>
+#include <csignal>
+#endif
+
 #include "tls_cert_generator.hpp"
 #endif
 
@@ -289,7 +294,19 @@ public:
         port_ = ntohs(bound.sin_port);
 
         running_ = true;
-        accept_thread_ = std::thread([this] { accept_loop(); });
+        accept_thread_ = std::thread([this] {
+#ifndef _WIN32
+            // OpenSSL 内部写（SSL_accept 失败的 fatal alert）不经
+            // MSG_NOSIGNAL：客户端提前关闭时 EPIPE 以 SIGPIPE 杀死
+            // 整个测试进程——accept 线程屏蔽之（与 tls_loopback_server
+            // 同款防护）
+            sigset_t sigpipe_set;
+            sigemptyset(&sigpipe_set);
+            sigaddset(&sigpipe_set, SIGPIPE);
+            pthread_sigmask(SIG_BLOCK, &sigpipe_set, nullptr);
+#endif
+            accept_loop();
+        });
         return true;
     }
 
@@ -350,6 +367,13 @@ public:
     }
 
     int connect_count() const { return connect_count_.load(); }
+
+    /// CONNECT 应答延迟（毫秒）：读到 CONNECT 请求后等这么久再发
+    /// established——给客户端侧留出「挂起等应答」的稳定注入窗口
+    void set_connect_reply_delay(int ms) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        connect_reply_delay_ms_ = ms;
+    }
 
 private:
     void accept_loop() {
@@ -434,6 +458,11 @@ private:
                     ? ""
                     : line.substr(sp1 + 1, sp2 - sp1 - 1);
             last_proxy_auth_ = extract_header(request, "Proxy-Authorization");
+        }
+
+        if (connect_reply_delay_ms_ > 0) {
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(connect_reply_delay_ms_));
         }
 
         if (mode_ == Mode::kConnectReject) {
@@ -534,6 +563,7 @@ private:
 
     Mode mode_ = Mode::kPlainProxy;
     bool split_connect_response_ = false;
+    int connect_reply_delay_ms_ = 0;
 
     mutable std::mutex mutex_;
     std::string body_;
@@ -908,6 +938,269 @@ TEST(DownloadEngineV2Proxy, ConnectTunnelThenTlsDownloadSucceeds) {
     // 隧道内 HTTP 请求回 origin-form（代理不见内部请求细节）
     EXPECT_EQ(server.tunnel_request_line(), "GET /f.bin HTTP/1.1");
     EXPECT_EQ(read_file_content(out_path), body);
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+/// CONNECT 发送 WANT_WRITE（模拟内核发送缓冲满——回环不可自然构造）：
+/// 注入置位期间 CONNECT 发送被拦挂起（代理侧 CONNECT 计数保持 0 即
+/// 注入生效铁证），清注入后 socket 恒可写唤醒重入续推，隧道建立后
+/// TLS 下载自然完成（进行中语义非失败，恰一次 CONNECT 无重连）
+TEST(DownloadEngineV2Proxy, ConnectSendWantWriteSuspendsThenRecovers) {
+    const std::string body = make_body(32 * 1024);
+
+    ProxyTestServer server;
+    ASSERT_TRUE(server.start(ProxyTestServer::Mode::kConnectAccept));
+    server.set_body(body);
+
+    const std::string dir = temp_dir_for("connww");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    // 客户端信任锚 = 服务器自签证书（同隧道用例）
+    ScopedEnvVar trusted_ca("SSL_CERT_FILE", server.cert_path());
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options = base_proxy_options(out_path);
+    options.proxy = server.proxy_url();
+    options.verify_ssl = true;
+
+    // 注入先于任务创建置位：CONNECT 发送必然被拦
+    ::falcon::detail::set_injection(
+        ::falcon::detail::InjectPoint::HttpSendWantWrite, true);
+    const TaskId task_id = engine.add_download(
+        "https://localhost:" + std::to_string(server.port()) + "/f.bin",
+        options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    ProxyEngineRunner runner(engine);
+    // 回环连接毫秒级完成，CONNECTING→CONNECT 发送在下一轮 poll 唤醒
+    // 即发生；静置窗口保证首个 CONNECT send 已被拦下
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    EXPECT_EQ(server.connect_count(), 0)
+        << "注入置位期间 CONNECT 必须被拦下（WANT_WRITE 挂起中）";
+    ::falcon::detail::set_injection(
+        ::falcon::detail::InjectPoint::HttpSendWantWrite, false);
+
+    ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
+    ASSERT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+    runner.shutdown_and_join();
+    server.stop();
+
+    EXPECT_EQ(server.connect_count(), 1);
+    EXPECT_EQ(server.connect_authority(),
+              "localhost:" + std::to_string(server.port()));
+    EXPECT_EQ(read_file_content(out_path), body);
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+/// 代理路径的事件注册失败（fd 上限/ENOMEM）：命令不得带着
+/// socket_wait_map_ 条目挂起等永远不会来的唤醒——注册失败立即按
+/// 连接失败收口。注入全局生效，可达注册点有两个（服务器 accept 时序
+/// 决定命中哪个，均为有效覆盖）：connect in-progress 等待注册点
+/// （EINPROGRESS 形态）与 CONNECT 发完后的应答等待注册点（connect
+/// 立即完成形态）；两者都走「注册失败 → 连接失败收口」
+TEST(DownloadEngineV2Proxy, ConnectPathRegistrationFailFailsCleanly) {
+    ProxyTestServer server;
+    ASSERT_TRUE(server.start(ProxyTestServer::Mode::kConnectAccept));
+
+    const std::string dir = temp_dir_for("connreg");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options = base_proxy_options(out_path);
+    options.proxy = server.proxy_url();
+    options.verify_ssl = true;
+
+    {
+        ::falcon::detail::ScopedInjection add_fail(
+            ::falcon::detail::InjectPoint::EventPollAddFail);
+        const TaskId task_id = engine.add_download(
+            "https://localhost:" + std::to_string(server.port()) + "/f.bin",
+            options);
+        ASSERT_GT(task_id, 0u);
+        auto* group = engine.request_group_man()->find_group(task_id);
+        ASSERT_NE(group, nullptr);
+
+        ProxyEngineRunner runner(engine);
+        ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
+        ASSERT_EQ(group->status(), RequestGroupStatus::FAILED);
+        runner.shutdown_and_join();
+    }
+    server.stop();
+
+    EXPECT_TRUE(read_file_content(out_path).empty());
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+// CONNECT 发送 WANT_WRITE 挂起轮的事件注册失败：HttpSendWantWrite
+// 先拦下 CONNECT（挂起等可写），挂起稳定窗内补挂 EventPollAddFail
+// ——可写事件唤醒后 send 仍报 EAGAIN，重注册命中注入按连接失败
+// 收口（与 ConnectPathRegistrationFailFailsCleanly 的 connect 注册
+// 形态区分：本用例锚定 send 挂起轮的注册点）
+TEST(DownloadEngineV2Proxy, ConnectSendWantWriteRegistrationFailFailsCleanly) {
+    ProxyTestServer server;
+    ASSERT_TRUE(server.start(ProxyTestServer::Mode::kConnectAccept));
+
+    const std::string dir = temp_dir_for("connsendreg");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options = base_proxy_options(out_path);
+    options.proxy = server.proxy_url();
+    options.verify_ssl = true;
+
+    {
+        ::falcon::detail::ScopedInjection send_ww(
+            ::falcon::detail::InjectPoint::HttpSendWantWrite);
+        const TaskId task_id = engine.add_download(
+            "https://localhost:" + std::to_string(server.port()) + "/f.bin",
+            options);
+        ASSERT_GT(task_id, 0u);
+        auto* group = engine.request_group_man()->find_group(task_id);
+        ASSERT_NE(group, nullptr);
+
+        ProxyEngineRunner runner(engine);
+        // 锚点：CONNECT 被拦（connect_count 保持 0 = 请求未上线），
+        // 静置窗口保证首个 send 的 WRITE 注册已成功、命令挂起中
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        EXPECT_EQ(server.connect_count(), 0)
+            << "注入置位期间 CONNECT 必须被拦下（WANT_WRITE 挂起中）";
+        ::falcon::detail::ScopedInjection add_fail(
+            ::falcon::detail::InjectPoint::EventPollAddFail);
+
+        ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
+        ASSERT_EQ(group->status(), RequestGroupStatus::FAILED);
+        runner.shutdown_and_join();
+    }
+    server.stop();
+
+    EXPECT_TRUE(read_file_content(out_path).empty());
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+// CONNECT 发完后等代理应答的注册失败：HttpSendWantWrite 拦下首个
+// send 产生挂起稳定窗，窗内补挂 EventPollAddFail 后放行——send 续
+// 推完成，紧随的应答等待注册命中注入收口。应答延迟 2s 保证收口
+// （若发生）先于代理应答，失败不可能是后续阶段冒名
+TEST(DownloadEngineV2Proxy, ConnectResponseWaitRegistrationFailFailsCleanly) {
+    ProxyTestServer server;
+    ASSERT_TRUE(server.start(ProxyTestServer::Mode::kConnectAccept));
+    server.set_connect_reply_delay(2000);
+
+    const std::string dir = temp_dir_for("connwaitreg");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options = base_proxy_options(out_path);
+    options.proxy = server.proxy_url();
+    options.verify_ssl = true;
+
+    {
+        ::falcon::detail::ScopedInjection send_ww(
+            ::falcon::detail::InjectPoint::HttpSendWantWrite);
+        const TaskId task_id = engine.add_download(
+            "https://localhost:" + std::to_string(server.port()) + "/f.bin",
+            options);
+        ASSERT_GT(task_id, 0u);
+        auto* group = engine.request_group_man()->find_group(task_id);
+        ASSERT_NE(group, nullptr);
+
+        ProxyEngineRunner runner(engine);
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        EXPECT_EQ(server.connect_count(), 0)
+            << "首个 send 必须被拦下（挂起稳定窗）";
+        // 先置注册失败再放行 send：续推完成后的应答等待注册必然命中
+        ::falcon::detail::ScopedInjection add_fail(
+            ::falcon::detail::InjectPoint::EventPollAddFail);
+        ::falcon::detail::set_injection(::falcon::detail::InjectPoint::HttpSendWantWrite, false);
+
+        ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
+        ASSERT_EQ(group->status(), RequestGroupStatus::FAILED);
+        runner.shutdown_and_join();
+    }
+    server.stop();
+
+    EXPECT_TRUE(read_file_content(out_path).empty());
+
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+// 代理应答 recv 的 would-block 重注册失败：应答延迟 + 分片形态让
+// 客户端收下前缀后再次 recv 得 EAGAIN——重注册命中注入收口。置位
+// 早于应答（300ms < 800ms），首个应答等待注册发生在置位前不命中
+TEST(DownloadEngineV2Proxy, ConnectResponseRecvRegistrationFailFailsCleanly) {
+    ProxyTestServer server;
+    ASSERT_TRUE(server.start(ProxyTestServer::Mode::kConnectAccept));
+    server.set_connect_reply_delay(800);
+    server.set_split_connect_response(true);
+
+    const std::string dir = temp_dir_for("connrecvreg");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "out.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options = base_proxy_options(out_path);
+    options.proxy = server.proxy_url();
+    options.verify_ssl = true;
+
+    {
+        const TaskId task_id = engine.add_download(
+            "https://localhost:" + std::to_string(server.port()) + "/f.bin",
+            options);
+        ASSERT_GT(task_id, 0u);
+        auto* group = engine.request_group_man()->find_group(task_id);
+        ASSERT_NE(group, nullptr);
+
+        ProxyEngineRunner runner(engine);
+        // 锚点：CONNECT 已上线（connect_count==1）且应答等待注册已
+        // 成功（发生在置位前）；命令挂起等应答中
+        ASSERT_TRUE(wait_for([&] { return server.connect_count() >= 1; },
+                             10000));
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        ::falcon::detail::ScopedInjection add_fail(
+            ::falcon::detail::InjectPoint::EventPollAddFail);
+
+        ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
+        ASSERT_EQ(group->status(), RequestGroupStatus::FAILED);
+        runner.shutdown_and_join();
+    }
+    server.stop();
+
+    EXPECT_TRUE(read_file_content(out_path).empty());
 
     std::error_code rm_ec;
     std::filesystem::remove_all(dir, rm_ec);

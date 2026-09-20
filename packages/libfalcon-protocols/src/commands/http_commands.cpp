@@ -583,8 +583,15 @@ bool HttpInitiateConnectionCommand::execute(DownloadEngineV2* engine) {
 
                 if (connect_in_progress_) {
                     connection_state_ = HttpConnectionState::CONNECTING;
-                    engine->register_socket_event(
-                        socket_fd_, static_cast<int>(net::IOEvent::WRITE), id());
+                    // 注册失败（fd 上限/ENOMEM 等）不能挂起等永远不会来
+                    // 的事件——立即按连接失败收口
+                    if (!engine->register_socket_event(
+                            socket_fd_, static_cast<int>(net::IOEvent::WRITE),
+                            id())) {
+                        notify_segment_failure(engine,
+                                               "Failed to register connect event");
+                        return handle_result(ExecutionResult::ERROR_OCCURRED);
+                    }
                     return handle_result(ExecutionResult::WAIT_FOR_SOCKET);
                 }
 
@@ -649,6 +656,14 @@ bool HttpInitiateConnectionCommand::execute(DownloadEngineV2* engine) {
                         return handle_result(tunnel_res);
                     }
                 }
+                [[fallthrough]];
+
+            case HttpConnectionState::CONNECTED:
+                // 请求发送 WANT_WRITE 挂起后的重入：连接/隧道/握手均
+                // 已完成且状态停在 CONNECTED（初始进入时 CONNECTING 置
+                // CONNECTED 后径直落到下方请求发送），重入必须直接续推
+                // 请求发送——落到 default 按失败收口是假失败（真实网络
+                // 拥塞下内核发送缓冲满即可触发）
                 [[fallthrough]];
 
             case HttpConnectionState::TLS_HANDSHAKING:
@@ -1076,14 +1091,19 @@ HttpInitiateConnectionCommand::advance_tls_handshake(
         return ExecutionResult::OK;
     case TlsHandshakeResult::WANT_READ:
         connection_state_ = HttpConnectionState::TLS_HANDSHAKING;
-        engine->register_socket_event(
-            socket_fd_, static_cast<int>(net::IOEvent::READ), id());
-        return ExecutionResult::WAIT_FOR_SOCKET;
+        // 注册失败无法等待重入，跳出 switch 落到下方握手失败收口
+        if (engine->register_socket_event(
+                socket_fd_, static_cast<int>(net::IOEvent::READ), id())) {
+            return ExecutionResult::WAIT_FOR_SOCKET;
+        }
+        break;
     case TlsHandshakeResult::WANT_WRITE:
         connection_state_ = HttpConnectionState::TLS_HANDSHAKING;
-        engine->register_socket_event(
-            socket_fd_, static_cast<int>(net::IOEvent::WRITE), id());
-        return ExecutionResult::WAIT_FOR_SOCKET;
+        if (engine->register_socket_event(
+                socket_fd_, static_cast<int>(net::IOEvent::WRITE), id())) {
+            return ExecutionResult::WAIT_FOR_SOCKET;
+        }
+        break;
     case TlsHandshakeResult::FAILED:
     default:
         break;
@@ -1124,7 +1144,12 @@ HttpInitiateConnectionCommand::send_proxy_connect(
 #ifdef _WIN32
         ssize_t n;
         if (::falcon::detail::inject_failure(
-                ::falcon::detail::InjectPoint::ProxyConnectSendFail)) {
+                ::falcon::detail::InjectPoint::HttpSendWantWrite)) {
+            // 模拟内核发送缓冲满：置 WOULDBLOCK 走 WANT_WRITE 重入
+            WSASetLastError(WSAEWOULDBLOCK);
+            n = -1;
+        } else if (::falcon::detail::inject_failure(
+                       ::falcon::detail::InjectPoint::ProxyConnectSendFail)) {
             WSASetLastError(WSAECONNRESET);
             n = -1;
         } else {
@@ -1134,7 +1159,12 @@ HttpInitiateConnectionCommand::send_proxy_connect(
 #else
         ssize_t n;
         if (::falcon::detail::inject_failure(
-                ::falcon::detail::InjectPoint::ProxyConnectSendFail)) {
+                ::falcon::detail::InjectPoint::HttpSendWantWrite)) {
+            // 模拟内核发送缓冲满：置 WOULDBLOCK 走 WANT_WRITE 重入
+            errno = EAGAIN;
+            n = -1;
+        } else if (::falcon::detail::inject_failure(
+                       ::falcon::detail::InjectPoint::ProxyConnectSendFail)) {
             errno = ECONNRESET;
             n = -1;
         } else {
@@ -1143,8 +1173,15 @@ HttpInitiateConnectionCommand::send_proxy_connect(
 #endif
         if (n < 0) {
             if (sock_would_block(sock_errno())) {
-                engine->register_socket_event(
-                    socket_fd_, static_cast<int>(net::IOEvent::WRITE), id());
+                if (!engine->register_socket_event(
+                        socket_fd_, static_cast<int>(net::IOEvent::WRITE),
+                        id())) {
+                    notify_segment_failure(
+                        engine, "Failed to register proxy connect send event");
+                    close_socket_fd(socket_fd_);
+                    socket_fd_ = -1;
+                    return ExecutionResult::ERROR_OCCURRED;
+                }
                 return ExecutionResult::WAIT_FOR_SOCKET;
             }
             FALCON_LOG_ERROR_STREAM("发送 CONNECT 失败: "
@@ -1160,8 +1197,14 @@ HttpInitiateConnectionCommand::send_proxy_connect(
     // CONNECT 已完整发出：等代理最终应答（非阻塞 socket 上应答不可
     // 能已在缓冲——请求刚写出）
     connection_state_ = HttpConnectionState::PROXY_TUNNEL_RECV;
-    engine->register_socket_event(
-        socket_fd_, static_cast<int>(net::IOEvent::READ), id());
+    if (!engine->register_socket_event(
+            socket_fd_, static_cast<int>(net::IOEvent::READ), id())) {
+        notify_segment_failure(engine,
+                               "Failed to register proxy response event");
+        close_socket_fd(socket_fd_);
+        socket_fd_ = -1;
+        return ExecutionResult::ERROR_OCCURRED;
+    }
     return ExecutionResult::WAIT_FOR_SOCKET;
 }
 
@@ -1178,8 +1221,15 @@ HttpInitiateConnectionCommand::receive_proxy_connect_response(
 #endif
         if (n < 0) {
             if (sock_would_block(sock_errno())) {
-                engine->register_socket_event(
-                    socket_fd_, static_cast<int>(net::IOEvent::READ), id());
+                if (!engine->register_socket_event(
+                        socket_fd_, static_cast<int>(net::IOEvent::READ),
+                        id())) {
+                    notify_segment_failure(
+                        engine, "Failed to register proxy response event");
+                    close_socket_fd(socket_fd_);
+                    socket_fd_ = -1;
+                    return ExecutionResult::ERROR_OCCURRED;
+                }
                 return ExecutionResult::WAIT_FOR_SOCKET;
             }
             FALCON_LOG_ERROR_STREAM("接收代理应答失败: "
@@ -1320,8 +1370,12 @@ AbstractCommand::ExecutionResult HttpInitiateConnectionCommand::send_http_reques
         if (use_https_ && ssl_conn_) {
             // 使用 SSL_write 发送 HTTPS 数据（注入时未发出任何字节，
             // SSL_get_error 的前置条件"真实失败操作"不成立，故错误码
-            // 一并注入取 SSL_ERROR_SYSCALL）
+            // 一并注入：WantWrite 模拟缓冲满走重入，Fail 取 SYSCALL）
+            const bool write_want_write =
+                ::falcon::detail::inject_failure(
+                    ::falcon::detail::InjectPoint::TlsRequestWriteWantWrite);
             const bool write_injected =
+                write_want_write ||
                 ::falcon::detail::inject_failure(
                     ::falcon::detail::InjectPoint::TlsRequestWriteFail);
             n = write_injected
@@ -1329,13 +1383,17 @@ AbstractCommand::ExecutionResult HttpInitiateConnectionCommand::send_http_reques
                     : SSL_write(ssl_conn_.get(), data,
                                 static_cast<int>(remaining));
             if (n <= 0) {
-                int ssl_error = write_injected
-                                    ? SSL_ERROR_SYSCALL
-                                    : SSL_get_error(ssl_conn_.get(),
-                                                    static_cast<int>(n));
+                int ssl_error =
+                    write_want_write ? SSL_ERROR_WANT_WRITE
+                    : write_injected ? SSL_ERROR_SYSCALL
+                                     : SSL_get_error(ssl_conn_.get(),
+                                                     static_cast<int>(n));
                 if (ssl_error == SSL_ERROR_WANT_WRITE || ssl_error == SSL_ERROR_WANT_READ) {
-                    engine->register_socket_event(
-                        socket_fd_, static_cast<int>(net::IOEvent::WRITE), id());
+                    if (!engine->register_socket_event(
+                            socket_fd_, static_cast<int>(net::IOEvent::WRITE),
+                            id())) {
+                        return ExecutionResult::ERROR_OCCURRED;
+                    }
                     return ExecutionResult::WAIT_FOR_SOCKET;
                 }
                 FALCON_LOG_ERROR_STREAM("SSL_write() 失败: " << ssl_error);
@@ -1343,17 +1401,32 @@ AbstractCommand::ExecutionResult HttpInitiateConnectionCommand::send_http_reques
             }
         } else {
 #endif
-            // 使用普通 send 发送 HTTP 数据
+            // 使用普通 send 发送 HTTP 数据（注入模拟内核发送缓冲满）
 #ifdef _WIN32
-            n = send(socket_fd_, data, static_cast<int>(remaining),
-                     kSendFlags);
+            if (::falcon::detail::inject_failure(
+                    ::falcon::detail::InjectPoint::HttpSendWantWrite)) {
+                WSASetLastError(WSAEWOULDBLOCK);
+                n = -1;
+            } else {
+                n = send(socket_fd_, data, static_cast<int>(remaining),
+                         kSendFlags);
+            }
 #else
-            n = send(socket_fd_, data, remaining, kSendFlags);
+            if (::falcon::detail::inject_failure(
+                    ::falcon::detail::InjectPoint::HttpSendWantWrite)) {
+                errno = EAGAIN;
+                n = -1;
+            } else {
+                n = send(socket_fd_, data, remaining, kSendFlags);
+            }
 #endif
             if (n < 0) {
                 if (sock_would_block(sock_errno())) {
-                    engine->register_socket_event(
-                        socket_fd_, static_cast<int>(net::IOEvent::WRITE), id());
+                    if (!engine->register_socket_event(
+                            socket_fd_, static_cast<int>(net::IOEvent::WRITE),
+                            id())) {
+                        return ExecutionResult::ERROR_OCCURRED;
+                    }
                     return ExecutionResult::WAIT_FOR_SOCKET;
                 }
                 FALCON_LOG_ERROR_STREAM("send() 失败: " << sock_err_str(sock_errno()));
@@ -1656,8 +1729,11 @@ AbstractCommand::ExecutionResult HttpResponseCommand::receive_response_headers(D
                 int ssl_error = SSL_get_error(tls_session_.get(), static_cast<int>(n));
                 if (ssl_error == SSL_ERROR_WANT_READ || ssl_error == SSL_ERROR_WANT_WRITE) {
                     if (engine) {
-                        engine->register_socket_event(
-                            socket_fd_, static_cast<int>(net::IOEvent::READ), id());
+                        if (!engine->register_socket_event(
+                                socket_fd_, static_cast<int>(net::IOEvent::READ),
+                                id())) {
+                            return ExecutionResult::ERROR_OCCURRED;
+                        }
                     }
                     return ExecutionResult::WAIT_FOR_SOCKET;
                 }
@@ -1671,8 +1747,11 @@ AbstractCommand::ExecutionResult HttpResponseCommand::receive_response_headers(D
             if (n < 0) {
                 if (sock_would_block(sock_errno())) {
                     if (engine) {
-                        engine->register_socket_event(
-                            socket_fd_, static_cast<int>(net::IOEvent::READ), id());
+                        if (!engine->register_socket_event(
+                                socket_fd_, static_cast<int>(net::IOEvent::READ),
+                                id())) {
+                            return ExecutionResult::ERROR_OCCURRED;
+                        }
                     }
                     return ExecutionResult::WAIT_FOR_SOCKET;
                 }
@@ -2820,12 +2899,14 @@ AbstractCommand::ExecutionResult HttpDownloadCommand::receive_data(DownloadEngin
                     // WANT_WRITE（写入响应/重协商被阻塞）同样可能出现在
                     // 读路径上，按所需方向注册事件，避免注册错方向挂死
                     if (engine) {
-                        engine->register_socket_event(
-                            socket_fd_,
-                            static_cast<int>(ssl_error == SSL_ERROR_WANT_WRITE
-                                                 ? net::IOEvent::WRITE
-                                                 : net::IOEvent::READ),
-                            id());
+                        if (!engine->register_socket_event(
+                                socket_fd_,
+                                static_cast<int>(ssl_error == SSL_ERROR_WANT_WRITE
+                                                     ? net::IOEvent::WRITE
+                                                     : net::IOEvent::READ),
+                                id())) {
+                            return ExecutionResult::ERROR_OCCURRED;
+                        }
                     }
                     return ExecutionResult::WAIT_FOR_SOCKET;
                 }
@@ -2852,8 +2933,11 @@ AbstractCommand::ExecutionResult HttpDownloadCommand::receive_data(DownloadEngin
         if (n < 0) {
             if (sock_would_block(sock_errno())) {
                 if (engine) {
-                    engine->register_socket_event(
-                        socket_fd_, static_cast<int>(net::IOEvent::READ), id());
+                    if (!engine->register_socket_event(
+                            socket_fd_, static_cast<int>(net::IOEvent::READ),
+                            id())) {
+                        return ExecutionResult::ERROR_OCCURRED;
+                    }
                 }
                 return ExecutionResult::WAIT_FOR_SOCKET;
             }
