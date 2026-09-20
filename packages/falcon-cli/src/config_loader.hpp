@@ -52,6 +52,9 @@ struct CliConfig {
     std::string cookie_jar;
     std::string http_username;
     std::string http_password;
+    /// 双向 TLS 客户端证书与私钥（PEM 路径）
+    std::string client_cert;
+    std::string client_key;
     std::map<std::string, std::string> headers;
 
     // RPC 选项

@@ -228,6 +228,12 @@ bool ConfigLoader::save(const CliConfig& config, const std::string& config_path)
         if (!config.http_password.empty()) {
             j["http_password"] = config.http_password;
         }
+        if (!config.client_cert.empty()) {
+            j["client_cert"] = config.client_cert;
+        }
+        if (!config.client_key.empty()) {
+            j["client_key"] = config.client_key;
+        }
         if (!config.headers.empty()) {
             j["headers"] = config.headers;
         }
@@ -411,6 +417,12 @@ std::optional<CliConfig> ConfigLoader::load_from_file(const std::string& path) {
         if (j.contains("http_password")) {
             config.http_password = j["http_password"].get<std::string>();
         }
+        if (j.contains("client_cert")) {
+            config.client_cert = j["client_cert"].get<std::string>();
+        }
+        if (j.contains("client_key")) {
+            config.client_key = j["client_key"].get<std::string>();
+        }
         if (j.contains("headers")) {
             for (auto& [k, v] : j["headers"].items()) {
                 config.headers[k] = v.get<std::string>();
@@ -586,6 +598,12 @@ CliConfig merge_configs(const CliConfig& file_config, const CliConfig& cli_args)
     }
     if (!cli_args.http_password.empty()) {
         merged.http_password = cli_args.http_password;
+    }
+    if (!cli_args.client_cert.empty()) {
+        merged.client_cert = cli_args.client_cert;
+    }
+    if (!cli_args.client_key.empty()) {
+        merged.client_key = cli_args.client_key;
     }
     if (!cli_args.headers.empty()) {
         // 合并 headers

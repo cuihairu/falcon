@@ -831,3 +831,45 @@ TEST_F(HttpHandlerEdgesTest, DownloadThrowsOnCurlInitFailure) {
 }
 
 #endif  // FALCON_FAILURE_INJECTION
+
+#if defined(FALCON_ENABLE_OPENSSL)
+#include "tls_loopback_server.hpp"
+
+// V1 curl 数据面的双向 TLS：客户端证书选项（aria2 --certificate/
+// --private-key 同语义）经 CURLOPT_SSLCERT/SSLKEY 传播——服务器要求
+// 客户端证书（FAIL_IF_NO_PEER_CERT），选项未接上即握手被拒，任务
+// 不可能 Completed，故 Completed 本身就是选项生效的铁证
+TEST_F(HttpHandlerEdgesTest, MutualTlsClientCertPropagatesToCurl) {
+    namespace fs = std::filesystem;
+    TempDir dir;
+    const std::string key_path = dir.file("key.pem");
+    const std::string cert_path = dir.file("cert.pem");
+    const std::string client_key_path = dir.file("client_key.pem");
+    const std::string client_cert_path = dir.file("client_cert.pem");
+    ASSERT_TRUE(falcon_test_tls::generate_client_cert(client_key_path,
+                                                      client_cert_path));
+
+    falcon::testtls::TlsTestServer tls;
+    ASSERT_TRUE(tls.start(key_path, cert_path, /*dual_stack=*/false,
+                          client_cert_path));
+    const std::string body = "v1-mtls-payload";
+    tls.set_body(body);
+
+    DownloadOptions options;
+    options.verify_ssl = false;  // 自签服务器证书不在本用例覆盖面
+    options.client_certificate = client_cert_path;
+    options.client_private_key = client_key_path;
+
+    const auto task = makeTask(301, tls.url("localhost", "/f.bin"),
+                               dir.file("out.bin"), options);
+    handler()->download(task, nullptr);
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+
+    // download() 顶部 HEAD 探测 + 实际 GET 各一次握手，均出示证书
+    EXPECT_GE(tls.client_certs(), 1);
+    EXPECT_EQ(readFile(dir.file("out.bin")), body);
+
+    tls.stop();
+}
+
+#endif  // FALCON_ENABLE_OPENSSL

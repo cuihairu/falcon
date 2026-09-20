@@ -162,9 +162,13 @@ public:
 
     /// dual_stack=true：AF_INET6 + IPV6_V6ONLY=0 监听回环（同一端口
     /// 同时接受 [::1] 与 127.0.0.1）。环境无 IPv6（socket/bind 失败）
-    /// 返回 false，调用方 GTEST_SKIP
+    /// 返回 false，调用方 GTEST_SKIP。
+    /// client_ca_cert 非空：双向 TLS——把该证书作信任锚并要求客户端
+    /// 证书（VERIFY_PEER|FAIL_IF_NO_PEER_CERT），客户端不出示则
+    /// SSL_accept 失败（handshakes() 不增长）
     bool start(const std::string& key_path, const std::string& cert_path,
-               bool dual_stack = false) {
+               bool dual_stack = false,
+               const std::string& client_ca_cert = {}) {
 #ifdef _WIN32
         ensure_winsock_for_tls_test();
 #endif
@@ -187,6 +191,21 @@ public:
             server_ctx_ = nullptr;
             ERR_clear_error();
             return false;
+        }
+
+        if (!client_ca_cert.empty()) {
+            if (SSL_CTX_load_verify_locations(server_ctx_,
+                                              client_ca_cert.c_str(),
+                                              nullptr) != 1) {
+                SSL_CTX_free(server_ctx_);
+                server_ctx_ = nullptr;
+                ERR_clear_error();
+                return false;
+            }
+            SSL_CTX_set_verify(server_ctx_,
+                               SSL_VERIFY_PEER |
+                                   SSL_VERIFY_FAIL_IF_NO_PEER_CERT,
+                               nullptr);
         }
 
         int v6only = 0;
@@ -288,6 +307,9 @@ public:
 
     int handshakes() const { return handshakes_.load(); }
 
+    /// 出示了客户端证书的握手数（mTLS 用例：服务器侧观测证据）
+    int client_certs() const { return client_certs_.load(); }
+
 private:
     void accept_loop() {
 #ifndef _WIN32
@@ -361,6 +383,12 @@ private:
         }
         handshakes_.fetch_add(1);
 
+        // 客户端证书观测（VERIFY_PEER 下 SSL_accept 成功即已验签通过）
+        if (X509* peer = SSL_get1_peer_certificate(ssl)) {
+            client_certs_.fetch_add(1);
+            X509_free(peer);
+        }
+
         {
             std::lock_guard<std::mutex> lock(mutex_);
             const char* server_name =
@@ -432,6 +460,7 @@ private:
     int port_ = 0;
     std::atomic<bool> running_{false};
     std::atomic<int> handshakes_{0};
+    std::atomic<int> client_certs_{0};
     std::atomic<int> served_{0};  // 响应完整发出的连接数
     std::thread accept_thread_;
 };

@@ -2,6 +2,83 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-20 - CI 红面收口：metalink 退出活锁（V2 宿主窗口竞速根因）+ Windows TLS 计数断言机制性修正
+- **红面**（run 35484110282）：Coverage (Ubuntu) 的 metalink
+  V2EngineShutdownDuringBridgeFallsBackToSerial Timeout 120s +
+  Windows build 的 TlsRequestWriteFail Failed；macOS libc++ 修复
+  生效全绿
+- **metalink 挂死根因（strace 95MB 铁证 + 机制全对上）**：
+  `V2EngineHost::shutdown_and_join` 的 [shutdown 已执行、engine_ 尚
+  未 reset] 窗口——并发 `engine()` 撞上窗口拿到**已停机引擎**，尾部
+  `while (!is_running())` 1ms 等待自旋对停机引擎**无限自旋（主线程
+  活锁）**→ download() 永不返回 → 进程不退出 → ctest Timeout。时间
+  线逐条闭环：killer 排水进行中桥接轮询先观察到组 REMOVED → WARN
+  回落串行 → 206×3 = 第一引擎排水期数据面收尾的段响应 → 下一镜像
+  委托的 engine() 撞窗口 → 活锁；「销毁 DownloadEngineV2」日志缺失
+  （主线程持 shared_ptr 引用不归零）+ 无 [ OK ] 行双铁证
+- **复现方法论**：单核 pin + 4 CPU 压力进程约 5% 命中率；gdb 直启
+  时序拖慢不命中（且 gdb batch 在 inferior 正常退出后自身可能挂住
+  不返回——SIGINT 才放行，「gdb 不退出」≠「inferior 挂死」）；
+  strace 版 80 轮命中：95MB log 以 740KB/s 增长、tid==pid 无限
+  clock_nanosleep(1ms) 即挂点。**测量级教训**：gtest 输出走 stdout
+  全缓冲，挂死时 [ PASSED ] 永不落盘——脚本「grep PASSED」检测
+  失效，改「时间基准超时 + log 停滞 + 进程存活」判定
+- **修复双保险**（v2_engine_host.cpp）：① 根修——`engine_.reset()`
+  提前到 join 之前锁内完成，engine() 锁内只可能拿到活引擎或 null
+  （null → 重建，语义正确）；② 纵深——engine() 等待自旋增加
+  `is_shutdown_requested()` 检查，极端窗口拿到的停机引擎不再等待，
+  直接返回由数据面自然失败收口
+- **验证**：60 轮压力循环全 PASSED 零挂死（修复前同环境约 5% 命中
+  率）；ASan metalink 桥接 16 + 宿主生命周期 5 用例零告警
+- **Windows TlsRequestWriteFail**：等待式断言对 Windows 机制性结果
+  不成立——TLS 1.3 NewSessionTicket 未读即 closesocket → Windows 对
+  接收缓冲非空的连接发 RST → 服务器 SSL_accept 被重置打断恒失败 →
+  handshakes 恒 0（机制性非调度，5s 等待无济于事）。断言改条件式：
+  观察到 ≥1 才断言 ==1（POSIX 收敛路径仍钉死恰一次）；注入命中本身
+  即「握手已完成」的结构性证据，服务器侧计数降级为观测补充
+
+### 2026-09-20 - 客户端 TLS 证书端到端（aria2 --certificate/--private-key 同语义，双向 TLS/mTLS）
+- **todo #9 落地**：`DownloadOptions::client_certificate`/
+  `client_private_key`（PEM 路径，默认空 = 无客户端证书）——此前
+  V1/V2 均无客户端证书能力（CURLOPT_SSLCERT 未接线、V2 无加载
+  路径），双向 TLS（服务器要求客户端证书的 mTLS 部署）不可用
+- **V2 数据面**（setup_tls 的 SSL_CTX 新建分支）：证书走
+  `SSL_CTX_use_certificate_chain_file` + 私钥 `SSL_CTX_use_PrivateKey_
+  file`（PEM）+ `SSL_CTX_check_private_key` 终检；**任一加载失败在
+  握手前失败收口**（返回 FAILED 不发 ClientHello）——配置错误绝不
+  退化成匿名连接；单给其一（半配置）经 check_private_key 失败同样
+  收口；两字段可指向同一复合 PEM 文件
+- **V1 curl 数据面**（apply_common_curl_options）：
+  `CURLOPT_SSLCERT`/`CURLOPT_SSLKEY` + 显式 `SSLXXXTYPE=PEM`（handle
+  复用残留防护同 S3 批次教训——方法/类型类选项必须清设或显式设值）
+- **配置面全链**：CLI `--certificate`/`--private-key`（aria2 同名）
+  + config 文件 `client_cert`/`client_key`（字符串合并模式：文件有
+  值且 CLI 为空才采纳，对齐 proxy 惯例）+ TaskManager 状态文件
+  v4→v5（+2 quoted 尾字段，version>=5 门控读取，v4 旧档按默认空串
+  解析升级无缝）+ daemon RPC addUri options `certificate`/
+  `private-key` 键映射（aria2 兼容，aria2.addUri 的 per-download
+  选项同键位）；daemon TaskStorage 不加该字段（与 auto_file_
+  renaming/conditional_get 同姿态——恢复路径无置位点）
+- **测试基建**：`tls_cert_generator` 增 `generate_client_cert`（CN=
+  falcon-client 终端实体，无 CA 约束无 SAN，自签即自身信任锚）；
+  TlsTestServer::start 增 `client_ca_cert` 可选参数（非空时
+  load_verify_locations + `SSL_VERIFY_PEER|FAIL_IF_NO_PEER_CERT`——
+  客户端不出示证书则 SSL_accept 失败、handshakes 不增长）+ 
+  `client_certs()` 观测（SSL_get1_peer_certificate 非空计数，VERIFY_
+  PEER 下 SSL_accept 成功即验签已通过）
+- **测试 7 用例三树绿**：V2 3 用例（mTLS 下载完成 + 服务器
+  client_certs()==1 铁证 / 不出示证书 FAILED 且 handshakes()==0 /
+  半配置握手前失败 handshakes()==0——ClientHello 未发出）+ V1
+  e2e 1 用例（服务器要求客户端证书下 Completed 即 CURLOPT_SSLCERT
+  /SSLKEY 传播生效的铁证——选项未接上握手必被拒；HEAD 探测 + GET
+  双握手均出示证书）+ task_manager 2 用例（v5 尾字段往返含引号
+  转义路径 + v4 旧档兼容）；build-cov 全量 ctest 零失败 + ASan
+  V2 TLS/V1 mTLS/task_manager 子集零告警 + CLI 92 用例回归绿
+- 下一个 todo 候选：#3 BT 做种、#2 SFTP（阻塞：SSH2 协议栈无轻量
+  mock 方案——libssh2 无服务端 API，回环 mock 不可行，需 paramiko
+  外部依赖或系统 sshd，与三平台自包含测试基建冲突）、#8
+  file-allocation
+
 ### 2026-09-20 - CI 三平台红面收口（libc++ chrono 编译错 + WSAEFAULT accept 缓冲 + 两处时序脆弱）
 - **双 run 红面盘点**（批次 Z2 35477484650 + IPv6 35480073040）：Linux
   全绿 + Coverage 绿；macOS build/Qt6 编译错（两 run 皆红，与 IPv6 无

@@ -185,6 +185,8 @@ static json download_options_to_json(const falcon::DownloadOptions& options) {
     out["save-cookies"] = options.cookie_jar;
     out["http-user"] = options.http_username;
     out["http-passwd"] = options.http_password;
+    out["certificate"] = options.client_certificate;
+    out["private-key"] = options.client_private_key;
     out["all-proxy"] = options.proxy;
     out["all-proxy-user"] = options.proxy_username;
     out["all-proxy-passwd"] = options.proxy_password;
@@ -1274,6 +1276,8 @@ JsonRpcServer::HttpResponse JsonRpcServer::handle_jsonrpc(const std::string& bod
                     if (o.contains("save-cookies") && o["save-cookies"].is_string()) options.cookie_jar = o["save-cookies"].get<std::string>();
                     if (o.contains("http-user") && o["http-user"].is_string()) options.http_username = o["http-user"].get<std::string>();
                     if (o.contains("http-passwd") && o["http-passwd"].is_string()) options.http_password = o["http-passwd"].get<std::string>();
+                    if (o.contains("certificate") && o["certificate"].is_string()) options.client_certificate = o["certificate"].get<std::string>();
+                    if (o.contains("private-key") && o["private-key"].is_string()) options.client_private_key = o["private-key"].get<std::string>();
                     if (o.contains("all-proxy") && o["all-proxy"].is_string()) options.proxy = o["all-proxy"].get<std::string>();
                     if (o.contains("all-proxy-user") && o["all-proxy-user"].is_string()) options.proxy_username = o["all-proxy-user"].get<std::string>();
                     if (o.contains("all-proxy-passwd") && o["all-proxy-passwd"].is_string()) options.proxy_password = o["all-proxy-passwd"].get<std::string>();

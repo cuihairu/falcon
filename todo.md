@@ -2502,8 +2502,22 @@ path-style）；网盘分享链识别（12 平台）+ 资源搜索；GUI 桌面�
 8. **file-allocation**：连 CLI 参数都没有——V2 稀疏临时文件 /
    V1 curl 直写；大文件预分配（falloc）对机械盘碎片与空间预留
    有意义，优先级低
-9. **客户端 TLS 证书**：V1/V2 均无（CURLOPT_SSLCERT 未接线）
-   ——aria2 --certificate/--private-key，双向 TLS 场景需要
+9. ~~**客户端 TLS 证书**~~（2026-09-20 已落地）：aria2
+   --certificate/--private-key 同语义。`DownloadOptions::
+   client_certificate/client_private_key`（PEM 路径）——V2 在
+   setup_tls 的 SSL_CTX 新建分支加载（use_certificate_chain_file +
+   use_PrivateKey_file + check_private_key，任一失败握手前收口，
+   配置错误绝不退化成匿名连接）；V1 经 CURLOPT_SSLCERT/SSLKEY
+   （显式 PEM 类型）。配置面全链：CLI --certificate/--private-key +
+   config client_cert/client_key + TaskManager 状态文件 v4→v5
+   （version>=5 门控，v4 旧档默认空串无缝升级）+ daemon RPC
+   addUri certificate/private-key 键映射。测试 7 用例三树绿：
+   V2 mTLS 完成+服务器 client_certs()==1 铁证 / 不出示证书 FAILED
+   handshakes()==0 / 半配置握手前失败；V1 e2e 服务器要求客户端
+   证书下 Completed 即选项传播铁证；task_manager v5 往返 + v4 兼容。
+   SFTP（#2）阻塞实证：SSH2 协议栈无轻量 mock 方案（libssh2 无
+   服务端 API，回环 mock 不可行；paramiko 外部依赖或系统 sshd 均
+   与三平台自包含测试基建冲突）
 10. ~~**RustFS / MinIO 系 S3 兼容服务的真鉴权**~~（2026-09-19 已落地）：
     MinIO 社区版闭源化后 RustFS（S3 兼容、Apache-2.0）成为自建替代
     主流。**真缺口是 s3_browser 无 SigV4**——perform_s3_request 原本
@@ -2618,3 +2632,41 @@ libtorrent 强依赖（当前 FALCON_ENABLE_BITTORRENT=OFF 为默认
 - NAT/防火墙穿透（公网可达性）未在上文展开，路线 A 落地前需
   补一轮评估（STUN/打洞或 UPnP 映射；纯 DHT 公告对 NAT 后
   节点不可达）
+
+### 2026-09-20 - CI 红面收口：metalink 退出活锁（V2 宿主窗口竞速）+ Windows TlsRequestWriteFail RST 机制
+- **红面盘点**（run 35484110282）：8 job 中 6 绿 2 红——Coverage (Ubuntu)
+  的 metalink V2EngineShutdownDuringBridgeFallsBackToSerial Timeout 120s +
+  Windows build 的 TlsRequestWriteFail Failed；macOS libc++ chrono 修复
+  生效全绿
+- **metalink 挂死根因闭环（strace 95MB 铁证 + 机制全对上）**：
+  V2EngineHost::shutdown_and_join 的 [shutdown 已执行、engine_ 尚未
+  reset] 窗口——并发 engine() 撞上窗口拿到**已停机引擎**，其尾部
+  `while (engine && !engine->is_running())` 1ms 等待自旋对停机引擎
+  **无限自旋（主线程活锁）**→ download() 永不返回 → 进程永不退出 →
+  ctest 120s Timeout。时间线逐条对上：killer 排水进行中，桥接轮询先
+  观察到组 REMOVED → WARN 回落串行 → 206×3 是第一引擎排水期数据面
+  收尾的段响应 → 下一镜像委托的 engine() 撞窗口 → 活锁；「销毁
+  DownloadEngineV2」日志缺失（主线程持 shared_ptr 引用计数不归零）+
+  无 [ OK ]/PASSED（gtest 没到断言行）双铁证
+- **复现方法论**：单核 pin + 4 CPU 压力进程约 5% 命中率；gdb 直启因
+  时序拖慢而不命中（且 gdb batch 在 inferior 正常退出后自身可能挂住
+  不返回——SIGINT 才放行，「gdb 不退出」≠「inferior 挂死」）；strace
+  版 80 轮命中一次：95MB log 以 740KB/s 增长、tid==pid 无限
+  clock_nanosleep(1ms) 即挂点。**测量级教训**：gtest 输出走 stdout
+  全缓冲，挂死时 [ PASSED ] 永不落盘——脚本「grep PASSED」检测失效，
+  改用「时间基准超时 + strace log 停滞 + 进程存活」判定
+- **修复双保险**（v2_engine_host.cpp）：① 根修——engine_.reset()
+  提前到 join 之前锁内完成，engine() 在锁内只可能拿到活引擎或 null
+  （null → 重建，语义正确）；② 纵深——engine() 等待自旋增加
+  is_shutdown_requested() 检查，极端窗口拿到的停机引擎不再等待，
+  直接返回由数据面自然失败收口
+- **验证**：60 轮压力循环全 PASSED 零挂死（修复前同环境约 5% 命中
+  率）；ASan metalink 桥接 16 用例 + 宿主生命周期 5 用例零告警
+- **Windows TlsRequestWriteFail 修复**：9fb2c60 的等待式断言对
+  Windows 机制性结果不成立——TLS 1.3 服务器握手后发的
+  NewSessionTicket 躺在客户端接收缓冲未读，closesocket 对接收缓冲
+  非空的连接发 RST（Windows 特有语义）→ 服务器 SSL_accept 被重置
+  打断恒失败 → handshakes 恒 0（5s 等待无济于事，机制性非调度）。
+  断言改条件式：观察到 handshakes≥1 才断言 ==1（Linux/macOS 收敛
+  路径仍钉死恰一次），Windows RST 路径不硬断言；注入命中本身即
+  「握手已完成」的结构性证据，服务器侧计数降级为观测补充

@@ -69,6 +69,15 @@ struct DownloadOptions {
     /// HTTP authentication password (optional)
     std::string http_password;
 
+    /// Client certificate file path for mutual TLS (PEM; aria2
+    /// --certificate). Empty = no client certificate.
+    std::string client_certificate;
+
+    /// Client private key file path for mutual TLS (PEM; aria2
+    /// --private-key). May point to the same combined PEM file as
+    /// client_certificate.
+    std::string client_private_key;
+
     /// Minimum segment size for multi-connection download (bytes)
     std::size_t min_segment_size = 1024 * 1024;  // 1 MB
 

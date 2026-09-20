@@ -21,7 +21,7 @@
 namespace falcon {
 
 namespace {
-constexpr int kTaskManagerStateVersion = 4;
+constexpr int kTaskManagerStateVersion = 5;
 constexpr const char* kTaskManagerStateMagic = "falcon_task_state";
 
 template <typename Int>
@@ -55,8 +55,8 @@ TaskStatus sanitize_status_for_restore(TaskStatus status) {
  * @brief 从流中读取下载选项
  *
  * version >= 3 才读取 auto_file_renaming、version >= 4 才读取
- * conditional_get 尾字段——旧版本状态文件按默认值（false）解析，
- * 保证升级后旧档可继续恢复
+ * conditional_get、version >= 5 才读取客户端证书尾字段——旧版本
+ * 状态文件按默认值（false / 空串）解析，保证升级后旧档可继续恢复
  */
 bool read_download_options(std::istream& in, int version, DownloadOptions& options) {
     if (!(in >> options.max_connections >> options.timeout_seconds >> options.max_retries >>
@@ -133,6 +133,15 @@ bool read_download_options(std::istream& in, int version, DownloadOptions& optio
             return false;
         }
         options.conditional_get = conditional != 0;
+    }
+
+    // version >= 5 才读取客户端证书尾字段——旧版本状态文件按默认值
+    //（空串 = 无客户端证书）解析
+    if (version >= 5) {
+        if (!(in >> std::quoted(options.client_certificate) >>
+              std::quoted(options.client_private_key))) {
+            return false;
+        }
     }
 
     std::size_t header_count = 0;
@@ -597,6 +606,8 @@ public:
             file << (options.overwrite_existing ? 1 : 0) << " ";
             file << (options.auto_file_renaming ? 1 : 0) << " ";
             file << (options.conditional_get ? 1 : 0) << " ";
+            write_quoted(options.client_certificate);
+            write_quoted(options.client_private_key);
             file << options.headers.size();
 
             for (const auto& [k, v] : options.headers) {

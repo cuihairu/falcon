@@ -49,13 +49,17 @@ std::shared_ptr<DownloadEngineV2> V2EngineHost::engine() {
     }
     // 等线程真正进入 run()（running_ 置位）再返回：run() 入口会复位
     // halt_requested_（实例复用语义），「创建后立即停机」的 shutdown
-    // 若先于该复位点到达会被吞掉，run 线程将永久轮询、join 挂死
+    // 若先于该复位点到达会被吞掉，run 线程将永久轮询、join 挂死。
+    // is_shutdown_requested() 兜底：并发 shutdown_and_join 的极端窗口
+    // 里拿到的引擎永远进不了 run()，此时停机请求已置位、等待无意义，
+    // 直接返回（调用方数据面对停机引擎自然失败收口）
     std::shared_ptr<DownloadEngineV2> engine;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         engine = engine_;
     }
-    while (engine && !engine->is_running()) {
+    while (engine && !engine->is_running() &&
+           !engine->is_shutdown_requested()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     return engine;
@@ -93,16 +97,21 @@ void V2EngineHost::shutdown_and_join(std::chrono::milliseconds drain_timeout) {
     }
 
     engine->shutdown();
-    if (run_thread.joinable()) {
-        run_thread.join();
+    // halt 后的引擎不可复用：先在锁内摘表、再 join——engine() 在锁内
+    // 只可能拿到活引擎或 null（null → 重建）。若把 reset 放到 join 之后，
+    // engine() 会在「shutdown 已执行、engine_ 尚未摘表」的窗口拿到停机
+    // 引擎，其尾部的 is_running() 等待自旋将对停机引擎无限自旋（主线程
+    // 活锁，进程永不退出——CI Coverage metalink 用例 Timeout 120s 根因）
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (engine_ == engine) {
+            engine_.reset();
+        }
     }
 
     FALCON_LOG_INFO_STREAM("V2 引擎宿主已停机");
-
-    // halt 后的引擎不可复用：实例销毁，下次 engine() 重建
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (engine_ == engine) {
-        engine_.reset();
+    if (run_thread.joinable()) {
+        run_thread.join();
     }
 }
 

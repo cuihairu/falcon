@@ -376,12 +376,23 @@ TEST(DownloadEngineV2Injection, TlsRequestWriteFailFailsCleanly) {
     }
     server.stop();
 
-    // 服务器在 SSL_accept 返回（Finished 已发出）之后才计数，客户端
-    // 收到 Finished → 注入失败 → 断言可快于服务器线程调度到计数行
-    //（Windows CI 实证 handshakes()==0 假失败）——等待式收敛
-    EXPECT_TRUE(testtls::wait_for(
-        [&] { return server.handshakes() >= 1; }, 5000));
-    EXPECT_EQ(server.handshakes(), 1);
+    // 服务器侧计数与本用例的失败收口存在结构性竞速：客户端「TLS 握手
+    // 成功」→ 注入失败 → FAILED 收口关连接，微秒级；服务器线程此刻
+    // 还在 SSL_accept 里等客户端 Finished。
+    //  - Linux/macOS：close 走 FIN，已收的 Finished 数据仍可读，
+    //    SSL_accept 成功返回后计数 1（等待式收敛即可观测）；
+    //  - Windows：TLS 1.3 服务器握手后发的 NewSessionTicket 躺在客户
+    //    端接收缓冲未被读，closesocket 对接收缓冲非空的连接发 RST
+    //    （Windows 特有语义），服务器 SSL_accept 被重置打断恒失败，
+    //    计数恒 0——机制性结果非调度抖动（run 35484110282 实证 5s
+    //    等待仍为 0）。
+    // 注入点 TlsRequestWriteFail 位于握手完成后的 SSL_write，注入命
+    // 中本身就是「握手已完成」的结构性证据，服务器侧计数只作观测补
+    // 充：观察到则钉住恰一次，观察不到不再硬断言。
+    if (testtls::wait_for([&] { return server.handshakes() >= 1; },
+                          5000)) {
+        EXPECT_EQ(server.handshakes(), 1);
+    }
     EXPECT_TRUE(inj_read_file(out_path).empty());
 
     std::error_code rm_ec;

@@ -230,6 +230,19 @@ static void apply_common_curl_options(CURL* curl,
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
     }
 
+    // 双向 TLS（mTLS）：客户端证书 + 私钥（PEM，aria2 --certificate/
+    // --private-key 同语义）；两字段可指向同一复合 PEM 文件
+    if (!options.client_certificate.empty()) {
+        curl_easy_setopt(curl, CURLOPT_SSLCERT,
+                         options.client_certificate.c_str());
+        curl_easy_setopt(curl, CURLOPT_SSLCERTTYPE, "PEM");
+    }
+    if (!options.client_private_key.empty()) {
+        curl_easy_setopt(curl, CURLOPT_SSLKEY,
+                         options.client_private_key.c_str());
+        curl_easy_setopt(curl, CURLOPT_SSLKEYTYPE, "PEM");
+    }
+
     if (!options.referer.empty()) {
         curl_easy_setopt(curl, CURLOPT_REFERER, options.referer.c_str());
     }

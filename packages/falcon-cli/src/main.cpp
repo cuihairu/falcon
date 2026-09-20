@@ -313,6 +313,8 @@ void show_help() {
     std::cout << "      --save-cookies <文件>  aria2: 保存 Cookies 到文件\n";
     std::cout << "      --http-user <用户>     aria2: HTTP 认证用户名\n";
     std::cout << "      --http-passwd <密码>    aria2: HTTP 认证密码\n";
+    std::cout << "      --certificate <文件>   aria2: 客户端 TLS 证书 (PEM)\n";
+    std::cout << "      --private-key <文件>   aria2: 客户端 TLS 私钥 (PEM)\n";
     std::cout << "      --http-engine <v1|v2>  HTTP 下载引擎（默认 v1；v2 实验性）\n";
     std::cout << "      --use-head             aria2: 使用 HEAD 方法获取文件信息\n";
     std::cout << "      --conditional-download aria2: 条件下载（仅当远程文件更新时）\n";
@@ -393,6 +395,12 @@ static void merge_config_with_file(CliArgs& args) {
     if (!file_config.http_password.empty() && args.http_passwd.empty()) {
         args.http_passwd = file_config.http_password;
     }
+    if (!file_config.client_cert.empty() && args.client_cert.empty()) {
+        args.client_cert = file_config.client_cert;
+    }
+    if (!file_config.client_key.empty() && args.client_key.empty()) {
+        args.client_key = file_config.client_key;
+    }
     if (!file_config.rpc_secret.empty() && args.rpc_secret.empty()) {
         args.rpc_secret = file_config.rpc_secret;
     }
@@ -463,6 +471,8 @@ static falcon::DownloadOptions setup_download_options(const CliArgs& args) {
     options.cookie_jar = args.save_cookies;
     options.http_username = args.http_user;
     options.http_password = args.http_passwd;
+    options.client_certificate = args.client_cert;
+    options.client_private_key = args.client_key;
 
     // 添加自定义 HTTP 头
     for (const auto& header : args.headers) {

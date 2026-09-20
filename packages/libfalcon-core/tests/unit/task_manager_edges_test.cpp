@@ -686,6 +686,48 @@ TEST(TaskManagerEdgesTest, ConditionalGetVersionGatedRoundTrip) {
     std::filesystem::remove(v3_path);
 }
 
+// version 5 落盘的客户端证书尾字段往返（带引号转义路径）；version 4
+// 旧档（v5 读取方）按默认空串解析——升级无缝
+TEST(TaskManagerEdgesTest, ClientCertVersionGatedRoundTrip) {
+    DownloadOptions opts;
+    opts.client_certificate = "/etc/falcon/client.pem";
+    opts.client_private_key = "/etc/falcon/client key.pem";
+    auto task = make_task(330, "https://example.com/v5.bin", opts);
+
+    auto path = unique_temp_file("falcon_tm_v5_");
+    {
+        TaskManager tm(base_config(), nullptr);
+        ASSERT_EQ(tm.add_task(task, TaskPriority::Normal), 330u);
+        ASSERT_TRUE(tm.save_state(path.string()));
+    }
+
+    TaskManager tm2(base_config(), nullptr);
+    ASSERT_TRUE(tm2.load_state(path.string()));
+    auto loaded = tm2.get_task(330);
+    ASSERT_NE(loaded, nullptr);
+    EXPECT_EQ(loaded->options().client_certificate, "/etc/falcon/client.pem");
+    EXPECT_EQ(loaded->options().client_private_key, "/etc/falcon/client key.pem");
+
+    // version 4 行格式（conditional_get 尾字段 + header_count，无证书
+    // 字段）：v5 读取方版本门控跳过，客户端证书按默认空串解析
+    const std::string v4_line = basic_task_prefix(331, 0, 1) + " " +
+                                join(option_field_groups(DownloadOptions{})) +
+                                " 1 0 0";  // auto_renaming=1, conditional=0, header_count=0
+    auto v4_path = unique_temp_file("falcon_tm_v4compat_");
+    write_state_file(v4_path, {v4_line}, 4);
+    TaskManager tm3(base_config(), nullptr);
+    ASSERT_TRUE(tm3.load_state(v4_path.string()));
+    auto legacy = tm3.get_task(331);
+    ASSERT_NE(legacy, nullptr);
+    EXPECT_TRUE(legacy->options().auto_file_renaming);
+    EXPECT_FALSE(legacy->options().conditional_get);
+    EXPECT_TRUE(legacy->options().client_certificate.empty());
+    EXPECT_TRUE(legacy->options().client_private_key.empty());
+
+    std::filesystem::remove(path);
+    std::filesystem::remove(v4_path);
+}
+
 TEST(TaskManagerEdgesTest, SaveLoadRoundTripAllOptionFields) {
     DownloadOptions opts;
     opts.max_connections = 8;
@@ -712,6 +754,8 @@ TEST(TaskManagerEdgesTest, SaveLoadRoundTripAllOptionFields) {
     opts.overwrite_existing = true;
     opts.auto_file_renaming = true;
     opts.conditional_get = true;
+    opts.client_certificate = "/etc/falcon/client cert.pem";
+    opts.client_private_key = "/etc/falcon/p\"key.pem";
     opts.headers = {{"X-A \"quoted\"", "back\\slash"},
                     {"X-B", "space value"}};
 
@@ -767,6 +811,8 @@ TEST(TaskManagerEdgesTest, SaveLoadRoundTripAllOptionFields) {
     EXPECT_TRUE(ro.overwrite_existing);
     EXPECT_TRUE(ro.auto_file_renaming);
     EXPECT_TRUE(ro.conditional_get);
+    EXPECT_EQ(ro.client_certificate, "/etc/falcon/client cert.pem");
+    EXPECT_EQ(ro.client_private_key, "/etc/falcon/p\"key.pem");
     EXPECT_EQ(ro.headers, opts.headers);
 
     std::filesystem::remove(state_path);

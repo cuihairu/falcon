@@ -147,4 +147,78 @@ inline bool generate_self_signed_cert(const std::string& key_path,
     return ok;
 }
 
+/**
+ * @brief 运行时生成自签客户端证书（RSA 2048，CN=falcon-client，
+ *        终端实体：无 CA 约束、无 SAN），PEM 落盘
+ *
+ * 供双向 TLS（mTLS）用例：服务器把该证书文件本身作为信任锚
+ *（SSL_CTX_load_verify_locations——自签证书即自身锚）并要求
+ * SSL_VERIFY_PEER，客户端出示后握手才成立。
+ */
+inline bool generate_client_cert(const std::string& key_path,
+                                 const std::string& cert_path) {
+    bool ok = false;
+    EVP_PKEY* pkey = nullptr;
+    X509* x509 = nullptr;
+    EVP_PKEY_CTX* kctx = nullptr;
+
+    do {
+        kctx = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr);
+        if (!kctx || EVP_PKEY_keygen_init(kctx) != 1 ||
+            EVP_PKEY_CTX_set_rsa_keygen_bits(kctx, 2048) != 1) {
+            break;
+        }
+        if (EVP_PKEY_keygen(kctx, &pkey) != 1) {
+            break;
+        }
+
+        x509 = X509_new();
+        if (!x509) {
+            break;
+        }
+        ASN1_INTEGER_set(X509_get_serialNumber(x509), 1);
+        X509_gmtime_adj(X509_getm_notBefore(x509), 0);
+        X509_gmtime_adj(X509_getm_notAfter(x509), 24 * 3600);
+        X509_set_version(x509, 2);
+        X509_set_pubkey(x509, pkey);
+
+        X509_NAME* name = X509_get_subject_name(x509);
+        X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
+                                   reinterpret_cast<const unsigned char*>(
+                                       "falcon-client"),
+                                   -1, -1, 0);
+        X509_set_issuer_name(x509, name);
+
+        if (X509_sign(x509, pkey, EVP_sha256()) == 0) {
+            break;
+        }
+
+        BIO* key_bio = BIO_new_file(key_path.c_str(), "w");
+        if (!key_bio) {
+            break;
+        }
+        const bool key_ok =
+            PEM_write_bio_PrivateKey(key_bio, pkey, nullptr, nullptr, 0,
+                                     nullptr, nullptr) == 1;
+        BIO_free(key_bio);
+
+        BIO* cert_bio = BIO_new_file(cert_path.c_str(), "w");
+        if (!cert_bio) {
+            break;
+        }
+        const bool cert_ok = PEM_write_bio_X509(cert_bio, x509) == 1;
+        BIO_free(cert_bio);
+
+        ok = key_ok && cert_ok;
+    } while (false);
+
+    if (x509) X509_free(x509);
+    if (pkey) EVP_PKEY_free(pkey);
+    if (kctx) EVP_PKEY_CTX_free(kctx);
+    if (!ok) {
+        ERR_clear_error();
+    }
+    return ok;
+}
+
 }  // namespace falcon_test_tls

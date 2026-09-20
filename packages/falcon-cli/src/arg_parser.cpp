@@ -237,6 +237,14 @@ CliArgs parse_args(int argc, char* argv[]) {
             if (i + 1 < argc) {
                 args.http_passwd = argv[++i];
             }
+        } else if (arg == "--certificate") {
+            if (i + 1 < argc) {
+                args.client_cert = argv[++i];
+            }
+        } else if (arg == "--private-key") {
+            if (i + 1 < argc) {
+                args.client_key = argv[++i];
+            }
         } else if (arg == "--http-engine") {
             if (i + 1 < argc) {
                 args.http_engine = argv[++i];

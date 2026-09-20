@@ -44,6 +44,10 @@ struct CliArgs {
     std::string save_cookies;
     std::string http_user;
     std::string http_passwd;
+    /// 双向 TLS 客户端证书与私钥（PEM 路径，aria2 --certificate/
+    /// --private-key 同语义；可指向同一复合 PEM 文件）
+    std::string client_cert;
+    std::string client_key;
     /// HTTP 数据面引擎："" 未指定（= v1）|"v1"|"v2"（实验性 V2 引擎）
     std::string http_engine;
     bool use_head = false;

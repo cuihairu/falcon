@@ -908,6 +908,31 @@ TlsHandshakeResult HttpInitiateConnectionCommand::setup_tls() {
                 SSL_CTX_set_verify(ssl_ctx_, SSL_VERIFY_NONE, nullptr);
             }
 
+            // 双向 TLS（mTLS）：客户端证书 + 私钥（PEM，aria2
+            // --certificate/--private-key 同语义）。任一加载失败都在
+            // 握手前失败收口——配置错误绝不退化成匿名连接；单给其一
+            // 时 check_private_key 失败同样收口（两字段可指向同一
+            // 复合 PEM 文件）
+            if (!options_.client_certificate.empty() ||
+                !options_.client_private_key.empty()) {
+                const bool loaded =
+                    (!options_.client_certificate.empty() &&
+                     SSL_CTX_use_certificate_chain_file(
+                         ssl_ctx_, options_.client_certificate.c_str()) == 1) &&
+                    (!options_.client_private_key.empty() &&
+                     SSL_CTX_use_PrivateKey_file(
+                         ssl_ctx_, options_.client_private_key.c_str(),
+                         SSL_FILETYPE_PEM) == 1) &&
+                    SSL_CTX_check_private_key(ssl_ctx_) == 1;
+                if (!loaded) {
+                    FALCON_LOG_ERROR_STREAM(
+                        "客户端证书加载失败: "
+                        << ERR_error_string(ERR_get_error(), nullptr));
+                    ERR_clear_error();
+                    return TlsHandshakeResult::FAILED;
+                }
+            }
+
             // 加载默认证书
             if (!SSL_CTX_set_default_verify_paths(ssl_ctx_)) {
                 FALCON_LOG_WARN_STREAM("无法加载默认 CA 证书，继续使用系统证书");
