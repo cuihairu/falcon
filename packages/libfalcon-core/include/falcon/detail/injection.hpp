@@ -11,6 +11,7 @@
 // 既有的失败防御分支。掩码全部原子操作，产品代码可在任意线程查询。
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 
 namespace falcon::detail {
@@ -112,14 +113,33 @@ enum class InjectPoint : uint32_t {
 
 #if FALCON_FAILURE_INJECTION
 
+// 注入点掩码上限（与 InjectPoint 注册表注释一致）
+inline constexpr size_t kInjectPointCap = 64;
+
 inline std::atomic<uint64_t>& injection_mask() {
     static std::atomic<uint64_t> mask{0};
     return mask;
 }
 
+// 命中计数观测表：注入命中时按点累加，测试用 wait_for 锚定
+// 「注入已被命中 N 次」的确定性事件。静态存储期零初始化（atomic
+// 对象表示全零即值 0）。生产构建下整个分支被剔除，无此表。
+inline std::atomic<uint32_t>& injection_hit_slot(InjectPoint point) {
+    static std::atomic<uint32_t> hits[kInjectPointCap];
+    return hits[static_cast<size_t>(point)];
+}
+
+inline uint32_t injection_hit_count(InjectPoint point) {
+    return injection_hit_slot(point).load(std::memory_order_relaxed);
+}
+
 inline bool inject_failure(InjectPoint point) {
-    return (injection_mask().load(std::memory_order_relaxed) &
-            (uint64_t{1} << static_cast<uint32_t>(point))) != 0;
+    const bool hit = (injection_mask().load(std::memory_order_relaxed) &
+                      (uint64_t{1} << static_cast<uint32_t>(point))) != 0;
+    if (hit) {
+        injection_hit_slot(point).fetch_add(1, std::memory_order_relaxed);
+    }
+    return hit;
 }
 
 inline void set_injection(InjectPoint point, bool enabled) {
@@ -149,6 +169,8 @@ private:
 
 inline constexpr bool inject_failure(InjectPoint) { return false; }
 inline void set_injection(InjectPoint, bool) {}
+// 与测试分支对齐的空访问器：生产构建注入永不命中，计数恒 0
+inline constexpr uint32_t injection_hit_count(InjectPoint) { return 0; }
 
 class ScopedInjection {
 public:

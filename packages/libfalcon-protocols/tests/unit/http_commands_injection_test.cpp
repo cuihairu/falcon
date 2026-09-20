@@ -306,7 +306,10 @@ TEST(DownloadEngineV2Injection, PlainRequestSendWantWriteSuspendsThenRecovers) {
     options.max_connections = 1;
     options.max_retries = 0;
 
-    // 注入先于任务创建置位：初始连接的请求 send 必然被拦
+    // 注入先于任务创建置位：初始连接的请求 send 必然被拦。
+    // 命中计数是进程全局表，记基线做差值锚（对用例顺序变化鲁棒）
+    const uint32_t hit_base =
+        detail::injection_hit_count(detail::InjectPoint::HttpSendWantWrite);
     detail::set_injection(detail::InjectPoint::HttpSendWantWrite, true);
     const TaskId task_id = engine.add_download(server.url("/f.bin"), options);
     ASSERT_GT(task_id, 0u);
@@ -314,12 +317,22 @@ TEST(DownloadEngineV2Injection, PlainRequestSendWantWriteSuspendsThenRecovers) {
     ASSERT_NE(group, nullptr);
 
     testtls::TlsEngineRunner runner(engine);
-    // 锚点：连接已到达（connect 完成）而请求被拦（GET 计数保持 0）
+    // 锚点：注入命中计数 ≥1（确定性事件锚）——首个 send 已被拦下
+    // 即挂起已发生。此前用 200ms 固定 sleep 锚定「连接后静置」，
+    // Windows runner 安全基线会中止已建立但双向零字节静置的回环
+    // 连接（响应阶段 recv 报 WSAECONNABORTED，CI 35528355783 首跑
+    // 实证；同款挂起模式的 TLS/代理版因握手/隧道期有数据流全绿
+    // ——纯静置仅此一家），计数锚消除静置窗口，全平台语义不变
+    ASSERT_TRUE(testtls::wait_for(
+        [&] {
+            return detail::injection_hit_count(
+                       detail::InjectPoint::HttpSendWantWrite) >=
+                   hit_base + 1;
+        },
+        10000));
+    // 服务器 accept 侧观测：连接已到达而请求被拦（GET 计数保持 0）
     ASSERT_TRUE(testtls::wait_for(
         [&] { return server.connections() >= 1; }, 10000));
-    // 连接完成后 CONNECTING→send 在下一轮 poll 唤醒（毫秒级）发生；
-    // 静置窗口保证首个 send 已被拦下，清注入不早于挂起
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
     ASSERT_EQ(server.count_requests("/f.bin", "GET"), 0u)
         << "注入置位期间请求必须被拦下（WANT_WRITE 挂起中）";
     detail::set_injection(detail::InjectPoint::HttpSendWantWrite, false);

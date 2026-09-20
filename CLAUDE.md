@@ -2,6 +2,48 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-20 - CI 红面收口：WANT_WRITE 明文用例 Windows 静置回环连接中止（注入命中计数锚替代时间锚）
+- **红面**（run 35528355783，A4 提交触发）：Coverage/Linux gcc+clang/
+  macOS/Qt6 全绿，唯一红 Windows build job 的
+  `PlainRequestSendWantWriteSuspendsThenRecovers`（1357 中 1356 过）
+  ——该用例与 HttpSendWantWrite 注入点均 68d6b77 才进仓库，
+  Windows 首跑即曝光
+- **失败链**：清注入 → send 成功 → 服务器回完整响应 → 客户端响应
+  头 recv 报 **WSAECONNABORTED(10053)** → max_retries=0 → 组
+  FAILED(4)；`<04-00>` 断言值先对 RequestGroupStatus 枚举表定性
+- **根因定性（排除法闭环）**：同注入模式四用例中唯一「连接建立后
+  200ms 双向零字节静置」的一家——TLS 版（握手期有数据流）/代理
+  CONNECT 版（隧道有数据流）/注册失败版（挂起立即收口无静置窗）
+  全绿；Linux 100 轮压测 fail=0 排除用例逻辑竞速；A1+A2 改动全
+  为注入闸门非回归。**Windows runner 安全基线中止「已建立但静
+  置」的回环连接**——时间锚（固定 sleep 锚定「事件已发生」）的
+  平台脆弱性：静置窗口在 Windows 不可假设
+- **修复：注入命中计数锚**：injection.hpp 增
+  `injection_hit_count(InjectPoint)` 访问器 + `inject_failure`
+  命中时 fetch_add（静态零初始化原子表）；生产分支 constexpr 空
+  实现零成本不变。用例改差值锚 `wait_for(hit_count >= base+1)`
+  （进程全局计数表，基线差值对用例顺序变化鲁棒）——首个 send
+  被拦即「挂起已发生」的确定性事件，清注入不再依赖静置时长；
+  单跑 57ms（原 200ms+），50 轮压测 fail=0
+- **测量级教训**：① 锚定「注入已命中/挂起已发生」类单次事件优
+  先用注入命中计数/服务器观测计数等确定性事件锚；固定 sleep 时
+  间锚仅适用于锚定「挂起稳定窗」（需挂起持续而非单次发生），且
+  必须评估平台回环栈对静置连接的处置差异（Linux 恒绿系统性掩
+  盖）；② CI job 日志中途获取走
+  `gh api repos/.../actions/jobs/<JOB_ID>/logs`（`gh run view
+  --log` 在 run 进行中拒绝）
+- **验证**：build-cov 全量 ctest **2389 全过零失败**（上轮抖动惯
+  犯 PerformanceLargeFile 本轮直过）；ASan injection 19 用例 +
+  protocols 全量 934 零告警
+- **铁账（build-cov 单树新鲜数据）**：分母 17660 → 17668
+  （injection.hpp 测试构建生效 +8 行，单文件 miss 0 全覆盖）；
+  miss 433 → 434（+1 为时序窗口行自然抖动，非生产改动），行
+  **97.53%** / 函数 99.1% / 分支 56.84%——98% 结构性不可达结论
+  维持
+- 下一个 todo 候选：#3 BT 做种（libtorrent 数据面真实化 + 
+  seed-ratio/seed-time）、#2 SFTP（阻塞：SSH2 协议栈无轻量
+  mock 方案）
+
 ### 2026-09-20 - 覆盖率批次 A4：A3 遗留 17 行注册失败收口锚定（7 用例）+ 行 97.42% → 97.55%（98% 结构性不可达终局收口）
 - **目标**：锚定 A3 新增收口代码中「WANT_* 挂起后的注册失败」17 行
   （延迟置位 EventPollAddFail 类）——这些行此前不可达的原因不是
