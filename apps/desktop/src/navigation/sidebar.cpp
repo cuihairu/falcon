@@ -57,6 +57,8 @@ void SideBar::setup_ui()
 
     footer_card_ = new QWidget(this);
     footer_card_->setObjectName("sideBarFooter");
+    // 裸 QWidget 默认不绘制 QSS 边框/背景，必须显式开启
+    footer_card_->setAttribute(Qt::WA_StyledBackground, true);
     auto* footer_layout = new QVBoxLayout(footer_card_);
     footer_layout->setContentsMargins(14, 14, 14, 14);
     footer_layout->setSpacing(4);

@@ -123,6 +123,8 @@ private:
     static QString filename_for(const falcon::daemon::rpc::TaskSnapshot& snapshot);
     static QString format_bytes(uint64_t bytes);
     static QString format_speed(uint64_t bytes_per_second);
+    // 活动任务才显示速度,暂停/终态显示 "—"(0 B/s 是无信息量噪音)
+    static QString speed_display_text(const falcon::daemon::rpc::TaskSnapshot& snapshot);
 
     // 当前视图模式
     DownloadViewMode view_mode_;

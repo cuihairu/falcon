@@ -325,7 +325,7 @@ QWidget* CloudPage::create_toolbar()
 
 void CloudPage::create_status_bar()
 {
-    status_label_ = new QLabel(tr("就绪"), right_panel_);
+    status_label_ = new QLabel(QString(), right_panel_);
 }
 
 void CloudPage::connect_to_storage()

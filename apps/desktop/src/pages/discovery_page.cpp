@@ -223,7 +223,7 @@ QWidget* DiscoveryPage::create_status_bar()
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(8);
 
-    status_label_ = new QLabel(tr("就绪"), status_bar);
+    status_label_ = new QLabel(QString(), status_bar);
     layout->addWidget(status_label_);
 
     layout->addStretch();

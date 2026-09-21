@@ -344,7 +344,7 @@ QWidget* SettingsPage::create_clipboard_section_widget()
 
     auto* layout = new QVBoxLayout(group);
     layout->setSpacing(16);
-    layout->setContentsMargins(16, 20, 16, 16);
+    layout->setContentsMargins(16, 8, 16, 16);
 
     // Enable monitoring checkbox
     clipboard_monitoring_checkbox_ = new QCheckBox(tr("自动检测剪切板链接"), this);
@@ -387,7 +387,7 @@ QWidget* SettingsPage::create_download_section_widget()
 
     auto* layout = new QFormLayout(group);
     layout->setSpacing(16);
-    layout->setContentsMargins(16, 20, 16, 16);
+    layout->setContentsMargins(16, 8, 16, 16);
     layout->setLabelAlignment(Qt::AlignRight);
 
     // Default download directory
@@ -409,10 +409,16 @@ QWidget* SettingsPage::create_download_section_widget()
 
     // Maximum concurrent downloads
     auto* max_label = new QLabel(tr("最大并发下载数:"), this);
+    auto* max_layout = new QHBoxLayout();
+    max_layout->setSpacing(8);
+
     max_downloads_spin_ = new QSpinBox(this);
     max_downloads_spin_->setRange(1, 10);
     max_downloads_spin_->setValue(3);
-    layout->addRow(max_label, max_downloads_spin_);
+    max_layout->addWidget(max_downloads_spin_);
+    max_layout->addStretch();
+
+    layout->addRow(max_label, max_layout);
 
     return group;
 }
@@ -423,7 +429,7 @@ QWidget* SettingsPage::create_speed_limit_section_widget()
 
     auto* layout = new QFormLayout(group);
     layout->setSpacing(16);
-    layout->setContentsMargins(16, 20, 16, 16);
+    layout->setContentsMargins(16, 8, 16, 16);
     layout->setLabelAlignment(Qt::AlignRight);
 
     // Task speed limit
@@ -482,7 +488,7 @@ QWidget* SettingsPage::create_completion_action_section_widget()
 
     auto* layout = new QVBoxLayout(group);
     layout->setSpacing(16);
-    layout->setContentsMargins(16, 20, 16, 16);
+    layout->setContentsMargins(16, 8, 16, 16);
 
     // Action selection
     auto* action_layout = new QHBoxLayout();
@@ -519,7 +525,7 @@ QWidget* SettingsPage::create_connection_section_widget()
 
     auto* layout = new QFormLayout(group);
     layout->setSpacing(16);
-    layout->setContentsMargins(16, 20, 16, 16);
+    layout->setContentsMargins(16, 8, 16, 16);
     layout->setLabelAlignment(Qt::AlignRight);
 
     // Default connections
@@ -571,7 +577,7 @@ QWidget* SettingsPage::create_notification_section_widget()
 
     auto* layout = new QVBoxLayout(group);
     layout->setSpacing(16);
-    layout->setContentsMargins(16, 20, 16, 16);
+    layout->setContentsMargins(16, 8, 16, 16);
 
     notifications_checkbox_ = new QCheckBox(tr("启用通知"), this);
     notifications_checkbox_->setChecked(true);
@@ -614,7 +620,7 @@ QWidget* SettingsPage::create_appearance_section_widget()
 
     auto* layout = new QVBoxLayout(group);
     layout->setSpacing(16);
-    layout->setContentsMargins(16, 20, 16, 16);
+    layout->setContentsMargins(16, 8, 16, 16);
 
     // 主题设置行
     auto* theme_layout = new QHBoxLayout();

@@ -440,12 +440,26 @@ void DownloadPage::sync_task_row(const TaskRecord& record)
         return;  // 行已存在，动态列由 rerender 统一更新
     }
 
-    const int row = task_table_->rowCount();
+    // 按 task id 升序定位插入点——task_records_ 是 QHash 无序遍历,
+    // 直接 append 会让行序随机(每次全量重建都可能变化)
+    int row = task_table_->rowCount();
+    for (auto it = row_by_task_id_.cbegin(); it != row_by_task_id_.cend(); ++it) {
+        if (it.key() < key) {
+            continue;
+        }
+        row = std::min(row, it.value());
+    }
     task_table_->insertRow(row);
+    // 中间插入把后续行往下推,既有行号同步 +1(与 remove_task_row 的 -1 对称)
+    for (auto it = row_by_task_id_.begin(); it != row_by_task_id_.end(); ++it) {
+        if (it.value() >= row) {
+            it.value() += 1;
+        }
+    }
     task_table_->setRowHeight(row, kRowHeight);
     row_by_task_id_.insert(key, row);
 
-    // 文件名（带图标）
+    // 文件名
     auto* name_item = new QTableWidgetItem(record.filename);
     name_item->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     name_item->setData(Qt::UserRole, QVariant::fromValue<qulonglong>(key));
@@ -477,7 +491,7 @@ void DownloadPage::sync_task_row(const TaskRecord& record)
     task_table_->setItem(row, 2, size_item);
 
     // 速度
-    auto* speed_item = new QTableWidgetItem("0 B/s");
+    auto* speed_item = new QTableWidgetItem(speed_display_text(record.snapshot));
     speed_item->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     task_table_->setItem(row, 3, speed_item);
 
@@ -535,7 +549,7 @@ void DownloadPage::update_row_texts(int row, const TaskRecord& record)
         size_item->setText(record.size_text);
     }
     if (auto* speed_item = task_table_->item(row, 3)) {
-        speed_item->setText(format_speed(snap.speed));
+        speed_item->setText(speed_display_text(snap));
     }
     if (auto* status_item = task_table_->item(row, 4)) {
         status_item->setText(record.status_text);
@@ -782,6 +796,14 @@ QString DownloadPage::format_speed(uint64_t bytes_per_second)
         return "0 B/s";
     }
     return format_bytes(bytes_per_second) + "/s";
+}
+
+QString DownloadPage::speed_display_text(
+    const falcon::daemon::rpc::TaskSnapshot& snapshot)
+{
+    const bool active = snapshot.status == falcon::TaskStatus::Downloading ||
+                        snapshot.status == falcon::TaskStatus::Preparing;
+    return active ? format_speed(snapshot.speed) : QStringLiteral("—");
 }
 
 void DownloadPage::show_context_menu(const QPoint& pos)
@@ -1109,7 +1131,7 @@ QWidget* DownloadPage::create_task_card(const TaskRecord& record)
     size_label->setObjectName("cardInfoLabel");
     info_layout->addWidget(size_label);
 
-    auto* speed_label = new QLabel(format_speed(snap.speed), card);
+    auto* speed_label = new QLabel(speed_display_text(snap), card);
     speed_label->setObjectName("cardInfoLabel");
     info_layout->addWidget(speed_label);
 

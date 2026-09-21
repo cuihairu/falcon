@@ -258,19 +258,19 @@ QGroupBox {
     background-color: #2b2b2b;
     border: 1px solid #383838;
     border-radius: 8px;
-    margin-top: 14px;
-    padding: 12px 8px 8px 8px;
+    margin-top: 0px;
+    padding: 26px 8px 10px 8px;
     font-size: 14px;
 }
 
-/* 标题带卡片底色盖住边框线(fieldset legend 形态),不再浮在卡外 */
+/* 标题绘制在卡片内部(padding 区)——margin origin 会把标题画到
+   widget 矩形之外被裁剪(上半截消失),padding origin 绝不裁剪 */
 QGroupBox::title {
-    subcontrol-origin: margin;
+    subcontrol-origin: padding;
     subcontrol-position: top left;
-    left: 14px;
-    top: 4px;
-    padding: 0 6px;
-    background-color: #2b2b2b;
+    left: 24px;
+    top: 8px;
+    background-color: transparent;
     color: #c8c8c8;
     font-size: 12px;
     font-weight: 600;
