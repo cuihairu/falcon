@@ -46,20 +46,27 @@ std::atomic<TaskId> g_task_id_counter{1};
 
 /// 暂停清扫命令：任务组暂停后由 pause_task 投递，引擎线程执行时
 /// 收走该任务挂起中的连接（挂起命令不经 execute，execute 入口的
-/// PAUSED 守卫覆盖不到它们），关闭 fd 并销毁
+/// PAUSED 守卫覆盖不到它们），关闭 fd 并销毁。投递时刻作为 cutoff
+/// 随命令携带：pause→resume 竞速下迟到的清扫只收暂停前已挂起的旧
+/// 命令，绝不误杀 resume 激活的新链命令（误杀 = 组无命令推进且超
+/// 时清理扫不到，上层永挂）
 class HttpPauseSweepCommand : public AbstractCommand {
 public:
     explicit HttpPauseSweepCommand(TaskId task_id)
-        : AbstractCommand(task_id) {}
+        : AbstractCommand(task_id),
+          dispatched_at_(std::chrono::steady_clock::now()) {}
 
     bool execute(DownloadEngineV2* engine) override {
         if (engine) {
-            engine->sweep_task_connections(get_task_id());
+            engine->sweep_task_connections(get_task_id(), dispatched_at_);
         }
         return handle_result(ExecutionResult::OK);
     }
 
     const char* name() const override { return "HttpPauseSweepCommand"; }
+
+private:
+    std::chrono::steady_clock::time_point dispatched_at_;
 };
 } // namespace
 
@@ -835,7 +842,8 @@ void DownloadEngineV2::fail_group_of_command(TaskId task_id, const std::string& 
     group->set_status(RequestGroupStatus::FAILED);
 }
 
-void DownloadEngineV2::sweep_task_connections(TaskId task_id) {
+void DownloadEngineV2::sweep_task_connections(
+    TaskId task_id, std::chrono::steady_clock::time_point cutoff) {
     struct SweptEntry {
         CommandId cmd_id;
         int fd;
@@ -847,6 +855,16 @@ void DownloadEngineV2::sweep_task_connections(TaskId task_id) {
         for (auto it = waiting_commands_.begin();
              it != waiting_commands_.end();) {
             if (!it->second || it->second->get_task_id() != task_id) {
+                ++it;
+                continue;
+            }
+            // cutoff 过滤：晚于 cutoff 进入挂起表的命令不是本次暂停
+            // 的收口对象（典型为迟到清扫到达时 resume 已激活的新链
+            // 命令）。时间戳缺失视作极旧照收（挂起与计时两表同步维
+            // 护，缺失仅剩理论空间，保守保持既有收口语义）
+            const auto ts_it = waiting_command_times_.find(it->first);
+            if (ts_it != waiting_command_times_.end() &&
+                ts_it->second >= cutoff) {
                 ++it;
                 continue;
             }

@@ -771,3 +771,80 @@ TEST(DownloadEngineV2Pause, SweepSkipsOtherTasksPendingCommands) {
     std::error_code rm_ec;
     std::filesystem::remove_all(dir, rm_ec);
 }
+
+/// 批次 W+：迟到清扫不得误杀 resume 激活的新命令（cutoff 过滤钉子）。
+/// CI 红面根因（metalink 桥接 V2PauseThenResume 120s Timeout）：pause
+/// 投递的清扫命令若在 resume 之后才执行（引擎队列积压/线程调度），
+/// 按旧语义会按 task 无差别收走等待表里全部命令——包括 resume 激活
+/// 的新链命令。组 ACTIVE 但再无命令推进，且命令已摘出等待表、超时
+/// 清理扫不到，上层永远等不到终态。修复后清扫只收进入等待表早于
+/// 投递时刻（cutoff）的命令；本用例以 pause 之前的时刻为 cutoff
+/// 模拟迟到清扫，断言恢复链照常完成
+TEST(DownloadEngineV2Pause, LateSweepAfterResumeSparesNewCommands) {
+    const std::size_t kBodySize = 64 * 1024;
+    const std::string body = make_body(kBodySize);
+    PauseTestServer server;
+    // 4KB/10ms → 16 块 ≈ 160ms 慢发窗口，命令绝大部分时间挂起
+    ASSERT_TRUE(server.start(body, 4 * 1024, 10));
+
+    const std::string dir = temp_dir_for("latesweep");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "late.bin").string();
+    const std::string temp_path = out_path + ".falcon.tmp";
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options;
+    options.output_filename = out_path;
+    options.max_connections = 1;
+    options.max_retries = 0;
+    const TaskId task_id = engine.add_download(server.url("/late.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    EngineRunner runner(engine);
+
+    // 等首笔进度（旧链命令进入挂起等待）
+    ASSERT_TRUE(wait_for([&] { return group->downloaded_bytes() > 0; }, 15000))
+        << "下载未在时限内推进";
+
+    const auto accepted_before = server.connections_accepted();
+
+    // cutoff 取 pause 之前——模拟「投递时刻在 pause 前后、执行却在
+    // resume 之后」的迟到清扫
+    const auto late_cutoff = std::chrono::steady_clock::now();
+    ASSERT_TRUE(engine.pause_task(task_id));
+    // 立即恢复：与清扫竞速（CI 红面时序——resume 先于清扫命令执行）
+    ASSERT_TRUE(engine.resume_task(task_id));
+
+    // 等恢复链的新连接被服务器接受：此刻新链命令已注册
+    ASSERT_TRUE(wait_for(
+                   [&] {
+                       return server.connections_accepted() > accepted_before;
+                   },
+                   15000))
+        << "resume 后未观察到新连接";
+    // 再给一拍：让新命令从执行队列落进等待表（连接建立/收头间隙）
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // 迟到清扫：cutoff 早于新命令的挂起时刻——按修复后语义只收旧链
+    // 命令，resume 后注册的新命令必须全部存活（旧语义在此处误杀：
+    // 组再无命令推进，wait_group_terminal 超时红）
+    engine.sweep_task_connections(task_id, late_cutoff);
+
+    ASSERT_TRUE(wait_group_terminal(engine, group, 30'000));
+    ASSERT_EQ(group->status(), RequestGroupStatus::COMPLETED)
+        << group->error_message();
+
+    runner.shutdown_and_join();
+    server.stop();
+
+    EXPECT_EQ(read_file_content(out_path), body) << "成品逐字节一致";
+    EXPECT_FALSE(std::filesystem::exists(temp_path));
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}

@@ -680,11 +680,18 @@ MetalinkHandler::V2BridgeOutcome MetalinkHandler::run_v2_multi_source(
         const auto parent_status = parent->status();
         if (parent_status == TaskStatus::Paused ||
             parent_status == TaskStatus::Cancelled) {
-            // 兜底同步(正常路径 pause()/cancel() 已转发,幂等)
+            // 兜底同步(正常路径 pause()/cancel() 已转发,幂等)。
+            // 组已 PAUSED 时不再重复 pause_task:幂等 pause 也会再投
+            // 一个清扫命令,迟到的清扫与 resume 激活的新命令存在竞速
+            // (收走新命令 = 组无命令推进且超时清理扫不到,永挂)
             if (parent_status == TaskStatus::Cancelled) {
                 engine->cancel_task(id);
             } else {
-                engine->pause_task(id);
+                auto* g = engine->request_group_man()->find_group(id);
+                if (g == nullptr ||
+                    g->status() != RequestGroupStatus::PAUSED) {
+                    engine->pause_task(id);
+                }
             }
             // 组保持 PAUSED 供 resume 续跑;临时文件/控制文件保留
             return V2BridgeOutcome::kSuspended;

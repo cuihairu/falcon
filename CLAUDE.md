@@ -2,6 +2,52 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-21 - CI 红面收口：metalink V2 暂停恢复竞速（迟到清扫误杀 resume 新命令 = 永挂）
+- **红面**（run 35565963269，commit ebe5eb5 触发）：Coverage job
+  唯一红 `MetalinkV2BridgeTest.V2PauseThenResume` Timeout 120s，
+  其余 2362/2363 全绿；本机多核 40 轮压测不复现（CI 2 核 + 插桩
+  放大交错窗口）
+- **根因闭环（CI 日志时间线 ↔ 代码机制逐条对上）**：桥接 pause()
+  转发一次 `engine->pause_task`（投递 sweep₁），桥接轮询返回
+  kSuspended 前兜底又调一次幂等 `pause_task`（投递 sweep₂）——
+  「暂停任务」日志两次即铁证；测试线程 resume_task 把组置
+  WAITING，run 循环末尾激活新初始连接命令挂起进等待表；迟到的
+  sweep 执行时 `sweep_task_connections` **按 task_id 无差别收走
+  等待表里该任务全部命令**——resume 后新链命令被收走 + 关 fd +
+  析构 → 组 ACTIVE 但再无命令推进，且命令已摘出等待表、超时清
+  理扫不到 → 桥接轮询永等 → ctest 120s Timeout
+- **修复双保险**：① 根治——`sweep_task_connections` 增 cutoff
+  时间戳参数（缺省 now() 兼容既有直调），`HttpPauseSweepCommand`
+  构造记录投递时刻、execute 以其为 cutoff；清扫锁内循环按
+  `waiting_command_times_` 过滤，**只收进入等待表早于投递时刻的
+  命令**——迟到的清扫绝不误杀 resume 激活的新链命令（时间戳缺
+  失视作极旧照收，保守保持既有收口语义）；② 减源——metalink
+  桥接兜底对已 PAUSED 的组不再重复 pause_task（find_group 查组
+  态，已 PAUSED 直接返回 kSuspended）
+- **回归钉子**：`LateSweepAfterResumeSparesNewCommands`（pause
+  套件 7 用例）——慢发下载 → 等首笔进度 → 以 pause 之前的时刻
+  为 cutoff 直调 sweep 模拟迟到清扫 → 断言恢复链照常 COMPLETED
+  + 成品一致（旧语义此用例误杀新命令、组永挂超时红）
+- **验证**：`MetalinkV2BridgeTest.V2PauseThenResume` 修复后 100
+  轮压测全绿；Metalink*/V2*/Adapter* 234 用例回归绿；ASan pause 7
+  + bridge 16 用例零告警；build-cov 全量 ctest **2399/2400 过零
+  抖动**（139.7s，新钉子在内，13 skip 设计内）；铁账（build-cov
+  单树）：分母 17668 → 17694（+26 生产新行），miss 434 → 441
+  （+7 构成：1 行为新兜底防御分支「组未及 PAUSED 仍调
+  pause_task」——bridge 200ms 轮询窗口 vs 引擎毫秒级处理，确定性
+  不可锚；余为 name() 虚函数与时序窗口自然抖动/行号漂移；sweep
+  cutoff 过滤行全覆盖），行 **97.5%** / 函数 99.1% / 分支
+  56.9%——98% 结构性不可达结论维持
+- **测量级教训**：① 幂等副作用不是无害副作用——「幂等的
+  pause_task」重复调用会重复投递清扫命令，幂等性只保证状态收敛
+  不保证消息不重复，跨线程投递型副作用必须以「是否已投递」判断
+  而非「状态是否已到位」；② 迟到的收口动作要带投递时刻——引擎
+  队列积压下命令执行时刻远晚于决策时刻，清扫类动作按 task 无差
+  别收走「此刻的全部挂起」会把决策后新注册的工作一起收掉；③
+  「组 ACTIVE 但再无命令推进且超时清理扫不到」是永挂三要素——
+  排查 120s 级 Timeout 先核对收口路径是否把命令摘出了超时扫描
+  的覆盖范围
+
 ### 2026-09-21 - BT 做种端到端（aria2 --seed-ratio/--seed-time 同语义 + libtorrent 数据面真实化）
 - **todo #3 收口**：seed-ratio/seed-time 从全库零命中到端到端生
   效——`SeedLimits{ratio=1.0, time=0}` 默认即 aria2 语义（做种

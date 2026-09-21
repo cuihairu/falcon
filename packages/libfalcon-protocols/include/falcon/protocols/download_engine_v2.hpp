@@ -136,8 +136,18 @@ public:
      * execute，execute 入口的 PAUSED 守卫覆盖不到它们），锁内清
      * 四表、锁外摘事件监听并关 fd，销毁前给命令 prepare_sweep
      * 检查点（冲刷写缓冲 + 固化断点）
+     *
+     * @param cutoff 只收进入挂起表早于该时刻的命令；缺省为当前时刻
+     *   （此刻前挂起的全部收走）。pause_task 投递的清扫命令携带投递
+     *   时刻——迟到的清扫（pause→resume 竞速下 resume 之后才执行）
+     *   绝不能收走 resume 激活的新链命令：误杀 = 组 ACTIVE 但再无
+     *   命令推进，且命令已被摘出等待表、超时清理扫不到，上层永远
+     *   等不到终态（120s 挂死级红面）
      */
-    void sweep_task_connections(TaskId task_id);
+    void sweep_task_connections(
+        TaskId task_id,
+        std::chrono::steady_clock::time_point cutoff =
+            std::chrono::steady_clock::now());
 
     /**
      * @brief 恢复任务
