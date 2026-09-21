@@ -1,11 +1,16 @@
 /**
  * @file bittorrent_parse_test.cpp
- * @brief BitTorrent 插件 magnet/.torrent 解析测试（纯 C++ 模式）
+ * @brief BitTorrent 插件 magnet/.torrent 解析测试
  * @author Falcon Team
  * @date 2026-09-13
  *
  * 覆盖 can_handle 的 info-hash 校验（hex/base32/边界）、get_file_info 的
  * .torrent 解析（单文件/多文件/file:// 前缀/缺文件/非法内容）。
+ *
+ * get_file_info 有两种构建模式（FALCON_USE_LIBTORRENT）：libtorrent
+ * torrent_info 严格校验（非法结构抛 FileIOException、magnet 吸收 dn
+ * 参数为显示名），纯 C++ 内嵌解析器宽松（结构不合法留空不抛）——
+ * 模式相关断言用 #ifdef 分叉，数据本身保持两模式统一可解析。
  */
 
 #include <falcon/plugins/bittorrent/bittorrent_plugin.hpp>
@@ -56,11 +61,16 @@ std::string writeTorrent(const TempDir& dir, const std::string& name,
     return file.string();
 }
 
+// pieces 数量与结构必须自洽（libtorrent torrent_info 严格校验：SHA1
+// 整倍长度 + 数量 == ceil(total/piece_length)，纯 C++ 模式宽松放行）；
+// 单文件 1048576/262144 = 4 个 hash，多文件总长 364 < piece length =
+// 1 个 hash——数据按真实语义构造使两种构建模式解析行为一致
 const std::string kSingleFileTorrent =
     "d8:announce40:http://tracker.example.com:6969/announce"
     "4:infod6:lengthi1048576e4:name13:test_file.zip"
     "12:piece lengthi262144e"
-    "6:pieces22:abcdefghijklmnopqrstuv"
+    "6:pieces80:abcdefghijklmnopqrstabcdefghijklmnopqrst"
+    "abcdefghijklmnopqrstabcdefghijklmnopqrst"
     "ee";
 
 const std::string kMultiFileTorrent =
@@ -70,7 +80,7 @@ const std::string kMultiFileTorrent =
     "d6:lengthi264e4:pathl2:bb1:2ee"     // bb/2
     "e"                                   // files 列表闭合
     "4:name4:pack12:piece lengthi262144e"
-    "6:pieces22:abcdefghijklmnopqrstuv"
+    "6:pieces20:abcdefghijklmnopqrst"
     "ee";
 
 } // namespace
@@ -168,25 +178,32 @@ TEST(BitTorrentParseTest, MissingTorrentFileThrows) {
     TempDir dir;
     BitTorrentHandler handler;
     const std::string missing = (dir.path() / "nope.torrent").string();
-    EXPECT_THROW(handler.get_file_info(missing, DownloadOptions{}), FileIOException);
+    EXPECT_THROW((void)handler.get_file_info(missing, DownloadOptions{}), FileIOException);
 }
 
 TEST(BitTorrentParseTest, MalformedTorrentThrows) {
     TempDir dir;
     BitTorrentHandler handler;
     const std::string path = writeTorrent(dir, "bad.torrent", "not-bencode");
-    EXPECT_THROW(handler.get_file_info(path, DownloadOptions{}), std::exception);
+    EXPECT_THROW((void)handler.get_file_info(path, DownloadOptions{}), std::exception);
 }
 
 TEST(BitTorrentParseTest, TorrentWithoutInfoDictKeepsEmptyInfo) {
     TempDir dir;
     BitTorrentHandler handler;
-    // 合法 bencode 但缺 info 字典：validateTorrent 失败，不抛出、字段留空
     const std::string path =
         writeTorrent(dir, "empty.torrent", "d8:announce4:httpe");
+#ifdef FALCON_USE_LIBTORRENT
+    // libtorrent torrent_info 严格校验：合法 bencode 但缺 info 字典
+    // 解析失败，按既有错误路径抛出
+    EXPECT_THROW((void)handler.get_file_info(path, DownloadOptions{}),
+                 FileIOException);
+#else
+    // 纯 C++ 模式：validateTorrent 失败，不抛出、字段留空
     auto info = handler.get_file_info(path, DownloadOptions{});
     EXPECT_TRUE(info.filename.empty());
     EXPECT_EQ(info.total_size, size_t{0});
+#endif
 }
 
 TEST(BitTorrentParseTest, MagnetInfoHasNoSize) {
@@ -194,7 +211,12 @@ TEST(BitTorrentParseTest, MagnetInfoHasNoSize) {
     auto info = handler.get_file_info(
         "magnet:?xt=urn:btih:1234567890abcdef1234567890abcdef12345678&dn=x",
         DownloadOptions{});
+#ifdef FALCON_USE_LIBTORRENT
+    // libtorrent parse_magnet_uri 吸收 dn 参数为显示名（大小未知恒 0）
+    EXPECT_EQ(info.filename, "x");
+#else
     EXPECT_TRUE(info.filename.empty());
+#endif
     EXPECT_EQ(info.total_size, size_t{0});
     EXPECT_TRUE(info.supports_resume);
 }
@@ -206,5 +228,5 @@ TEST(BitTorrentParseTest, EmptyTorrentFileThrows) {
     BitTorrentHandler handler;
     const std::string path =
         writeTorrent(dir, "empty.torrent", "");
-    EXPECT_THROW(handler.get_file_info(path, DownloadOptions{}), std::exception);
+    EXPECT_THROW((void)handler.get_file_info(path, DownloadOptions{}), std::exception);
 }

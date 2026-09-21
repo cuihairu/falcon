@@ -39,6 +39,12 @@
           "platform": "!linux"
         }
       ]
+    },
+    "bittorrent": {
+      "description": "BitTorrent full data plane (download/seeding) via libtorrent",
+      "dependencies": [
+        "libtorrent"
+      ]
     }
   },
   "builtin-baseline": "89dd0f4d241136b843fb55813b2f0fa6448c204d"

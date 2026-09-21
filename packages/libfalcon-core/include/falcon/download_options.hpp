@@ -116,6 +116,19 @@ struct DownloadOptions {
     /// blocks to occupy real disk space). Applies once at output-file
     /// creation only; resume and rename paths are unaffected.
     std::string file_allocation = "none";
+
+    /// BitTorrent seeding share ratio: keep seeding after download
+    /// completes until uploaded/downloaded reaches this value
+    /// (aria2 --seed-ratio). Default 1.0; 0 = stop seeding immediately
+    /// on completion (task finishes as soon as the download does).
+    /// Only consumed by BitTorrent handlers; other protocols ignore it.
+    double seed_ratio = 1.0;
+
+    /// BitTorrent seeding time limit in minutes: keep seeding after
+    /// download completes for at most this long (aria2 --seed-time).
+    /// Default 0 = no time limit (only seed_ratio applies). Seeding
+    /// stops when EITHER limit is reached.
+    std::size_t seed_time_minutes = 0;
 };
 
 /// Global engine configuration

@@ -81,25 +81,62 @@ public:
     [[nodiscard]] int priority() const override { return 50; }
 
     /**
-     * @brief 启动 DHT 客户端
+     * @brief 启动 DHT 客户端（纯 C++ 模式；libtorrent 模式下 DHT
+     * 由 session 管理，此方法为 no-op，关闭走 configure_private_mode）
      */
     void startDht(uint16_t port = 6881);
 
     /**
-     * @brief 停止 DHT 客户端
+     * @brief 停止 DHT 客户端（纯 C++ 模式；libtorrent 模式 no-op）
      */
     void stopDht();
 
     /**
-     * @brief 检查 DHT 是否已启动（仅当客户端真正绑定并运行时为 true）
+     * @brief 检查 DHT 是否已启动（libtorrent 模式查 session 的
+     * DHT 状态；纯 C++ 模式仅当客户端真正绑定并运行时为 true）
      */
+#ifdef FALCON_USE_LIBTORRENT
+    bool isDhtRunning() const { return session_.is_dht_running(); }
+#else
     bool isDhtRunning() const { return dhtClient_ != nullptr; }
+#endif
 
     /**
      * @brief 清空 DHT 引导节点（预置的公网引导节点一并清除，
      * 供纯私有网络/测试场景使用；须在 DHT 启动后调用）
      */
     void clearDhtBootstrapNodes();
+
+    /**
+     * @brief 私有网络模式：关闭全部 peer 自动发现服务
+     * （libtorrent 模式关 session 的 DHT/LSD/UPnP/NAT-PMP；
+     * 纯 C++ 模式停用自研 DHT）。供测试与内网部署使用，
+     * peer 只经 connect_peer 显式直连
+     */
+    void configure_private_mode();
+
+#ifdef FALCON_USE_LIBTORRENT
+    /**
+     * @brief 设置 session 监听接口（如 "0.0.0.0:6881"、"127.0.0.1:0"
+     * 随机端口）；运行时可调，libtorrent 会重开监听 socket
+     */
+    void set_listen_interfaces(const std::string& interfaces);
+
+    /**
+     * @brief 当前实际监听端口（未监听返回 0）
+     */
+    [[nodiscard]] uint16_t listen_port() const { return session_.listen_port(); }
+
+    /**
+     * @brief 任务累计上传载荷字节数（做种计量；无该任务句柄返回 0）
+     */
+    [[nodiscard]] std::uint64_t uploaded_bytes(TaskId id) const;
+
+    /**
+     * @brief 任务累计下载载荷字节数（无该任务句柄返回 0）
+     */
+    [[nodiscard]] std::uint64_t downloaded_bytes(TaskId id) const;
+#endif
 
     /**
      * @brief 从 URL 提取 xt=urn:btih: 携带的 info-hash 文本（原样大小写，
@@ -115,14 +152,16 @@ public:
     static std::string info_hash_to_hex(const std::string& hash);
 
     /**
-     * @brief 启用/禁用 PEX
+     * @brief 启用/禁用 PEX（自研 PEX 表仅纯 C++ 模式维护；
+     * libtorrent 模式 PEX 由 session 内建支持）
      */
+#ifdef FALCON_USE_LIBTORRENT
+    void setPexEnabled(bool /*enabled*/) {}
+    bool isPexEnabled() const { return false; }
+#else
     void setPexEnabled(bool enabled) { pexEnabled_ = enabled; }
-
-    /**
-     * @brief 检查 PEX 是否启用
-     */
     bool isPexEnabled() const { return pexEnabled_; }
+#endif
 
     /**
      * @brief 获取指定 info_hash 的 PEX 处理器
@@ -138,7 +177,14 @@ private:
 #ifdef FALCON_USE_LIBTORRENT
     libtorrent::session session_;
     std::map<TaskId, libtorrent::torrent_handle> torrentHandles_;
-    std::mutex handlesMutex_;
+    mutable std::mutex handlesMutex_;
+
+    /**
+     * @brief 移除任务 torrent（默认保留磁盘文件）并清出句柄表；
+     * 须持锁调用语义——方法内部自持 handlesMutex_，download 监控
+     * 循环与 cancel 共用
+     */
+    void remove_torrent(TaskId id);
 #else
     // 纯 C++ 实现所需的数据结构
     struct TorrentFileInfo {

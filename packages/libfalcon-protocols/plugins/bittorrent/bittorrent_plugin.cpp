@@ -6,11 +6,18 @@
  */
 
 #include "bittorrent_plugin.hpp"
+#include "seed_policy.hpp"
 #include <falcon/logger.hpp>
 #include <falcon/exceptions.hpp>
+#include <chrono>
+#include <filesystem>
 #include <fstream>
 #include <cctype>
 #include <algorithm>
+
+#ifdef FALCON_USE_LIBTORRENT
+#include <libtorrent/bdecode.hpp>
+#endif
 
 namespace falcon {
 namespace protocols {
@@ -22,21 +29,25 @@ namespace protocols {
 BitTorrentHandler::BitTorrentHandler() {
     FALCON_LOG_INFO("BitTorrent handler initialized");
 
+#ifndef FALCON_USE_LIBTORRENT
     // 如果启用了 DHT，自动启动
     if (dhtEnabled_) {
         startDht(dhtPort_);
     }
+#endif
 }
 
 BitTorrentHandler::~BitTorrentHandler() {
     FALCON_LOG_DEBUG("BitTorrent handler shutdown");
 
+#ifndef FALCON_USE_LIBTORRENT
     // 停止 DHT
     stopDht();
 
     // 清理 PEX 处理器
     std::lock_guard<std::mutex> lock(pexHandlersMutex_);
     pexHandlers_.clear();
+#endif
 }
 
 std::vector<std::string> BitTorrentHandler::supported_schemes() const {
@@ -191,19 +202,23 @@ FileInfo BitTorrentHandler::get_file_info(const std::string& url,
                             std::istreambuf_iterator<char>());
 
             libtorrent::error_code ec;
-            libtorrent::torrent_info ti(data, ec);
+            // torrent_info(std::string, ec) 把参数当文件路径——内存数据
+            // 须先 bdecode 再从 bdecode_node 构造
+            libtorrent::bdecode_node node;
+            libtorrent::bdecode(data.data(), data.data() + data.size(), node, ec);
+            if (ec) {
+                throw FileIOException("Failed to decode torrent: " + ec.message());
+            }
+            libtorrent::torrent_info ti(node, ec);
             if (ec) {
                 throw FileIOException("Failed to parse torrent: " + ec.message());
             }
 
             info.filename = ti.name();
-            info.total_size = ti.total_size();
-
-            // 获取最后修改时间（如果有）
-            std::filesystem::path fsPath(filePath);
-            if (std::filesystem::exists(fsPath)) {
-                info.last_modified = std::filesystem::last_write_time(fsPath);
-            }
+            info.total_size = static_cast<Bytes>(ti.total_size());
+            // FileInfo::last_modified 是 steady_clock 时间点（HTTP 条件
+            // 下载语义），文件 mtime（file_clock）不可转换——BT 路径
+            // 不消费该字段，保持默认值
         }
     } catch (const std::exception& e) {
         FALCON_LOG_ERROR("Failed to get torrent file info: {}", e.what());
@@ -251,121 +266,174 @@ FileInfo BitTorrentHandler::get_file_info(const std::string& url,
 
 void BitTorrentHandler::download(DownloadTask::Ptr task, IEventListener* listener) {
 #ifdef FALCON_USE_LIBTORRENT
-    // 使用 libtorrent 实现
+    // 进度通知经 task->update_progress 内部 listener 下发，形参不消费
+    (void)listener;
+    // libtorrent 数据面：worker 线程内阻塞监控（对齐 metalink 委托形态）。
+    // 任务终态完全由本函数负责置位（TaskManager worker 对 download()
+    // 返回后不做任何状态改写；异常由 worker catch 置 Failed）
     FALCON_LOG_INFO("Starting BitTorrent download: {}", task->url());
 
     try {
-        libtorrent::add_torrent_params params;
-        std::string infoHash;
-
-        if (task->url().find("magnet:") == 0) {
-            params = libtorrent::parse_magnet_uri(task->url());
-            infoHash = params.info_hash.to_hex();
-        } else {
-            // 处理 torrent 文件
-            std::string filePath = task->url();
-            if (task->url().find("file://") == 0) {
-                filePath = task->url().substr(7);
-            }
-
-            std::ifstream file(filePath, std::ios::binary);
-            if (!file.is_open()) {
-                throw FileIOException("Failed to open torrent file");
-            }
-
-            std::string data((std::istreambuf_iterator<char>(file)),
-                            std::istreambuf_iterator<char>());
-
-            libtorrent::error_code ec;
-            params.ti = std::make_shared<libtorrent::torrent_info>(data, ec);
-            if (ec) {
-                throw FileIOException("Failed to parse torrent: " + ec.message());
-            }
-            infoHash = params.ti->info_hash().to_hex();
-        }
-
-        // 设置保存路径
-        std::string outputPath = task->options().output_directory;
-        if (outputPath.empty()) {
-            outputPath = "./downloads";
-        }
-        params.save_path = outputPath;
-
-        // 添加 torrent 到 session
-        libtorrent::torrent_handle handle = session_.add_torrent(params);
-
-        // 保存句柄供后续使用（DHT/PEX 回调需要）
+        // 句柄复用（resume 路径）：TaskManager 的 resume = Paused→Pending
+        // 重排队后重新调 download()。PAUSED torrent 句柄保留在 session
+        // 内（断点数据在磁盘与 session 缓存），复用续跑而非重新添加
+        libtorrent::torrent_handle handle;
+        bool reused = false;
         {
             std::lock_guard<std::mutex> handlesLock(handlesMutex_);
-            torrentHandles_[task->id()] = handle;
+            auto it = torrentHandles_.find(task->id());
+            if (it != torrentHandles_.end() && it->second.is_valid()) {
+                handle = it->second;
+                reused = true;
+            }
         }
 
-        // 设置任务为下载中状态
+        if (reused) {
+            handle.resume();
+            FALCON_LOG_INFO("BitTorrent download resumed: {}", task->id());
+        } else {
+            libtorrent::add_torrent_params params;
+            if (task->url().find("magnet:") == 0) {
+                params = libtorrent::parse_magnet_uri(task->url());
+            } else {
+                // 处理 torrent 文件
+                std::string filePath = task->url();
+                if (task->url().find("file://") == 0) {
+                    filePath = task->url().substr(7);
+                }
+
+                std::ifstream file(filePath, std::ios::binary);
+                if (!file.is_open()) {
+                    throw FileIOException("Failed to open torrent file");
+                }
+
+                std::string data((std::istreambuf_iterator<char>(file)),
+                                std::istreambuf_iterator<char>());
+
+                libtorrent::error_code ec;
+                // 同 get_file_info：内存 bencode 须先 bdecode（string 构造
+                // 重载按文件路径处理）
+                libtorrent::bdecode_node node;
+                libtorrent::bdecode(data.data(), data.data() + data.size(), node, ec);
+                if (ec) {
+                    throw FileIOException("Failed to decode torrent: " + ec.message());
+                }
+                params.ti = std::make_shared<libtorrent::torrent_info>(node, ec);
+                if (ec) {
+                    throw FileIOException("Failed to parse torrent: " + ec.message());
+                }
+            }
+
+            // 设置保存路径
+            std::string outputPath = task->options().output_directory;
+            if (outputPath.empty()) {
+                outputPath = "./downloads";
+            }
+            params.save_path = outputPath;
+
+            handle = session_.add_torrent(params);
+
+            // 保存句柄供 pause/resume/cancel 与监控循环使用
+            {
+                std::lock_guard<std::mutex> handlesLock(handlesMutex_);
+                torrentHandles_[task->id()] = handle;
+            }
+        }
+
         task->mark_started();
 
-        // 使用 DHT 查找 peers（如果启用）
-        if (dhtClient_ && !infoHash.empty()) {
-            FALCON_LOG_INFO("Starting DHT peer discovery for info_hash: {}", infoHash);
-            dhtClient_->findPeers(infoHash,
-                [this, task](const std::string& hash,
-                            const std::vector<std::pair<std::string, uint16_t>>& peers) {
-                    FALCON_LOG_DEBUG("DHT found {} peers for {}", peers.size(), hash);
+        // peer 发现由 session 原生 DHT/LSD/PEX/tracker 驱动——自研
+        // DhtClient/PexExtensionHandler 是纯 C++ 数据面的基础设施，
+        // libtorrent 分支不使用
 
-                    std::lock_guard<std::mutex> handlesLock(handlesMutex_);
-                    auto it = torrentHandles_.find(task->id());
-                    if (it != torrentHandles_.end() && it->second.is_valid()) {
-                        for (const auto& peer : peers) {
-                            try {
-                                libtorrent::tcp::endpoint endpoint(
-                                    libtorrent::address::from_string(peer.first),
-                                    peer.second
-                                );
-                                it->second.connect_peer(endpoint, 0);
-                                FALCON_LOG_DEBUG("Added DHT peer: {}:{}", peer.first, peer.second);
-                            } catch (const std::exception& e) {
-                                FALCON_LOG_WARN("Failed to add peer {}:{}: {}",
-                                               peer.first, peer.second, e.what());
-                            }
-                        }
-                    }
-                });
+        // ===== 监控循环（aria2 BT 语义：任务完成 = 下载完成 + 做种策略
+        // 满足；pause/cancel 经任务状态观测后在此收口）=====
+        using bt::SeedLimits;
+        using bt::SeedStats;
+        using bt::seeding_complete;
+        const auto& opts = task->options();
+        const SeedLimits limits{opts.seed_ratio,
+                                static_cast<double>(opts.seed_time_minutes)};
+        std::chrono::steady_clock::time_point seeding_started{};
+        bool seeding_observed = false;
+
+        while (true) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+            // 用户控制检查点：pause()/cancel() 只置任务状态，数据面冻结
+            // 与清理在循环内收口（DownloadTask::pause 不代置状态）
+            const auto status = task->status();
+            if (status == TaskStatus::Cancelled) {
+                // 清理已由 cancel() 完成，此处只退出循环
+                return;
+            }
+            if (!handle.is_valid()) {
+                // cancel() 的 remove_torrent 与状态置位之间的竞态窗口
+                return;
+            }
+            if (status == TaskStatus::Paused) {
+                handle.pause();
+                FALCON_LOG_INFO("BitTorrent download paused: {}", task->id());
+                // 句柄保留，resume 重排队后重新进入本函数
+                return;
+            }
+
+            libtorrent::torrent_status st = handle.status();
+
+            // torrent 级致命错误（存储错误等）→ throw 经 worker 置 Failed
+            if (st.errc) {
+                throw std::runtime_error("BitTorrent error: " + st.errc.message());
+            }
+
+            // magnet 元数据未到位时 total_wanted==0（0/0 piece，尚无
+            // 内容可下）——此阶段不能当下载完成处理（做种策略面对
+            // 0 字节任务没有可评估的量），必须等元数据到达后真有
+            // 内容；total_wanted>0 同时为该时序提供防御
+            const bool finished = st.is_finished && st.total_wanted > 0;
+            if (finished && !seeding_observed) {
+                seeding_observed = true;
+                seeding_started = std::chrono::steady_clock::now();
+                FALCON_LOG_INFO("BitTorrent download complete, seeding "
+                                "(ratio={}, time={} min): {}",
+                                limits.ratio, limits.time_minutes, task->id());
+            }
+
+            // 进度上报（update_progress 按 progress_interval_ms 节流下发；
+            // magnet 元数据未到时 total_wanted==0，报 0/0 未知总量）
+            task->update_progress(
+                static_cast<Bytes>(st.total_payload_download),
+                static_cast<Bytes>(st.total_wanted),
+                static_cast<BytesPerSecond>(st.download_payload_rate));
+
+            if (finished) {
+                const auto seeded_seconds = seeding_observed
+                    ? std::chrono::duration_cast<std::chrono::duration<double>>(
+                          std::chrono::steady_clock::now() - seeding_started).count()
+                    : 0.0;
+                const SeedStats stats{static_cast<std::uint64_t>(st.total_payload_upload),
+                                      static_cast<std::uint64_t>(st.total_payload_download),
+                                      static_cast<std::uint64_t>(st.total_wanted),
+                                      seeded_seconds};
+                if (seeding_complete(limits, stats)) {
+                    // 收口：移除 torrent（默认保留磁盘文件），任务 Completed。
+                    // 首次观察即满足（ratio/time 均 0）= 下载完成立即停
+                    remove_torrent(task->id());
+                    // 终态进度穿透（total>0 时 update_progress 不节流）
+                    task->update_progress(
+                        static_cast<Bytes>(st.total_payload_download),
+                        static_cast<Bytes>(st.total_wanted), 0);
+                    task->set_status(TaskStatus::Completed);
+                    FALCON_LOG_INFO("BitTorrent seeding finished "
+                                    "(uploaded={}, target ratio={}, "
+                                    "time={} min): {}",
+                                    st.total_payload_upload, limits.ratio,
+                                    limits.time_minutes, task->id());
+                    return;
+                }
+            }
         }
-
-        // 创建 PEX 处理器（如果启用）
-        if (pexEnabled_ && !infoHash.empty()) {
-            std::lock_guard<std::mutex> lock(pexHandlersMutex_);
-            pexHandlers_[infoHash] = std::make_unique<PexExtensionHandler>(infoHash);
-            pexHandlers_[infoHash]->enable();
-
-            // 设置 PEX peer 发现回调
-            pexHandlers_[infoHash]->getManager().setPeerDiscoveredCallback(
-                [this, task](const PexPeer& peer) {
-                    FALCON_LOG_DEBUG("PEX discovered peer: {}:{}", peer.ip, peer.port);
-
-                    std::lock_guard<std::mutex> handlesLock(handlesMutex_);
-                    auto it = torrentHandles_.find(task->id());
-                    if (it != torrentHandles_.end() && it->second.is_valid()) {
-                        try {
-                            libtorrent::tcp::endpoint endpoint(
-                                libtorrent::address::from_string(peer.ip),
-                                peer.port
-                            );
-                            it->second.connect_peer(endpoint, 0);
-                            FALCON_LOG_DEBUG("Added PEX peer: {}:{}", peer.ip, peer.port);
-                        } catch (const std::exception& e) {
-                            FALCON_LOG_WARN("Failed to add PEX peer {}:{}: {}",
-                                           peer.ip, peer.port, e.what());
-                        }
-                    }
-                });
-        }
-
-        // 监控下载进度（简化实现）
-        // 实际实现应该使用独立的监控线程
-        FALCON_LOG_INFO("BitTorrent download started: {}", params.name);
-
     } catch (const std::exception& e) {
-        FALCON_LOG_ERROR("Failed to start BitTorrent download: {}", e.what());
+        FALCON_LOG_ERROR("BitTorrent download failed: {}", e.what());
         task->set_error(e.what());
         throw;
     }
@@ -429,10 +497,24 @@ void BitTorrentHandler::download(DownloadTask::Ptr task, IEventListener* listene
 }
 
 void BitTorrentHandler::pause(DownloadTask::Ptr task) {
+    // TaskManager 不代置状态（DownloadTask::pause 也不代置）——handler
+    // 首行自置 Paused；数据面冻结由 download 监控循环观测后收口
+    task->set_status(TaskStatus::Paused);
 #ifdef FALCON_USE_LIBTORRENT
-    FALCON_LOG_DEBUG("Pausing BitTorrent download: {}", task->id());
-    // libtorrent 实现需要维护任务句柄映射
-    // 这里简化处理
+    // 尽早转发冻结：torrent pause 后停止请求与上传分块；
+    // 句柄移除与监控循环退出归循环内的 Paused 观测分支
+    libtorrent::torrent_handle handle;
+    {
+        std::lock_guard<std::mutex> handlesLock(handlesMutex_);
+        auto it = torrentHandles_.find(task->id());
+        if (it != torrentHandles_.end() && it->second.is_valid()) {
+            handle = it->second;
+        }
+    }
+    if (handle.is_valid()) {
+        handle.pause();
+    }
+    FALCON_LOG_INFO("BitTorrent download paused: {}", task->id());
 #else
     std::lock_guard<std::mutex> lock(tasksMutex_);
     auto it = activeTasks_.find(task->id());
@@ -443,31 +525,19 @@ void BitTorrentHandler::pause(DownloadTask::Ptr task) {
 }
 
 void BitTorrentHandler::resume(DownloadTask::Ptr task, IEventListener* listener) {
-#ifdef FALCON_USE_LIBTORRENT
-    FALCON_LOG_DEBUG("Resuming BitTorrent download: {}", task->id());
-    // libtorrent 实现需要维护任务句柄映射
-    // 这里简化处理
-#else
-    std::lock_guard<std::mutex> lock(tasksMutex_);
-    auto it = activeTasks_.find(task->id());
-    if (it != activeTasks_.end()) {
-        it->second->paused.store(false);
-        it->second->listener = listener;
-    }
-#endif
+    // TaskManager 的 resume = Paused→Pending 重排队后重新调 download()
+    //（句柄复用续跑）；此处直接 download 是非 TaskManager 调用路径
+    //（DownloadTask::resume）的对齐实现（metalink/http 同形态）
+    download(std::move(task), listener);
 }
 
 void BitTorrentHandler::cancel(DownloadTask::Ptr task) {
+    // 首行自置 Cancelled（幂等）——download 监控循环观测后退出；
+    // 直接调 handler->cancel 的路径（不经 DownloadTask::cancel）同样收口
+    task->set_status(TaskStatus::Cancelled);
 #ifdef FALCON_USE_LIBTORRENT
-    FALCON_LOG_DEBUG("Canceling BitTorrent download: {}", task->id());
-
-    std::lock_guard<std::mutex> handlesLock(handlesMutex_);
-    auto it = torrentHandles_.find(task->id());
-    if (it != torrentHandles_.end()) {
-        session_.remove_torrent(it->second);
-        torrentHandles_.erase(it);
-        FALCON_LOG_INFO("BitTorrent download cancelled: {}", task->id());
-    }
+    remove_torrent(task->id());  // 默认保留磁盘文件
+    FALCON_LOG_INFO("BitTorrent download cancelled: {}", task->id());
 #else
     std::lock_guard<std::mutex> lock(tasksMutex_);
     auto it = activeTasks_.find(task->id());
@@ -484,6 +554,63 @@ void BitTorrentHandler::cancel(DownloadTask::Ptr task) {
     FALCON_LOG_INFO("BitTorrent download cancelled: {}", task->id());
 #endif
 }
+
+#ifdef FALCON_USE_LIBTORRENT
+void BitTorrentHandler::remove_torrent(TaskId id) {
+    std::lock_guard<std::mutex> handlesLock(handlesMutex_);
+    auto it = torrentHandles_.find(id);
+    if (it != torrentHandles_.end()) {
+        if (it->second.is_valid()) {
+            // 默认 flags：保留磁盘文件与 .torrent 状态
+            session_.remove_torrent(it->second);
+        }
+        torrentHandles_.erase(it);
+    }
+}
+#endif
+
+void BitTorrentHandler::configure_private_mode() {
+#ifdef FALCON_USE_LIBTORRENT
+    libtorrent::settings_pack settings;
+    settings.set_bool(libtorrent::settings_pack::enable_dht, false);
+    settings.set_bool(libtorrent::settings_pack::enable_lsd, false);
+    settings.set_bool(libtorrent::settings_pack::enable_upnp, false);
+    settings.set_bool(libtorrent::settings_pack::enable_natpmp, false);
+    session_.apply_settings(std::move(settings));
+    FALCON_LOG_INFO("BitTorrent session private mode enabled "
+                    "(DHT/LSD/UPnP/NAT-PMP off)");
+#else
+    stopDht();
+    dhtEnabled_.store(false);
+#endif
+}
+
+#ifdef FALCON_USE_LIBTORRENT
+void BitTorrentHandler::set_listen_interfaces(const std::string& interfaces) {
+    libtorrent::settings_pack settings;
+    settings.set_str(libtorrent::settings_pack::listen_interfaces, interfaces);
+    session_.apply_settings(std::move(settings));
+}
+
+std::uint64_t BitTorrentHandler::uploaded_bytes(TaskId id) const {
+    std::lock_guard<std::mutex> handlesLock(handlesMutex_);
+    auto it = torrentHandles_.find(id);
+    if (it == torrentHandles_.end() || !it->second.is_valid()) {
+        return 0;
+    }
+    // total_payload_upload 只含真实数据载荷（不含协议握手/元信息开销）
+    return it->second.status().total_payload_upload;
+}
+
+std::uint64_t BitTorrentHandler::downloaded_bytes(TaskId id) const {
+    std::lock_guard<std::mutex> handlesLock(handlesMutex_);
+    auto it = torrentHandles_.find(id);
+    if (it == torrentHandles_.end() || !it->second.is_valid()) {
+        return 0;
+    }
+    return it->second.status().total_payload_download;
+}
+#endif
 
 // ============================================================================
 // B 编码解析（简化实现）
@@ -659,6 +786,12 @@ bool BitTorrentHandler::validateTorrent(const BValue& torrent) {
 // ============================================================================
 
 void BitTorrentHandler::startDht(uint16_t port) {
+#ifdef FALCON_USE_LIBTORRENT
+    // libtorrent 模式：DHT 由 session 管理（默认开启），
+    // 关闭走 configure_private_mode()
+    (void)port;
+    FALCON_LOG_DEBUG("DHT lifecycle is managed by the libtorrent session");
+#else
     if (dhtClient_) {
         FALCON_LOG_DEBUG("DHT client already running");
         return;
@@ -680,15 +813,19 @@ void BitTorrentHandler::startDht(uint16_t port) {
         FALCON_LOG_ERROR("Failed to start DHT client: {}", e.what());
         dhtClient_.reset();
     }
+#endif
 }
 
 void BitTorrentHandler::clearDhtBootstrapNodes() {
+#ifndef FALCON_USE_LIBTORRENT
     if (dhtClient_) {
         dhtClient_->clear_bootstrap_nodes();
     }
+#endif
 }
 
 void BitTorrentHandler::stopDht() {
+#ifndef FALCON_USE_LIBTORRENT
     if (!dhtClient_) {
         return;
     }
@@ -700,22 +837,32 @@ void BitTorrentHandler::stopDht() {
     } catch (const std::exception& e) {
         FALCON_LOG_ERROR("Failed to stop DHT client: {}", e.what());
     }
+#endif
 }
 
 // ============================================================================
-// PEX 集成
+// PEX 集成（自研 PEX 表仅纯 C++ 模式维护；libtorrent 内建 PEX）
 // ============================================================================
 
 PexExtensionHandler* BitTorrentHandler::getPexHandler(const std::string& infoHash) {
+#ifdef FALCON_USE_LIBTORRENT
+    (void)infoHash;
+    return nullptr;
+#else
     std::lock_guard<std::mutex> lock(pexHandlersMutex_);
     auto it = pexHandlers_.find(infoHash);
     return (it != pexHandlers_.end()) ? it->second.get() : nullptr;
+#endif
 }
 
 void BitTorrentHandler::removePexHandler(const std::string& infoHash) {
+#ifdef FALCON_USE_LIBTORRENT
+    (void)infoHash;
+#else
     std::lock_guard<std::mutex> lock(pexHandlersMutex_);
     pexHandlers_.erase(infoHash);
     FALCON_LOG_DEBUG("Removed PEX handler for info_hash: {}", infoHash);
+#endif
 }
 
 // ============================================================================

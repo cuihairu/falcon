@@ -59,6 +59,9 @@ DownloadOptions CliConfig::to_download_options() const {
     opts.adaptive_segment_sizing = adaptive_segment_sizing;
     opts.create_directory = create_directory;
     opts.overwrite_existing = overwrite_existing;
+    opts.seed_ratio = seed_ratio;
+    opts.seed_time_minutes = static_cast<std::size_t>(
+        std::max(0, seed_time_minutes));
 
     // Copy headers
     for (const auto& [k, v] : headers) {
@@ -259,6 +262,8 @@ bool ConfigLoader::save(const CliConfig& config, const std::string& config_path)
         j["conditional_download"] = config.conditional_download;
         j["auto_renaming"] = config.auto_renaming;
         j["file_allocation"] = config.file_allocation;
+        j["seed_ratio"] = config.seed_ratio;
+        j["seed_time_minutes"] = config.seed_time_minutes;
         j["create_directory"] = config.create_directory;
         j["overwrite_existing"] = config.overwrite_existing;
 
@@ -470,6 +475,13 @@ std::optional<CliConfig> ConfigLoader::load_from_file(const std::string& path) {
         }
         if (j.contains("file_allocation")) {
             config.file_allocation = j["file_allocation"].get<std::string>();
+        }
+        if (j.contains("seed_ratio")) {
+            config.seed_ratio = std::max(0.0, j["seed_ratio"].get<double>());
+        }
+        if (j.contains("seed_time_minutes")) {
+            config.seed_time_minutes = std::max(
+                0, j["seed_time_minutes"].get<int>());
         }
         if (j.contains("create_directory")) {
             config.create_directory = j["create_directory"].get<bool>();

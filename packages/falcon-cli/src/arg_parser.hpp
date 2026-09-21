@@ -56,6 +56,12 @@ struct CliArgs {
     /// 输出文件预分配（aria2 --file-allocation 同语义）：空 = 未指定
     /// （引擎默认 none）；有效值 none/trunc/falloc/prealloc
     std::string file_allocation;
+    /// BT 做种分享率（aria2 --seed-ratio 同语义，默认 1.0；0 = 下载
+    /// 完成立即停）；与 seed_time_minutes 任一满足即收口
+    double seed_ratio = 1.0;
+    /// BT 做种时长上限（分钟，aria2 --seed-time 同语义；0 = 不限时，
+    /// 仅 seed_ratio 生效）
+    int seed_time_minutes = 0;
     std::string rpc_secret;
     int rpc_listen_port = 6800;
     bool rpc_allow_origin_all = false;

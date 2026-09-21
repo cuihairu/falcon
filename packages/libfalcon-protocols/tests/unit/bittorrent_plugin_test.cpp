@@ -17,6 +17,12 @@
  *
  * 任务生命周期与 DHT 集成经本地随机端口 DHT（清空公网引导节点后
  * 空网络立即收敛）端到端覆盖。
+ *
+ * 构建模式分叉：libtorrent 模式（FALCON_USE_LIBTORRENT）下 get_file_info
+ * 走 torrent_info 严格校验（非法结构抛出而非留空），自研 DhtClient/PEX
+ * 表不在数据面上（session 原生 DHT/LSD/PEX），且 download() 是阻塞
+ * 监控循环——结构校验组按模式分叉断言，纯 C++ DHT/生命周期组编译期
+ * 隔离，session 数据面由 bittorrent_seeding_test 覆盖。
  */
 
 #include <gtest/gtest.h>
@@ -59,7 +65,9 @@ protected:
                                        "&tr=udp%3A%2F%2Ftracker.example.com%3A6969"
                                        "&tr=udp%3A%2F%2Ftracker2.example.com%3A6969";
 
-    // 简单的 torrent 文件内容（B 编码，key 按字典序，长度前缀正确）
+    // 简单的 torrent 文件内容（B 编码，key 按字典序，长度前缀正确；
+    // pieces = 4×20 字节与 total/piece_length = 1048576/262144 自洽
+    // ——libtorrent 严格校验 piece 数量，与纯 C++ 模式数据统一可解析）
     const std::string simpleTorrentData =
         "d8:announce40:http://tracker.example.com:6969/announce"
         "10:created by13:Falcon Client"
@@ -67,7 +75,8 @@ protected:
         "8:encoding5:UTF-8"
         "4:infod6:lengthi1048576e4:name13:test_file.zip"
         "12:piece lengthi262144e"
-        "6:pieces22:abcdefghijklmnopqrstuv"
+        "6:pieces80:abcdefghijklmnopqrstabcdefghijklmnopqrst"
+        "abcdefghijklmnopqrstabcdefghijklmnopqrst"
         "ee";
 };
 
@@ -524,7 +533,7 @@ TEST(BitTorrentInfoHashTest, WrongLengthRejected) {
 TEST_F(BitTorrentHandlerTest, TruncatedIntegerThrows) {
     // 旧实现静默返回 42：截断的 "i42" 缺终止 'e' 必须报错
     TempTorrentFile file("i42");
-    EXPECT_THROW(handler->get_file_info(
+    EXPECT_THROW((void)handler->get_file_info(
                      file.path().string(), DownloadOptions{}),
                  std::exception);
 }
@@ -533,7 +542,7 @@ TEST_F(BitTorrentHandlerTest, InvalidIntegerContentThrows) {
     // 空内容 / 空白填充：std::stoll 会宽松接受，bencode 不允许
     for (const auto* data : {"ie", "i 5e", "i+5e"}) {
         TempTorrentFile file(data);
-        EXPECT_THROW(handler->get_file_info(
+        EXPECT_THROW((void)handler->get_file_info(
                          file.path().string(), DownloadOptions{}),
                      std::exception)
             << "input: " << data;
@@ -542,24 +551,32 @@ TEST_F(BitTorrentHandlerTest, InvalidIntegerContentThrows) {
 
 TEST_F(BitTorrentHandlerTest, IntegerOutOfRangeThrows) {
     TempTorrentFile file("i99999999999999999999999e");
-    EXPECT_THROW(handler->get_file_info(
+    EXPECT_THROW((void)handler->get_file_info(
                      file.path().string(), DownloadOptions{}),
                  std::exception);
 }
 
 TEST_F(BitTorrentHandlerTest, NegativeIntegerStillParses) {
+    TempTorrentFile file("i-5e");
+#ifdef FALCON_USE_LIBTORRENT
+    // libtorrent 对根非字典输入解析失败（严格语义）；严格化不误伤
+    // 合法负整数的契约由纯模式分支钉住
+    EXPECT_THROW((void)handler->get_file_info(file.path().string(),
+                                        DownloadOptions{}),
+                 std::exception);
+#else
     // 严格化不得误伤合法负整数（根非字典 → validateTorrent 失败 →
     // 按既有契约不抛出、字段留空）
-    TempTorrentFile file("i-5e");
     auto info = handler->get_file_info(file.path().string(),
                                                 DownloadOptions{});
     EXPECT_TRUE(info.filename.empty());
+#endif
 }
 
 TEST_F(BitTorrentHandlerTest, TruncatedContainerThrows) {
     for (const auto* data : {"l4:spam", "d4:info4:name"}) {
         TempTorrentFile file(data);
-        EXPECT_THROW(handler->get_file_info(
+        EXPECT_THROW((void)handler->get_file_info(
                          file.path().string(), DownloadOptions{}),
                      std::exception)
             << "input: " << data;
@@ -568,14 +585,14 @@ TEST_F(BitTorrentHandlerTest, TruncatedContainerThrows) {
 
 TEST_F(BitTorrentHandlerTest, DictWithNonStringKeyThrows) {
     TempTorrentFile file("di1e4:spame");
-    EXPECT_THROW(handler->get_file_info(
+    EXPECT_THROW((void)handler->get_file_info(
                      file.path().string(), DownloadOptions{}),
                  std::exception);
 }
 
 TEST_F(BitTorrentHandlerTest, StringLengthBeyondDataThrows) {
     TempTorrentFile file("d4:info12:shorte");
-    EXPECT_THROW(handler->get_file_info(
+    EXPECT_THROW((void)handler->get_file_info(
                      file.path().string(), DownloadOptions{}),
                  std::exception);
 }
@@ -583,43 +600,67 @@ TEST_F(BitTorrentHandlerTest, StringLengthBeyondDataThrows) {
 TEST_F(BitTorrentHandlerTest, StringMissingColonThrows) {
     // 长度前缀后缺 ':'（"4name"）
     TempTorrentFile file("d4:info4name");
-    EXPECT_THROW(handler->get_file_info(
+    EXPECT_THROW((void)handler->get_file_info(
                      file.path().string(), DownloadOptions{}),
                  std::exception);
 }
 
 //==============================================================================
-// validateTorrent 结构校验分支（既有契约：不抛出、字段留空）
+// 结构校验分支：纯 C++ 模式宽松（不抛出、字段留空），libtorrent 模式
+// torrent_info 严格校验（非法结构解析失败抛 FileIOException）——
+// 两种模式对非法输入都不得静默出假元数据
 //==============================================================================
 
 TEST_F(BitTorrentHandlerTest, NonDictRootRejected) {
     TempTorrentFile file("l4:spame");
+#ifdef FALCON_USE_LIBTORRENT
+    EXPECT_THROW((void)handler->get_file_info(file.path().string(),
+                                        DownloadOptions{}),
+                 std::exception);
+#else
     auto info = handler->get_file_info(file.path().string(),
                                                 DownloadOptions{});
     EXPECT_TRUE(info.filename.empty());
     EXPECT_EQ(info.total_size, size_t{0});
+#endif
 }
 
 TEST_F(BitTorrentHandlerTest, InfoWithoutPiecesRejected) {
     TempTorrentFile file("d4:infod4:name4:testee");
+#ifdef FALCON_USE_LIBTORRENT
+    EXPECT_THROW((void)handler->get_file_info(file.path().string(),
+                                        DownloadOptions{}),
+                 std::exception);
+#else
     auto info = handler->get_file_info(file.path().string(),
                                                 DownloadOptions{});
     EXPECT_TRUE(info.filename.empty());
+#endif
 }
 
 TEST_F(BitTorrentHandlerTest, InfoWithoutLengthRejected) {
     // 有 name + pieces 但既无单文件 length 也无多文件 files
     TempTorrentFile file("d4:infod4:name4:test6:pieces3:abcee");
+#ifdef FALCON_USE_LIBTORRENT
+    EXPECT_THROW((void)handler->get_file_info(file.path().string(),
+                                        DownloadOptions{}),
+                 std::exception);
+#else
     auto info = handler->get_file_info(file.path().string(),
                                                 DownloadOptions{});
     EXPECT_TRUE(info.filename.empty());
+#endif
 }
 
 //==============================================================================
-// DHT 生命周期（随机端口 + 端口冲突）
+// DHT 生命周期（随机端口 + 端口冲突；纯 C++ DhtClient 数据面专属）
 //==============================================================================
 
 TEST_F(BitTorrentHandlerTest, DhtStartStopOnEphemeralPort) {
+#ifdef FALCON_USE_LIBTORRENT
+    GTEST_SKIP() << "libtorrent 模式 DHT 由 session 原生管理，startDht/"
+                    "stopDht 为 no-op（session 数据面由 seeding e2e 覆盖）";
+#else
     handler->stopDht();
     EXPECT_FALSE(handler->isDhtRunning());
 
@@ -634,9 +675,13 @@ TEST_F(BitTorrentHandlerTest, DhtStartStopOnEphemeralPort) {
     EXPECT_FALSE(handler->isDhtRunning());
     handler->stopDht();  // 幂等
     EXPECT_FALSE(handler->isDhtRunning());
+#endif
 }
 
 TEST_F(BitTorrentHandlerTest, DhtPortConflictLeavesNoZombieClient) {
+#ifdef FALCON_USE_LIBTORRENT
+    GTEST_SKIP() << "libtorrent 模式无自研 DhtClient（见上一用例）";
+#else
     HeldUdpPort held;
     ASSERT_TRUE(held.valid());
 
@@ -646,11 +691,17 @@ TEST_F(BitTorrentHandlerTest, DhtPortConflictLeavesNoZombieClient) {
     // 客户端，isDhtRunning() 才不撒谎（旧实现留僵尸客户端，
     // 后续 findPeers 的查找无人驱动、回调永不触发）
     EXPECT_FALSE(handler->isDhtRunning());
+#endif
 }
 
 //==============================================================================
-// 任务生命周期（纯 C++ 路径；清空公网引导节点后空网络查找立即收敛）
+// 任务生命周期（纯 C++ 数据面：自研 DHT 查找 + 内部下载线程）。
+// libtorrent 模式 download() 是 worker 线程内的阻塞监控循环（对齐
+// metalink 委托形态），主线程直调永不返回，且数据面为 session 原生
+// DHT/LSD/PEX——整组与 libtorrent 模式无关，编译期隔离
 //==============================================================================
+
+#ifndef FALCON_USE_LIBTORRENT
 
 namespace {
 
@@ -726,13 +777,19 @@ TEST_F(BitTorrentHandlerTest, DownloadPauseResumeCancelLifecycle) {
     lc->cancel(task);  // 幂等
 }
 
-TEST_F(BitTorrentHandlerTest, PauseResumeCancelUnknownTaskIsNoOp) {
-    // 从未 download 的任务 id：查找落空即无操作，不崩溃
+TEST_F(BitTorrentHandlerTest, UnknownTaskLifecycleEntriesStaySafe) {
+    // 「未知任务三连 no-op」契约已随监控循环接线演进：pause/cancel
+    // 首行自置状态（TaskManager 不代置，对齐 http handler 形态），
+    // resume 直接 download（DownloadTask::resume 路径同形态）。
+    // 本用例钉住演进后的安全面：三入口对未知任务不崩溃，resume
+    // 启动的下载由 cancel 干净收口，不留孤儿线程
     auto task = makeTask(7704, std::string("magnet:?xt=urn:btih:") + kHexHash);
     handler->pause(task);
-    handler->resume(task, nullptr);
+    EXPECT_EQ(task->status(), TaskStatus::Paused);
+    handler->resume(task, nullptr);  // resume = 直接 download（真实启动）
     handler->cancel(task);
-    EXPECT_EQ(task->status(), TaskStatus::Pending);
+    EXPECT_EQ(task->status(), TaskStatus::Cancelled);
+    waitALittle();  // 给 download 线程收尾窗口（fixture 析构前落地）
 }
 
 TEST_F(BitTorrentHandlerTest, DownloadMagnetWithoutInfoHashSkipsDhtLookup) {
@@ -769,8 +826,12 @@ TEST_F(BitTorrentHandlerTest, PexHandlerLookupMissingReturnsNull) {
     EXPECT_EQ(handler->getPexHandler("nonexistent-hash"), nullptr);
     handler->removePexHandler("nonexistent-hash");  // 不存在：无操作不崩溃
 
+#ifndef FALCON_USE_LIBTORRENT
     handler->setPexEnabled(false);
     EXPECT_FALSE(handler->isPexEnabled());
     handler->setPexEnabled(true);
     EXPECT_TRUE(handler->isPexEnabled());
+#endif
 }
+
+#endif // !FALCON_USE_LIBTORRENT

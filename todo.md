@@ -2464,9 +2464,28 @@ path-style）；网盘分享链识别（12 平台）+ 资源搜索；GUI 桌面�
 2. **SFTP**：同上形态（plugins/sftp 449 行旧接口未接入注册表）；
    aria2 原生支持。可经 V1 curl 的 SCP/SFTP 能力低成本接入
    （需 libssh2 构建项）
-3. **BT 做种策略**：seed-ratio/seed-time 全库零命中——下载完
-   即停，无法做种保活（PT 站核心需求）。需要 BT handler 增加
-   完成后保留会话 + 上传计量 + 条件退出
+3. ~~**BT 做种策略**~~（2026-09-21 已落地）：seed_policy 纯单元
+   （seed_policy.{hpp,cpp}，aria2 --seed-ratio/--seed-time 同语义
+   ——ratio 做种到 uploaded/max(downloaded,total_size) 达标、
+   time 做种不超时长、**任一满足即停（OR）**、两者均 0 = 下完
+   立即停；默认 ratio=1.0/time=0）+ libtorrent session 数据面
+   真实化——download() 监控循环 200ms 轮询 alert 刷新状态：
+   完成→进入做种（SeedStats{uploaded, downloaded, total_wanted,
+   seeded_seconds} 持续评估）→策略满足→remove_torrent（保留磁
+   盘文件）+ 终态进度穿透 + Completed；pause/resume 接线（句柄
+   保留供 resume 续传）；uploaded_bytes/downloaded_bytes 计量访
+   问器（total_payload_upload/download，完成摘句柄后按契约返 0
+   ——活动任务才有意义）；CLI --seed-ratio/--seed-time + config
+   seed_ratio/seed_time_minutes 字段（负值钳 0）。e2e 钉死：
+   私有回环 P2P（seed 端 create_torrent 造真实 .torrent 对已存
+   在文件做种 ratio=100 永不自停、leech 端 magnet+x.pe 直连——
+   私有模式关 DHT/LSD/UPnP/NAT-PMP 后 x.pe 是唯一 peer 来源，
+   seed uploaded ≥ 文件总长即数据唯一来源的结构性铁证）+ ratio=0
+   下完立即停 + 计量 miss 返 0。**如实记录**：leech 侧完成路径
+   remove_torrent 摘句柄，下载侧计量不可观测；seed_time 粒度为
+   分钟（DownloadOptions::seed_time_minutes size_t）；daemon RPC
+   per-download seed 选项映射未做（DownloadOptions 默认 1.0/0
+   在 daemon 路径已生效，与 auto_file_renaming 同姿态留独立增量）
 4. ~~**gzip/deflate content-encoding**~~（2026-09-19 收口，方案与本
    条原始设想不同）：原条目前提「V1 curl 自动解压」有误——libcurl
    不设 CURLOPT_ACCEPT_ENCODING 就不协商也不解压，全库 grep 零命中，

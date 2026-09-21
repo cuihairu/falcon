@@ -319,7 +319,9 @@ void show_help() {
     std::cout << "      --use-head             aria2: 使用 HEAD 方法获取文件信息\n";
     std::cout << "      --conditional-download aria2: 条件下载（仅当远程文件更新时）\n";
     std::cout << "      --auto-file-renaming   aria2: 自动重命名文件\n";
-    std::cout << "      --file-allocation <模式> aria2: 文件预分配 (none|trunc|falloc|prealloc)\n\n";
+    std::cout << "      --file-allocation <模式> aria2: 文件预分配 (none|trunc|falloc|prealloc)\n";
+    std::cout << "      --seed-ratio <比率>    aria2: BT 做种分享率 [默认: 1.0，0 = 下完即停]\n";
+    std::cout << "      --seed-time <分钟>     aria2: BT 做种时长上限 [默认: 0 = 不限时]\n\n";
 
     std::cout << "RPC 选项 (预留):\n";
     std::cout << "      --rpc-secret <令牌>    aria2: RPC 密钥\n";
@@ -419,6 +421,12 @@ static void merge_config_with_file(CliArgs& args) {
     if (!file_config.file_allocation.empty() && args.file_allocation.empty()) {
         args.file_allocation = file_config.file_allocation;
     }
+    if (file_config.seed_ratio != 1.0 && args.seed_ratio == 1.0) {
+        args.seed_ratio = file_config.seed_ratio;
+    }
+    if (file_config.seed_time_minutes != 0 && args.seed_time_minutes == 0) {
+        args.seed_time_minutes = file_config.seed_time_minutes;
+    }
     if (!file_config.verify_ssl) args.verify_ssl = false;
     // 合并 headers
     for (const auto& [k, v] : file_config.headers) {
@@ -467,6 +475,9 @@ static falcon::DownloadOptions setup_download_options(const CliArgs& args) {
     if (!args.file_allocation.empty()) {
         options.file_allocation = args.file_allocation;
     }
+    options.seed_ratio = args.seed_ratio;
+    options.seed_time_minutes = static_cast<std::size_t>(
+        std::max(0, args.seed_time_minutes));
     options.speed_limit = args.speed_limit;
     options.min_segment_size = args.min_segment_size;
     options.adaptive_segment_sizing = args.adaptive_sizing;

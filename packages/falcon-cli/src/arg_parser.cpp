@@ -267,6 +267,14 @@ CliArgs parse_args(int argc, char* argv[]) {
             if (i + 1 < argc) {
                 args.file_allocation = argv[++i];
             }
+        } else if (arg == "--seed-ratio") {
+            if (i + 1 < argc) {
+                args.seed_ratio = std::max(0.0, std::stod(argv[++i]));
+            }
+        } else if (arg == "--seed-time") {
+            if (i + 1 < argc) {
+                args.seed_time_minutes = std::max(0, std::stoi(argv[++i]));
+            }
         } else if (arg == "--rpc-secret") {
             if (i + 1 < argc) {
                 args.rpc_secret = argv[++i];

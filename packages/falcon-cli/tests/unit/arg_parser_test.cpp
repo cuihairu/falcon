@@ -318,3 +318,24 @@ TEST(ParseArgs, ClampsQueueAndConnectionLimits) {
     EXPECT_EQ(high.connections, 64);
     EXPECT_EQ(high.max_retries, 10);
 }
+
+TEST(ParseArgs, SeedPolicyDefaults) {
+    auto args = parse_args_from_vector({"https://example.com/file.zip"});
+
+    EXPECT_DOUBLE_EQ(args.seed_ratio, 1.0);
+    EXPECT_EQ(args.seed_time_minutes, 0);
+}
+
+TEST(ParseArgs, SeedPolicyValuesParsedAndClamped) {
+    auto args = parse_args_from_vector(
+        {"--seed-ratio", "2.5", "--seed-time", "30",
+         "https://example.com/file.zip"});
+    EXPECT_DOUBLE_EQ(args.seed_ratio, 2.5);
+    EXPECT_EQ(args.seed_time_minutes, 30);
+
+    auto negative = parse_args_from_vector(
+        {"--seed-ratio", "-1.5", "--seed-time", "-10",
+         "https://example.com/file.zip"});
+    EXPECT_DOUBLE_EQ(negative.seed_ratio, 0.0);
+    EXPECT_EQ(negative.seed_time_minutes, 0);
+}

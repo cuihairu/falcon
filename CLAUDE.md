@@ -2,6 +2,45 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-21 - BT 做种端到端（aria2 --seed-ratio/--seed-time 同语义 + libtorrent 数据面真实化）
+- **todo #3 收口**：seed-ratio/seed-time 从全库零命中到端到端生
+  效——`SeedLimits{ratio=1.0, time=0}` 默认即 aria2 语义（做种
+  到 1.0 倍或永不时限；两者均 0 = 下完立即停）。**seed_policy
+  纯单元**（seed_policy.{hpp,cpp}，无 libtorrent 依赖两模式共
+  享）：任一条件满足即停（OR）；ratio 分母 = max(downloaded,
+  total_size)（纯做种任务 downloaded=0 按 torrent 总长计）；无
+  总长退化情形比率不可判定不因比率退出
+- **监控循环真实化**（libtorrent 模式）：download() 200ms 轮询
+  alert 刷新句柄状态——torrent 级 errc→throw（worker 置
+  Failed）；Paused→handle.pause()（句柄保留供 resume）；完成
+  （is_finished && total_wanted>0——magnet 元数据未到时
+  total_wanted==0 无内容可评估，不进完成/做种判定）→进入做种
+  （SeedStats 持续评估）→策略满足→remove_torrent（保留磁盘文
+  件）+ 终态进度穿透 + Completed
+- **计量访问器**：`uploaded_bytes(id)`/`downloaded_bytes(id)`
+  （total_payload_upload/download，只含真实数据载荷不含协议开
+  销；完成路径摘句柄后按契约返 0——活动任务才有意义）
+- **CLI/config 接线**（对齐 file-allocation 惯例）：--seed-ratio
+  /--seed-time + config `seed_ratio`/`seed_time_minutes`（负值
+  钳 0；config 字段 CLI 优先；to_download_options 同步消费）+
+  5 用例（解析钳制/字段往返/缺省回归）
+- **私有回环 P2P e2e**（bittorrent_seeding_test.cpp，真实
+  libtorrent session 数据面）：seed 端 create_torrent 造真实
+  .torrent 对已存在文件做种（ratio=100 永不自停，测试 cancel
+  收口）；leech 端 magnet+x.pe 直连——私有模式关 DHT/LSD/UPnP/
+  NAT-PMP 后 x.pe 是唯一 peer 来源，**seed uploaded ≥ 文件总长
+  即"数据唯一来源是本地 seed"的结构性铁证**（metadata 交换不
+  计 payload upload）；ratio=0 验证"下载完成立即停"语义；
+  SeedSession 成员序 TempDir 在前 handler 在后（析构逆序 ⇒
+  session 先销毁再清文件）
+- **如实记录**：leech 侧完成态计量不可观测（remove_torrent 摘
+  句柄，访问器按契约返 0）；seed_time 粒度为分钟（size_t）；
+  daemon RPC per-download seed 选项映射未做（默认 1.0/0 已生
+  效，与 auto_file_renaming 同姿态）。**测量教训**：断言失败先
+  核对观测点契约再下"产品缺陷"结论——leech downloaded_bytes==0
+  曾两轮误诊（真因摘句柄返 0，文件逐字节一致证明下载真实发生）
+- 下一个 todo 候选：#2 SFTP（阻塞：SSH2 无轻量 mock 方案）
+
 ### 2026-09-20 - CI 红面收口：WANT_WRITE 明文用例 Windows 静置回环连接中止（注入命中计数锚替代时间锚）
 - **红面**（run 35528355783，A4 提交触发）：Coverage/Linux gcc+clang/
   macOS/Qt6 全绿，唯一红 Windows build job 的

@@ -6,6 +6,39 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-21 - BT 做种策略落地（aria2 --seed-ratio/--seed-time 同语义 + libtorrent 数据面真实化）
+- **seed_policy.{hpp,cpp}**（纯函数，无 libtorrent 依赖）：
+  `seeding_complete(SeedLimits, SeedStats)` ——ratio>0 做种到
+  uploaded/max(downloaded,total_size) 达标（纯做种任务
+  downloaded=0 按 torrent 总长计）；time>0 做种不超时长；**任一
+  满足即停（OR）**；两者均 0 = 下载完成立即停（aria2
+  --seed-ratio=0 语义）；无总长退化情形比率不可判定不因比率退出。
+  8 用例纯单元（两模式共享）
+- **监控循环真实化**（libtorrent 模式 download()）：200ms 轮询
+  alert 刷新句柄状态——errc→throw（经 worker 置 Failed）；
+  Paused→handle.pause()（句柄保留供 resume 续传）；完成
+  （is_finished && total_wanted>0，元数据未到时 total_wanted==0
+  不当完成处理）→进入做种（SeedStats 持续评估）→策略满足→
+  remove_torrent（默认保留磁盘文件）+ 终态进度穿透 + Completed
+- **计量访问器**：`uploaded_bytes(id)`/`downloaded_bytes(id)`
+  （锁内查句柄 → total_payload_upload/download，只含真实数据
+  载荷；完成路径 remove_torrent 摘句柄后按契约返 0——活动任务
+  才有意义，leech 侧完成态计量不可观测是契约而非缺陷）
+- **测试基建**：`bittorrent_seeding_test.cpp` 私有回环 P2P e2e
+  ——seed 端 create_torrent（v1_only 三参构造，本版 libtorrent
+  签名）造真实 .torrent 对已存在文件做种（ratio=100 永不自停、
+  测试 cancel 收口、异常经 exception_ptr 捕获防 terminate）；
+  leech 端 magnet+x.pe 直连（私有模式关 DHT/LSD/UPnP/NAT-PMP
+  后 x.pe 是唯一 peer 来源——seed uploaded ≥ 文件总长即数据唯
+  一来源的结构性铁证，metadata 交换不计 payload upload）；
+  SeedSession 成员声明序 TempDir 在前 handler 在后（析构逆序 ⇒
+  session 先销毁再清文件）
+- CLI/config 接线：--seed-ratio/--seed-time + config
+  seed_ratio/seed_time_minutes（负值钳 0，config 字段 CLI 优先）
+- 测量教训：断言失败先核对观测点契约再下"产品缺陷"结论——
+  leech 侧 downloaded_bytes==0 曾两轮误诊（真因：完成路径摘句
+  柄，访问器按契约返 0，文件逐字节一致证明下载真实发生）
+
 ### 2026-09-14 - 覆盖率批次 E：bittorrent_plugin.cpp 187 → 7 miss + 四缺陷修复
 - **magnet infoHash off-by-one**：`"xt=urn:btih:"` 是 12 字符，旧代
   码 `pos + 11` 截取——magnet 任务的 infoHash 恒带前导冒号

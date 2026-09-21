@@ -139,6 +139,59 @@ TEST_F(ConfigLoaderTest, LoadValidConfig) {
     EXPECT_TRUE(config->verbose);
 }
 
+TEST_F(ConfigLoaderTest, LoadSeedPolicyFields) {
+    std::string config_content = R"json({
+        "seed_ratio": 2.5,
+        "seed_time_minutes": 45
+    })json";
+
+    auto config_path = test_dir_ / "seed_config.json";
+    std::ofstream file(config_path);
+    file << config_content;
+    file.close();
+
+    auto config = falcon::cli::ConfigLoader::load(config_path.string());
+
+    ASSERT_TRUE(config.has_value());
+    EXPECT_DOUBLE_EQ(2.5, config->seed_ratio);
+    EXPECT_EQ(45, config->seed_time_minutes);
+}
+
+TEST_F(ConfigLoaderTest, SeedPolicyNegativeValuesClamped) {
+    std::string config_content = R"json({
+        "seed_ratio": -1.0,
+        "seed_time_minutes": -30
+    })json";
+
+    auto config_path = test_dir_ / "seed_negative_config.json";
+    std::ofstream file(config_path);
+    file << config_content;
+    file.close();
+
+    auto config = falcon::cli::ConfigLoader::load(config_path.string());
+
+    ASSERT_TRUE(config.has_value());
+    EXPECT_DOUBLE_EQ(0.0, config->seed_ratio);
+    EXPECT_EQ(0, config->seed_time_minutes);
+}
+
+TEST_F(ConfigLoaderTest, SeedPolicyDefaultsWhenAbsent) {
+    std::string config_content = R"json({
+        "max_connections": 4
+    })json";
+
+    auto config_path = test_dir_ / "seed_absent_config.json";
+    std::ofstream file(config_path);
+    file << config_content;
+    file.close();
+
+    auto config = falcon::cli::ConfigLoader::load(config_path.string());
+
+    ASSERT_TRUE(config.has_value());
+    EXPECT_DOUBLE_EQ(1.0, config->seed_ratio);
+    EXPECT_EQ(0, config->seed_time_minutes);
+}
+
 TEST_F(ConfigLoaderTest, LoadConfigWithHeaders) {
     std::string config_content = R"json({
         "headers": {
