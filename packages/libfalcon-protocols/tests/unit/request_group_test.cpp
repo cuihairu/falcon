@@ -1584,6 +1584,20 @@ TEST(RequestGroupConditionalGet, SuppressesAutoRenaming) {
     EXPECT_FALSE(group.if_modified_since().empty());
 }
 
+// URL 以斜杠收尾（无 query）→ rfind 命中最后字符，pos+1 == size，
+// 推导条件不成立 → 回退默认名（与 EmptySegment 变体的区别：那里
+// substr 产出 "?q=1" 经 query 剥离得空串回退，这里不进入 substr）
+TEST(RequestGroupCovR, DeriveFilenameTrailingSlashFallsBackToDownload) {
+    DownloadOptions options;
+    options.output_directory = make_unique_temp_dir("slashend");
+
+    RequestGroup group(14, {"http://127.0.0.1:1/"}, options);
+    ASSERT_TRUE(group.init());
+
+    const std::filesystem::path out(group.download_task()->output_path());
+    EXPECT_EQ(out.filename().string(), "download");
+}
+
 //==============================================================================
 // 主函数
 //==============================================================================

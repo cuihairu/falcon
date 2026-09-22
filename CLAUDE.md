@@ -2,6 +2,51 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-22 - 覆盖率批次 A9（分支覆盖维度首立项）：3 用例 + 分支 miss 15094 → 15084 + 分支缺口侦察定性（参数变体矿经核对后枯竭）
+- **批次缘起**：行维度矿点 A8 已定性收尽，但分支维度（56.95%，
+  缺口 15094）从未系统攻过；coverage.xml 解析 + 抽查证实存在
+  「参数变体即可达」的纯函数分支，A9 立项
+- **3 新用例**（全参数变体直达，零注入零竞速）：
+  - `ContentLengthMissingHeaderParsesAsEmptyBody`（json_rpc_server_
+    coverage）——POST 无 Content-Length 头 → parse_content_length
+    走「头不存在返回 nullopt」侧（与既有 GarbageContentLength 的
+    catch 侧互补），body 按 0 字节 → -32700
+  - `HeaderValueWhitespaceVariantsTrimmed`（同文件）——头值空白三
+    形态一键三吃（键值两侧空白 / 值全空白 / 值为空）：trim 的两侧
+    erase 与空串不进循环分支全部命中，正常 JSON 照常分发断言
+    trim 不参与语义
+  - `DeriveFilenameTrailingSlashFallsBackToDownload`（request_group_
+    test）——URL 以斜杠收尾（无 query）→ rfind 命中最后字符、
+    pos+1 == size 推导条件不成立回退默认名；与既有 EmptySegment
+    变体（substr 产出 "?q=1" 经 query 剥离得空串回退）路径可区分
+- **分支缺口侦察定性（本批核心产出）**：初判 json_rpc_server 头部
+  46 分支缺口，逐行「缺口方向 + 源码 + 既有用例形态」三方核对后
+  真实可测仅上述 handful——① gid 形态簇（0x/0X 前缀、非法形态、
+  空/超长）已被既有 GidAcceptsHexPrefixes / GidValidationErrors /
+  PauseFamilyUnknownTaskVariants 收好；② 115-117/121-122 行的
+  3/6、8/10 形态缺口是 libstdc++ string/ostream 内联构造分支
+  （库伪影，参数变体命中靠运气不靠设计）；③ 130/135 的 stoull
+  catch 为 16 hex 字符上限下 stoull 恒成功——结构不可达防御；
+  ④ task_manager read_download_options 的 EOF 截断侧已被既有
+  LoadStateSkipsTruncatedOptionFields 前缀全扫覆盖（中部垃圾值走
+  同一 `in >> x` 失败分支，无独立分支可收）
+- **测量级教训**：分支缺口行号 ≠ 可测矿——gcovr 分支计数混入库
+  内联伪影（string/ostream 构造的多方向分支），矿性判定必须
+  「condition-coverage 方向明细 + 源码 + 既有用例形态核对」三方
+  对照，只看行号会像行覆盖早期一样高估；剩余分支大头
+  （http_commands 1457 / download_engine_v2 512 / dht_node 481）
+  为 e2e 场景分支与同类伪影，与行维度结论同构：便宜矿收尽，
+  深矿需重服务器剧本且收益薄
+- **验证**：3 新用例单跑绿 + gcov 对象级核对目标行命中；
+  build-cov 全量 ctest **2417/2417 串行零失败**（本轮顺带把并行
+  跑改串行，gcda 完整统一）；ASan 侧零生产改动不重跑
+- **铁账（build-cov 单树新鲜数据）**：行 miss 423 → 422（分母
+  17756 不变，本批零生产改动；−1 为时序窗口行自然抖动收敛），
+  行 **97.62%** 维持；**分支 miss 15094 → 15084（分支率 56.95%
+  → 56.98%）**——3 用例净收 10 分支点；两大分支伪影维持既有
+  定性（json_rpc_server:1579 dispatch lambda 汇聚 1208 +
+  builtin_protocol_handlers.cpp:97 `#ifdef` 两侧 130）
+
 ### 2026-09-22 - 覆盖率批次 A8：miss 418 → 423（行 97.62%）+ 十文件复核定性收口（矿点枯竭批）
 - **1 新用例**（http_handler 558 目标行，gcov 逐行核对命中 1 次 throw）：
   - `DownloadLoopCurlInitFailsAfterHead`（http_handler_edges_test）——

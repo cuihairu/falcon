@@ -1630,6 +1630,47 @@ TEST_F(JsonRpcCoverageTest, GlobalOptionValueParseExceptionPath) {
         << parsed.dump();
 }
 
+/// HTTP 层解析容错的参数变体（分支覆盖批次 A9）：缺 Content-Length 头
+/// → parse_content_length 走「头不存在返回 nullopt」侧（非数字值走
+/// catch 侧，由 GarbageContentLengthFallsBackToZero 覆盖），body 按
+/// 0 字节 → JSON 解析空串 → -32700
+TEST_F(JsonRpcCoverageTest, ContentLengthMissingHeaderParsesAsEmptyBody) {
+    start_server();
+    auto resp = raw_request(port(),
+        "POST /jsonrpc HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    ASSERT_TRUE(resp.has_value());
+    auto body = extract_body(*resp);
+    ASSERT_TRUE(body.has_value());
+    auto parsed = json::parse(*body);
+    EXPECT_EQ(parsed["error"]["code"], -32700) << parsed.dump();
+}
+
+/// 头值空白三形态（键值两侧空白 / 值全空白 / 值为空）经 trim 归一，
+/// 正常 JSON 照常分发——trim 的空串不进 erase 循环与两侧擦除分支
+/// 由同一请求一并命中
+TEST_F(JsonRpcCoverageTest, HeaderValueWhitespaceVariantsTrimmed) {
+    start_server();
+    std::string http;
+    http += "POST /jsonrpc HTTP/1.1\r\n";
+    http += "Host:   127.0.0.1  \r\n";   // 键值两侧空白
+    http += "X-Pad:   \r\n";             // 值全空白 → trim 空串
+    http += "X-Empty:\r\n";              // 值为空
+    http += "Connection: close\r\n";
+    http += "Content-Type: application/json\r\n";
+    json req = {{"jsonrpc", "2.0"}, {"id", 1}, {"method", "aria2.getVersion"},
+                {"params", json::array()}};
+    const std::string body = req.dump();
+    http += "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n";
+    http += body;
+
+    auto resp = raw_request(port(), http);
+    ASSERT_TRUE(resp.has_value());
+    auto body_out = extract_body(*resp);
+    ASSERT_TRUE(body_out.has_value());
+    auto parsed = json::parse(*body_out);
+    EXPECT_EQ(parsed["result"]["version"], "0.1.0") << parsed.dump();
+}
+
 #if defined(FALCON_FAILURE_INJECTION)
 
 // socket() 创建失败：start 立即报 false，对象状态干净可安全 stop
