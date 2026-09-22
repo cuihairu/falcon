@@ -875,6 +875,46 @@ TEST_F(HttpHandlerEdgesTest, DownloadThrowsOnCurlInitFailure) {
     EXPECT_THROW(handler()->download(task, nullptr), falcon::NetworkException);
 }
 
+// 下载主循环的 curl init 失败：HEAD（get_file_info）必须先成功——注入
+// 全程挂会先命中 HEAD 阶段的 init（上一用例），到不了主循环。锚
+// on_file_info 回调（task->set_file_info 在 download 线程内同步触发，
+// 位于主循环 curl_easy_init 之前）在回调内置位注入，零竞速命中主循环
+// 的 throw；置位/清理均手动（回调栈上 RAII 会在返回时即恢复）
+class LateInitInjectionArmer : public IEventListener {
+public:
+    void on_file_info(TaskId, const FileInfo&) override {
+        falcon::detail::set_injection(
+            falcon::detail::InjectPoint::CurlEasyInit, true);
+    }
+};
+
+TEST_F(HttpHandlerEdgesTest, DownloadLoopCurlInitFailsAfterHead) {
+    TempDir dir;
+    FakeResponse resp;
+    resp.body = "late-init";
+    server().set_response("/late-init.bin", resp);
+
+    const auto task = makeTask(903, server().url("/late-init.bin"),
+                               dir.file("late.bin"), {});
+    LateInitInjectionArmer armer;
+    task->set_listener(&armer);
+
+    bool threw = false;
+    try {
+        handler()->download(task, nullptr);
+    } catch (const falcon::NetworkException& e) {
+        threw = true;
+        EXPECT_NE(std::string(e.what()).find("Failed to initialize CURL"),
+                  std::string::npos);
+    }
+    // 先清理再断言（EXPECT 失败不中断执行，清理必须恒达）
+    falcon::detail::set_injection(
+        falcon::detail::InjectPoint::CurlEasyInit, false);
+    EXPECT_TRUE(threw);
+    // HEAD 已成功、主循环 init 即失败：不产生任何输出文件
+    EXPECT_FALSE(fs::exists(dir.file("late.bin")));
+}
+
 #endif  // FALCON_FAILURE_INJECTION
 
 #if defined(FALCON_ENABLE_OPENSSL)

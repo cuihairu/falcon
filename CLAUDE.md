@@ -2,6 +2,66 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-22 - 覆盖率批次 A8：miss 418 → 423（行 97.62%）+ 十文件复核定性收口（矿点枯竭批）
+- **1 新用例**（http_handler 558 目标行，gcov 逐行核对命中 1 次 throw）：
+  - `DownloadLoopCurlInitFailsAfterHead`（http_handler_edges_test）——
+    下载主循环的 curl init 失败。既有 DownloadThrowsOnCurlInitFailure
+    全程挂注入恒先命中 HEAD 阶段的 get_file_info init（414），到不了
+    主循环（558）——锚 **on_file_info 回调**（task->set_file_info 在
+    download 线程内同步触发、位于主循环 curl_easy_init 之前）在回调
+    内 set_injection 置位，零竞速命中主循环 throw "Failed to initialize
+    CURL"；置位/清理手动（回调栈上 RAII 会在返回时即恢复），断言先
+    清理再 EXPECT（清理必须恒达）
+- **十文件 gcov ##### 逐行复核定性（本批主体，A 系列收尾）**：
+  - metalink 12 / cloud_storage 8 / dht_node 8 / task_storage 5 /
+    incremental 1——全部维持既有批次定性（M/J/L/O/A6/A7），零候选
+  - kodo_browser 10——INT_MAX 级长度防御群（base64/HMAC 输入输出
+    2GB+ 才可达）不可现实构造 + URL 构造尾行归属伪影 + 266 死出参
+    （A7 已定性），零候选
+  - segment_downloader 11——与批次 N 收口数一致（死防御 4 + 30s
+    worker 超时兜底 5 + 权限 1 + merge 1），行号漂移后按代码内容重对，
+    零候选
+  - **json_rpc_server 824 新定性**（WS 101 握手应答 send_all 失败）：
+    与 A6 的 862 同性质——服务器 recv 完升级请求后微秒级即写 101
+    应答，客户端 SO_LINGER{1,0} RST 的到达无同步点可锚（批次 P 的
+    广播死 fd 剧本成功是因为 send 在广播时刻、RST 已稳定到达，824
+    的 send 紧跟 recv 无窗口）；**644**（accept 失败非停机 continue）
+    唯一自然来源 ECONNABORTED 同为竞速不可锚
+  - **download_engine_v2 1028/1029 新定性**（modify_event 失败收口）：
+    EventPollModifyFail 注入点不存在（grep 实证），新增注入点 + 接线
+    + 时序叠加用例（A4 AddFail 同款）只为 2 行收益，成本不成比例
+  - **http_handler 301 新定性**（段路径 curl init 失败 return false）：
+    主循环 init（554）先于段 worker init（299）执行且两者之间无回调
+    锚点隔开，全局无状态注入恒先命中 554；独立注入点只为 1 行收益
+    不成比例
+  - request_group.hpp 18 / command.hpp 6——单对象 gcov 的内联水分
+    （http_handler TU 不调用这些 inline 方法，engine_v2 TU 调用密集
+    已覆盖；gcovr 合并口径无缺口）
+- **验证**：ASan falcon_http_tests 33 用例（32 既有 + 1 新）零告警；
+  build-cov 全量 ctest 2414/2414 过零失败（2415 清单含 skip）；铁账
+  （build-cov 单树新鲜数据）：**miss 418 → 423**（558 收口 −1，其余
+  文件净 +6 为时序窗口/收尾行伪影类 miss 的自然抖动**反向发散**——
+  分文件比对：json_rpc_server 133-135/215/230/247/338/961、
+  task_storage 675/708/743、dht_node 92/116 等函数收尾行与
+  metalink 651/652 resume 失败时序窗全部落在既有定性集合，抽查
+  确认零新性质；A6 有「+6 行抖动收敛」先例，方向随机、本轮净
+  发散同幅度），分母 17756 不变（本批零生产改动），行 **97.62%** /
+  分支 56.95%——98% 结构性不可达
+  结论维持，矿点定性沿批次
+  X/V/A1-A7 口径，**可测矿点至 A8 止全库收尽**（A 系列自 A1 起 8 批
+  miss 474 → 423，抖动在 ±6 行内随机摆动，后续批次将以「新生产代码
+  的收口 + 全量回归」为主）
+- **测量级教训**：① 测试文件的归属 target 用对象路径核实（find
+  *.cpp.o）——http_handler_edges_test 编进 falcon_http_tests（批次 G
+  weak-stub 规避的挂载决策），对 falcon_protocols_tests 构建是静默
+  no-op，filter 0 匹配即此症状；CMake/Make 依赖数据库对编辑后源文件
+  偶发不重编（touch 强制亦然），二进制 gtest_list_tests 核对用例注册；
+  ② **单对象 gcov 与 gcovr 合并口径不可混用**——`=====` 行（多函数
+  实例共享、部分实例命中）在单对象 `#####` 扫描不算 miss，gcovr
+  `merge-use-line-min` 取 min=0 算 miss：侦察用单对象扫描、铁账用
+  gcovr 聚合时，同一文件可差出近一倍 miss 数，预期值必须沿铁账
+  口径推算
+
 ### 2026-09-22 - 覆盖率批次 A7：miss 424 → 418（行 97.65%）+ nlohmann parse UTF-8 验证探针证伪 ws dump 防御
 - **3 新用例 + 1 处生产注入接线**（json_rpc_client.cpp/aria2_snapshots.cpp 目标行，断言值均为目标行独有产出锁死行命中）：
   - `CallRejectsNonJsonResponseBody`（json_rpc_client_test）——HTTP 200 + 非
