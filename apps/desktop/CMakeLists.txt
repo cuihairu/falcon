@@ -134,6 +134,7 @@ target_link_libraries(falcon-desktop PRIVATE
     Qt6::Svg
     Falcon::core
     Falcon::protocols
+    Falcon::builtin_protocol_handlers
     Falcon::storage
 )
 

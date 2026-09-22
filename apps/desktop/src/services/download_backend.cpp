@@ -51,6 +51,11 @@ falcon::daemon::rpc::TaskSnapshot snapshot_from_download_task(
 class InProcessBackend final : public IDownloadBackend {
 public:
     InProcessBackend() : engine_(std::make_unique<falcon::DownloadEngine>()) {
+        // TaskManager 后台清理默认每 60s 擦除终态任务（daemon 有 SQLite
+        // 落库不受影响），桌面进程内后端直接读引擎内存——不关掉的话
+        // 下载完成的任务一分钟后就从列表里蒸发。设为极大值等效禁用，
+        // 终态任务保留至用户"清除已完成"显式清理。
+        engine_->set_cleanup_interval(std::chrono::hours(24 * 365));
         // V2 HTTP 数据面兜底开关：FALCON_HTTP_ENGINE=v2 时启用（默认
         // v1，设置页暂无入口）。惰性启动，首个走 V2 的任务才创建引擎
         if (const char* env = std::getenv("FALCON_HTTP_ENGINE")) {

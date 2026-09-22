@@ -25,6 +25,7 @@
 #include <QVector>
 #include <cstdio>
 
+#include "dialogs/add_download_dialog.hpp"
 #include "navigation/sidebar.hpp"
 #include "pages/cloud_page.hpp"
 #include "pages/discovery_page.hpp"
@@ -162,7 +163,34 @@ int main(int argc, char** argv)
     ThemeManager theme;
 
     Shell shell = build_shell();
-    shell.root->resize(1280, 832);
+    // 尺寸矩阵:生产默认 1200×800(main_window resize)+ 最小窗口
+    // 960×640(挤压场景)——重叠类布局缺陷只在窄窗下暴露
+    struct SizeCase { int w; int h; const char* tag; };
+    const SizeCase size_cases[] = {{1200, 800, "1200"}, {960, 640, "960"}};
+
+    // 添加下载对话框:主窗之外的最高频交互面,此前从未进截图验收
+    const auto snap_add_dialog = [&](const QString& name) {
+        UrlInfo info;
+        info.protocol = UrlProtocol::HTTPS;
+        info.original_url = info.decoded_url =
+            "https://cdn.example.com/media/ubuntu-24.04.3-desktop-amd64.iso";
+        info.file_name = "ubuntu-24.04.3-desktop-amd64.iso";
+        info.file_size = "5.7 GB";
+        info.is_valid = true;
+        AddDownloadDialog dialog(info);
+        dialog.resize(600, 450);
+        dialog.show();
+        for (int i = 0; i < 8; ++i) {
+            app.processEvents();
+            app.sendPostedEvents(nullptr, QEvent::LayoutRequest);
+        }
+        const QString path = out_dir + "/" + name + ".png";
+        if (!dialog.grab().save(path)) {
+            std::fprintf(stderr, "failed to save %s\n", qPrintable(path));
+            return;
+        }
+        std::printf("saved %s\n", qPrintable(path));
+    };
 
     shell.download->update_tasks(demo_tasks());
     if (auto* status = shell.root->findChild<StatusBar*>()) {
@@ -211,12 +239,16 @@ int main(int argc, char** argv)
         snap("discovery_" + suffix);
         go(4); // 偏好设置
         snap("settings_" + suffix);
+        snap_add_dialog("add_dialog_" + suffix);
     };
 
-    theme.set_theme(ThemeType::Light);
-    shoot_all("light");
-    theme.set_theme(ThemeType::Dark);
-    shoot_all("dark");
+    for (const auto& sz : size_cases) {
+        shell.root->resize(sz.w, sz.h);
+        theme.set_theme(ThemeType::Light);
+        shoot_all(QString("light_") + sz.tag);
+        theme.set_theme(ThemeType::Dark);
+        shoot_all(QString("dark_") + sz.tag);
+    }
 
     delete shell.root;
     return 0;

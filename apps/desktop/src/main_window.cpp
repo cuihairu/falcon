@@ -30,7 +30,6 @@
 #include <QDir>
 #include <QDesktopServices>
 #include <QFileInfo>
-#include <QInputDialog>
 #include <QMessageBox>
 #include <QSettings>
 #include <QAction>
@@ -248,11 +247,8 @@ void MainWindow::create_top_bar()
     });
 
     // 视图切换钮仅对下载页有意义,其他页禁用(避免无效点击)
-    connect(content_stack_, &QStackedWidget::currentChanged, this, [this](int index) {
-        if (top_bar_) {
-            top_bar_->set_view_toggle_enabled(index == PAGE_DOWNLOAD);
-        }
-    });
+    // connect 移至 create_content_area:content_stack_ 在彼处才创建,
+    // 此处传 nullptr 连接从未生效(Qt 报 invalid nullptr parameter)
 }
 
 void MainWindow::open_url(const QString& url)
@@ -352,16 +348,9 @@ void MainWindow::show_add_download_dialog(UrlInfo url_info, const IncomingDownlo
         options.headers["Cookie"] = cookies.toStdString();
     }
 
-    // 异步提交；被拒绝时经 task_add_failed 信号提示
+    // 异步提交；被拒绝时经 task_add_failed 信号提示（成功不打扰——
+    // 任务行即刻出现在列表里，旧的无样式"已添加"确认框只会盖住它）
     download_service_->add_task(dialog.get_url(), options, true);
-
-    QMessageBox::information(
-        this,
-        tr("Download Added"),
-        tr("A download task was added:\n\nURL: %1\nSave path: %2\nFile name: %3\nConnections: %4")
-            .arg(dialog.get_url(), dialog.get_save_path(), dialog.get_file_name())
-            .arg(dialog.get_connections())
-    );
 }
 
 bool MainWindow::add_download_task(const QString& url, bool start_immediately)
@@ -420,6 +409,14 @@ void MainWindow::create_content_area()
 {
     content_stack_ = new QStackedWidget(this);
     create_pages();
+
+    // 视图切换钮仅对下载页有意义,其他页禁用(避免无效点击);
+    // 自 create_top_bar 移入——content_stack_ 在此才创建
+    connect(content_stack_, &QStackedWidget::currentChanged, this, [this](int index) {
+        if (top_bar_) {
+            top_bar_->set_view_toggle_enabled(index == PAGE_DOWNLOAD);
+        }
+    });
 }
 
 void MainWindow::create_pages()
@@ -708,18 +705,9 @@ void MainWindow::on_download_requested(const IncomingDownloadRequest& request)
 
 void MainWindow::on_new_task_requested()
 {
-    const QString url = QInputDialog::getText(
-        this,
-        tr("New Download Task"),
-        tr("Enter download URL (HTTP/HTTPS/Magnet):"),
-        QLineEdit::Normal
-    ).trimmed();
-
-    if (url.isEmpty()) {
-        return;
-    }
-
-    open_url(url);
+    // 直接进 Fluent 添加对话框,URL 在对话框内输入(协议/文件名随输入
+    // 联动);旧 QInputDialog 两段式路径是 UI 重做前的遗留,无主题样式
+    show_add_download_dialog(UrlDetector::parse_url(QString()), nullptr);
 }
 
 void MainWindow::on_configured_download_requested(const QString& url)

@@ -407,6 +407,39 @@ TEST(TaskManagerEdgesTest, AddTaskTriggersAutoSave) {
     std::filesystem::remove(state_path);
 }
 
+// 终态任务自动清理按 set_cleanup_interval 运行期生效——桌面宿主以
+// 极大值禁用自动清理，终态任务保留至显式 cleanup_finished_tasks()
+TEST(TaskManagerEdgesTest, SetCleanupIntervalKeepsFinishedTasks) {
+    TaskManagerConfig cfg = base_config();
+    cfg.cleanup_interval = std::chrono::seconds(1);
+
+    TaskManager tm(cfg, nullptr);
+    tm.start();  // cleanup_interval>0 时 start() 才拉起清理线程
+
+    // 默认周期下终态任务在一个周期内被自动清理
+    auto gone = make_task(91, "https://example.com/gone.bin");
+    ASSERT_EQ(tm.add_task(gone, TaskPriority::Normal), 91u);
+    gone->set_status(TaskStatus::Completed);
+    EXPECT_TRUE(wait_until(
+        [&] { return tm.get_all_tasks().empty(); },
+        std::chrono::milliseconds(3000)));
+
+    // 调大周期后终态任务跨多个原周期存活
+    tm.set_cleanup_interval(std::chrono::seconds(3600));
+    auto kept = make_task(92, "https://example.com/kept.bin");
+    ASSERT_EQ(tm.add_task(kept, TaskPriority::Normal), 92u);
+    kept->set_status(TaskStatus::Completed);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+    ASSERT_EQ(tm.get_all_tasks().size(), 1u);
+    EXPECT_EQ(tm.get_all_tasks().front()->id(), 92u);
+
+    // 显式清理不依赖周期，立即收走终态任务
+    EXPECT_EQ(tm.cleanup_finished_tasks(), 1u);
+    EXPECT_TRUE(tm.get_all_tasks().empty());
+
+    tm.stop();
+}
+
 TEST(TaskManagerEdgesTest, RemoveTaskTriggersAutoSave) {
     TaskManagerConfig cfg = base_config();
     cfg.auto_save_state = true;

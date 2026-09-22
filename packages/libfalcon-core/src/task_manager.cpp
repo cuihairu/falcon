@@ -383,6 +383,19 @@ public:
         return count;
     }
 
+    // 置变化标志并唤醒清理线程：进行中的旧等待立即被打断，但变化轮
+    // 只重新计时、不执行清扫——改周期绝不追加一次清扫（设大周期保留
+    // 终态任务的宿主不希望 set 那一刻反向清掉它们）。标志位解决 notify
+    // 落在清理线程非等待期（正在清扫/收尾）时丢失的问题。
+    void set_cleanup_interval(std::chrono::seconds interval) {
+        {
+            std::lock_guard<std::mutex> lock(cleanup_mutex_);
+            config_.cleanup_interval = interval;
+            cleanup_interval_changed_.store(true, std::memory_order_release);
+        }
+        cleanup_cv_.notify_all();
+    }
+
     bool start_task(TaskId id) {
         auto task = get_task(id);
         if (!task || task->is_active() || task->is_finished()) {
@@ -888,10 +901,17 @@ private:
         while (running_) {
             {
                 std::unique_lock<std::mutex> lock(cleanup_mutex_);
-                cleanup_cv_.wait_for(lock, config_.cleanup_interval, [this] { return !running_; });
+                cleanup_cv_.wait_for(lock, config_.cleanup_interval, [this] {
+                    return !running_ ||
+                           cleanup_interval_changed_.load(std::memory_order_acquire);
+                });
             }
             if (!running_) {
                 break;
+            }
+            // 周期变化轮：仅按新周期重新计时，跳过清扫
+            if (cleanup_interval_changed_.exchange(false)) {
+                continue;
             }
 
             // 清理完成的任务
@@ -963,6 +983,8 @@ private:
     // 清理线程唤醒
     mutable std::mutex cleanup_mutex_;
     std::condition_variable cleanup_cv_;
+    // set_cleanup_interval 变化标志：打断旧等待并令变化轮跳过清扫
+    std::atomic<bool> cleanup_interval_changed_{false};
 
     // 活动任务
     mutable std::mutex active_mutex_;
@@ -1011,6 +1033,10 @@ bool TaskManager::remove_task(TaskId id) {
 
 size_t TaskManager::cleanup_finished_tasks() {
     return impl_->cleanup_finished_tasks();
+}
+
+void TaskManager::set_cleanup_interval(std::chrono::seconds interval) {
+    impl_->set_cleanup_interval(interval);
 }
 
 bool TaskManager::pause_task(TaskId id) {

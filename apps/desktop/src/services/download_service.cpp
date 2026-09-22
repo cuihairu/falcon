@@ -7,6 +7,9 @@
 
 #include "download_service.hpp"
 
+#include <QDebug>
+#include <stdexcept>
+
 namespace falcon::desktop {
 
 DownloadService::DownloadService(std::unique_ptr<IDownloadBackend> backend,
@@ -73,10 +76,17 @@ void DownloadService::add_task(const QString& url,
 {
     const std::string url_utf8 = url.toStdString();
     enqueue([this, url_utf8, options, start_immediately]() {
-        auto result = backend_->add_task(url_utf8, options, start_immediately);
-        if (!result.ok) {
+        // add_task 可能抛(协议无 handler 的 UnsupportedProtocolException
+        // 等)——worker 线程异常逃逸即 std::terminate 整个进程,转失败信号
+        try {
+            auto result = backend_->add_task(url_utf8, options, start_immediately);
+            if (!result.ok) {
+                emit task_add_failed(QString::fromStdString(url_utf8),
+                                     QString::fromStdString(result.error));
+            }
+        } catch (const std::exception& e) {
             emit task_add_failed(QString::fromStdString(url_utf8),
-                                 QString::fromStdString(result.error));
+                                 QString::fromUtf8(e.what()));
         }
     });
 }
@@ -143,17 +153,31 @@ void DownloadService::worker_loop()
         refresh_requested_ = false;  // 合并期间到达的重复事件
         lock.unlock();
 
+        // 命令级兜底:任何 job 异常不得逃出 worker 线程(逃逸即
+        // std::terminate 杀死整个进程);具体命令自带的失败信号不受影响
         while (!jobs.empty()) {
-            jobs.front()();
+            auto job = std::move(jobs.front());
             jobs.pop_front();
+            try {
+                job();
+            } catch (const std::exception& e) {
+                qWarning() << "DownloadService command failed:" << e.what();
+            } catch (...) {
+                qWarning() << "DownloadService command failed: unknown exception";
+            }
         }
 
-        // 拉取一轮快照并推送（信号从本线程发出，跨线程自动排队）
-        auto tasks = backend_->fetch_tasks();
-        publish_transitions(tasks);
-        emit tasks_refreshed(tasks);
-        if (auto stats = backend_->fetch_stats()) {
-            emit stats_refreshed(*stats);
+        // 拉取一轮快照并推送（信号从本线程发出，跨线程自动排队）；
+        // 后端故障不杀进程,本轮跳过等下个周期重试
+        try {
+            auto tasks = backend_->fetch_tasks();
+            publish_transitions(tasks);
+            emit tasks_refreshed(tasks);
+            if (auto stats = backend_->fetch_stats()) {
+                emit stats_refreshed(*stats);
+            }
+        } catch (const std::exception& e) {
+            qWarning() << "DownloadService fetch failed:" << e.what();
         }
 
         lock.lock();

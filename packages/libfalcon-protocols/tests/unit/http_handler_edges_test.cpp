@@ -121,6 +121,23 @@ private:
     std::mutex mutex_;
 };
 
+/// 进度观测 listener：记录全部 on_progress 快照（终态穿透断言用）
+class ProgressRecorder : public IEventListener {
+public:
+    void on_progress(const ProgressInfo& info) override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        updates_.push_back(info);
+    }
+    std::vector<ProgressInfo> updates() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return updates_;
+    }
+
+private:
+    std::vector<ProgressInfo> updates_;
+    mutable std::mutex mutex_;
+};
+
 class HttpHandlerEdgesTest : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -303,6 +320,31 @@ TEST_F(HttpHandlerEdgesTest, DownloadReportsProgressDuringSlowTransfer) {
     EXPECT_EQ(readFile(dir.file("out.bin")), std::string(2048, 'p'));
     EXPECT_GT(task->downloaded_bytes(), 0u);  // 进度记账真实发生
     EXPECT_EQ(task->total_bytes(), 2048u);
+}
+
+TEST_F(HttpHandlerEdgesTest, FastDownloadPublishesFinalProgressAfterThrottleWindow) {
+    // 快速小文件下载：curl progress_callback 的 200ms 窗口从未到期，
+    // update_progress 全程零调用——完成路径按成品尺寸补记（终态更新
+    // 穿透 task 层节流），监听者必须看到一次 100%（无补记时本用例
+    // 的 updates 为空 = "已完成 0%" 假进度）
+    FakeResponse resp;
+    resp.body = std::string(2048, 'f');
+    server().set_response("/fast", resp);  // 无 slow_body：亚毫秒完成
+
+    ProgressRecorder listener;
+    TempDir dir;
+    const auto task = makeTask(214, server().url("/fast"), dir.file("out.bin"));
+    task->set_listener(&listener);  // 模拟 TaskManager::add_task 的接线
+    handler()->download(task, &listener);
+
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(readFile(dir.file("out.bin")), std::string(2048, 'f'));
+
+    const auto updates = listener.updates();
+    ASSERT_FALSE(updates.empty()) << "终态进度必须穿透节流到达监听者";
+    EXPECT_EQ(updates.back().downloaded_bytes, 2048u);
+    EXPECT_EQ(updates.back().total_bytes, 2048u);
+    EXPECT_EQ(task->downloaded_bytes(), 2048u);
 }
 
 TEST_F(HttpHandlerEdgesTest, DynamicSpeedLimitHotAppliedMidTransfer) {

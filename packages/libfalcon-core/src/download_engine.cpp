@@ -235,6 +235,10 @@ public:
         return task_manager_.cleanup_finished_tasks();
     }
 
+    void set_cleanup_interval(std::chrono::seconds interval) {
+        task_manager_.set_cleanup_interval(interval);
+    }
+
     bool start_task(TaskId id) {
         return task_manager_.start_task(id);
     }
@@ -453,6 +457,10 @@ bool DownloadEngine::remove_task(TaskId id) {
 
 size_t DownloadEngine::remove_finished_tasks() {
     return impl_->remove_finished_tasks();
+}
+
+void DownloadEngine::set_cleanup_interval(std::chrono::seconds interval) {
+    impl_->set_cleanup_interval(interval);
 }
 
 bool DownloadEngine::start_task(TaskId id) {

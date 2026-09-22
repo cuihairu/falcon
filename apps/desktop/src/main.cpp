@@ -11,6 +11,10 @@
 #include <QLocale>
 #include <QUrl>
 #include <QUrlQuery>
+#include <cstdio>
+
+#include <falcon/protocol_registry.hpp>
+
 #include "main_window.hpp"
 
 namespace {
@@ -29,6 +33,16 @@ QString extract_falcon_url_from_argv(const QStringList& args)
 
 int main(int argc, char* argv[])
 {
+    // 关键:引用 protocols 真实实现的强符号,防止 GNU ld 归档单次扫描下
+    // protocols 对象从未拉入、core 的 weak 空 stub 生效(症状:注册 0 个
+    // 协议 handler,任何下载抛 UnsupportedProtocolException 后 terminate
+    // 整个进程)。daemon 二进制因 RPC 层引用同一符号天然免疫,桌面此前
+    // 无任何引用点。同时利用返回值做启动自检。
+    const auto builtin_protocols = falcon::describe_builtin_protocols();
+    if (builtin_protocols.empty()) {
+        std::fprintf(stderr, "Falcon: no protocol handlers compiled in\n");
+    }
+
     QApplication app(argc, argv);
 
     app.setApplicationName("Falcon");

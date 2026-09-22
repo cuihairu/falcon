@@ -642,6 +642,17 @@ public:
                     if (std::rename(temp_path.c_str(), task->output_path().c_str()) != 0) {
                         throw FileIOException("Failed to move downloaded file to destination");
                     }
+                    // 终态进度记账：快速下载全程落在进度回调 200ms 节流
+                    // 窗外时 update_progress 一次都没触发过——按成品尺寸
+                    // 补记，避免"已完成 0%"的假进度（终态更新穿透节流）。
+                    // 未知总长（EOF/chunked 定界）跳过：total 未报告过就
+                    // 不发明一个（downloaded 由写回调即时记账，本就准确）
+                    std::error_code size_ec;
+                    const auto final_size =
+                        std::filesystem::file_size(task->output_path(), size_ec);
+                    if (!size_ec && task->total_bytes() > 0) {
+                        task->update_progress(final_size, task->total_bytes(), 0);
+                    }
                     task->set_status(TaskStatus::Completed);
                     return;
                 }
@@ -733,6 +744,15 @@ public:
         }
 
         if (success) {
+            // 终态进度记账（同 download_single：段路径的段级回调不汇入
+            // 任务级 update_progress，成品尺寸是唯一可信的完成进度；
+            // 未知总长跳过——total 未报告过就不发明一个）
+            std::error_code size_ec;
+            const auto final_size =
+                std::filesystem::file_size(task->output_path(), size_ec);
+            if (!size_ec && task->total_bytes() > 0) {
+                task->update_progress(final_size, task->total_bytes(), 0);
+            }
             task->set_status(TaskStatus::Completed);
         } else {
             throw FileIOException("Segmented download failed");

@@ -145,8 +145,9 @@ void AddDownloadDialog::browse_directory()
 
 void AddDownloadDialog::start_download()
 {
-    // Validate inputs
-    if (url_edit_->text().isEmpty()) {
+    // Validate inputs:URL 非空且可解析(新任务模式用户手输,格式非法
+    // 不放行;解析过的只读路径重解析无损——thunder/magnet 解码态仍合法)
+    if (!UrlDetector::parse_url(url_edit_->text()).is_valid) {
         url_edit_->setFocus();
         return;
     }
@@ -224,12 +225,31 @@ QWidget* AddDownloadDialog::create_url_section_widget()
     );
     layout->addWidget(protocol_label_);
 
-    // URL input
+    // URL input:解析过的 URL(剪贴板/IPC 直达)只读展示;新建任务入口
+    // (url_info 无效)允许用户直接输入,协议标签与文件名随输入联动
     url_edit_ = new QLineEdit(url_info_.decoded_url, this);
-    url_edit_->setReadOnly(true);
+    if (url_info_.is_valid) {
+        url_edit_->setReadOnly(true);
+    } else {
+        connect(url_edit_, &QLineEdit::textEdited,
+                this, &AddDownloadDialog::on_url_edited);
+    }
     layout->addWidget(url_edit_);
 
     return group;
+}
+
+void AddDownloadDialog::on_url_edited(const QString& text)
+{
+    const UrlInfo parsed = UrlDetector::parse_url(text);
+    protocol_label_->setText(tr("协议: %1")
+        .arg(UrlDetector::get_protocol_name(parsed.protocol)));
+
+    // 文件名未被手改时随 URL 自动推断(末段路径;magnet 等无文件名
+    // 形态推断为空则保留现状,由 start_download 校验兜底)
+    if (!file_name_edited_ && parsed.is_valid && !parsed.file_name.isEmpty()) {
+        file_name_edit_->setText(parsed.file_name);
+    }
 }
 
 QWidget* AddDownloadDialog::create_file_section_widget()
@@ -244,6 +264,9 @@ QWidget* AddDownloadDialog::create_file_section_widget()
     // File name
     auto* file_label = new QLabel(tr("文件名:"), this);
     file_name_edit_ = new QLineEdit(url_info_.file_name, this);
+    connect(file_name_edit_, &QLineEdit::textEdited, this, [this] {
+        file_name_edited_ = true;
+    });
     layout->addRow(file_label, file_name_edit_);
 
     // Save path

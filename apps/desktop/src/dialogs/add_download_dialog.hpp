@@ -95,9 +95,13 @@ private:
     QWidget* create_file_section_widget();
     QWidget* create_options_section_widget();
     QLayout* create_button_layout();
+    void on_url_edited(const QString& text);
 
     // URL Info
     UrlInfo url_info_;
+    // 新任务模式下(URL 未知,用户手动输入)跟踪文件名是否已被用户
+    // 手改——未手改时随 URL 变化自动推断,手改后不再覆盖
+    bool file_name_edited_ = false;
 
     // UI Components
     QLabel* url_label_;

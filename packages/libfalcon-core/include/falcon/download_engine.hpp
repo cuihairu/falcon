@@ -6,6 +6,7 @@
 #include <falcon/protocol_handler.hpp>
 #include <falcon/types.hpp>
 
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <string>
@@ -86,6 +87,11 @@ public:
     /// Remove all finished tasks
     /// @return Number of tasks removed
     std::size_t remove_finished_tasks();
+
+    /// Set the auto-cleanup period for finished tasks (see
+    /// TaskManager::set_cleanup_interval). Hosts that keep finished
+    /// tasks visible until explicit user action pass a very large value.
+    void set_cleanup_interval(std::chrono::seconds interval);
 
     // === Task Control ===
 

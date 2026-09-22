@@ -168,6 +168,24 @@ public:
      */
     size_t cleanup_finished_tasks();
 
+    /**
+     * @brief 设置终态任务自动清理周期
+     *
+     * 后台清理线程按该周期擦除终态（Completed/Failed/Cancelled）任务。
+     * 需要"任务完成后保留在列表里、由用户显式清除"的宿主（桌面进程内
+     * 引擎）可设为极大值等效禁用自动清理；显式清理仍走
+     * cleanup_finished_tasks()。
+     *
+     * 立即生效：进行中的旧等待被打断并按新周期重新计时；周期变化本身
+     * 不触发清扫（设大周期不会反向清掉已保留的终态任务）。
+     *
+     * 注意：构造时 cleanup_interval<=0 则清理线程根本不启动（完全禁用），
+     * 运行期改值也无人消费；运行期启用自动清理需在构造时给正值。
+     *
+     * @param interval 清理周期
+     */
+    void set_cleanup_interval(std::chrono::seconds interval);
+
     // === 任务控制 ===
 
     /**

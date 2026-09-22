@@ -2,6 +2,61 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-22 - 桌面端可用性修复批次（终态任务保留 + 进程存活防线 + 添加对话框可编辑）
+- **终态任务 60s 蒸发缺陷**（桌面进程内后端）：TaskManager 后台清理
+  默认每 60s 擦除终态任务（daemon 有 SQLite 落库不受影响），桌面
+  InProcessBackend 直接读引擎内存——下载完成的任务一分钟后从列表
+  消失。新增 `TaskManager::set_cleanup_interval`/`DownloadEngine::
+  set_cleanup_interval`（运行期调整清理周期），桌面设极大值等效禁
+  用，终态任务保留至用户显式"清除已完成"
+- **set_cleanup_interval 竞态修复**（新测试曝光）：初版只改配置值
+  不打断进行中的旧等待——清理线程按旧周期再清一轮，把设置后新加
+  的终态任务清走（测试 1.2s 观测窗 < 旧周期追赶）。改为「周期变化
+  标志（atomic）+ notify_all + 变化轮跳过清扫」——立即生效（旧等
+  待被打断按新周期重新计时），且改周期绝不追加一次清扫（设大周期
+  保留终态任务的宿主不希望 set 那一刻反向清掉它们）；标志位解决
+  notify 落在清理线程非等待期时丢失的问题
+- **V1 终态进度记账（"已完成 0%" 假进度）**：快速小文件下载全程落
+  在 curl progress_callback 自身的 200ms 窗口外 → update_progress
+  零调用 → 完成时 downloaded 恒 0。完成路径按成品尺寸补记（终态
+  更新 final_update 穿透 task 层 progress_interval_ms 节流，监听者
+  必看到 100%）；**未知总长（EOF/chunked 定界）跳过补记**——total
+  未报告过就不发明一个（DownloadWithoutContentLength 用例的
+  total==0 契约保持，初版实现曾把未知改写成成品尺寸被既有用例当
+  场拦截）；download_single 与段路径两处同修。新钉子
+  `FastDownloadPublishesFinalProgressAfterThrottleWindow`（无
+  slow_body 亚毫秒完成 + ProgressRecorder listener 断言终态进度到
+  达监听者——测试直调 handler 须手动 set_listener，生产接线在
+  TaskManager::add_task）
+- **桌面进程存活三防线**：① DownloadService worker 线程异常边界
+  ——job 异常与 fetch 异常不再逃出 worker（逃逸即 std::terminate
+  整个进程），协议无 handler 的 UnsupportedProtocolException 转
+  task_add_failed 信号；② desktop main.cpp 引用
+  `describe_builtin_protocols` 强符号——weak stub 链接陷阱（批次 F
+  定性：GNU ld 归档单次扫描下不引用 protocols 符号的二进制真实实
+  现对象从未拉入，core 空 stub 生效 → 注册 0 个协议 handler，任何
+  下载抛异常即 terminate）此前桌面无任何引用点天然中招，CMake 同
+  步链接 Falcon::builtin_protocol_handlers；返回值兼作启动自检；
+  ③ 后端 fetch 失败本轮跳过等下个周期重试
+- **添加对话框可用性**：新任务入口（URL 未知）允许直接输入，协议
+  标签与文件名随输入联动（文件名手改后不再覆盖）；解析过的 URL
+  （剪贴板/IPC 直达）保持只读；start_download 以 parse_url 校验
+  收口（非法 URL 不放行）。MainWindow 修复：create_top_bar 里对
+  未创建的 content_stack_ connect nullptr（连接从未生效）移至
+  create_content_area；新任务按钮直进 Fluent 对话框（删 QInputDialog
+  两段式无样式遗留）；删添加成功后的旧确认框（任务行即刻在列表
+  可见，模态框只会盖住它）
+- **ui_sandbox 截图矩阵扩展**：生产默认 1200×800 + 最小窗 960×640
+  双尺寸 × 亮暗两主题 + 添加对话框（主窗之外最高频交互面首次进
+  截图验收）= 28 张；离屏验收通过（对话框 Fluent 完整、960 挤压
+  无重叠）
+- **验证**：build-desktop 全量 ctest 过（1 例
+  BlackHoleServerTimesOutViaTaskTimeout 并行抖动串行即过，A3 批次
+  既有记录）；core 全量 440/440；protocols 全量绿；V1 HTTP 36 +
+  daemon main 33 + desktop backend 6；新用例 50 轮压测 0 失败；
+  ASan core 24 + HTTP 32 零告警
+- 下一个 todo 候选：#2 SFTP（阻塞：SSH2 协议栈无轻量 mock 方案）
+
 ### 2026-09-21 - CI 红面收口：metalink V2 暂停恢复竞速（迟到清扫误杀 resume 新命令 = 永挂）
 - **红面**（run 35565963269，commit ebe5eb5 触发）：Coverage job
   唯一红 `MetalinkV2BridgeTest.V2PauseThenResume` Timeout 120s，
