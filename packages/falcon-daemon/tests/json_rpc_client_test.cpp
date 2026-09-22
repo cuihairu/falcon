@@ -14,6 +14,8 @@
 #include <falcon/download_engine.hpp>
 #include <falcon/download_task.hpp>
 
+#include <falcon/detail/injection.hpp>
+
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -654,5 +656,39 @@ TEST_F(JsonRpcClientTest, CallNormalizesObjectParamsWithSecret) {
     ASSERT_TRUE(version.has_value());
     EXPECT_TRUE(version->is_object());
 }
+
+// HTTP 200 但应答体不是合法 JSON：json::parse 抛出 → -32700
+//（区别于既有 -32600 畸形形状用例——那些 body 是合法 JSON）
+TEST_F(JsonRpcClientTest, CallRejectsNonJsonResponseBody) {
+    ScriptHttpServer server("HTTP/1.1 200 OK\r\n"
+                            "Content-Length: 9\r\n"
+                            "\r\n"
+                            "<not-json>");
+    ASSERT_NE(server.port(), 0);
+    auto scripted = make_scripted_client(server);
+
+    falcon::daemon::rpc::JsonRpcError err;
+    auto result = scripted.call("aria2.getVersion", json::array(), &err);
+    EXPECT_FALSE(result.has_value());
+    EXPECT_TRUE(err.is_error());
+    EXPECT_EQ(err.code, -32700);
+    EXPECT_NE(err.message.find("Invalid JSON response"), std::string::npos);
+}
+
+#if defined(FALCON_FAILURE_INJECTION)
+
+// curl 句柄创建失败（注入短路）：传输层错误 -32000，不发起任何请求
+TEST_F(JsonRpcClientTest, CallFailsWhenCurlInitInjected) {
+    ::falcon::detail::ScopedInjection guard(
+        ::falcon::detail::InjectPoint::CurlEasyInit);
+    falcon::daemon::rpc::JsonRpcError err;
+    auto result = client_->call("aria2.getVersion", json::array(), &err);
+    EXPECT_FALSE(result.has_value());
+    EXPECT_TRUE(err.is_error());
+    EXPECT_EQ(err.code, -32000);
+    EXPECT_EQ(err.message, "curl_easy_init failed");
+}
+
+#endif  // FALCON_FAILURE_INJECTION
 
 } // namespace

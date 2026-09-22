@@ -120,6 +120,20 @@ TEST(Aria2SnapshotsTest, ToleratesNumericAndEmptyFields) {
     EXPECT_EQ(snap->speed, 0u);
 }
 
+// 字符串字段的非数字形态：完全非数字（stoull 抛 invalid_argument）
+// 按异常回退 0；前导数字后缀垃圾按 stoull 截断语义取前导值
+TEST(Aria2SnapshotsTest, NonNumericStringFieldsFallBackToZero) {
+    auto status = make_status();
+    status["totalLength"] = "abc";
+    status["completedLength"] = "12abc";
+    status["downloadSpeed"] = "xyz";
+    auto snap = snapshot_from_status_json(status);
+    ASSERT_TRUE(snap.has_value());
+    EXPECT_EQ(snap->total_bytes, 0u);
+    EXPECT_EQ(snap->downloaded_bytes, 12u);
+    EXPECT_EQ(snap->speed, 0u);
+}
+
 TEST(Aria2SnapshotsTest, ParsesGlobalStat) {
     auto stats = stats_from_global_stat_json(json{
         {"downloadSpeed", "2048"},

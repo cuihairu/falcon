@@ -2,6 +2,45 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-22 - 覆盖率批次 A7：miss 424 → 418（行 97.65%）+ nlohmann parse UTF-8 验证探针证伪 ws dump 防御
+- **3 新用例 + 1 处生产注入接线**（json_rpc_client.cpp/aria2_snapshots.cpp 目标行，断言值均为目标行独有产出锁死行命中）：
+  - `CallRejectsNonJsonResponseBody`（json_rpc_client_test）——HTTP 200 + 非
+    JSON body（`<not-json>`）→ `json::parse` 抛 → -32700
+    "Invalid JSON response"（既有 CallRejectsMalformedResponseShapes 全是
+    合法 JSON 畸形形状的 -32600，本用例是解析层 -32700 的缺口）
+  - `CallFailsWhenCurlInitInjected`（json_rpc_client_test）——CurlEasyInit
+    注入命中短路创建 → transport_error "curl_easy_init failed"；接线对齐
+    upyun/incremental_download 惯例（短路形态防已创建句柄泄漏），
+    json_rpc_client.cpp 双 target（rpc_client 库 + daemon 主程序）同布局
+  - `NonNumericStringFieldsFallBackToZero`（aria2_snapshots_test）——
+    parse_u64 字符串分支双形态："abc"（stoull 抛 invalid_argument →
+    catch → 0）+ "12abc"（stoull 前导截断 → 12）
+- **证伪定性（本批核心，10 行探针省一个写不出目标行的用例）**：
+  websocket_rpc_client.cpp 417-419（通知 params 的 dump catch）——初判
+  「未配对代理对 `\ud800` parse 接受但 dump 抛 type_error.316」，探针实证
+  **nlohmann parse 阶段即做 UTF-8 与代理对配对验证**（`\ud800` →
+  parse_error.101 "must be followed by low surrogate"；原始非法字节 0xFF/
+  0xC0 0x80 → parse_error.101 "ill-formed UTF-8 byte"）——parse 成功的
+  产物 dump 恒成功，catch 结构不可达，与 A5 的 525 同款纵深防御定性
+- **其余假矿点写码前核对证伪**：kodo_browser.cpp 266（response_headers
+  死出参——8 个调用点全 nullptr）；upyun_browser.cpp 89/99（build_upyun_url
+  的 `path[0] != '/'` 死防御——公开方法全先补斜杠）；socket_pool.cpp 70/
+  84-86/92（生产零调用方 + 回环恒成功）；aria2_snapshots.cpp 84-86（gid
+  stoull 溢出在 `s.size() > 16` 守卫下不可达）；task_manager.cpp 893-896
+  （submit-after-stop 与批次 V thread_pool 定性同源）
+- **测量级教训**：矿点的机制支点必须探针实证再写用例——「nlohmann parse
+  接受但 dump 抛」是常见直觉（dump_error.316 文档位置显眼），但 parse 的
+  101 检查先行挡死；与 A5 教训（上游有守卫的下游分支）互补，本批为
+  「上游已验证的不变式使下游验证恒真」，两类都该在写码前用最小程序证伪
+- **验证**：ASan daemon rpc client 60 用例（57 既有 + 3 新）零告警；
+  build-cov 全量 ctest 2414 清单（2 例并行抖动 EndToEndMultiSegment
+  Download / WsRpcClientEdge.ConnectFailsWhenHandshakeSendInjected——
+  当轮他项目满载 16 核，串行复跑即过后两二进制无 filter 全量重跑恢复
+  gcda）；铁账（build-cov 单树新鲜数据）：
+  miss 418（分母 17756，+2 为 curl init 三元接线行），行 **97.65%** /
+  分支 56.98%——98% 结构性不可达结论维持，矿点定性沿批次
+  X/V/A1-A6 口径
+
 ### 2026-09-22 - 覆盖率批次 A6：miss 434 → 424（行 97.61%）+ json_rpc 两矿点证伪 + 目录 tellg 行为实证
 - **3 新用例 + 2 处生产注入接线，4 目标行 gcov 逐行核对命中**（incremental_download.cpp 293-294/354/480）：
   - `CalculateChunkHashesDirectoryReadFailsAfterSeek`（既有目录用例旁）——

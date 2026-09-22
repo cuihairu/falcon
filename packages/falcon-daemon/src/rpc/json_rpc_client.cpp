@@ -1,5 +1,7 @@
 #include "rpc/json_rpc_client.hpp"
 
+#include <falcon/detail/injection.hpp>
+
 #include <curl/curl.h>
 
 #include <chrono>
@@ -68,7 +70,11 @@ std::optional<nlohmann::json> JsonRpcClient::call(const std::string& method,
     };
     const std::string body = request.dump();
 
-    CURL* curl = curl_easy_init();
+    // 注入命中时短路真实创建，避免已创建句柄在失败路径泄漏
+    CURL* curl =
+        ::falcon::detail::inject_failure(::falcon::detail::InjectPoint::CurlEasyInit)
+            ? nullptr
+            : curl_easy_init();
     if (!curl) {
         return fail(transport_error("curl_easy_init failed"));
     }
