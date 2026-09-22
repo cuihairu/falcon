@@ -152,4 +152,18 @@ TEST(Aria2SnapshotsTest, ParsesGidForms) {
     EXPECT_FALSE(task_id_from_gid("").has_value());
 }
 
+// tellStatus 精简视图可能没有 files/uris——url 从扩展字段回退，
+// output_path 无可回退来源按空串解析（快照其余字段照常生成）
+TEST(Aria2SnapshotsTest, FallsBackToUrlExtensionWithoutFiles) {
+    auto status = make_status();
+    status.erase("files");
+    status["url"] = "http://example.com/file.bin";
+    auto snap = snapshot_from_status_json(status);
+    ASSERT_TRUE(snap.has_value());
+    EXPECT_EQ(snap->url, "http://example.com/file.bin");
+    EXPECT_EQ(snap->output_path, "");
+    EXPECT_EQ(snap->id, 42u);
+    EXPECT_EQ(snap->status, falcon::TaskStatus::Downloading);
+}
+
 } // namespace

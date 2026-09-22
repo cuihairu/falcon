@@ -761,6 +761,40 @@ TEST(TaskManagerEdgesTest, ClientCertVersionGatedRoundTrip) {
     std::filesystem::remove(v4_path);
 }
 
+// version 门控尾字段的截断行：v3 缺 auto_file_renaming、v4 缺
+// conditional_get、v5 缺 quoted 客户端证书——三种「流尽才失败」的
+// 截断形态都走 read_download_options 失败 → 整行跳过（不加载该任务，
+// load_state 整体仍成功，与既有截断行容错语义一致）
+TEST(TaskManagerEdgesTest, VersionGatedTailFieldTruncationRejected) {
+    const std::string groups = join(option_field_groups(DownloadOptions{}));
+
+    // v3：options 22 字段后即行末（无 auto_rename，也无 header_count）
+    auto v3_path = unique_temp_file("falcon_tm_v3trunc_");
+    write_state_file(v3_path, {basic_task_prefix(340, 0, 1) + " " + groups}, 3);
+
+    // v4：auto_rename 在位，行末缺 conditional
+    auto v4_path = unique_temp_file("falcon_tm_v4trunc_");
+    write_state_file(v4_path,
+                     {basic_task_prefix(341, 0, 1) + " " + groups + " 1"}, 4);
+
+    // v5：auto_rename + conditional 在位，行末缺 quoted 客户端证书对
+    auto v5_path = unique_temp_file("falcon_tm_v5trunc_");
+    write_state_file(v5_path,
+                     {basic_task_prefix(342, 0, 1) + " " + groups + " 1 0"}, 5);
+
+    TaskManager tm(base_config(), nullptr);
+    ASSERT_TRUE(tm.load_state(v3_path.string()));
+    EXPECT_EQ(tm.get_task(340), nullptr);
+    ASSERT_TRUE(tm.load_state(v4_path.string()));
+    EXPECT_EQ(tm.get_task(341), nullptr);
+    ASSERT_TRUE(tm.load_state(v5_path.string()));
+    EXPECT_EQ(tm.get_task(342), nullptr);
+
+    std::filesystem::remove(v3_path);
+    std::filesystem::remove(v4_path);
+    std::filesystem::remove(v5_path);
+}
+
 TEST(TaskManagerEdgesTest, SaveLoadRoundTripAllOptionFields) {
     DownloadOptions opts;
     opts.max_connections = 8;

@@ -165,6 +165,38 @@ TEST(SegmentDownloaderTest, BasicSegmentedDownload) {
     std::remove(output_path.c_str());
 }
 
+// 完成合并后的段文件清理必须连同遗留的 .resume 控制文件一起收走——
+// 断点控制文件残留在成品旁，后续同名下载的恢复检测会误认断点
+TEST(SegmentDownloaderTest, ResumeControlFileCleanedOnCompletion) {
+    DownloadOptions options;
+    options.max_connections = 2;
+
+    auto task = std::make_shared<MockDownloadTask>(1, "http://test.example.com/file.bin", options);
+    task->set_test_file_info(1024 * 10);
+
+    const std::string output_path = make_unique_temp_path("falcon_test_resume_clean.bin");
+
+    // 预置段 0 的遗留 .resume 文件（旧版本/异常中断的产物）
+    const std::string resume_path = output_path + ".falcon.tmp.seg0.resume";
+    {
+        std::ofstream seed(resume_path, std::ios::binary | std::ios::trunc);
+        ASSERT_TRUE(seed.is_open());
+        seed << "falcon_resume_v1\nseg=0 0 5120 256\n";
+    }
+
+    SegmentConfig config;
+    config.num_connections = 2;
+    config.min_segment_size = 1024;
+    config.min_file_size = 1;
+
+    SegmentDownloader downloader(task, "http://test.example.com/file.bin",
+                                 output_path, config);
+    EXPECT_TRUE(downloader.start(mock_segment_download));
+
+    EXPECT_FALSE(std::filesystem::exists(resume_path));
+    std::remove(output_path.c_str());
+}
+
 TEST(SegmentDownloaderTest, Cancellation) {
     DownloadOptions options;
     options.max_connections = 4;

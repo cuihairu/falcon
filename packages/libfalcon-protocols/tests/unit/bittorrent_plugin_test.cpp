@@ -694,6 +694,25 @@ TEST_F(BitTorrentHandlerTest, DhtPortConflictLeavesNoZombieClient) {
 #endif
 }
 
+// 私有网络模式（纯 C++ 数据面）：停用自研 DHT——peer 只经
+// connect_peer 显式直连，isDhtRunning() 必须转为 false；未启动
+// DHT 时调用同样安全（幂等）
+TEST_F(BitTorrentHandlerTest, ConfigurePrivateModeStopsDht) {
+#ifdef FALCON_USE_LIBTORRENT
+    GTEST_SKIP() << "libtorrent 模式 private mode 关 session 的自动发现"
+                    "服务（DHT/LSD/UPnP/NAT-PMP），无自研 DhtClient";
+#else
+    handler->startDht(0);
+    ASSERT_TRUE(handler->isDhtRunning());
+
+    handler->configure_private_mode();
+    EXPECT_FALSE(handler->isDhtRunning());
+
+    handler->configure_private_mode();  // 幂等
+    EXPECT_FALSE(handler->isDhtRunning());
+#endif
+}
+
 //==============================================================================
 // 任务生命周期（纯 C++ 数据面：自研 DHT 查找 + 内部下载线程）。
 // libtorrent 模式 download() 是 worker 线程内的阻塞监控循环（对齐

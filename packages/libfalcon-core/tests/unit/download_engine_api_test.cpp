@@ -502,3 +502,15 @@ TEST(DownloadEngineApiTest, StartTaskUsesPriorityAdjustedBeforeQueueing) {
     raw_handler->release(normal->id());
     engine.wait_all();
 }
+
+TEST(DownloadEngineApiTest, SetCleanupIntervalReachesTaskManager) {
+    falcon::DownloadEngine engine;
+    engine.register_handler(std::make_unique<QuickHandler>());
+
+    // 极大周期等效禁用终态清理（桌面端宿主语义），再回到常规周期——
+    // 转发链 DownloadEngine::set_cleanup_interval → Impl →
+    // TaskManager::set_cleanup_interval 逐级生效且运行期任意时刻可调
+    engine.set_cleanup_interval(std::chrono::seconds(3600));
+    engine.set_cleanup_interval(std::chrono::seconds(60));
+    SUCCEED();
+}

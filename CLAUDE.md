@@ -2,6 +2,51 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-22 - 覆盖率批次 A5：miss 444 → 434（行 97.55%）+ WS 响应帧防御证伪定性
+- **5 新用例三树绿**（6 个矿点候选 → 5 落地 1 证伪）：
+  - `SetCleanupIntervalReachesTaskManager`（download_engine_api_test）
+    ——转发链 `DownloadEngine::set_cleanup_interval → Impl →
+    TaskManager::set_cleanup_interval` 6 行直调覆盖（桌面端终态任
+    务保留批次的收口代码一直无测试消费端）
+  - `VersionGatedTailFieldTruncationRejected`（task_manager_edges_
+    test）——v3 缺 auto_file_renaming / v4 缺 conditional_get / v5
+    缺 quoted 客户端证书三种手工截断行；**语义教训**：版本门控尾
+    字段截断与既有截断容错同流——read_download_options 失败 →
+    整行跳过（load_state 仍 true，get_task(id) == nullptr），初版
+    断言 EXPECT_FALSE(load_state) 单跑即红，既有用例命名
+    「LoadStateSkipsTruncated*」早已写明答案
+  - `FallsBackToUrlExtensionWithoutFiles`（aria2_snapshots_test）
+    ——tellStatus 精简视图无 files/uris 时 url 从扩展字段回退
+    （first_uri 尾行）、output_path 按空串
+  - `ConfigurePrivateModeStopsDht`（bittorrent_plugin_test）——纯
+    C++ 数据面 configure_private_mode 的 `#else` 分支：停自研 DHT
+    + isDhtRunning 转 false + 幂等；libtorrent 模式 GTEST_SKIP 对
+    齐既有 DHT 用例姿态
+  - `ResumeControlFileCleanedOnCompletion`（segment_downloader_
+    test）——预置段 0 遗留 `.falcon.tmp.seg0.resume` + 正常完成，
+    cleanup_segment_files 的 is_regular_file 守卫清理分支命中
+    （SegmentFileOccupied 修复新增代码的测试消费端）
+- **证伪定性（websocket_rpc_client.cpp:525）**：「call 层非 object
+  响应 fail("Invalid response frame")」候选矿点不成立——
+  dispatch_message（读线程）入口 `if (!parsed.is_object()) return;`
+  先行过滤，slot->response 仅有的两个赋值点（dispatch_message 的
+  parsed、fail_pending 构造的完整 error object）均为 object，525
+  是结构不可达的纵深防御。用例（RawWsServer 回 "42"）实测走
+  「请求超时」路径而非目标行，删除
+- **验证**：build-cov 全量 ctest **2407/2407 过零失败**；ASan
+  falcon_core_tests 442 + falcon_daemon_rpc_client_tests 57 +
+  falcon_protocols_tests BT/segment 子集 102 零告警
+- **铁账（build-cov 单树新鲜数据）**：miss **444 → 434**（净收敛
+  10 行；分母 17750 不变），行 **97.50% → 97.55%** / 分支
+  56.9%——98% 结构性不可达结论维持，矿点定性沿批次 X/V/A1-A4
+  口径
+- **测量级教训**：矿点「可测」定性必须在写用例前核对数据流全链
+  ——525 的 call 层检查被读线程入口过滤挡死，只看 call 附近上下
+  文漏掉了 dispatch_message 的先遣守卫；同类教训此前已有（工厂
+  循环 369-376 只看 register_handler_factory 公开性漏看 load_all_
+  handlers 仅构造期调用），「上游有守卫的下游分支」应作为矿点排
+  查的标准否定项
+
 ### 2026-09-22 - CI 红面收口：pause→resume 竞速轮无 Range 初始请求按断点续写（成品污染）+ Windows CI 测试剧本窗口加固
 - **红面**（run 35752778339，69b148d 触发——纯设计文档 commit 零代码
   改动不可能是引入者）：8 job 全绿唯 Windows build 红
