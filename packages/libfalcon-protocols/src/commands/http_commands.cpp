@@ -2132,7 +2132,19 @@ bool HttpResponseCommand::schedule_resume_download(DownloadEngineV2* engine,
                           content_start == range_offset_;
         }
     } else {
-        response_ok = content_length_ == plan.total;
+        // 无 Range 的初始请求只允许在段 0 无半截断点时放行——响应体
+        // 起点是资源 0，半截断点（0 < downloaded < length）下按断点
+        // 续写必然错位污染成品。「有半截断点却未带 Range」是真实可
+        // 达的竞速态：resume 抢在暂停清扫命令执行之前时，fill 激活
+        // 时断点还在旧命令的写缓冲里未固化（apply_group_resume_range
+        // 看到 downloaded==0），随后清扫才固化断点。段 0 已完成
+        //（downloaded == length，增量由其他段连接承载、响应体不消
+        // 费）与段 0 全新（downloaded == 0）两种形态合法。total 相等
+        // 不足以证明兼容，按不一致收口（abandon 全新重下，断点数据
+        // 绝不接续不兼容的响应体）
+        response_ok = content_length_ == plan.total &&
+                      (seg0.downloaded == 0 ||
+                       seg0.downloaded >= seg0.length);
     }
 
     if (!response_ok) {

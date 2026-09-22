@@ -784,8 +784,14 @@ TEST(DownloadEngineV2Pause, LateSweepAfterResumeSparesNewCommands) {
     const std::size_t kBodySize = 64 * 1024;
     const std::string body = make_body(kBodySize);
     PauseTestServer server;
-    // 4KB/10ms → 16 块 ≈ 160ms 慢发窗口，命令绝大部分时间挂起
-    ASSERT_TRUE(server.start(body, 4 * 1024, 10));
+    // 2KB/40ms → 32 块 ≈ 1280ms 慢发窗口。窗口必须远大于测试线程从
+    // 进度锚醒来到 pause/resume 执行完的调度延迟：窗口太短时（Windows
+    // CI 慢调度百 ms 级）服务器在 pause 落地前后已把数据发完并关连接，
+    // 旧链命令被唤醒摘出等待表一口气收完——sweep 收不到它（无"暂停
+    // 清扫"日志）、resume 后无需新连接，"新连接"断言必超时红。进度
+    // 锚又吃掉窗口头部一段（见下），实际竞速窗取剩余 ~1.1s，余量按
+    // 调度延迟百 ms 级放 10 倍
+    ASSERT_TRUE(server.start(body, 2 * 1024, 40));
 
     const std::string dir = temp_dir_for("latesweep");
     std::filesystem::create_directories(dir);
@@ -808,8 +814,11 @@ TEST(DownloadEngineV2Pause, LateSweepAfterResumeSparesNewCommands) {
 
     EngineRunner runner(engine);
 
-    // 等首笔进度（旧链命令进入挂起等待）
-    ASSERT_TRUE(wait_for([&] { return group->downloaded_bytes() > 0; }, 15000))
+    // 等 4 块（8KB）进度：锚到窗口中部而非首笔（首笔后剩余窗口太短，
+    // pause 竞速不过慢发收尾——Windows CI 红面），此刻慢发仍剩 ~1.1s，
+    // 旧链命令必然挂起在等待表
+    ASSERT_TRUE(
+        wait_for([&] { return group->downloaded_bytes() >= 8 * 1024; }, 15000))
         << "下载未在时限内推进";
 
     const auto accepted_before = server.connections_accepted();

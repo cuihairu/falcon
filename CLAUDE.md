@@ -2,6 +2,58 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-22 - CI 红面收口：pause→resume 竞速轮无 Range 初始请求按断点续写（成品污染）+ Windows CI 测试剧本窗口加固
+- **红面**（run 35752778339，69b148d 触发——纯设计文档 commit 零代码
+  改动不可能是引入者）：8 job 全绿唯 Windows build 红
+  `DownloadEngineV2Pause.LateSweepAfterResumeSparesNewCommands`（1/1373，
+  串行重跑同样失败非抖动）；本机多核不复现
+- **Windows 红面定性（测试剧本时序缺陷）**：慢发窗口 160ms < Windows
+  runner 百 ms 级调度延迟——测试线程从进度锚醒来到 pause/resume 执行
+  完时服务器已发完并关连接，旧链命令被唤醒摘出等待表（无「暂停清扫」
+  日志铁证）一口气收完，组 COMPLETED 无需新连接，「resume 后必须有新
+  连接」断言超时红。CI 日志时间线逐条闭环（无清扫日志/无第二次激活日
+  志/「所有任务已完成」先于断言超时）
+- **修复加固（测试面）**：慢发 4KB/10ms → 2KB/40ms（窗口 160ms →
+  1280ms，调度延迟余量 10 倍）+ 进度锚从首笔改窗口中部（≥8KB，锚后
+  仍剩 ~1.1s 慢发，旧链命令必然挂起在等待表——钉子目标可达）
+- **本机压测曝光真产品缺陷（更深一层）**：窗口加固后本机 50 轮 3 败，
+  失败形态与 Windows 红面**不同**——成品逐字节断言红，污染形态
+  `correct[0:8192] + body[0:57344]`（成品 65536 字节但 8192 起从资源
+  0 重启）。完整竞速链：resume 抢在暂停清扫命令执行之前 → fill 激活
+  时段 0 断点还在旧命令写缓冲里未固化（apply_group_resume_range 看到
+  downloaded==0 不 set_range）→ 初始请求**无 Range** → 服务器 200 全
+  量 → schedule_resume_download 的 range_requested==false 分支仅凭
+  `content_length_ == plan.total` 放行 → 随后 sweep 的 prepare_sweep
+  固化断点 8192 → 下载命令按断点从资源 0 的 body 续写到文件偏移
+  8192 → 污染。本机 ~6% 命中率，修后统计两执行序各 ~50%（206 续传
+  19 轮 / abandon 重下 21 轮），CI 慢调度下更高
+- **产品根修（一致性守卫）**：schedule_resume_download 无 Range 分支
+  放行条件收紧为 `content_length_ == plan.total &&（seg0.downloaded ==
+  0 || >= seg0.length）`——「半截断点却未带 Range」是矛盾态（响应体
+  起点资源 0 vs 续写位置断点，必错位），按不一致收口 abandon 全新重
+  下（断点数据绝不接续不兼容响应体，数据安全优先）；段 0 全新
+  （downloaded==0，按全新消费）与段 0 已完成（增量由其他段连接承载、
+  本连接响应体不消费）两种形态合法。初版只放行 downloaded==0 被
+  ResumeAcrossRestartMultiSource 当场拦截（段 0 完成态的无 Range 初始
+  连接是跨引擎恢复的合法形态）——守卫条件即由该既有用例校准
+- **回归钉子**：LateSweepAfterResumeSparesNewCommands 现同时钉住两条
+  收敛路径——sweep 先于 fill（断点已固化 → Range → 206 正确续传）与
+  resume 抢先（无 Range → 200 → 守卫拦下 abandon 重下），两分支成品
+  都必须逐字节一致；断言不钉 Range 形态（两分支皆合法）
+- **验证**：钉子修复后 200 轮压测零失败；ASan 暂停 7 + resume/桥接/
+  适配/多源 84 用例零告警；build-ci 全量 ctest 2356/2356 过（1 例
+  BlackHoleServerTimesOutViaTaskTimeout 并行抖动串行即过，A3 批次既
+  有记录）
+- **测量级教训**：① 「拉长窗口」只治剧本性窗口不足，治不了引擎内部
+  执行序竞速——修复验证失败 3/50 时先抓失败断言形态（「新连接超时」
+  vs「成品污染」是两个不同缺陷面），尾部摘要行 `[ FAILED ]` 不含断
+  言消息，压测循环必须保留失败轮完整日志（cp 而非单文件覆盖）；②
+  续传校验的「一致」必须覆盖请求形态与断点状态的组合合法性——total
+  相等只证明资源没变，不证明响应体起点与续写位置兼容；半截断点 +
+  无 Range 请求是结构性矛盾态，任何模糊放行都是污染入口；③ 同一竞
+  速窗口在不同平台暴露为不同断言失败（Windows 慢调度暴露剧本窗口、
+  Linux 快调度暴露内部执行序），压测定稿前两形态都要见过
+
 ### 2026-09-22 - 桌面端可用性修复批次（终态任务保留 + 进程存活防线 + 添加对话框可编辑）
 - **终态任务 60s 蒸发缺陷**（桌面进程内后端）：TaskManager 后台清理
   默认每 60s 擦除终态任务（daemon 有 SQLite 落库不受影响），桌面
