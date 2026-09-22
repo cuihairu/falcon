@@ -13,6 +13,7 @@
 #include <falcon/types.hpp>
 #include <falcon/download_options.hpp>
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -38,6 +39,20 @@ enum class CommandStatus {
     COMPLETED,   // 命令执行完成
     FAILED       // 命令执行出错（避免 Windows 宏冲突）
 };
+
+/**
+ * @brief 组纪元计数器（进程内单调递增）
+ *
+ * RequestGroup 构造时取号，Command 构造时快照当前值。同 id 组重建
+ * （cancel→重注入 / 终态回收→重注入）后新组纪元严格大于旧组，执行
+ * 处按「组纪元 > 命令出生纪元」识别旧代命令并静默收口——防止僵尸
+ * 命令污染重建的新组。方向比较（而非等值）使无关任务换代推进的
+ * 计数不影响其他任务的命令判定
+ */
+inline std::uint64_t next_group_epoch() noexcept {
+    static std::atomic<std::uint64_t> counter{1};
+    return counter.fetch_add(1, std::memory_order_relaxed);
+}
 
 /**
  * @brief 命令基类接口
@@ -95,6 +110,23 @@ public:
     TaskId get_task_id() const noexcept { return task_id_; }
 
     /**
+     * @brief 命令出生时的组纪元快照
+     *
+     * 构造时快照全局纪元当前值；所属 RequestGroup 构造（更早）取号
+     * 不大于该值。同 id 组重建后新组纪元严格更大，执行处按
+     * 「组纪元 > 出生纪元」识别旧代命令
+     */
+    std::uint64_t born_epoch() const noexcept { return born_epoch_; }
+
+    /**
+     * @brief 是否豁免组纪元守卫
+     *
+     * 引擎内部管理命令（暂停/取消清扫命令等）不属于任何一代数据面，
+     * 组重建后仍必须执行——默认不豁免，清扫命令 override 返回 true
+     */
+    virtual bool exempt_from_epoch_guard() const noexcept { return false; }
+
+    /**
      * @brief 命令当前持有的 socket 文件描述符（未持有返回 -1）
      *
      * fd 生命周期由引擎统一管理（超时清理与停机排水路径 close），
@@ -128,7 +160,8 @@ public:
 
 protected:
     explicit Command(TaskId task_id)
-        : task_id_(task_id), command_id_(generate_command_id()) {}
+        : task_id_(task_id), command_id_(generate_command_id()),
+          born_epoch_(next_group_epoch()) {}
 
     /**
      * @brief 转换命令状态
@@ -160,6 +193,7 @@ private:
 
     TaskId task_id_;           // 关联的下载任务 ID
     CommandId command_id_;     // 唯一命令 ID
+    std::uint64_t born_epoch_; // 出生时组纪元快照（僵尸命令识别）
     CommandStatus status_ = CommandStatus::READY;
 };
 

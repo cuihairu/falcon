@@ -17,6 +17,7 @@
 #include <falcon/protocols/commands/command.hpp>
 
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -125,6 +126,14 @@ public:
      * @brief 获取任务 ID
      */
     TaskId id() const noexcept { return id_; }
+
+    /**
+     * @brief 获取组纪元（构造时全局取号）
+     *
+     * 同 id 组重建后纪元严格递增；执行处按「组纪元 > 命令出生纪元」
+     * 识别并收口旧代命令（僵尸污染防护）
+     */
+    std::uint64_t epoch() const noexcept { return epoch_; }
 
     /**
      * @brief 获取 URI 列表
@@ -394,6 +403,7 @@ public:
 
 private:
     TaskId id_;
+    std::uint64_t epoch_ = 0;  // 组纪元（构造时全局取号）
     RequestGroupStatus status_ = RequestGroupStatus::WAITING;
     std::vector<std::string> uris_;
     std::size_t current_uri_index_ = 0;

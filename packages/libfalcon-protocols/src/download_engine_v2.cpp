@@ -65,6 +65,11 @@ public:
 
     const char* name() const override { return "HttpPauseSweepCommand"; }
 
+    // 引擎内部管理命令：cancel→重注入时序下清扫命令出生纪元属于旧
+    // 代（组已移除、新组尚未构造），纪元守卫若不放行会把清扫本身
+    // 丢弃——旧命令漏收、僵尸污染防线只剩执行守卫单腿站立
+    bool exempt_from_epoch_guard() const noexcept override { return true; }
+
 private:
     std::chrono::steady_clock::time_point dispatched_at_;
 };
@@ -210,7 +215,16 @@ bool DownloadEngineV2::cancel_task(TaskId id) {
             task->cancel();
         }
     }
-    return request_group_man_->remove_group(id);
+    const bool removed = request_group_man_->remove_group(id);
+    // 与 pause_task 对等的清扫收口：等待表中该任务的挂起命令若不
+    // 收走，同 id 重注入（metalink 桥接 resume 换镜像窗口）后事件
+    // 唤醒会 find_group 命中新组僵尸执行——写新组文件、用旧组记账
+    // 把新组提前推到终态（成品脏数据）。组已移除，清扫的 prepare_
+    // sweep 对已移除组安全（find_group 落空只冲刷不触组）；FIFO 保证
+    // 清扫先于重注入激活的新命令执行。cutoff（投递时刻）保护迟到的
+    // 清扫不误杀 resume 语义下重注入后挂起的新命令
+    add_command(std::make_unique<HttpPauseSweepCommand>(id));
+    return removed;
 }
 
 void DownloadEngineV2::pause_all() {
@@ -629,6 +643,37 @@ void DownloadEngineV2::execute_commands() {
 
         if (!command) {
             continue;
+        }
+
+        // 组纪元守卫（纵深防御）：cancel/终态回收后同 id 重注入时，
+        // 队列中残留的旧代命令（清扫只收等待表，不收队列）与事件
+        // 唤醒回队的旧命令（清扫竞速窗口漏收）若照常执行，find_group
+        // 按 task_id 命中新组——僵尸写新组文件、用旧组记账把新组提前
+        // 推到终态。组纪元严格大于命令出生纪元 ⇔ 命令所属组已被同 id
+        // 新组替代。静默收口（关 fd、不 prepare_sweep——旧组断点已
+        // 作废，触组反而危险）
+        if (!command->exempt_from_epoch_guard()) {
+            auto* cmd_group =
+                request_group_man_->find_group(command->get_task_id());
+            if (cmd_group != nullptr &&
+                cmd_group->epoch() > command->born_epoch()) {
+                FALCON_LOG_INFO_STREAM("丢弃过期命令（组已重建）: cmd="
+                                      << command->name()
+                                      << ", task=" << command->get_task_id());
+                const int stale_fd = command->socket_fd();
+                if (stale_fd >= 0) {
+                    {
+                        std::lock_guard<std::mutex> lock(socket_map_mutex_);
+                        socket_wait_map_.erase(command->id());
+                        socket_command_map_.erase(stale_fd);
+                    }
+                    if (event_poll_) {
+                        event_poll_->remove_event(stale_fd);
+                    }
+                    close_socket_fd(stale_fd);
+                }
+                continue;
+            }
         }
 
         // 执行命令（不要持有队列锁，避免阻塞 socket 回调入队）。

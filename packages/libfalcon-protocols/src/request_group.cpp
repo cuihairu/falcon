@@ -144,6 +144,7 @@ RequestGroup::RequestGroup(TaskId id,
                              const DownloadOptions& options,
                              const std::string& output_path_override)
     : id_(id)
+    , epoch_(next_group_epoch())
     , status_(RequestGroupStatus::WAITING)
     , uris_(uris)
     , current_uri_index_(0)

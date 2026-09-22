@@ -57,6 +57,66 @@
   ASan core 24 + HTTP 32 零告警
 - 下一个 todo 候选：#2 SFTP（阻塞：SSH2 协议栈无轻量 mock 方案）
 
+### 2026-09-22 - CI 红面收口：cancel_task 清扫缺失 × 同 id 重注入僵尸命令（成品脏数据 + 组提前终态）
+- **红面**（run 35671832942，e738b5b 触发）：Coverage job 唯一红
+  `MetalinkV2BridgeTest.V2ResumeWithChangedMirrors`，其余全绿；本机
+  40 轮压测不复现——快机器上 pause 投递的 sweep₁ 在桥接 200ms 轮询
+  观察到 PAUSED 前已收走全部旧命令（窗口恒不命中），CI 2 核 + 插桩
+  放大窗口
+- **根因闭环（CI 日志时间线 ↔ 代码机制逐条对上）**：pause_task 与
+  cancel_task 收口语义不对等——pause 标 PAUSED + 投递
+  HttpPauseSweepCommand（清扫等待表），cancel 只 remove_group 不投
+  递。桥接 resume 换镜像窗口（镜像列表变更 → cancel_task →
+  add_download_as 同 id）里：旧组挂起命令事件触发 → execute →
+  `find_group(task_id)` 命中同 id 新组（ACTIVE 通过全部入口守卫）→
+  僵尸执行——写新组 part 文件、用旧组 length_ 判完成 + finish_
+  segment 记账把新组提前推到 COMPLETED（成品 = 脏数据 → 整文件哈希
+  校验失败回落串行）→ 串行镜像哈希失败删 part 文件 → 下一镜像注入
+  后僵尸段命令（in|out 打开要求文件已存在）先于段 0 trunc 创建文件
+  执行 → 「Failed to open output file」→ 全灭。CI 时间线逐条闭环：
+  暂停任务仅一次（96859ff 修复生效）→ 取消 + REMOVED → 同 id 注入
+  → 无「启用多连接分段下载」日志（组被旧命令记账提前终态）→ 三连
+  哈希失败（三次下载全是僵尸污染的脏数据）→ 段 1 打开失败
+- **修复双保险**：① 根治——cancel_task 与 pause_task 对等投递
+  HttpPauseSweepCommand（FIFO 保证清扫先于重注入激活的新命令执行；
+  组已移除，prepare_sweep 的 find_group 落空只冲刷不触组——安全；
+  cutoff 投递时刻语义保护迟到的清扫不误杀重注入后挂起的新命令）；
+  ② 纵深——**组纪元守卫**：进程级单调纪元计数器（command.hpp
+  inline 原子），RequestGroup 构造取号、Command 构造快照
+  born_epoch，execute_commands 弹出处校验「组纪元 > 出生纪元」→
+  静默收口（摘事件 + 关 fd + 销毁，不 prepare_sweep——旧组断点已
+  作废）。**方向比较（非等值）**：全局计数器下无关任务换代推进计数，
+  等值比较会误杀其他任务的正常命令；引擎内部命令（清扫）override
+  exempt_from_epoch_guard 豁免——否则 cancel→重注入时序下清扫命令
+  出生于旧代、自己被守卫丢弃，修复①失效单腿站立。守卫覆盖清扫的
+  两个盲区：command_queue_ 中的残留命令（sweep 只收等待表）与事件
+  唤醒竞速窗口漏收的命令
+- **回归钉子**：`CancelThenSameIdReinjectNotPollutedByZombieCommands`
+  （run_test，LatchedBodyServer：首连接发 512B 后挂门闩 → cancel →
+  放行剩余 bodyA 一次全发（旧命令一次唤醒即收完）→ 同 id 重注入
+  （第二连接 bodyB 分批慢发 15ms/128B，新组完成必然晚于旧命令被
+  唤醒，消除「新组先终态」逃逸形态））——断言新组 COMPLETED + 成品
+  逐字节 == bodyB；修复前 644ms 确定性红（文件全是 bodyA 残量——
+  僵尸记账把新组提前置 COMPLETED，与 CI 形态完全一致）
+- **验证**：钉子修复后 40 轮压测零失败；run 43 + pause/resume/retry
+  /multisource 21 + metalink/http 97（含 CI 红面用例）回归绿；ASan
+  run 43 + metalink 97 零告警；build-cov 全量 ctest **2402/2402 过
+  零失败**（115.9s，13 skip 设计内）；铁账（build-cov 单树）：分母
+  17694 → 17748（+54 纪元设施 + 守卫收口行），miss 441 → 446（+5
+  为守卫 fd 清理分支的时序窗口行——钉子场景僵尸 fd 已被 sweep 收走，
+  守卫路径 socket_fd() 返回 -1 不触发清理），行 **97.5%** / 函数
+  99.0% / 分支 56.9%——98% 结构性不可达结论维持
+- **测量级教训**：① 终态收口语义必须跨入口对等——pause/cancel 是
+  同一「任务停止」的两形态，一个投清扫一个不投，差的就是僵尸窗口
+  （对照 96859ff 的教训：投递了清扫还要带 cutoff，本次教训是有的
+  入口根本没投）；② 命令按 task_id 寻址组（不持有组指针）的引擎
+  里，同 id 重注入必须有跨代隔离机制——清扫只覆盖等待表，队列残留
+  与唤醒竞速窗口要靠纪元/代际号兜底；③ 纪元守卫用方向比较而非等值
+  ——全局计数器被无关任务推进时等值比较误杀正常命令；④ 「本机不
+  可复现」≠「无缺陷」——窗口 <200ms 的竞速在快机器恒不命中，机制
+  闭环（CI 日志时间线 ↔ 代码逐条对上）优先于压测证明，钉子测试用
+  门闩服务器把竞速窗口钉成确定性时序后 644ms 即复现
+
 ### 2026-09-21 - CI 红面收口：metalink V2 暂停恢复竞速（迟到清扫误杀 resume 新命令 = 永挂）
 - **红面**（run 35565963269，commit ebe5eb5 触发）：Coverage job
   唯一红 `MetalinkV2BridgeTest.V2PauseThenResume` Timeout 120s，

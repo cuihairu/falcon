@@ -1263,6 +1263,165 @@ private:
     std::vector<std::thread> conn_threads_;
 };
 
+/// cancel→同 id 重注入钉子的剧本服务器：首个连接（旧组）发一半
+/// bodyA 后挂住等门闩；放行后剩余 bodyA 一次性全发（旧命令一次
+/// 唤醒即可收完，污染窗口最短）；后续连接（新组）bodyB 分批慢发
+/// （新组完成必然晚于旧命令唤醒，消除「新组先终态」的逃逸形态）。
+/// bodyA/bodyB 内容不同（'A'/'B' 填充），文件内容可精确区分污染来源
+class LatchedBodyServer {
+public:
+    ~LatchedBodyServer() { stop(); }
+
+    bool start() {
+#ifdef _WIN32
+        ensure_winsock_for_run_test();
+#endif
+        listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (listen_fd_ < 0) return false;
+
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = 0;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 ||
+            ::listen(listen_fd_, 8) != 0) {
+            CLOSE_SOCKET(listen_fd_);
+            listen_fd_ = -1;
+            return false;
+        }
+
+        sockaddr_in bound{};
+        sock_len len = sizeof(bound);
+        if (::getsockname(listen_fd_, reinterpret_cast<sockaddr*>(&bound), &len) != 0) {
+            stop();
+            return false;
+        }
+        port_ = ntohs(bound.sin_port);
+
+        running_ = true;
+        accept_thread_ = std::thread([this] { accept_loop(); });
+        return true;
+    }
+
+    void stop() {
+        running_ = false;
+        if (listen_fd_ >= 0) {
+            CLOSE_SOCKET(listen_fd_);
+            listen_fd_ = -1;
+        }
+        if (accept_thread_.joinable()) accept_thread_.join();
+        for (auto& t : conn_threads_) {
+            if (t.joinable()) t.join();
+        }
+        conn_threads_.clear();
+    }
+
+    std::string url(const std::string& path) const {
+        return "http://127.0.0.1:" + std::to_string(port_) + path;
+    }
+
+    void set_bodies(std::size_t first_conn_partial, std::string body_a,
+                    std::string body_b) {
+        first_conn_partial_ = first_conn_partial;
+        body_a_ = std::move(body_a);
+        body_b_ = std::move(body_b);
+    }
+
+    /// 放行首个连接的剩余数据（旧 socket 可读 → 唤醒挂起中的旧命令）
+    void release() { release_ = true; }
+
+private:
+    void accept_loop() {
+        while (running_) {
+            struct pollfd pfd;
+            pfd.fd = listen_fd_;
+            pfd.events = POLLIN;
+            pfd.revents = 0;
+            if (POLL(&pfd, 1, 500) <= 0) {
+                continue;
+            }
+            sockaddr_in peer{};
+            sock_len peer_len = sizeof(peer);
+            int conn = ::accept(listen_fd_, reinterpret_cast<sockaddr*>(&peer), &peer_len);
+            if (conn < 0) {
+                if (!running_) return;
+                continue;
+            }
+            conn_threads_.emplace_back([this, conn] { serve(conn); });
+        }
+    }
+
+    void serve(int conn) {
+        std::string request;
+        char buf[2048];
+        while (request.find("\r\n\r\n") == std::string::npos &&
+               request.size() < 16 * 1024) {
+            recv_ssize n = ::recv(conn, buf, sizeof(buf), 0);
+            if (n <= 0) {
+                CLOSE_SOCKET(conn);
+                return;
+            }
+            request.append(buf, static_cast<std::size_t>(n));
+        }
+
+        const bool first_conn = conn_count_.fetch_add(1) == 0;
+        const std::string& body = first_conn ? body_a_ : body_b_;
+        std::string header = "HTTP/1.1 200 OK\r\n"
+                             "Content-Type: application/octet-stream\r\n"
+                             "Content-Length: " + std::to_string(body.size()) + "\r\n"
+                             "Accept-Ranges: none\r\n"
+                             "Connection: close\r\n\r\n";
+        send_all(conn, header.data(), header.size());
+
+        if (first_conn) {
+            const std::size_t partial =
+                std::min(first_conn_partial_, body.size());
+            send_all(conn, body.data(), partial);
+            // 挂住：等测试 cancel 旧任务后放行剩余数据
+            while (!release_.load() && running_.load()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+            send_all(conn, body.data() + partial, body.size() - partial);
+        } else {
+            // 新组：bodyB 分批慢发（128B × 15ms），完成必然晚于旧
+            // 命令被事件唤醒，钉死「旧命令先执行」的污染时序
+            for (std::size_t off = 0; off < body.size() && running_.load();
+                 off += 128) {
+                const std::size_t n = std::min<std::size_t>(128, body.size() - off);
+                send_all(conn, body.data() + off, n);
+                std::this_thread::sleep_for(std::chrono::milliseconds(15));
+            }
+        }
+        CLOSE_SOCKET(conn);
+    }
+
+    void send_all(int conn, const char* data, std::size_t size) {
+        std::size_t sent = 0;
+        while (sent < size) {
+            recv_ssize n = ::send(conn, data + sent,
+#ifdef _WIN32
+                                  static_cast<int>(size - sent),
+#else
+                                  size - sent,
+#endif
+                                  0);
+            if (n <= 0) return;
+            sent += static_cast<std::size_t>(n);
+        }
+    }
+
+    std::size_t first_conn_partial_ = 512;
+    std::string body_a_;
+    std::string body_b_;
+    std::atomic<int> conn_count_{0};
+    std::atomic<bool> release_{false};
+    int listen_fd_ = -1;
+    int port_ = 0;
+    std::atomic<bool> running_{false};
+    std::thread accept_thread_;
+    std::vector<std::thread> conn_threads_;
+};
+
 } // namespace
 
 TEST(DownloadEngineV2RunTest, BlackHoleServerTimesOutViaTaskTimeout) {
@@ -1948,6 +2107,78 @@ TEST(DownloadEngineV2RunTest, AddDownloadAsHonorsOutputPathOverride) {
 
     std::filesystem::remove_all(dir);
     server.stop();
+}
+
+/// 回归钉子（CI run 35671832942 红面）：cancel_task 之后同 id 重注入，
+/// 旧组挂在等待表的命令若未被清扫，事件唤醒后 find_group 按 task_id
+/// 命中同 id 新组（ACTIVE 通过全部入口守卫）→ 僵尸执行：写新组文件、
+/// 把新组提前推到 COMPLETED（metalink 桥接 resume 换镜像窗口的真实
+/// 缺陷形态：成品是脏数据）。cancel 必须与 pause 对等地投递清扫收口
+TEST(DownloadEngineV2RunTest, CancelThenSameIdReinjectNotPollutedByZombieCommands) {
+    LatchedBodyServer server;
+    ASSERT_TRUE(server.start());
+
+    const std::string body_a(4096, 'A');
+    const std::string body_b(2048, 'B');
+    server.set_bodies(512, body_a, body_b);
+
+    EngineConfigV2 config = fast_poll_config();
+    DownloadEngineV2 engine(config);
+
+    const std::string dir = run_test_temp_dir("cancel_reinject");
+    std::filesystem::create_directories(dir);
+    const std::string out_path = dir + "/reinject.bin";
+
+    DownloadOptions options;
+    options.max_connections = 1;
+    options.resume_enabled = false;  // 钉子聚焦僵尸命令，不引入续传分支
+
+    // 旧组（bodyA）：发 512B 后服务器挂住 → 旧命令挂起进等待表
+    ASSERT_EQ(engine.add_download_as(77, {server.url("/x.bin")}, options, out_path),
+              77u);
+    std::thread runner([&engine] { engine.run(); });
+
+    bool got_progress = false;
+    for (int i = 0; i < 500; ++i) {
+        auto* g = engine.request_group_man()->find_group(77);
+        if (g && g->download_task() && g->download_task()->downloaded_bytes() > 0) {
+            got_progress = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_TRUE(got_progress) << "旧组未收到首笔数据，剧本时序不成立";
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));  // 挂起稳定窗
+
+    // CI 红面时序：cancel（修复前不清扫，旧命令仍挂等待表）→ 同 id
+    // 重注入 → 放行旧 socket 剩余数据（旧命令唤醒即僵尸执行）
+    ASSERT_TRUE(engine.cancel_task(77));
+    ASSERT_EQ(engine.add_download_as(77, {server.url("/x.bin")}, options, out_path),
+              77u);
+    server.release();
+
+    auto* group = engine.request_group_man()->find_group(77);
+    ASSERT_NE(group, nullptr);
+
+    bool finished = false;
+    for (int i = 0; i < 2000; ++i) {
+        const auto st = group->status();
+        if (st == RequestGroupStatus::COMPLETED || st == RequestGroupStatus::FAILED) {
+            finished = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_TRUE(finished) << "重注入的新组未在时限内到达终态";
+    EXPECT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+    // 成品必须逐字节等于新组 bodyB：僵尸命令污染（写 bodyA 残量 /
+    // 用旧组记账把新组提前推到 COMPLETED）任一发生即红
+    EXPECT_EQ(read_file_content(out_path), body_b);
+
+    engine.shutdown();
+    runner.join();
+    server.stop();
+    std::filesystem::remove_all(dir);
 }
 
 /// 批次 V：异常命令携带引擎不认识的 task_id——fail_group_of_command
