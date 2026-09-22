@@ -2,6 +2,44 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-22 - 覆盖率批次 A6：miss 434 → 424（行 97.61%）+ json_rpc 两矿点证伪 + 目录 tellg 行为实证
+- **3 新用例 + 2 处生产注入接线，4 目标行 gcov 逐行核对命中**（incremental_download.cpp 293-294/354/480）：
+  - `CalculateChunkHashesDirectoryReadFailsAfterSeek`（既有目录用例旁）——
+    hash 计算 read 失败 break 分支。**目录 ifstream 行为探针实证**（libstdc++）：
+    `/tmp` 类既有目录的 tellg = -1 → fileSize=0 → 循环不进（既有用例只走
+    零尺寸早退，到不了 read 失败）；`/` 与 `/usr` 的 tellg = INT64_MAX
+    （9223372036854775807）→ fileSize 巨大 → 进循环 → read 失败命中
+    293-294。断言空 chunks 在两形态下恒成立故不加平台守卫
+  - `InjectedCurlInitFailFailsRemoteHashList` / `InjectedCurlInitFailFailsDownloadChanged`
+    ——http_get 与 downloadRange 的 curl_easy_init 短路注入（`inject_failure
+    ? nullptr : curl_easy_init()`，对齐 ftp_plugin 泄漏式接线修复惯例）。
+    两个函数均 private：前者经公开 compare() 触发（注入 → 拉取失败 → 回退
+    全量下载建议），后者手工构造 FileDiff + downloadChanged() 免起 HTTP
+    服务器（断言 false 且不产出输出文件）
+- **两矿点证伪/放弃（写用例前核对数据流全链的又一次践行）**：
+  - json_rpc_server.cpp:1331 `if (!task)` "Unsupported URL"——**结构性不
+    可达**：DownloadEngine::add_task 契约 = 空 URL 抛 InvalidURLException、
+    无 handler 抛 UnsupportedProtocolException（dispatch catch → -32603）、
+    其余恒返回有效指针。传未知协议 URL 在 add_task 内先抛异常，到不了
+    1331——修正了「传未知协议 URL 即命中」的初判
+  - json_rpc_server.cpp:862 WS_OP_PONG 的 pong send 失败——recv→send 窗口
+    的 RST 传播竞速，无同步点可锚（与 824 同性质），不写低命中用例
+- **测量级教训**：① gcov 输出被 `>/dev/null` 吞掉时，旧 .gcov 残留（mtime
+  可差数天）会冒充新结果误导行号判读——重新生成前必须先删；② GCC 15
+  gcov 必须传对象文件（`gcov -o . xxx.cpp.o`），传 `.cpp` 报 "cannot open
+  notes file"（它在找 .gcno）
+- **验证**：build-cov 全量 ctest 2407 清单（1 例
+  DownloadEngineTest.ResumeTask 高负载并行抖动，串行复跑 19ms 即过——
+  A1/A2/A5 批次既有记录；当轮另有他项目满载 16 核，负载 49）+ core
+  二进制无 filter 全量重跑 442/442 恢复 gcda（filter 复跑污染铁律）；
+  ASan 3 新用例零告警
+- **铁账（build-cov 单树新鲜数据）**：miss **434 → 424**（4 目标行 +
+  6 行时序窗口自然抖动收敛），分母 17750 → 17754（+4 为两处接线），
+  行 **97.55% → 97.61%** / 分支 56.92%——98% 结构性不可达结论维持，
+  矿点定性沿批次 X/V/A1-A5 口径。该文件剩余 miss 2 行均定性：
+  compareHashLists 收尾（需远程列表成功——既有用例全走失败回退路径）
+  与 downloadRange 零尺寸防御（结构性不可达，批次 O 既有定性）
+
 ### 2026-09-22 - 覆盖率批次 A5：miss 444 → 434（行 97.55%）+ WS 响应帧防御证伪定性
 - **5 新用例三树绿**（6 个矿点候选 → 5 落地 1 证伪）：
   - `SetCleanupIntervalReachesTaskManager`（download_engine_api_test）

@@ -345,7 +345,11 @@ std::vector<ChunkInfo> IncrementalDownloader::downloadRemoteHashList(
 
 bool IncrementalDownloader::http_get(const std::string& url, std::string& out) {
 #ifdef FALCON_USE_CURL
-    CURL* curl = curl_easy_init();
+    // 注入命中时短路真实创建，避免已创建句柄在失败路径泄漏
+    CURL* curl = ::falcon::detail::inject_failure(
+                     ::falcon::detail::InjectPoint::CurlEasyInit)
+                     ? nullptr
+                     : curl_easy_init();
     if (!curl) {
         return false;
     }
@@ -467,7 +471,11 @@ std::vector<uint8_t> IncrementalDownloader::downloadRange(
         return {};
     }
 
-    CURL* curl = curl_easy_init();
+    // 注入命中时短路真实创建，避免已创建句柄在失败路径泄漏
+    CURL* curl = ::falcon::detail::inject_failure(
+                     ::falcon::detail::InjectPoint::CurlEasyInit)
+                     ? nullptr
+                     : curl_easy_init();
     if (!curl) {
         return {};
     }

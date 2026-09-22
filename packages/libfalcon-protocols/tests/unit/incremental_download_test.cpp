@@ -919,6 +919,15 @@ TEST_F(IncrementalDownloadTest, GenerateHashListDirectoryReadFailsCleanly) {
         std::filesystem::temp_directory_path().string(), 512);
     EXPECT_TRUE(chunks.empty());
 }
+
+// 根目录形态：libstdc++ 对 / 的 tellg 返回 INT64_MAX（非 -1）→ fileSize
+// 巨大进入读取循环 → read 失败命中循环内错误分支（/tmp 的 tellg=-1 只走
+// 零尺寸早退，到不了该分支）——两条目录形态都断言空 chunks
+TEST_F(IncrementalDownloadTest, CalculateChunkHashesDirectoryReadFailsAfterSeek) {
+    IncrementalDownloader downloader;
+    const auto chunks = downloader.generateHashList("/", 512);
+    EXPECT_TRUE(chunks.empty());
+}
 #endif
 
 // 远程哈希列表非法（算法元数据与请求不一致）→ 回退全量下载建议
@@ -1020,6 +1029,47 @@ TEST_F(IncrementalDownloadTest, InjectedHashFinalFailureFailsVerify) {
     ::falcon::detail::ScopedInjection guard(
         ::falcon::detail::InjectPoint::IncrementalHashFinal);
     EXPECT_FALSE(downloader.verifyFile(filePath, chunks[0].hash));
+}
+
+// curl 句柄创建失败 → 远程哈希列表拉取失败 → compare 回退全量下载建议
+// （downloadRemoteHashList 私有，经公开入口 compare 触发）
+TEST_F(IncrementalDownloadTest, InjectedCurlInitFailFailsRemoteHashList) {
+    const std::string local = createTestFile("inj_hashlist.bin", 2048);
+    IncrementalDownloader downloader;
+    IncrementalDownloader::Options options;
+    options.chunkSize = 512;
+
+    ::falcon::detail::ScopedInjection guard(
+        ::falcon::detail::InjectPoint::CurlEasyInit);
+    const FileDiff diff = downloader.compare(
+        local, "http://127.0.0.1:1/remote.bin", options);
+    EXPECT_GT(diff.localSize, 0u);
+    EXPECT_TRUE(diff.chunks.empty());
+}
+
+// curl 句柄创建失败 → 分块 Range 拉取返回空 → downloadChanged 干净失败
+// （不产出输出文件；手工构造 FileDiff 免起 HTTP 服务器）
+TEST_F(IncrementalDownloadTest, InjectedCurlInitFailFailsDownloadChanged) {
+    const std::string local = createTestFile("inj_changed_local.bin", 2048);
+
+    FileDiff diff;
+    diff.localPath = local;
+    diff.remotePath = "http://127.0.0.1:1/remote.bin";
+    diff.localSize = 2048;
+    diff.remoteSize = 2048;
+    ChunkInfo chunk;
+    chunk.offset = 0;
+    chunk.size = 512;
+    chunk.changed = true;
+    diff.chunks.push_back(chunk);
+    diff.totalChanged = 512;
+
+    IncrementalDownloader downloader;
+    ::falcon::detail::ScopedInjection guard(
+        ::falcon::detail::InjectPoint::CurlEasyInit);
+    EXPECT_FALSE(downloader.downloadChanged(
+        diff, testDir_ + "/inj_changed_out.bin"));
+    EXPECT_FALSE(std::filesystem::exists(testDir_ + "/inj_changed_out.bin"));
 }
 
 #endif  // FALCON_FAILURE_INJECTION
