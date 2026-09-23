@@ -416,6 +416,81 @@ TEST(DownloadEngineV2Redirect, RelativeLocationWithDotDotNormalization) {
     std::filesystem::remove_all(dir, rm_ec);
 }
 
+/// 超根上跳（../../../../）：空栈出栈忽略，归一化不越 authority 根，
+/// 结果锚定在根路径
+TEST(DownloadEngineV2Redirect, BeyondRootDotDotClampsAtRoot) {
+    const std::string body = make_body(8 * 1024);
+    RedirectServer server;
+    ASSERT_TRUE(server.start());
+    // /deep/a.bin + "../../../../root.bin" → /root.bin
+    server.add_redirect("/deep/a.bin", 302, "../../../../root.bin");
+    server.add_body("/root.bin", body);
+
+    const std::string dir = temp_dir_for("beyond");
+    std::filesystem::create_directories(dir);
+    const std::string out_path = (std::filesystem::path(dir) / "b.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    const TaskId task_id = engine.add_download(
+        server.url("/deep/a.bin"), redirect_options(out_path));
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    RedirectEngineRunner runner(engine);
+    ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
+    ASSERT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+
+    runner.shutdown_and_join();
+    server.stop();
+
+    EXPECT_EQ(read_file_content(out_path), body);
+    EXPECT_EQ(server.hits("/root.bin"), 1);
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+/// 301/303/308 同在可跟随集合内（既有 302/307 多跳用例之外的三个
+/// is_redirect_status 短路链方向，三跳一次钉齐）
+TEST(DownloadEngineV2Redirect, Status301And303And308Followed) {
+    const std::string body = make_body(8 * 1024);
+    RedirectServer server;
+    ASSERT_TRUE(server.start());
+    server.add_redirect("/s301", 301, "/s303");
+    server.add_redirect("/s303", 303, "/s308");
+    server.add_redirect("/s308", 308, "/done.bin");
+    server.add_body("/done.bin", body);
+
+    const std::string dir = temp_dir_for("s30103308");
+    std::filesystem::create_directories(dir);
+    const std::string out_path = (std::filesystem::path(dir) / "d.bin").string();
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    const TaskId task_id = engine.add_download(
+        server.url("/s301"), redirect_options(out_path));
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    RedirectEngineRunner runner(engine);
+    ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
+    ASSERT_EQ(group->status(), RequestGroupStatus::COMPLETED);
+
+    runner.shutdown_and_join();
+    server.stop();
+
+    EXPECT_EQ(read_file_content(out_path), body);
+    EXPECT_EQ(server.hits("/done.bin"), 1);
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
 /// 重定向环：kMaxRedirects 内截断按失败收口，连接次数有界
 TEST(DownloadEngineV2Redirect, RedirectLoopFailsBounded) {
     RedirectServer server;

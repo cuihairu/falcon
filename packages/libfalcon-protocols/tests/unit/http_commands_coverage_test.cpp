@@ -51,6 +51,7 @@ using ssize_t = std::ptrdiff_t;
 #include <sstream>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 using namespace falcon;
@@ -499,6 +500,53 @@ TEST_F(HttpCommandsCoverageTest, InitiateConnectionHttpSuccess) {
               std::string::npos);
     EXPECT_NE(server.received_request().find("X-Coverage: yes"),
               std::string::npos);
+    // referer 选项随请求上线（防盗链场景的到达断言）
+    EXPECT_NE(server.received_request().find("Referer: http://127.0.0.1/refer"),
+              std::string::npos);
+
+    CLOSE_SOCKET(cmd.socket_fd());
+}
+
+/// 用户自定义同名头覆盖内建头（std::map 后写胜出）：Accept-Encoding
+/// 被自定义值替换后，内建 identity 不得再出现
+TEST_F(HttpCommandsCoverageTest, CustomHeaderOverridesBuiltinAcceptEncoding) {
+    const std::string response =
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Length: 2\r\n"
+        "\r\n"
+        "ok";
+
+    LocalTcpServer server(LocalTcpServer::Mode::kRespondAndClose, response);
+    ASSERT_TRUE(server.valid());
+
+    EngineConfigV2 config;
+    DownloadEngineV2 engine(config);
+
+    const std::string url =
+        "http://127.0.0.1:" + std::to_string(server.port()) + "/file.bin";
+
+    DownloadOptions options;
+    options.headers["Accept-Encoding"] = "gzip";
+
+    HttpInitiateConnectionCommand cmd(1, url, options);
+
+    bool done = false;
+    for (int i = 0; i < 100 && !done; ++i) {
+        done = cmd.execute(&engine);
+        if (!done) {
+            engine.event_poll()->poll(10);
+        }
+    }
+
+    ASSERT_TRUE(done) << "connection/request did not finish in time";
+    EXPECT_EQ(cmd.status(), CommandStatus::COMPLETED);
+
+    server.join();
+
+    // 线上只有自定义 gzip，内建 identity 被覆盖
+    EXPECT_NE(server.received_request().find("Accept-Encoding: gzip"),
+              std::string::npos);
+    EXPECT_EQ(server.received_request().find("identity"), std::string::npos);
 
     CLOSE_SOCKET(cmd.socket_fd());
 }
@@ -1567,4 +1615,69 @@ TEST_F(HttpCommandsCoverageTest, CommandNamesReturnStableIdentifiers) {
                                 /*if_range=*/"", /*retry_count=*/0)
             .name(),
         "HttpSegmentRetry");
+}
+
+//==============================================================================
+// compute_http_segment_ranges（公开纯函数：多连接分段计划）
+// 注：num_segments < 1 的防御分支不可达——content_length ≥ 1 且
+// max_connections ≥ 1 时 max_by_min ≥ 1，钳制恒成立
+//==============================================================================
+
+/// 零长内容与零连接两个早退方向：不产生任何分段
+TEST(ComputeHttpSegmentRanges, ZeroLengthOrZeroConnectionsYieldNoSegments) {
+    EXPECT_TRUE(compute_http_segment_ranges(0, 1024, 4).empty());
+    EXPECT_TRUE(compute_http_segment_ranges(4096, 1024, 0).empty());
+}
+
+/// 内容不足一个最小分段：段数钳制为 1（整段单连接语义）
+TEST(ComputeHttpSegmentRanges, BelowMinSegmentSizeClampsToSingleSegment) {
+    const auto ranges = compute_http_segment_ranges(100, 1000, 4);
+    ASSERT_EQ(ranges.size(), 1u);
+    EXPECT_EQ(ranges[0].offset, 0u);
+    EXPECT_EQ(ranges[0].length, 100u);
+}
+
+/// 常规多段：段数受 max_connections 与 min_segment_size 双重上限约束，
+/// 余数并入最后一段；整除时各段等长
+TEST(ComputeHttpSegmentRanges, RemainderMergedIntoLastSegment) {
+    // 10 字节 / min_segment_size=3 → 至多 3 段（< max_connections=4）；
+    // base=3 余 1，末段 3+1=4
+    const auto ranges = compute_http_segment_ranges(10, 3, 4);
+    ASSERT_EQ(ranges.size(), 3u);
+    EXPECT_EQ(ranges[0].offset, 0u);
+    EXPECT_EQ(ranges[0].length, 3u);
+    EXPECT_EQ(ranges[1].offset, 3u);
+    EXPECT_EQ(ranges[1].length, 3u);
+    EXPECT_EQ(ranges[2].offset, 6u);
+    EXPECT_EQ(ranges[2].length, 4u);
+
+    // 整除对照：9 字节 min=3 → 恰 3 段等长（末段长度不加余数）
+    const auto even = compute_http_segment_ranges(9, 3, 4);
+    ASSERT_EQ(even.size(), 3u);
+    for (const auto& r : even) {
+        EXPECT_EQ(r.length, 3u);
+    }
+}
+
+/// 不变式：任意配置下分段连续无重叠且恰好覆盖 [0, content_length)；
+/// min_segment_size=0 走 max(…,1) 钳制（按每段至少 1 字节计）
+TEST(ComputeHttpSegmentRanges, SegmentsAreContiguousAndCoverEverything) {
+    const std::vector<std::tuple<Bytes, Bytes, std::size_t>> cases = {
+        {1024 * 1024 + 7, 64 * 1024, 8},
+        {17, 5, 16},
+        {4096, 4096, 2},
+        {4096, 0, 4},
+        {999'999, 100'000, 32},
+    };
+    for (const auto& [content, min_seg, conns] : cases) {
+        const auto ranges = compute_http_segment_ranges(content, min_seg, conns);
+        ASSERT_FALSE(ranges.empty());
+        Bytes offset = 0;
+        for (const auto& r : ranges) {
+            EXPECT_EQ(r.offset, offset);
+            EXPECT_GT(r.length, 0u);
+            offset += r.length;
+        }
+        EXPECT_EQ(offset, content);
+    }
 }

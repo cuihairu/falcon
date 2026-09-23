@@ -2,6 +2,59 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-23 - 覆盖率批次 A10：分支维度第二批（miss 15084→15075，分支 57.00%）+ 近重复用例自纠 + CI Configure 超时加固
+- **12 新用例 + 1 既有增强**（全参数变体/单元直调/回环 e2e，零注入零竞速）：
+  - `ComputeHttpSegmentRanges` 单元 4（http_commands 内部分段计划
+    纯函数首覆盖）：零长度/零连接数无分段、低于 min_segment_size 钳
+    单段、余数并入末段、分段连续性与全覆盖不变式
+  - `ParseHttpProxy` 参数变体 5：userinfo 无冒号整体落 password 字
+    段、空 username 回落 username 字段、带前导斜杠 path 判
+    Unsupported、端口文本超长判 Unsupported、65535 端口上限合法接
+    受（与既有 <65536 拒绝用例合成边界对）
+  - `DownloadEngineV2Redirect` e2e 2（真新分支）：超根上跳
+    `../../../../` 空栈出栈忽略归一化不越 authority 根；301/303/308
+    三跳一次钉齐既有 302/307 之外的可跟随集合三方向
+  - `CustomHeaderOverridesBuiltinAcceptEncoding`（coverage）——用户
+    自定义同名头覆盖内建头（std::map 后写胜出），断言 identity 不
+    再出现；既有 `InitiateConnectionHttpSuccess` 补 Referer 线上到
+    达断言（该用例早已实现 L1339 referer 行覆盖但从未断言到达）
+- **近重复用例自纠（本批核心教训）**：首批写的 5 个 redirect e2e
+  中 3 个与 edges 文件既有用例（e8636cf，批次 D 时代）同簇——
+  MissingLocation≈RedirectEmptyLocationFailsCleanly、ProtocolRelative
+  ≈RedirectProtocolRelativeSucceeds、QueryStripped≈既有同簇强断言
+  版本。删除 3 个并还原 RedirectServer 观测增强。**「既有用例形态
+  三方对照」必须覆盖同二进制全部测试文件**（此前只对照了被测源码
+  与本文件既有用例）——写用例前标准动作补充「网内对照法」：同二
+  进制既有用例 grep（`grep -rn "Redirect" tests/*/unit/*.cpp`）+
+  `git log -S` 溯源引入批次
+- **L1956 死防御定性（resolve 簇唯一残留 miss）**：handle_redirect
+  的 `if (!engine) return false;`——private 方法全库唯一调用点
+  L1653 位于 execute 内、其入口 null 守卫先行（批次 V
+  ResponseExecuteNullEngineFails 钉住），执行到调用点时 engine 恒
+  非空 → 结构性不可达，不写用例（A5「上游有守卫的下游分支」标准
+  否定项）。**附带测量误判修正**：压缩前「resolve 簇全零 miss」结
+  论系旧 .gcov 残留冒充（A6 教训复现——重生成前必须先删旧文件，
+  本轮 rm 后重生成才得到可信判定）
+- **CI 红面收口（A8 run 35794879798 唯一红，与纯测试 commit 无
+  关）**：Windows Qt6 job 的 Configure CMake (Windows) 步骤 60 分
+  钟整被超时击杀——vcpkg 二进制缓存被 GH LRU 驱逐触发 qtbase 全
+  源码构建，日志末行 "successfully in: 60 min" 紧跟 timeout error
+  （安装完成瞬间越过步骤预算，零余量）。修复：两 Configure 步骤
+  timeout-minutes 60→120（a13a3c3；Unix 侧同步加固因 macOS 同样
+  经 vcpkg 源码构建 qtbase）；失败 run 恰已完成缓存提交，重跑即
+  命中暖缓存
+- **验证**：build-cov 全量 ctest **2429/2430 过零失败**（512s 串
+  行，13 skip 设计内）；12 新用例 + 增强先经 build-ci 单跑 31/31
+  绿 + gcov 对象级核对（prepare_http_request 头区 L1286-1350 零
+  miss、L1305 执行 3128 次/L1339 referer 9 次/L1343 自定义头循环
+  4 次）
+- **铁账（build-cov 单树新鲜数据）**：行 miss **423 → 419**
+  （97.62% → 97.64%），**分支 miss 15084 → 15075（56.98% →
+  57.00%）**——12 用例净收 4 行 + 9 分支点；分母 17756/35060 不变
+  （本批零生产改动）。行维度小幅收敛符合立项预期（本批主体是分
+  支维度：参数变体用例多打在已有行覆盖区域的条件方向上）。98%
+  结构性不可达结论维持，矿点定性沿批次 X/V/A1-A9 口径
+
 ### 2026-09-22 - 覆盖率批次 A9（分支覆盖维度首立项）：3 用例 + 分支 miss 15094 → 15084 + 分支缺口侦察定性（参数变体矿经核对后枯竭）
 - **批次缘起**：行维度矿点 A8 已定性收尽，但分支维度（56.95%，
   缺口 15094）从未系统攻过；coverage.xml 解析 + 抽查证实存在

@@ -749,6 +749,54 @@ TEST(ParseHttpProxy, Ipv6LiteralAuthorityIsUnsupported) {
     }
 }
 
+/// userinfo 无冒号（仅用户名）：密码回落独立凭据字段
+TEST(ParseHttpProxy, UserinfoWithoutColonFallsBackToPasswordField) {
+    DownloadOptions options;
+    options.proxy = "http://alice@proxy.local:8080";
+    options.proxy_username = "ignored";
+    options.proxy_password = "fieldpw";
+    const auto cfg = parse_http_proxy(options);
+    ASSERT_EQ(cfg.kind, HttpProxyKind::HttpProxy);
+    EXPECT_EQ(cfg.username, "alice");
+    EXPECT_EQ(cfg.password, "fieldpw");
+}
+
+/// userinfo 用户名为空（":pass@"）：用户名回落独立凭据字段
+TEST(ParseHttpProxy, EmptyUsernameInUserinfoFallsBackToUsernameField) {
+    DownloadOptions options;
+    options.proxy = "http://:secretpw@proxy.local:8080";
+    options.proxy_username = "fielduser";
+    options.proxy_password = "ignored";
+    const auto cfg = parse_http_proxy(options);
+    ASSERT_EQ(cfg.kind, HttpProxyKind::HttpProxy);
+    EXPECT_EQ(cfg.username, "fielduser");
+    EXPECT_EQ(cfg.password, "secretpw");
+}
+
+/// userinfo 之后紧跟路径（无 authority）：同前导斜杠判 Unsupported
+TEST(ParseHttpProxy, UserinfoWithLeadingSlashPathIsUnsupported) {
+    DownloadOptions options;
+    options.proxy = "http://user@/path";
+    EXPECT_EQ(parse_http_proxy(options).kind, HttpProxyKind::Unsupported);
+}
+
+/// 6 位端口文本（超出 5 字符长度上限）：与 5 位超范围值（99999）不同
+/// 的拒绝方向
+TEST(ParseHttpProxy, OverlongPortTextIsUnsupported) {
+    DownloadOptions options;
+    options.proxy = "http://proxy.local:123456";
+    EXPECT_EQ(parse_http_proxy(options).kind, HttpProxyKind::Unsupported);
+}
+
+/// 端口合法上界 65535 被接受
+TEST(ParseHttpProxy, PortMaxValue65535Accepted) {
+    DownloadOptions options;
+    options.proxy = "http://proxy.local:65535";
+    const auto cfg = parse_http_proxy(options);
+    ASSERT_EQ(cfg.kind, HttpProxyKind::HttpProxy);
+    EXPECT_EQ(cfg.port, 65535);
+}
+
 //==============================================================================
 // 明文 HTTP 代理：absolute-form 请求行 + Basic 认证
 //==============================================================================
