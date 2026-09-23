@@ -2,6 +2,18 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-23 - BT DHT 改走 libtorrent 原生（成熟开源库替换批次：会话配置单一事实源 + 自研 DHT 隔离定性 + 回环两跳传播测试）
+- **背景与方案**（用户点名的三处自研实现替换之一）：仓库调查实锤自研 DhtClient 四处 BEP-5 线格式偏差（id 写顶层 dict、values 列表被丢弃、arguments 装不下 implied_port、hex id 曾为 memcpy 截断）+ announce_peer 零实现 + 无入站查询应答——生产 BT 模式的 DHT 实际由 libtorrent session 原生承载但从未显式配置。用户裁决方案 B：libtorrent 侧显式配置加固 + 自研 DhtClient 隔离保留（纯 C++ 模式实验用，不进产品路径）
+- **生产改动（bittorrent_plugin）**：新增 public static `make_session_settings()`——enable_dht=true + 四公共引导节点表（dht.libtorrent.org / router.bittorrent.com / dht.transmissionbt.com / router.utorrent.com）显式声明，session_ 构造即 `session_{make_session_settings()}`（防上游版本静默改写默认）；私有模式 configure_private_mode 停 DHT 语义沿既有；#else 分支自研 DhtClient 补文档定性注释（偏差不修，仅服务纯 C++ 模式）
+- **新测试**（bittorrent_dht_test.cpp，libtorrent 模式 3 用例 + 纯 C++ 模式 skip 占位）：
+  - `MakeSessionSettingsExplicitlyEnablesDht`——配置单一事实源钉死（enable_dht + 四节点清单 + 恰 3 逗号）
+  - `DhtRunsByDefaultAndPrivateModeStopsIt`——handler 运行时契约：构造后 DHT 运行、私有模式关停（既有纯 C++ 模式两 DHT 用例在库模式 skip，本用例补齐等价覆盖）
+  - `ThirdNodeEntersRoutingTableViaBootstrapRelay`——**三 session 回环两跳传播**：A（引导表清空纯被动）← C 先引导到 A（C 入 A 表，以 A stats 主表 num_nodes≥1 为确定性观测）← B 后引导到 A，断言 C 进入 B 的路由表（60s 预算实测 5.4-5.6s，10/10 轮压测全绿）
+- **测量级教训（libtorrent router node 排除语义，读上游源码实锤）**：bootstrap 目标被 libtorrent **设计性排除在路由表之外**——`routing_table::add_router_node` 把 bootstrap 端点插入 m_router_nodes 集合，`add_node_impl` 对集合内端点直接 failed_to_add（v2.0.11 routing_table.cpp:634-636/1078-1080）→「直连 bootstrap 对方入表」结构性不成立，初版断言 60s 必超时是**断言选错观测点而非产品缺陷**。入表全库仅三路径：reply（rpc_manager L389，需先 outstanding 查询）、announce_peer（node.cpp:962，token 验证后）、put（L1109）——ping/find_node/get_peers/get 查询分支一律不入表；find_node 只返回**主表 confirmed** 节点（replacement cache 不参与引导响应）。回环验证 bootstrap 传播的唯一可行形态是**两跳传播**（A 被动 ← C 先引导 ← B 后引导，A 响应 nodes 携 C → B 遍历 INVOKE C → reply 入表）；链式拓扑不可行（C 是 A 的 router 永不入 A 表 → A 响应 nodes 恒空 → C 表恒空）。矿点/断言的机制支点必须读上游源码实证再定断言（「直连入表」直觉在 libtorrent 语义下不成立——与 A5/A7「上游有守卫的下游分支」教训同构）
+- **测试基建两要点**：① pop_alerts 消费即弃——日志收集必须逐轮在等待循环内做，失败分支才有全程 DHT 日志（dht_log_alert 模块枚举 0-4 + dht_pkt_alert 方向帧）；② dht_stats_alert 观测路由表必须 num_nodes（主表）与 num_replacements 分列统计——引导响应只携带主表 confirmed 节点，replacement 不参与
+- **验证**：build-ci 树（libtorrent 2.0.11）BT 全套件 149 过（3 skip 既有纯 C++ 占位）+ 新用例 10/10 轮压测全绿；ASan 树（纯 C++ 模式）BT 套件 154 过零告警（2 skip 无 libtorrent 占位）；build-cov 树无 libtorrent（与 CI Coverage job 同构），新测试为 skip 占位——净增不减
+- 下一个替换批次：NAT 端口映射 → miniupnpc + libnatpmp（用户已裁决，libnatpmp 一并 overlay port）；随后 Metalink → libmetalink（调研已完成）
+
 ### 2026-09-23 - 覆盖率批次 A11：websocket_rpc_client parse_url 两矿点收口（分支 miss 15075→15053，57.00%→57.07%）+ Kodo 外网依赖用例环境挂死处置
 - **2 新用例**（websocket_rpc_client_test，全参数变体直达，零注入零竞速）：
   - `ParseUrlStripsUserinfoBeforeHostResolution`——`ws://user:pass@host:port/jsonrpc` 的 userinfo 剥离（rfind('@') 命中 host 侧 L184 剥离分支）：host 恒不可解析即剥离生效的结构性铁证（未剥离则 connect 到 "user"），断言请求行 `GET /jsonrpc HTTP/1.1` 照常发出

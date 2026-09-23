@@ -30,6 +30,7 @@
 #include <libtorrent/bencode.hpp>
 #include <libtorrent/torrent_info.hpp>
 #include <libtorrent/magnet_uri.hpp>
+#include <libtorrent/settings_pack.hpp>
 #endif
 
 namespace falcon {
@@ -97,6 +98,16 @@ public:
      */
 #ifdef FALCON_USE_LIBTORRENT
     bool isDhtRunning() const { return session_.is_dht_running(); }
+
+    /**
+     * @brief 会话初始设置的单一事实源（libtorrent 模式）：显式声明
+     * DHT 语义——enable_dht=true + 公共引导节点表（节点清单与
+     * libtorrent 内置默认一致，显式写出是防上游版本静默改写默认
+     * 行为）。listen_interfaces 不在此设定（运行期经
+     * set_listen_interfaces 配置）；configure_private_mode 在运行期
+     * 以 apply_settings 覆盖 DHT/LSD/UPnP/NAT-PMP 开关
+     */
+    static libtorrent::settings_pack make_session_settings();
 #else
     bool isDhtRunning() const { return dhtClient_ != nullptr; }
 #endif
@@ -175,7 +186,9 @@ public:
 
 private:
 #ifdef FALCON_USE_LIBTORRENT
-    libtorrent::session session_;
+    // 显式初始设置构造：DHT 从「隐式默认」变为显式契约（DHT 由
+    // libtorrent session 原生承载，产品路径的 peer 自动发现面）
+    libtorrent::session session_{make_session_settings()};
     std::map<TaskId, libtorrent::torrent_handle> torrentHandles_;
     mutable std::mutex handlesMutex_;
 
@@ -247,7 +260,15 @@ private:
     std::map<TaskId, std::unique_ptr<TaskContext>> activeTasks_;
     std::mutex tasksMutex_;
 
-    // DHT 客户端
+    // DHT 客户端（纯 C++ 模式专属，隔离保留——文档定性）：
+    // 自研 DhtClient 是纯 C++ 模式（FALCON_USE_LIBTORRENT 关闭）
+    // 的实验性 P2P 基础设施，产品 BT 路径为 libtorrent 模式（DHT
+    // 由 session 原生承载，见 make_session_settings）。与 BEP-5
+    // 规范存在四处已知偏差（announce_peer/token 流程零实现、
+    // 无入站查询应答、响应 id 落顶层 dict、values 列表被 decode
+    // 丢弃）——不修：与公共 DHT 网络正确互通需要重造 libtorrent
+    // 已有的全部轮子。现有能力（迭代查找/路由表/bencode）仅
+    // 服务纯 C++ 模式内的私有集群实验与测试基建（MockDhtNode）
     std::unique_ptr<DhtClient> dhtClient_;
     std::atomic<bool> dhtEnabled_{true};
     uint16_t dhtPort_{6881};

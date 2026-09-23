@@ -569,6 +569,19 @@ void BitTorrentHandler::remove_torrent(TaskId id) {
 }
 #endif
 
+#ifdef FALCON_USE_LIBTORRENT
+libtorrent::settings_pack BitTorrentHandler::make_session_settings() {
+    libtorrent::settings_pack pack;
+    pack.set_bool(libtorrent::settings_pack::enable_dht, true);
+    pack.set_str(libtorrent::settings_pack::dht_bootstrap_nodes,
+                 "dht.libtorrent.org:25401,"
+                 "router.bittorrent.com:6881,"
+                 "dht.transmissionbt.com:6881,"
+                 "router.utorrent.com:6881");
+    return pack;
+}
+#endif
+
 void BitTorrentHandler::configure_private_mode() {
 #ifdef FALCON_USE_LIBTORRENT
     libtorrent::settings_pack settings;

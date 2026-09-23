@@ -86,6 +86,8 @@ if(FALCON_ENABLE_BITTORRENT)
     target_sources(falcon_protocols_tests PRIVATE unit/seed_policy_test.cpp)
     # libtorrent session 数据面做种 e2e（非 libtorrent 构建下编译为 skip 占位）
     target_sources(falcon_protocols_tests PRIVATE unit/bittorrent_seeding_test.cpp)
+    # libtorrent 模式 DHT 会话配置 + 回环 bootstrap（非 libtorrent 构建下编译为 skip 占位）
+    target_sources(falcon_protocols_tests PRIVATE unit/bittorrent_dht_test.cpp)
     # 插件符号（BencodeValue、create_bittorrent_handler 等）在插件静态库中
     target_link_libraries(falcon_protocols_tests PRIVATE falcon_plugin_bittorrent)
     # 与库一致的编译定义，供配置相关的测试条件使用

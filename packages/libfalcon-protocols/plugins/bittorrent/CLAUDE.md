@@ -6,6 +6,32 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-23 - DHT 会话配置单一事实源（libtorrent 原生 DHT 显式化 + 自研 DhtClient 隔离定性）
+- **make_session_settings()**（public static，`FALCON_USE_LIBTORRENT`
+  分支单一事实源）：enable_dht=true + 四公共引导节点表显式声明
+  （dht.libtorrent.org:25401 / router.bittorrent.com:6881 /
+  dht.transmissionbt.com:6881 / router.utorrent.com:6881）；
+  `session_{make_session_settings()}` 构造即用——此前 DHT 处于
+  「隐式默认」状态（enable_dht 依赖上游默认、引导表依赖上游
+  默认），上游版本静默改写即无感漂移
+- **自研 DhtClient 定性隔离**（`#else` 纯 C++ 分支，文档注释）：
+  四处 BEP-5 线格式偏差 + announce_peer 零实现 + 无入站查询应答
+  ——不修（生产 BT 模式 DHT 由 libtorrent 原生承载），仅服务
+  纯 C++ 模式实验；行为覆盖在 dht_node_test
+- **bittorrent_dht_test.cpp**（libtorrent 模式 3 用例 + 纯 C++
+  skip 占位）：配置钉死 / 构造后 DHT 运行 + 私有模式关停（库
+  模式等价覆盖，既有两 DHT 用例在库模式 skip）/ **三 session
+  回环两跳传播**（A 被动 ← C 先引导入 A 表 ← B 后引导，断言
+  C 经 A 的响应 nodes 进入 B 的路由表——libtorrent 把
+  bootstrap 目标设计性排除在路由表外（m_router_nodes），
+  「直连 bootstrap 对方入表」结构性不成立；链式拓扑不可行）
+- 测量教训：① 断言的机制支点先读上游源码实证（router node
+  排除语义在 routing_table.cpp:634-636/1078-1080，入表仅
+  reply/announce_peer/put 三路径）；② pop_alerts 消费即弃，
+  诊断日志必须在等待循环内逐轮收集；③ dht_stats_alert 的
+  num_nodes（主表）与 num_replacements 必须分列——引导响应
+  只携带主表 confirmed 节点
+
 ### 2026-09-21 - BT 做种策略落地（aria2 --seed-ratio/--seed-time 同语义 + libtorrent 数据面真实化）
 - **seed_policy.{hpp,cpp}**（纯函数，无 libtorrent 依赖）：
   `seeding_complete(SeedLimits, SeedStats)` ——ratio>0 做种到
@@ -112,8 +138,10 @@
 
 ## 插件职责
 
-BitTorrent/Magnet 协议插件，**纯 C++ 实现**（`FALCON_USE_LIBTORRENT`
-存在但生产未启用），支持：
+BitTorrent/Magnet 协议插件，双模式：`FALCON_USE_LIBTORRENT` 生产
+模式（session 原生数据面 + 原生 DHT，`make_session_settings()`
+单一事实源）与纯 C++ 模式（实验面：内嵌解析器 + 自研 DhtClient
+——已定性隔离）。支持：
 
 - .torrent 文件解析（内嵌 B 编码解析器，`get_file_info` 纯模式路径）
 - Magnet 链接（hex / Base32 info-hash 归一化，`extract_info_hash`/
