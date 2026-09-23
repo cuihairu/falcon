@@ -78,13 +78,15 @@ endif()
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(
         -Wall -Wextra -Wpedantic
-        -Wnon-virtual-dtor
         -Wcast-align
         -Wunused
-        -Woverloaded-virtual
         -Wconversion
         -Wsign-conversion
         -Wformat=2
+        # C++ 专属开关按语言限定：vendored C 库（third_party/libmetalink）
+        # 编译时这两个选项会产生 "valid for C++/ObjC++ but not for C" 告警
+        $<$<COMPILE_LANGUAGE:CXX>:-Wnon-virtual-dtor>
+        $<$<COMPILE_LANGUAGE:CXX>:-Woverloaded-virtual>
     )
 
     # 代码覆盖率支持 (GCC/Clang)

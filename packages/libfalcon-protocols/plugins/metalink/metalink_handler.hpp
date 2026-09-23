@@ -83,9 +83,10 @@ struct MetalinkFile {
  * @brief metalink XML 文档 → MetalinkFile 列表
  *
  * 同时兼容 RFC 5854(.meta4,priority 升序)与 Metalink3
- * (.metalink,preference 降序)。解析失败(非法 XML/根元素不是
- * metalink/无 file/name 缺失或路径穿越/无可用镜像)抛
- * std::runtime_error(含 XmlParseError 子类,带行列号)。
+ * (.metalink,preference 降序)。语义解析交给 libmetalink(expat
+ * 预检 + metalink_parse_memory,aria2 同款库)。解析失败(非法
+ * XML/根元素不是 metalink/无 file/name 缺失或路径穿越/无可用镜像)
+ * 抛 std::runtime_error(格式错误为 XmlParseError 子类,带行列号)。
  */
 class MetalinkFileParser {
 public:

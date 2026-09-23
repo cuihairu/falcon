@@ -119,7 +119,7 @@ protected:
             (dir_.path() / ("doc" + std::to_string(doc_count_++) + ".meta4"))
                 .string();
         std::ofstream out(path, std::ios::binary | std::ios::trunc);
-        out << "<?xml version=\"1.0\"?><metalink>" << inner << "</metalink>";
+        out << "<?xml version=\"1.0\"?><metalink xmlns=\"urn:ietf:params:xml:ns:metalink\">" << inner << "</metalink>";
         return path;
     }
 
@@ -315,7 +315,7 @@ TEST_F(MetalinkHandlerTest, RemoteMeta4FullChain) {
     server().set_response("/m1.bin",
                           FakeResponse{200, "OK", {}, kMirror1Body, true});
     const std::string xml =
-        "<?xml version=\"1.0\"?><metalink>"
+        "<?xml version=\"1.0\"?><metalink xmlns=\"urn:ietf:params:xml:ns:metalink\">"
         "<file name=\"remote.bin\">"
         "<size>22</size>"
         "<hash type=\"md5\">" + std::string(kMirror1Md5) + "</hash>"
@@ -450,7 +450,7 @@ TEST_F(MetalinkHandlerTest, RemoteFetchWithoutHttpHandler) {
 /// Completed 收口 → 按暂停语义收口,parent 停在 Paused
 TEST_F(MetalinkHandlerTest, PauseDuringRemoteFetchStaysPaused) {
     const std::string xml =
-        "<?xml version=\"1.0\"?><metalink><file name=\"x.bin\">"
+        "<?xml version=\"1.0\"?><metalink xmlns=\"urn:ietf:params:xml:ns:metalink\"><file name=\"x.bin\">"
         "<url>http://192.0.2.10/x.bin</url></file></metalink>";
     server().set_response("/remote.meta4",
                           FakeResponse{200, "OK", {}, xml, false});
@@ -720,7 +720,7 @@ protected:
              ("v2doc" + std::to_string(doc_count_++) + ".meta4"))
                 .string();
         std::ofstream out(path, std::ios::binary | std::ios::trunc);
-        out << "<?xml version=\"1.0\"?><metalink>" << inner << "</metalink>";
+        out << "<?xml version=\"1.0\"?><metalink xmlns=\"urn:ietf:params:xml:ns:metalink\">" << inner << "</metalink>";
         return path;
     }
 
@@ -1061,7 +1061,7 @@ TEST_F(MetalinkV2BridgeTest, V2ResumeWithChangedMirrors) {
     server().set_response("/cm4.bin", v2_range_response(body));
     {
         std::ofstream out(doc_path, std::ios::binary | std::ios::trunc);
-        out << "<?xml version=\"1.0\"?><metalink>"
+        out << "<?xml version=\"1.0\"?><metalink xmlns=\"urn:ietf:params:xml:ns:metalink\">"
             << "<file name=\"cmout.bin\">"
             << "<size>32</size>"
             << "<hash type=\"sha-256\">" << sha256_hex(body) << "</hash>"
@@ -1243,7 +1243,9 @@ TEST_F(MetalinkV2BridgeTest, V2OnSingleMirrorUsesStage1) {
     EXPECT_EQ(read_file((dir_.path() / "out4.bin").string()), kMirror1Body);
     // 阶段1 单连接:全新下载不带 Range
     for (const auto& r : server().requests()) {
-        if (r.path == "/single.bin") EXPECT_TRUE(r.range.empty());
+        if (r.path == "/single.bin") {
+            EXPECT_TRUE(r.range.empty());
+        }
     }
 }
 

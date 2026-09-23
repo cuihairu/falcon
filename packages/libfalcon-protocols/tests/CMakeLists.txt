@@ -120,7 +120,6 @@ endif()
 # Metalink 解析单测(handler e2e 挂到下方 falcon_http_tests 定义之后)
 if(FALCON_ENABLE_METALINK)
     target_sources(falcon_protocols_tests PRIVATE
-        unit/mini_xml_parser_test.cpp
         unit/metalink_parse_test.cpp
     )
     target_compile_definitions(falcon_protocols_tests PRIVATE FALCON_ENABLE_METALINK_PLUGIN)

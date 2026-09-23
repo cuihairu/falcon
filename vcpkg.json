@@ -20,7 +20,11 @@
       "version>=": "1.12.0"
     },
     "miniupnpc",
-    "libnatpmp"
+    "libnatpmp",
+    {
+      "name": "expat",
+      "default-features": false
+    }
   ],
   "features": {
     "desktop": {

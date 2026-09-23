@@ -7,7 +7,10 @@
 
 #include "metalink_handler.hpp"
 
-#include "mini_xml_parser.hpp"
+#include "metalink_xml_error.hpp"
+
+#include <metalink/metalink.h>
+#include <expat.h>
 
 #include <falcon/exceptions.hpp>
 #include <falcon/logger.hpp>
@@ -24,7 +27,6 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
-#include <limits>
 #include <sstream>
 #include <thread>
 #include <utility>
@@ -110,30 +112,6 @@ bool is_safe_filename(const std::string& name) {
     return true;
 }
 
-/// 属性整数解析;失败/超范围回落默认值
-int parse_int_attr(const std::string& text, int fallback) {
-    try {
-        std::size_t consumed = 0;
-        const long value = std::stol(trim(text), &consumed);
-        if (consumed != trim(text).size()) return fallback;
-        if (value < std::numeric_limits<int>::min() ||
-            value > std::numeric_limits<int>::max()) {
-            return fallback;
-        }
-        return static_cast<int>(value);
-    } catch (const std::exception&) {
-        return fallback;
-    }
-}
-
-std::uint64_t parse_u64_attr(const std::string& text) {
-    try {
-        return std::stoull(trim(text));
-    } catch (const std::exception&) {
-        return 0;
-    }
-}
-
 /// 镜像排序键:meta4 priority 升序优先,metalink3 preference 降序换算
 int mirror_rank(const MetalinkUrl& u) {
     if (u.priority != kNoPriority) return u.priority;
@@ -173,57 +151,111 @@ bool MetalinkFileParser::hash_type_to_algorithm(const std::string& type,
     return false;
 }
 
+namespace {
+
+/// XML 文档格式预检:仅验证 well-formedness,错误带行列号。
+/// 语义解析交给 libmetalink,但它对格式错误只回笼统的
+/// METALINK_ERR_PARSER_ERROR(无位置);预检先行保住诊断契约。
+void validate_xml_well_formed(const std::string& xml_text) {
+    XML_Parser parser = XML_ParserCreate(nullptr);
+    if (!parser) throw std::runtime_error("metalink 解析内存分配失败");
+    // 手写守卫:成功路径与异常路径都要释放 parser
+    struct ParserGuard {
+        XML_Parser p;
+        ~ParserGuard() { XML_ParserFree(p); }
+    } guard{parser};
+
+    if (XML_Parse(parser, xml_text.data(),
+                  static_cast<int>(xml_text.size()), 1) == XML_STATUS_ERROR) {
+        throw XmlParseError(
+            XML_ErrorString(XML_GetErrorCode(parser)),
+            static_cast<std::size_t>(XML_GetCurrentLineNumber(parser)),
+            static_cast<std::size_t>(XML_GetCurrentColumnNumber(parser)));
+    }
+}
+
+/// libmetalink 错误码 → 中文错误消息(runtime_error)
+[[noreturn]] void throw_metalink_error(int error_code) {
+    switch (error_code) {
+    case METALINK_ERR_BAD_ALLOC:
+        throw std::runtime_error("metalink 解析内存分配失败");
+    case METALINK_ERR_MISSING_REQUIRED_ATTR:
+        throw std::runtime_error("file 元素缺少 name 属性");
+    case METALINK_ERR_PARSER_ERROR:
+        // 格式错误已被预检拦截,理论上到不了;仍映射为解析异常
+        throw XmlParseError("metalink XML 解析失败", 0, 0);
+    default:
+        throw std::runtime_error(std::string("metalink 解析失败: ") +
+                                 metalink_strerror(error_code));
+    }
+}
+
+/// RAII 持有 libmetalink 解析结果
+struct MetalinkResultGuard {
+    metalink_t* doc = nullptr;
+    ~MetalinkResultGuard() {
+        if (doc) metalink_delete(doc);
+    }
+};
+
+} // namespace
+
 std::vector<MetalinkFile> MetalinkFileParser::parse(
     const std::string& xml_text) {
-    auto root = MiniXmlParser::parse(xml_text);
-    if (!root || root->name != "metalink") {
-        throw std::runtime_error(
-            "不是有效的 metalink 文档(根元素缺失或不是 metalink)");
-    }
+    // ① 格式层:well-formed 预检(行列号诊断契约)
+    validate_xml_well_formed(xml_text);
 
+    // ② 语义层:libmetalink(RFC 5854 与 Metalink3 双版本,aria2 同款)
+    MetalinkResultGuard result;
+    const int rc = metalink_parse_memory(
+        xml_text.data(), xml_text.size(), &result.doc);
+    if (rc != 0) throw_metalink_error(rc);
+
+    const bool known_version = result.doc->version == METALINK_VERSION_3 ||
+                               result.doc->version == METALINK_VERSION_4;
+
+    // ③ 字段映射:库结构 → MetalinkFile DTO
     std::vector<MetalinkFile> files;
-    for (const auto* file_node : root->children_of("file")) {
+    for (metalink_file_t** fp = result.doc->files; fp && *fp; ++fp) {
+        metalink_file_t* f = *fp;
         MetalinkFile mf;
-
-        const std::string* name = file_node->attr("name");
-        if (!name || name->empty()) {
-            throw std::runtime_error("file 元素缺少 name 属性");
+        mf.name = f->name ? f->name : "";
+        // 库已把不安全文件名(穿越/控制字符/盘符)的 file 整个跳过;
+        // 二次检查兜住库放行但我们契约更严的形态(嵌入 '/' 与反斜杠)
+        if (!is_safe_filename(mf.name)) {
+            throw std::runtime_error("file name 含路径穿越或分隔符: " +
+                                     mf.name);
         }
-        if (!is_safe_filename(*name)) {
-            throw std::runtime_error("file name 含路径穿越或分隔符: " + *name);
-        }
-        mf.name = *name;
+        // 库对 size 已做垃圾值/负数/溢出回落 0
+        mf.size = f->size > 0 ? static_cast<std::uint64_t>(f->size) : 0;
 
-        if (const auto* size_node = file_node->child("size")) {
-            mf.size = parse_u64_attr(size_node->text);
-        }
-
-        for (const auto* hash_node : file_node->children_of("hash")) {
-            const std::string* type = hash_node->attr("type");
+        for (metalink_checksum_t** cp = f->checksums; cp && *cp; ++cp) {
             HashAlgorithm algo;
-            if (!type || !hash_type_to_algorithm(*type, algo)) continue;
-            std::string hex = trim(hash_node->text);
+            const char* type = (*cp)->type;
+            if (!type || !hash_type_to_algorithm(type, algo)) continue;
+            std::string hex = trim((*cp)->hash ? (*cp)->hash : "");
             if (hex.empty()) continue;
             mf.hashes.emplace_back(std::move(hex), algo);
         }
 
-        for (const auto* url_node : file_node->children_of("url")) {
+        for (metalink_resource_t** rp = f->resources; rp && *rp; ++rp) {
+            metalink_resource_t* r = *rp;
             MetalinkUrl mu;
-            mu.url = trim(url_node->text);
+            mu.url = trim(r->url ? r->url : "");
             if (mu.url.empty()) continue;
-            if (const auto* t = url_node->attr("type")) mu.type = *t;
-            if (const auto* loc = url_node->attr("location")) {
-                mu.location = *loc;
-            }
-            if (const auto* p = url_node->attr("priority")) {
-                mu.priority = parse_int_attr(*p, kNoPriority);
-            }
-            if (const auto* p = url_node->attr("preference")) {
-                mu.preference = parse_int_attr(*p, -1);
-            }
+            if (r->location) mu.location = r->location;
+            if (r->type) mu.type = r->type;
+            // v4 缺省 priority 的库内哨兵 999999 → kNoPriority;
+            // v3 由库换算 priority = 1000000 - preference(值域
+            // 999901..1000000,不会撞哨兵)
+            mu.priority = (r->priority == 999999)
+                              ? kNoPriority
+                              : static_cast<int>(r->priority);
+            mu.preference = r->preference;
 
             // 只保留委托模式下可下载的镜像:http/ftp;type 显式标注为
-            // 其他协议(bittorrent 等)的条目跳过
+            // 其他协议(bittorrent 等)的条目跳过。注意 v4 文档的
+            // type 属性 libmetalink 不解析,过滤按 scheme 兜底
             const std::string scheme = scheme_of(mu.url);
             if (!is_http_ftp_scheme(scheme)) continue;
             if (!mu.type.empty() && !is_http_ftp_scheme(to_lower(mu.type))) {
@@ -242,6 +274,11 @@ std::vector<MetalinkFile> MetalinkFileParser::parse(
     }
 
     if (files.empty()) {
+        if (!known_version) {
+            // 库对无命名空间/未知命名空间的文档整体静默跳过
+            throw std::runtime_error(
+                "不是有效的 metalink 文档(根元素缺失或不是 metalink)");
+        }
         throw std::runtime_error("metalink 文档不含 file 元素");
     }
     return files;

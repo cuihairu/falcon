@@ -133,13 +133,20 @@ elseif(FALCON_ENABLE_SFTP)
     set(FALCON_ENABLE_SFTP OFF CACHE BOOL "Enable SFTP plugin" FORCE)
 endif()
 
-# Metalink protocol(手写 mini XML 解析器,零第三方依赖)
+# Metalink protocol（vendored libmetalink 语义解析 + expat 格式预检）
 if(FALCON_ENABLE_METALINK)
+    # Metalink 文档语义解析交给 vendored libmetalink（aria2 同款，MIT）；
+    # XML 格式预检（行列号错误）与字段映射在 metalink_handler.cpp
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/libmetalink
+                     ${CMAKE_BINARY_DIR}/third_party/libmetalink)
     target_sources(falcon_protocols PRIVATE
-        plugins/metalink/mini_xml_parser.cpp
         plugins/metalink/metalink_handler.cpp
     )
     target_compile_definitions(falcon_protocols PRIVATE FALCON_ENABLE_METALINK_PLUGIN)
+    # BUILD_INTERFACE 包裹：libmetalink 是 vendored 构建内部件，不进
+    # install(EXPORT FalconTargets) 的依赖闭包（导出时该表达式为空）
+    target_link_libraries(falcon_protocols PRIVATE
+        $<BUILD_INTERFACE:Metalink::libmetalink>)
 endif()
 
 # NAT 端口映射门面（miniupnpc = UPnP IGD + libnatpmp = NAT-PMP）。
