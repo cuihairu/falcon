@@ -287,7 +287,7 @@ jobs:
 
       - name: Configure CMake (Unix)
         if: runner.os != 'Windows'
-        timeout-minutes: 60
+        timeout-minutes: 120
         run: >
           cmake -B ${{ github.workspace }}/build-desktop
           -G "${{ matrix.cmake-generator }}"
@@ -307,7 +307,7 @@ jobs:
 
       - name: Configure CMake (Windows)
         if: runner.os == 'Windows'
-        timeout-minutes: 60
+        timeout-minutes: 120
         run: >
           cmake -B ${{ github.workspace }}/build-desktop
           -DCMAKE_BUILD_TYPE=Release
