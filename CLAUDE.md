@@ -2,6 +2,24 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-23 - NAT 端口映射落地（成熟开源库替换批次：miniupnpc + libnatpmp 双后端门面 + overlay port）
+- **背景**（用户点名三处自研实现替换之二）：仓库自研 NAT 穿透为零实现（BT 私有模式注释自述「NAT-PMP/UPnP 未实现」），BT 服务器可被外部主动连接的可达地址面缺失。方案：数据面全权交给 miniupnpc（UPnP IGD）+ libnatpmp（NAT-PMP）两个成熟库，自研层只做后端接缝抽象（`IPortMappingBackend`）+ 按序回退（UPnP → NAT-PMP，第一个成功者胜）+ RAII 映射句柄（析构尽力删除映射、静默吞错绝不阻塞进程退出路径）
+- **overlay port（libnatpmp）**：vcpkg 官方 port 缺失（miniupnpc 有），`ports/libnatpmp/` 本地 overlay（vcpkg-configuration.json 挂 overlay-ports）——version-date 2025-04-03 上游 git REF + SHA512 锁定，vcpkg_cmake_configure + `vcpkg_clean_executables_in_bin` 清 natpmpc/testgetgateway 工具；根 CMakeLists `FALCON_ENABLE_NAT` option（默认 ON），protocols 侧 miniupnpc 走 CONFIG find_package、natpmp 走 find_path/find_library（纯 C 无 config），双库齐才定义 `FALCON_ENABLE_NAT_UPNP`/`FALCON_ENABLE_NAT_PMP`，缺库 WARNING 优雅降级（port_mapper.cpp 无条件编译、工厂按宏返回 nullptr）；Windows 链 ws2_32+iphlpapi、`NATPMP_STATICLIB`/`MINIUPNP_STATICLIB`
+- **生产面（port_mapper.{hpp,cpp}，protocols/src/net/）**：`PortMappingRequest`（external_port=0 退化为 internal_port——IGD 普遍拒绝任意端口分配，aria2 同姿态）/`IPortMappingBackend`/`PortMapping`（pimpl RAII 句柄，valid() 以 Impl 内标志区分而非判 impl_ 非空——失败句柄也持有 Impl 携带 error）/`PortMapper`（三构造：全默认/Config/测试注入后端序列；内部统一持 shared_ptr——活跃句柄可能比门面长寿，析构 remove 需要后端仍存活）。UPnP 侧 upnpDiscover 有界 SSDP 组播 → `UPNP_GetValidIGD`（1=已连接 2=未连接均尝试）→ RAII 双守卫（freeUPNPDevlist/FreeUPNPUrls）→ SOAP Add/Delete；删除 rc=714（NoSuchEntryInArray，网关已回收）视为幂等成功；NAT-PMP 侧 initnatpmp(forcegw) → sendnewportmappingrequest → readnatpmpresponseorretry 重试循环按库节奏 select 有界等待（默认 lifetime 7200s，删除 lifetime=0，超时按「网关已回收」尽力而为语义）
+- **18 用例四层测试矩阵**（port_mapper_test.cpp，门面 fake 9 + NAT-PMP 回环 3 + Upnp 回环 1 + UPnP SOAP mock 5，全绿零泄漏）：
+  - fake 门面 9：回退序/全灭 error 聚合/句柄 RAII 析构 remove/move 语义/空后端序列/默认禁用工厂 nullptr 等
+  - NAT-PMP 回环 3（MockNatPmpGateway 按 RFC 6886 线格式应答的真实 UDP 网关）：TCP 映射往返（外部端口回读）/UDP 往返/**静默网关超时**（set_silent 吞请求 → add false + "timeout"，覆盖 wait_response 有界收口）
+  - UPnP SOAP mock 5（MockIgdServer 回环 HTTP：GET desc.xml 三层嵌套 IGD 描述 + POST SOAP 按开关应答）：**测试用 parserootdesc + GetUPNPUrls 从 mock desc.xml 装配真实 UPNPUrls/IGDdatas 直调 detail:: 自由函数**（可测接缝——SSDP 组播不经回环接口，发现段不可测而单次 SOAP 调用可全链验证）：AddPortMapping 请求字段逐项断言（外部/内部端口独立钉住 + servicetype + 协议 + 内部地址 + 描述）/Fault 718 上抛 ConflictInMappingEntry/删除 Fault 714 幂等成功/删除成功 envelope/**非 714 Fault（501）上抛**（"UPNP_DeletePortMapping failed" 前缀确定性断言，不依赖 strupnperror 文本）
+- **安全红线**：测试绝不对真实 IGD 调 add/remove（真实路由器上映射端口 = 外向副作用）——UpnpBackend::add/remove 的 discover+GetValidIGD 段（~52 行）结构性不可测；NoIgd 回环用例在存有真实 IGD 的机器上 skip（本机实测命中）
+- **三处 C/库交互硬教训**：
+  - **C 库头与前向声明必须全局作用域**——miniupnpc 头在全局定义 struct UPNPUrls/IGDdatas，若在 namespace 内 include/前向声明会造出 falcon::net::IGDdatas 私有类型（与全局 ::IGDdatas 不同 ABI），消费 TU include 顺序不同即二义性/链接错；公共头零第三方 include 污染（引用形参只靠全局前向声明）
+  - **GetUPNPUrls 分配的堆串必须 FreeUPNPUrls 配对**——ASan 实证 620 字节/20 处泄漏（4 用例 × ~5 个 controlURL 类堆串）；**带析构的类型禁 by-value 返回**——IgdAssembly 初版 by-value 返回，非强制省略复制场景移动后临时对象析构即误释放堆串，改 void + 引用出参；FreeUPNPUrls 对全零结构安全（各字段逐一判空），可放心对 `UPNPUrls{}` 调用
+  - **miniupnpc 以 SOAP body 内 errorCode 判定失败而非 HTTP 状态码**——mock 必须构造 s:Fault envelope（500 状态码 + Fault body），仅回 500 无 body 判不出具体错误码
+- **铁账（build-cov 单树新鲜数据）**：行 miss 416 → 480（**净 +64 = NAT 新代码防御面**：port_mapper.cpp 单对象 miss 60 + hpp 3 + 自然抖动 1——UpnpBackend discover 段 52 行结构性不可测 + NAT-PMP 防御 8 行不可注入，可收 6 行本批收口），分母 17756 → 17987（+231 NAT 新行），行 **97.66% → 97.33%**（新代码增量稀释，同批次先例：A3 新增收口代码 miss 438→455）；分支 miss 15053 → 15189（+136），分母 35060 → 35316，分支 57.07% → 57.00%。可收矿点（SOAP 段全链 + NAT-PMP 线协议全链 + 门面回退全逻辑）至本批收尽，其余沿「SSDP 组播不经回环 + 真 IGD 外向副作用红线」定性
+- **gcovr 8.6 flag 变化**（memory 旧记录过时）：`--merge-mode-functions` 合法值含 merge-use-line-min（`min` 不存在）；`--ignore-parse-errors` 改名 `--gcov-ignore-parse-errors=negative_hits.warn`；**必须 `--filter '.*/packages/.*'`** 否则 vcpkg_installed 头文件扫入分母虚胖（实测 34864 vs 17987）
+- **验证**：build-ci + build-asan + build-cov 三树构建零告警；ASan NAT 套件 18 用例零泄漏零告警（含修复后复跑）；build-cov 全量 ctest 2448 清单 99% 过（1 失败为 BlackHoleServerTimesOutViaTaskTimeout 既有并行抖动惯犯串行复跑过 + protocols 全量重跑恢复 gcda）
+- 下一个替换批次：Metalink → libmetalink（调研已完成：vendoring + expat，换接缝 metalink_handler 保留 MiniXmlParser 对拍）
+
 ### 2026-09-23 - BT DHT 改走 libtorrent 原生（成熟开源库替换批次：会话配置单一事实源 + 自研 DHT 隔离定性 + 回环两跳传播测试）
 - **背景与方案**（用户点名的三处自研实现替换之一）：仓库调查实锤自研 DhtClient 四处 BEP-5 线格式偏差（id 写顶层 dict、values 列表被丢弃、arguments 装不下 implied_port、hex id 曾为 memcpy 截断）+ announce_peer 零实现 + 无入站查询应答——生产 BT 模式的 DHT 实际由 libtorrent session 原生承载但从未显式配置。用户裁决方案 B：libtorrent 侧显式配置加固 + 自研 DhtClient 隔离保留（纯 C++ 模式实验用，不进产品路径）
 - **生产改动（bittorrent_plugin）**：新增 public static `make_session_settings()`——enable_dht=true + 四公共引导节点表（dht.libtorrent.org / router.bittorrent.com / dht.transmissionbt.com / router.utorrent.com）显式声明，session_ 构造即 `session_{make_session_settings()}`（防上游版本静默改写默认）；私有模式 configure_private_mode 停 DHT 语义沿既有；#else 分支自研 DhtClient 补文档定性注释（偏差不修，仅服务纯 C++ 模式）

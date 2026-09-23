@@ -126,6 +126,16 @@ if(FALCON_ENABLE_METALINK)
     target_compile_definitions(falcon_protocols_tests PRIVATE FALCON_ENABLE_METALINK_PLUGIN)
 endif()
 
+# NAT 端口映射门面测试：无条件挂载（库缺失时真库用例运行时 skip），
+# 真库宏与库编译定义保持一致（变量来自上级目录 find 结果）
+target_sources(falcon_protocols_tests PRIVATE unit/port_mapper_test.cpp)
+if(FALCON_NAT_BACKENDS_ENABLED)
+    target_compile_definitions(falcon_protocols_tests PRIVATE
+        FALCON_ENABLE_NAT_UPNP FALCON_ENABLE_NAT_NATPMP)
+    # UPnP 用例直调 upnpDiscover（无 IGD 探测），测试侧显式链接
+    target_link_libraries(falcon_protocols_tests PRIVATE miniupnpc::miniupnpc)
+endif()
+
 target_link_libraries(falcon_protocols_tests
     PRIVATE
         falcon_protocols

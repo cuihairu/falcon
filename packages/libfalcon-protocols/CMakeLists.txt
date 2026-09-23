@@ -142,6 +142,38 @@ if(FALCON_ENABLE_METALINK)
     target_compile_definitions(falcon_protocols PRIVATE FALCON_ENABLE_METALINK_PLUGIN)
 endif()
 
+# NAT 端口映射门面（miniupnpc = UPnP IGD + libnatpmp = NAT-PMP）。
+# port_mapper.cpp 无条件编译：库缺失时工厂走返回 nullptr 的 #else 分支
+# （消费方按 nullptr 优雅降级），真库用例运行时 skip。
+if(FALCON_ENABLE_NAT)
+    find_package(miniupnpc CONFIG QUIET)
+    find_path(NATPMP_INCLUDE_DIR natpmp.h)
+    find_library(NATPMP_LIBRARY NAMES natpmp)
+    target_sources(falcon_protocols PRIVATE src/net/port_mapper.cpp)
+    if(TARGET miniupnpc::miniupnpc AND NATPMP_INCLUDE_DIR AND NATPMP_LIBRARY)
+        target_link_libraries(falcon_protocols
+            PRIVATE miniupnpc::miniupnpc ${NATPMP_LIBRARY})
+        target_include_directories(falcon_protocols
+            PRIVATE ${NATPMP_INCLUDE_DIR})
+        target_compile_definitions(falcon_protocols
+            PRIVATE FALCON_ENABLE_NAT_UPNP FALCON_ENABLE_NAT_NATPMP)
+        set(FALCON_NAT_BACKENDS_ENABLED ON)
+        if(WIN32)
+            # 两库静态链接时的 Winsock 依赖与 dllexport 抑制宏
+            # （vcpkg usage 要求消费方显式定义 *_STATICLIB）
+            target_link_libraries(falcon_protocols PRIVATE ws2_32 iphlpapi)
+            target_compile_definitions(falcon_protocols
+                PRIVATE NATPMP_STATICLIB MINIUPNP_STATICLIB)
+        endif()
+    else()
+        message(WARNING
+            "NAT port mapping libraries not found "
+            "(miniupnpc target: ${miniupnpc_FOUND}, "
+            "natpmp.h: ${NATPMP_INCLUDE_DIR}, libnatpmp: ${NATPMP_LIBRARY}); "
+            "port mapping backends will report unavailable at runtime")
+    endif()
+endif()
+
 # Thunder protocol
 if(FALCON_ENABLE_THUNDER)
     add_subdirectory(plugins/thunder)

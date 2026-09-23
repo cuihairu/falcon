@@ -18,7 +18,9 @@
     {
       "name": "gtest",
       "version>=": "1.12.0"
-    }
+    },
+    "miniupnpc",
+    "libnatpmp"
   ],
   "features": {
     "desktop": {

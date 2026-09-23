@@ -1,0 +1,14 @@
+{
+  "name": "libnatpmp",
+  "version-date": "2025-04-03",
+  "description": "NAT-PMP client library portable with multiple compilers (NAT Port Mapping Protocol)",
+  "homepage": "https://github.com/miniupnp/libnatpmp",
+  "license": "BSD-3-Clause",
+  "supports": "!uwp",
+  "dependencies": [
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    }
+  ]
+}
