@@ -1013,6 +1013,35 @@ TEST(WsRpcClientEdge, CustomPathCarriedInRequestLine) {
     EXPECT_EQ(raw.request_line(), "GET /myrpc HTTP/1.1");
 }
 
+// userinfo 剥离（parse_url 的 '@' 分支）：凭据段不进 host 解析。
+// 不剥离时 host = "user:pass@127.0.0.1"（rfind(':') 命中端口前冒号），
+// DNS 解析必败 → connect 成功 + 请求行正确即剥离生效的铁证
+TEST(WsRpcClientEdge, ParseUrlStripsUserinfoBeforeHostResolution) {
+    RawWsServer raw;
+    const std::string base = raw.url();
+    const std::string host_port = base.substr(5, base.find('/', 5) - 5);
+    JsonRpcClientConfig cfg;
+    cfg.url = "ws://user:pass@" + host_port + "/jsonrpc";
+    cfg.timeout_seconds = 5;
+    WebSocketRpcClient client(cfg);
+    ASSERT_TRUE(client.connect());
+    EXPECT_EQ(raw.request_line(), "GET /jsonrpc HTTP/1.1");
+}
+
+// 尾斜杠 path 归一化："ws://host:port/" 的 path = "/" → 归一化为 /jsonrpc
+// （空 path 方向结构不可达：slash 命中时 substr 至少 "/"，else 分支恒 "/jsonrpc"）
+TEST(WsRpcClientEdge, ParseUrlTrailingSlashPathBecomesJsonrpc) {
+    RawWsServer raw;
+    const std::string base = raw.url();
+    const std::string host_port = base.substr(5, base.find('/', 5) - 5);
+    JsonRpcClientConfig cfg;
+    cfg.url = "ws://" + host_port + "/";
+    cfg.timeout_seconds = 5;
+    WebSocketRpcClient client(cfg);
+    ASSERT_TRUE(client.connect());
+    EXPECT_EQ(raw.request_line(), "GET /jsonrpc HTTP/1.1");
+}
+
 // 客户端帧必须是掩码帧，且服务端解析器能无损还原
 TEST(WsClientFrameTest, MaskedFrameParserRoundtrip) {
     const std::string payload = R"({"jsonrpc":"2.0","id":1,"method":"aria2.tellActive"})";

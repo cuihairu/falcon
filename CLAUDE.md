@@ -2,6 +2,16 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-23 - 覆盖率批次 A11：websocket_rpc_client parse_url 两矿点收口（分支 miss 15075→15053，57.00%→57.07%）+ Kodo 外网依赖用例环境挂死处置
+- **2 新用例**（websocket_rpc_client_test，全参数变体直达，零注入零竞速）：
+  - `ParseUrlStripsUserinfoBeforeHostResolution`——`ws://user:pass@host:port/jsonrpc` 的 userinfo 剥离（rfind('@') 命中 host 侧 L184 剥离分支）：host 恒不可解析即剥离生效的结构性铁证（未剥离则 connect 到 "user"），断言请求行 `GET /jsonrpc HTTP/1.1` 照常发出
+  - `ParseUrlTrailingSlashPathBecomesJsonrpc`——`ws://host:port/` 尾斜杠归一化（L193 `path=="/"` 为真方向）：服务器侧断言请求行归一为 `GET /jsonrpc HTTP/1.1`
+- **目标行 condition-coverage 定稿**：L184 1/4 → **3/4**（userinfo 剥离方向收口；剩 1 方向 = substr 内部 throw，libstdc++ 结构性不可达）；L193 4/10 → **7/10**（**branch 6 `path=="/"` 真方向疑点裁决：taken 3% 非零，已由尾斜杠用例命中**，服务器请求行为证；剩 3 方向全为 std::string 比较内部 throw，结构性不可达）——parse_url 矿点收口，该文件仅余时序窗口与 throw 伪影类 miss
+- **意外事件与处置（环境类，非代码缺陷）**：全量 ctest 中 `KodoBrowserMockTest.ConnectWithoutEndpointUsesOfficialDomainAndFails` 与 `ListDirectoryWithoutEndpointBuildsOfficialRsfUrlAndFails`（V 批次官方域名兜底簇，对 rs.qbox.me/rsf.qbox.me 发真实请求）先后挂死 36/9 分钟——进程单线程阻塞在 socket 等待（`/proc` wchan=wait_woken、CPU 0:00、无 proxy 环境、DNS 正常、命令行 curl 0.09s 通）= 本机到七牛的瞬时网络黑洞。处置：手动 kill 释放 ctest + 日志停滞看守脚本自动杀后续挂死 + 结束后 **falcon_storage_tests 全量重跑（STOR_RERUN_EXIT=0，388 用例全过含两挂死用例）恢复 gcda**——重跑通过即坐实环境抖动；外网依赖用例的挂死 face 是「无超时约束的 ctest 通道」（本地铁账命令未带 --timeout，CI 有 120s）
+- **测量级教训**：① 双 target gcda 布局——websocket_rpc_client.cpp 编进 falcon_daemon_rpc_client.dir 与 falcon_daemon_rpc.dir 两 target，**仅后者有 gcda**（测试挂 falcon_daemon_rpc_client_tests）；gcov 对无 gcda 对象静默输出全零 `.gcov`（`Data:-` 行可见），全零数据冒充结果差点误读——gcov 探针前先核实 gcda 落在哪侧；② GCC 15 gcov 必须传对象文件（A6 教训复现，传 .cpp 报 cannot open notes file）；③ 日志停滞（mtime >120s）+ pgrep 测试进程是「全量 ctest 挂死」的可靠看守判据，比等待探测 marker 更快止损
+- **验证**：build-cov 全量 ctest 2431 清单 2429 过（2 个 Kodo 外网挂死经 storage 全量重跑恢复并复绿；13 skip 设计内）；A11 两用例单跑绿 + gcov 对象级核对（L184 68 次/L193 68 次，分支方向明细见上）
+- **铁账（build-cov 单树新鲜数据）**：行 miss **419 → 416**（97.64% → 97.66%），分母 17756 不变；**分支 miss 15075 → 15053（56.98%→57.07%）**，分母 35060 不变——2 用例净收 3 行 + 22 分支点；98% 结构性不可达结论维持，矿点定性沿批次 X/V/A1-A10 口径
+
 ### 2026-09-23 - 覆盖率批次 A10：分支维度第二批（miss 15084→15075，分支 57.00%）+ 近重复用例自纠 + CI Configure 超时加固
 - **12 新用例 + 1 既有增强**（全参数变体/单元直调/回环 e2e，零注入零竞速）：
   - `ComputeHttpSegmentRanges` 单元 4（http_commands 内部分段计划
