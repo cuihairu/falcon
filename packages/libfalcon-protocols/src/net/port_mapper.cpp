@@ -379,9 +379,12 @@ bool wait_response(natpmp_t& np, natpmpresp_t& resp, int timeout_ms,
                 tv.tv_usec / 1000;
             const auto wait = std::chrono::milliseconds(
                 retry_ms > 0 && retry_ms < left ? retry_ms : left);
+            // tv_usec 的成员类型三平台不一（macOS __darwin_suseconds_t=int，
+            // Linux/Windows=long）——按成员类型 cast，避免 brace-init 窄化错
+            const int64_t wait_ms = wait.count();
             struct timeval sel_tv{
-                static_cast<long>(wait.count()) / 1000,
-                static_cast<long>(wait.count() % 1000) * 1000};
+                static_cast<decltype(sel_tv.tv_sec)>(wait_ms / 1000),
+                static_cast<decltype(sel_tv.tv_usec)>(wait_ms % 1000 * 1000)};
             fd_set fds;
             FD_ZERO(&fds);
             FD_SET(np.s, &fds);

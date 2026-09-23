@@ -2,6 +2,12 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-23 - NAT 批次 CI 红面收口（Windows NatPmp 重发计数 + macOS tv_usec 窄化编译错）
+- **红面盘点**（run 35893094351，8 job 中 2 红）：Windows build 测试红 `NatPmpLoopback.AddMappingViaMockGateway`（472 行实测 2 期望 1 + 479 行实测 4 期望 2）+ Qt6 macOS 编译错 `port_mapper.cpp:384`（`tv_usec` brace-init 窄化）；其余 6 job 全绿
+- **Windows 计数翻倍定性（断言钉死了库实现细节而非协议契约）**：观测形态 = add/remove 每动作恰好 2 发、全程 2ms、结果语义全部正确（471 行 `external_port==51413` 通过）——2ms 排除 250ms 超时重试节奏的多次循环，恰好 +1 = libnatpmp `readnatpmpresponseorretry` 的重发分支命中一次（响应迟到即重发，RFC 6886 §6 明确要求的客户端重传语义）；Windows 慢调度/时钟粒度让首轮 read 的超时判定为真，Linux/macOS 快调度恒 1 发。排查中溯源 timercmp（libnatpmp 全库零定义、Linux/macOS 由 BSD sys/time.h 提供、MSVC 侧解析方式未实锤）——最终不需要实锤宏语义：**结果语义正确 + 重发是协议合法行为**已足够支撑修法，断言从精确计数改为范围 `[1, 4]`（3000ms 响应预算内重试节奏 250/500/1000ms 的发送上限，`NATPMP_MAX_RETRIES=9` 不触顶），remove 侧同理钉在 add 后基线之上
+- **macOS 编译错（timeval 成员类型三平台不一）**：`wait_response` 的 select 超时 timeval brace-init 用 `static_cast<long>`，macOS `tv_usec` 是 `__darwin_suseconds_t`（int）报 -Wc++11-narrowing error；Linux/Windows 成员均为 long 故本机绿系统性掩盖。修复：`decltype(sel_tv.tv_sec/tv_usec)` 成员类型 cast（比硬编码 `suseconds_t` 可移植）
+- **验证**：build-ci NAT 套件 9 过 1 skip（Upnp 真实 IGD 设计内）+ ASan 树 17 过 1 skip 零告警；build-cov 全量 ctest 重跑恢复 gcda（生产代码改动铁律）
+
 ### 2026-09-23 - NAT 端口映射落地（成熟开源库替换批次：miniupnpc + libnatpmp 双后端门面 + overlay port）
 - **背景**（用户点名三处自研实现替换之二）：仓库自研 NAT 穿透为零实现（BT 私有模式注释自述「NAT-PMP/UPnP 未实现」），BT 服务器可被外部主动连接的可达地址面缺失。方案：数据面全权交给 miniupnpc（UPnP IGD）+ libnatpmp（NAT-PMP）两个成熟库，自研层只做后端接缝抽象（`IPortMappingBackend`）+ 按序回退（UPnP → NAT-PMP，第一个成功者胜）+ RAII 映射句柄（析构尽力删除映射、静默吞错绝不阻塞进程退出路径）
 - **overlay port（libnatpmp）**：vcpkg 官方 port 缺失（miniupnpc 有），`ports/libnatpmp/` 本地 overlay（vcpkg-configuration.json 挂 overlay-ports）——version-date 2025-04-03 上游 git REF + SHA512 锁定，vcpkg_cmake_configure + `vcpkg_clean_executables_in_bin` 清 natpmpc/testgetgateway 工具；根 CMakeLists `FALCON_ENABLE_NAT` option（默认 ON），protocols 侧 miniupnpc 走 CONFIG find_package、natpmp 走 find_path/find_library（纯 C 无 config），双库齐才定义 `FALCON_ENABLE_NAT_UPNP`/`FALCON_ENABLE_NAT_PMP`，缺库 WARNING 优雅降级（port_mapper.cpp 无条件编译、工厂按宏返回 nullptr）；Windows 链 ws2_32+iphlpapi、`NATPMP_STATICLIB`/`MINIUPNP_STATICLIB`

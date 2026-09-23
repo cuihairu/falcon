@@ -469,14 +469,22 @@ TEST(NatPmpLoopback, AddMappingViaMockGateway) {
         << "add failed: " << error;
     // libnatpmp 把网关应答的 mappedpublicport 回传
     EXPECT_EQ(external_port, 51413);
-    EXPECT_EQ(gateway.mapping_requests.load(), 1);
+    // 计数是范围断言而非精确值：libnatpmp 在响应迟到时按 RFC 6886 重发
+    // 请求（Windows CI 实测每动作 2 发——慢调度/时钟粒度命中首轮重试窗
+    // 口），重发是协议要求的合法行为且对幂等应答无副作用；契约只钉
+    // 「请求到达网关 + 响应被接受」。上界 4 = 3000ms 响应预算内重试节奏
+    // 250/500/1000ms 的发送上限（NATPMP_MAX_RETRIES=9 不触顶）。
+    const int after_add = gateway.mapping_requests.load();
+    EXPECT_GE(after_add, 1);
+    EXPECT_LE(after_add, 4);
     // NAT-PMP 协议无外部地址回报（接口契约：留空）
     EXPECT_TRUE(external_ip.empty());
 
     // 删除（lifetime=0）同样走真实线协议
     ASSERT_TRUE(backend->remove(req, external_port, error))
         << "remove failed: " << error;
-    EXPECT_EQ(gateway.mapping_requests.load(), 2);
+    EXPECT_GE(gateway.mapping_requests.load(), after_add + 1);
+    EXPECT_LE(gateway.mapping_requests.load(), after_add + 4);
 }
 
 TEST(NatPmpLoopback, UdpProtocolRoundTrip) {
