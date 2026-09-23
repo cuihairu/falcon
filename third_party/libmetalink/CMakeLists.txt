@@ -47,7 +47,18 @@ target_include_directories(libmetalink
     PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-find_package(expat CONFIG REQUIRED)
+# expat 依赖两段解析：CONFIG 优先（vcpkg/官方 cmake 安装提供
+# expatConfig.cmake），落空再 MODULE（CMake 自带 FindEXPAT 找头+库，
+# 覆盖 brew formula 装到非标准前缀、系统发行版无 config 的安装形态），
+# 并按 FindEXPAT 变量手工派生 expat::expat imported target
+find_package(expat CONFIG QUIET)
+if(NOT TARGET expat::expat)
+    find_package(EXPAT MODULE REQUIRED)
+    add_library(expat::expat UNKNOWN IMPORTED)
+    set_target_properties(expat::expat PROPERTIES
+        IMPORTED_LOCATION "${EXPAT_LIBRARIES}"
+        INTERFACE_INCLUDE_DIRECTORIES "${EXPAT_INCLUDE_DIRS}")
+endif()
 target_link_libraries(libmetalink PRIVATE expat::expat)
 
 target_compile_definitions(libmetalink PRIVATE HAVE_TIME)
