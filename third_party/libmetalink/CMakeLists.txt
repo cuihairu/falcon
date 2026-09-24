@@ -1,8 +1,9 @@
 # Vendored libmetalink（上游 metalink-dev/libmetalink @ 5bcdfc0，MIT）。
 # 原样拷贝零修改：src/ 平面结构（上游 lib/）、include/metalink 公共头、COPYING。
 # 平台适配经由编译定义注入（等价上游 autoconf 的 config.h，见 src/metalink_config.h）：
-#   HAVE_STRPTIME / HAVE_TIMEGM —— 系统有则不编自带替代品（strptime.c/timegm.c）
-#   HAVE_TIME 恒有；HAVE__MKGMTIME 供 timegm.c 在 MSVC 上选 _mkgmtime
+#   HAVE_STRPTIME / HAVE_TIMEGM —— 系统有则不编自带替代品（strptime.c/timegm.c）；
+#   timegm.c 为纯算术实现（无 tzset/localtime 依赖），MSVC 直接可编
+#   HAVE_TIME 恒有
 
 include(CheckSymbolExists)
 
@@ -63,8 +64,16 @@ target_link_libraries(libmetalink PRIVATE expat::expat)
 
 target_compile_definitions(libmetalink PRIVATE HAVE_TIME)
 if(MSVC)
-    target_compile_definitions(libmetalink PRIVATE HAVE__MKGMTIME)
     target_compile_definitions(libmetalink PRIVATE _CRT_SECURE_NO_WARNINGS)
+    # 上游代码仅有 POSIX/mingw 支持面，MSVC 适配经编译定义注入（等价
+    # autoconf config.h 的结果，vendored .c 源文件零修改）：
+    #   - 随包 strptime.c 补编路径（MSVC 无 strptime，探测必失败）：
+    #     tzset/tzname → CRT _tzset/_tzname；HAVE_MALLOC_H 使其 alloca
+    #     声明经 <malloc.h> 可达（MSVC 亦内建 alloca，显式声明优先）
+    #   - metalink_parse_fd 的 fd 读取路径：read/ssize_t 由 compat/
+    #     unistd.h 桥接（unistd.h 的 include 行无法用宏适配）
+    target_compile_definitions(libmetalink PRIVATE tzset=_tzset tzname=_tzname HAVE_MALLOC_H)
+    target_include_directories(libmetalink PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/compat)
 endif()
 
 # 根 CMakeLists 的全局 add_compile_options（-Wall -Wextra -Wconversion…

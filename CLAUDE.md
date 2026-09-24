@@ -2,6 +2,16 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-24 - CI 红面收口：Metalink 批次双红面（macOS expat 缺失 + MSVC POSIX 假设）
+- **双红面盘点**（run 35934560690，8 job 中 2 红）：macOS build 的 Configure 段 `find_package(expat CONFIG REQUIRED)` 找不到 config 包（该 job 走 brew——cmake/ninja/curl，expat 从未安装；Ubuntu 绿因 runner 预装 libexpat1-dev 自带 cmake config；desktop-build job 有 vcpkg 不受影响）；Windows build 的编译段暴露 vendored libmetalink 上游仅有 POSIX/mingw 支持面（`libexpat_metalink_parser.c` include `<unistd.h>` C1083 + 随包 `strptime.c` 用 POSIX 全局 `tzname` C2065 连锁 C2109/C2168）
+- **macOS 修复**（3f19acb）：workflow macOS build 依赖补 `brew install … expat`；`third_party/libmetalink/CMakeLists.txt` 的 expat 依赖改两段解析——`find_package(expat CONFIG QUIET)` 落空再 `find_package(EXPAT MODULE REQUIRED)`（CMake 自带 FindEXPAT 覆盖 brew formula/发行版无 config 的安装形态），并按 FindEXPAT 变量手工派生 `expat::expat` UNKNOWN IMPORTED target；`CMAKE_DISABLE_FIND_PACKAGE_expat` 只禁小写名，MODULE 的 `EXPAT` 是另一名字不受影响（本机可模拟验证 MODULE 路径命中 /usr/lib 的 libexpat.so）
+- **MSVC 修复（vendored 源文件零修改，全部经 CMake 注入——等价 autoconf config.h 的既有机制）**：
+  - `compat/unistd.h` 桥接头（MSVC 构建专用 include 路径）：`unistd.h` 的 include 行无法用宏适配，桥接头提供 `read→_read` 宏、`typedef SSIZE_T ssize_t`、`EINTR`（MSVC errno.h 自带）——服务 `metalink_parse_fd` 的 fd 读取路径（生产消费方只走 parse_memory，桥接仅为该 TU 可编译）
+  - 编译定义注入 strptime.c 补编路径（MSVC 无 strptime 探测必失败）：`tzset=_tzset tzname=_tzname`（对象宏全局生效，不依赖 config.h include 链——strptime.h 恰有该链，双保险）+ `HAVE_MALLOC_H` 使 alloca 声明经 `<malloc.h>` 可达（MSVC 亦内建 alloca，显式声明优先）
+  - **顺带删除无效注入 `HAVE__MKGMTIME`**：timegm.c 全文零消费者（纯算术实现无 tzset/localtime 依赖，MSVC 直接可编——CI 零报错实证），按「注入等价 autoconf 结果」原则死宏不入
+- **测量级教训**：① 本会话多轮 Edit 中 target 名 i/n 拼写疑云靠等宽渲染无法目测——写完必须脚本字节级判等（`add_library` 定义名 vs 全部 `target_*` 引用逐行比对），本轮实证 9 处引用全部一致、疑云为渲染错觉；② CMake 注入宏的拼写核对对象是**源码门控行**（`#ifdef HAVE_…`），grep 实锤两处（HAVE_MALLOC_H↔strptime.c:48）而非记忆；③ vendored 库 MSVC 编译失败优先怀疑 POSIX 假设（unistd.h/read/ssize_t/tzname/alloca 五件套），桥接头管 include 行、-D 管标识符映射，两类注入各司其职
+- **验证**：Linux 侧编译输入逐字节不变（全部改动在 `if(MSVC)` 分支 + MSVC 专用 compat 目录），configure 语法绿零重编不触 gcda 铁律；MSVC 语义面静态核对：`_read`/`_tzname`/`_tzset` 声明位置与 `alloca` 声明路径逐项核过；MSVC 真编译靠 CI Windows job 收口
+
 ### 2026-09-23 - Metalink → libmetalink 替换落地（成熟开源库替换批次之三：vendoring + expat 预检 + 两段式解析）
 - **背景**（用户点名三处自研实现替换之三，动机「自研实现测试 bug 一堆很难稳定，优先用成熟库」）：手写 mini_xml_parser（~1300 行字节级严格 XML 解析器 + 35 用例）被 vendored libmetalink（aria2 同款，MIT）整体替换——格式层 expat 直用（XML_Parse 预检 well-formedness，错误带行列号，保 XmlParseError line()>0 契约）+ 语义层 `metalink_parse_memory`（`metalink_t*` + `metalink_delete` RAII 守卫），接缝 `MetalinkFileParser::parse` 签名与全部存量消费方零变化
 - **vendoring 结构**（third_party/libmetalink/）：src/ 原样 + include/metalink 五头（metalinkver.h 自写静态化 0.1.3）+ 独立 CMakeLists（`enable_language(C)` + CheckSymbolExists 探测 strptime（time.h→string.h 回落）/timegm、缺了编译随包附带的 strptime.c/timegm.c 补齐；target 级 `-w`/接口 `w` 关 vendored 代码告警）；根 CMakeLists 两个 C++ 专属警告标志（-Wnon-virtual-dtor/-Woverloaded-virtual）改 `$<$<COMPILE_LANGUAGE:CXX>:...>` 语言限定；protocols 侧 `$<BUILD_INTERFACE:Metalink::libmetalink>` PRIVATE 链接（不进 install(EXPORT) 依赖闭包）；expat 走 vcpkg（default-features 关，gcovr filter '.*/packages/.*' 使 third_party 不进覆盖率分母）
