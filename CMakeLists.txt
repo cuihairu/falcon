@@ -31,6 +31,10 @@ option(FALCON_BUILD_TESTS "Build tests" ON)
 option(FALCON_BUILD_EXAMPLES "Build examples" ON)
 option(FALCON_BUILD_CLI "Build CLI tool" ON)
 option(FALCON_BUILD_DAEMON "Build daemon service" ON)
+# Swarm 目录服务器（P2SP 网络，docs/p2sp_network_design.md §12 阶段 0）。
+# 依赖 FALCON_BUILD_DAEMON=ON（复用 daemon 包的 falcon_ws_protocol /
+# falcon_daemon_core）；缺 nlohmann_json 或 OpenSSL 时整包优雅跳过
+option(FALCON_BUILD_SWARMD "Build swarm directory server (falcon-swarmd)" ON)
 option(FALCON_BUILD_DESKTOP "Build desktop GUI application" ON)
 
 # 插件开关
@@ -160,6 +164,11 @@ if(FALCON_BUILD_DAEMON)
     add_subdirectory(packages/falcon-daemon)
 endif()
 
+# Swarm 目录服务器（可选；依赖 daemon 包的 falcon_ws_protocol/falcon_daemon_core）
+if(FALCON_BUILD_DAEMON AND FALCON_BUILD_SWARMD)
+    add_subdirectory(packages/falcon-swarmd)
+endif()
+
 # Desktop 应用（可选）
 if(FALCON_BUILD_DESKTOP)
     add_subdirectory(apps/desktop)
@@ -277,6 +286,7 @@ message(STATUS "  Build Tests: ${FALCON_BUILD_TESTS}")
 message(STATUS "  Build Examples: ${FALCON_BUILD_EXAMPLES}")
 message(STATUS "  Build CLI: ${FALCON_BUILD_CLI}")
 message(STATUS "  Build Daemon: ${FALCON_BUILD_DAEMON}")
+message(STATUS "  Build Swarmd: ${FALCON_BUILD_SWARMD}")
 message(STATUS "  Build Desktop: ${FALCON_BUILD_DESKTOP}")
 message(STATUS "")
 message(STATUS "Plugin Options:")

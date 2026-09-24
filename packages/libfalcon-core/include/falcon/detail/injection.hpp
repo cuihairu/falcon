@@ -109,6 +109,16 @@ enum class InjectPoint : uint32_t {
     // 测试下 poll 恒成功或超时）
     PollSyscallEintr,
     PollSyscallFail,
+    // falcon-swarmd 服务器：监听 socket 创建 / listen 失败（回环上
+    // 端口 0 绑定恒成功；形态对齐既有 RpcServerSocket/Listen）
+    SwarmServerSocket,
+    SwarmServerListen,
+    // falcon-swarmd：Ed25519 签名/验签 EVP 防御链（创建类注入短路
+    // 真实创建防泄漏，遵循批次 Z 形态；回环上密钥合法时 EVP 恒成功）
+    SwarmSignCtxNew,
+    SwarmSign,
+    SwarmVerifyCtxNew,
+    SwarmVerify,
 };
 
 #if FALCON_FAILURE_INJECTION
