@@ -28,6 +28,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <poll.h>
+#include <csignal>
 #define CLOSE_SOCKET(fd) close(fd)
 #define POLL(fd_ptr, count, timeout_ms) ::poll((fd_ptr), (count), (timeout_ms))
 #endif
@@ -82,6 +83,16 @@ public:
     bool start(std::string body) {
 #ifdef _WIN32
         ensure_winsock_for_range_test();
+#else
+        // CI 红面（run 35947196187，clang Release job 0.01s 死于 SIGPIPE）：
+        // 本服务器的全部意义就是被客户端「失败收口」——分段路径收到
+        // 200 头（非 206）即 abort 连接（RST），conn 线程对已关/RST 的
+        // socket 继续 send body 时内核触发 SIGPIPE 杀死整个测试进程。
+        // 该窗口是纯竞速两面（send 先完成则绿，插桩树恒绿掩盖；无插
+        // 桩 Release 客户端失败更快更易命中）。进程级忽略让写失败以
+        // EPIPE/ECONNRESET 返回值出现（send_all 的 n<=0 分支正常吞掉），
+        // 与 edges 测试文件服务器 / TlsTestServer 的既有先例同法
+        signal(SIGPIPE, SIG_IGN);
 #endif
         body_ = std::move(body);
 
