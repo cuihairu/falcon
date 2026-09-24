@@ -2823,7 +2823,13 @@ TEST(DownloadEngineV2FileAllocation, MultiSegmentPreallocCoversGroupTotal) {
     std::filesystem::remove_all(dir);
 }
 
-#ifndef _WIN32
+// /dev/full 是 Linux 特有设备（写恒 ENOSPC）——macOS/BSD 没有，ofstream
+// 打开即 ENOENT，失败落「文件打开失败」分支而非「预分配失败」分支，用例
+// 在 macOS 物理不可测（CI 35938444061 首次真跑 macOS 测试实证）。生产语义
+// 在 macOS 依然存在（F_PREALLOCATE 真实磁盘满 ENOSPC → 失败收口），无廉价
+// 构造手段（三个注入点不成比例）——沿「测试设施平台依赖」skip 先例
+// （Upnp 真实 IGD / V1 mTLS Schannel 同款）
+#if defined(__linux__)
 /// prealloc + /dev/full：分配写零即 ENOSPC，失败按段错误收口（组
 /// FAILED、错误消息含 pre-allocation）——磁盘满绝不退化成"稀疏下载
 /// 假装预分配"
@@ -2860,9 +2866,8 @@ TEST(DownloadEngineV2FileAllocation, PreallocDiskFullFailsCleanly) {
     server.stop();
 }
 
-/// falloc + /dev/full：posix_fallocate 对字符设备报 ENODEV（macOS 走
-/// fcntl F_PREALLOCATE 失败、Windows 无此用例）——快速分配 API 的
-/// 失败必须走同一收口，绝不退化成无分配继续下载
+/// falloc + /dev/full：posix_fallocate 对字符设备报 ENODEV——快速分配
+/// API 的失败必须走同一收口，绝不退化成无分配继续下载
 TEST(DownloadEngineV2FileAllocation, FallocDiskFullFailsCleanly) {
     const std::string body = make_body(64 * 1024);
     MinimalHttpServer server;
