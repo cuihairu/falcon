@@ -68,11 +68,15 @@ if(MSVC)
     # 上游代码仅有 POSIX/mingw 支持面，MSVC 适配经编译定义注入（等价
     # autoconf config.h 的结果，vendored .c 源文件零修改）：
     #   - 随包 strptime.c 补编路径（MSVC 无 strptime，探测必失败）：
-    #     tzset/tzname → CRT _tzset/_tzname；HAVE_MALLOC_H 使其 alloca
-    #     声明经 <malloc.h> 可达（MSVC 亦内建 alloca，显式声明优先）
+    #     tzset/tzname → CRT _tzset/_tzname（声明经其 include 的
+    #     <time.h> 可达）；strncasecmp → _strnicmp（同签名同语义，
+    #     声明经 <string.h> 可达；全 vendored 源码唯一使用点
+    #     strptime.c:90）；HAVE_MALLOC_H 使其 alloca 声明经
+    #     <malloc.h> 可达（MSVC 亦内建 alloca，显式声明优先）
     #   - metalink_parse_fd 的 fd 读取路径：read/ssize_t 由 compat/
     #     unistd.h 桥接（unistd.h 的 include 行无法用宏适配）
-    target_compile_definitions(libmetalink PRIVATE tzset=_tzset tzname=_tzname HAVE_MALLOC_H)
+    target_compile_definitions(libmetalink PRIVATE
+        tzset=_tzset tzname=_tzname strncasecmp=_strnicmp HAVE_MALLOC_H)
     target_include_directories(libmetalink PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/compat)
 endif()
 
