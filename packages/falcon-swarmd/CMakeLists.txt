@@ -28,5 +28,95 @@ if(NOT TARGET OpenSSL::Crypto)
     return()
 endif()
 
-message(STATUS "falcon-swarmd targets (batch 2/3): falcon_swarm_common, "
-               "falcon_swarm_server, falcon_swarm_client, falcon-swarmd")
+find_package(nlohmann_json QUIET)
+if(NOT nlohmann_json_FOUND)
+    message(WARNING
+        "nlohmann_json not found: falcon-swarmd targets will be skipped")
+    return()
+endif()
+
+message(STATUS "falcon-swarmd targets enabled")
+
+# ============================================================================
+# 公共层：线协议常量/编码定案 + Ed25519 密码学（§7-§9 单一事实源）
+# ============================================================================
+add_library(falcon_swarm_common STATIC
+    src/common/swarm_crypto.cpp
+    src/common/swarm_crypto.hpp
+    src/common/swarm_protocol.cpp
+    src/common/swarm_protocol.hpp
+)
+
+target_link_libraries(falcon_swarm_common
+    PUBLIC
+        Falcon::core
+        nlohmann_json::nlohmann_json
+        OpenSSL::Crypto
+)
+
+target_include_directories(falcon_swarm_common
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_compile_features(falcon_swarm_common PRIVATE cxx_std_17)
+
+# ============================================================================
+# 服务端：状态/handlers/限频/传输层（阶段 0 server 全部面）
+# ============================================================================
+add_library(falcon_swarm_server STATIC
+    src/server/swarm_rate_limiter.cpp
+    src/server/swarm_rate_limiter.hpp
+    src/server/swarm_rpc_handlers.cpp
+    src/server/swarm_rpc_handlers.hpp
+    src/server/swarm_rpc_server.cpp
+    src/server/swarm_rpc_server.hpp
+    src/server/swarm_server_state.cpp
+    src/server/swarm_server_state.hpp
+)
+
+# falcon_ws_protocol：RFC 6455 帧协议层（daemon 包拆出的共享库）
+target_link_libraries(falcon_swarm_server
+    PUBLIC
+        falcon_swarm_common
+        falcon_ws_protocol
+)
+
+target_include_directories(falcon_swarm_server
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_compile_features(falcon_swarm_server PRIVATE cxx_std_17)
+
+# ============================================================================
+# 可执行：falcon-swarmd（配置 + main；链 server 与 daemon 包拆出的 core）
+# ============================================================================
+add_executable(falcon-swarmd
+    src/main.cpp
+    src/swarmd_config.cpp
+)
+
+target_link_libraries(falcon-swarmd
+    PRIVATE
+        falcon_swarm_server
+        falcon_daemon_core
+)
+
+target_compile_features(falcon-swarmd PRIVATE cxx_std_17)
+
+# ============================================================================
+# 安装（daemon 包同形制：GNUInstallDirs BINDIR）
+# ============================================================================
+include(GNUInstallDirs)
+
+install(TARGETS falcon-swarmd
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
+# ============================================================================
+# Tests（GTest 在位才编；与 daemon 包同守卫形制）
+# ============================================================================
+if(FALCON_BUILD_TESTS)
+    add_subdirectory(tests)
+endif()
