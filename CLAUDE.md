@@ -2,6 +2,14 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-24 - CI 红面收口三轮：RangeLiarServer SIGPIPE 竞速红面（Linux 无插桩 Release 曝光，1f44064 同教训在另一测试基建再现）
+- **红面**（run 35947196187，commit e8636cf 触发——纯设计文档 commit 零代码改动不可能是引入者）：8 job 全绿唯 `build (ubuntu-latest, Release, clang)` 红，ctest #1309 `RangeIntegrity.SegmentedPathAgainstRangeLiarFailsClean` 0.01s 死于 SIGPIPE（exit code 8，整个测试进程被信号杀死）；同 run Coverage job（插桩树）绿、本机多核恒绿不复现
+- **根因闭环（纯竞速两面 + 测试基建裸奔）**：RangeLiarServer（range_integrity_test.cpp）的存在意义就是被客户端「失败收口」——HEAD 宣称 Accept-Ranges、GET 忽略 Range 一律回 200 全量，分段路径收到 200 头（非 206）即 abort 连接（RST）；conn 线程还在 `send_all` 发 8KB body，对已关/RST socket 写 → 内核触发 SIGPIPE 杀死整个测试进程。该服务器**从未有 SIGPIPE 防护**（1f44064 只修了 tls_loopback_server.hpp——macOS 红面曝光的共享头，本基建漏网）。竞速两面性：send 先完成则绿（插桩树慢恒绿掩盖、本机回环快恒绿掩盖），RST 先到则红——**无插桩 Release 客户端失败收口更快更易命中**，这正是 Coverage job 绿而 clang Release job 红的分叉解释；Windows 无 SIGPIPE 语义，该红面只暴露于 POSIX
+- **flaky 排查方法论（断言确定性论证）**：逐断言列可达性证据链——①分段必败（start>0 段撞 206 门禁 / 每段收 8KB > 2KB 段长的精确尺寸校验，max_retries=0 恒 Failed）；②`range_requests_>=1` 计数发生在服务器收到请求时（客户端只有先收到 200 头才可能失败，计数必然已发生）；③成品不出现由全部段失败推出。三个断言全部确定，唯一非确定面就是 SIGPIPE 竞速——免疫后消除，「flaky 竞态」疑点以论证而非压测收口
+- **修复（02671e7，纯测试面 +11 行零断言改动）**：RangeLiarServer::start() 开头 POSIX 分支进程级 `signal(SIGPIPE, SIG_IGN)` + `<csignal>` include——写失败以 EPIPE/ECONNRESET 返回值出现（`send_all` 的 `n<=0` 分支既有吞错路径正常收口），与 edges 测试文件服务器 / TlsTestServer（1f44064）既有先例同法；SIG_IGN 是进程级 disposition，所有线程（accept/conn）继承，不依赖任何平台信号投递语义
+- **测量级教训**：① **「修了共享头 ≠ 修了同类基建」**——SIGPIPE 免疫必须逐服务器落位，1f44064 修 tls_loopback_server.hpp 时 range_integrity_test.cpp 的 RangeLiarServer 同形态漏网，同一教训在另一测试基建+另一平台组合（Linux/无插桩）再现；判据升级为「**服务器存在的意义就是被客户端 abort** 的回环基建必须 start() 进程级 SIGPIPE 免疫」（不依赖线程屏蔽、不依赖平台投递语义）；② 本机/插桩树恒绿是竞速掩盖不是清白证明——「同 run 另一 job 绿、本机不复现」优先核对两环境**代码路径速度差**（插桩/优化等级）而非怀疑时序运气；③ 约 25 个含裸 `::send` 的测试服务器文件仍无防护（PauseTestServer 等走 MSG_NOSIGNAL 路线者除外）——无红面先例、窗口形态各异，全库清扫留作后续批次
+- **验证**：本机修复后 100 轮压测 100/100 全绿（修复前竞速窗口本机难命中，压测验证免疫无回归）+ falcon_http_tests 全量（98 过 1 skip 1 disabled）+ SegmentDownloaderIntegrity 3/3；终验 run 35955910474（02671e7）**8/8 job 全绿**——红面复现 job `build (ubuntu-latest, Release, clang)` 绿，ctest #1308/#1309 RangeIntegrity 两用例 Passed（0.51s/1.01s），`100% tests passed, 0 tests failed out of 1374`，其余 7 job（gcc/macOS×2/Coverage/Windows cl/Qt6×2）全绿零回归
+
 ### 2026-09-24 - CI 红面收口二轮：CI 测试假绿收口（gtest 首次真跑三平台）+ MSVC 分层红面三层（编译/链接/测试面）+ macOS SIGPIPE 进程级投递 + Windows qsort 顺序断言
 - **CI 测试假绿（9c458cf，本批最大发现——ubuntu/macos build job 的测试从未在 CI 真跑过）**：workflow 依赖清单从未含 gtest → `Dependencies.cmake` 的 `find_package(GTest QUIET)` 落空后仅打 STATUS 消息即静默跳过**全部测试目标** → ctest 对零测试清单退出 0 → job 绿但测试面为空（历史日志长期 "No tests were found!!!"，约 40s 完成 Configure+Build+Test）。修复：ubuntu 补 `libgtest-dev`、macOS 补 brew `googletest`（Dependencies.cmake 的 `GTest_DIR` 提示分支本就支持 brew 布局，只是从未被装过）、Test 步骤加 `--no-tests=error`（ctest 3.20+，清单为空即红——杜绝再次零测试假绿）
 - **假绿修复的验证即红面暴露**：ubuntu gcc/clang 双编译器测试首次真跑全绿；macOS 首次真跑 1369 用例 1366 过——唯一三红 `FileAllocation.*DiskFull`（见下）；Windows build job（vcpkg 供 gtest）是唯一一直真测试的 build job
