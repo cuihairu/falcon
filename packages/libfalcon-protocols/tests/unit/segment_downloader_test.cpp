@@ -7,7 +7,9 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <future>
@@ -279,29 +281,113 @@ TEST(SegmentDownloaderTest, PauseAndResume) {
 
     const std::string output_path = make_unique_temp_path("falcon_test_pause.bin");
 
+    // gate 语义 mock（用例局部 lambda：SegmentDownloadFunc 是
+    // std::function，gate 原子可捕获，无需文件级状态重置）。回调开段
+    // 文件后置 started 并阻塞在 gate——gate 前零写入、回调不返回。
+    // pause() 不传播进在飞回调（回调只收 cancelled_），segment 记账只
+    // 发生在回调返回之后（成功记账与 best-effort tellg 两路径皆是），
+    // 因此 gate 挡住全部回调 ⇒ pause 前后不存在任何记账来源，进度位
+    // 型恒同。旧版「sleep 锚 + 容差断言」在 macOS CI 慢调度下被在飞
+    // worker 于观测窗内写完击穿（run 36012912035：0.625 → 1.0）。
+    std::atomic<int> gate_started{0};
+    std::atomic<bool> gate_open{false};
+
+    auto gate_mock = [&gate_started, &gate_open](
+                         const std::string& url, Bytes start, Bytes end,
+                         const std::string& mock_output_path,
+                         std::atomic<bool>& cancelled) -> bool {
+        (void)url;
+        std::ofstream file(mock_output_path, std::ios::binary | std::ios::app);
+        if (!file.is_open()) {
+            return false;
+        }
+        gate_started.fetch_add(1, std::memory_order_release);
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (!gate_open.load(std::memory_order_acquire) &&
+               std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        // gate 放行后一次性写完全部段（内容 = 段内偏移 i%256，与成品
+        // 断言一致）；close 后 file_size 才对成功记账的精确尺寸校验可见
+        const Bytes size = end - start + 1;
+        std::vector<uint8_t> buffer(static_cast<std::size_t>(size));
+        for (std::size_t i = 0; i < buffer.size(); ++i) {
+            buffer[i] = static_cast<uint8_t>(i % 256);
+        }
+        file.write(reinterpret_cast<const char*>(buffer.data()),
+                   static_cast<std::streamsize>(buffer.size()));
+        file.flush();
+        file.close();
+        return !cancelled.load();
+    };
+
     SegmentDownloader downloader(task, "http://test.example.com/file.bin",
                                  output_path, config);
 
-    // Download in a thread
+    bool success = false;
     std::thread download_thread([&]() {
-        downloader.start(mock_segment_download);
+        success = downloader.start(gate_mock);
     });
 
-    // Wait for some progress
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    // 确定性事件锚：等全部段回调到达 gate（替代 sleep 时序锚）——此后
+    // pause 前后无任何回调返回，零记账是全称确定的。start() 在本进程
+    // 独立线程内先算分段再 spawn worker，total_segments() 须等首个
+    // 到达者事件之后才稳定可读（直接读与分段计算竞速，读到 0 会让
+    // 末尾成品校验的 total_size/seg_count 除零 SIGFPE——首轮压测
+    // 96/100 失败即此，release/acquire 经 gate_started 原子对可见）
+    for (int i = 0; i < 5000 && gate_started.load() < 1; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    EXPECT_GE(gate_started.load(), 1);
+    const auto seg_count = downloader.total_segments();
+    for (int i = 0; i < 5000 &&
+                    gate_started.load() < static_cast<int>(seg_count);
+         ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    EXPECT_EQ(gate_started.load(), static_cast<int>(seg_count));
 
-    // Pause
+    // pause 期间进度必须冻结：gate 挡住全部回调 ⇒ 两条记账路径均
+    // 不可达 ⇒ 两次观测间进度恒 0.0（位型相同，等值断言而非容差）
     downloader.pause();
-    auto paused_progress = downloader.progress();
-
+    const auto paused_progress = downloader.progress();
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    const auto new_progress = downloader.progress();
+    EXPECT_FLOAT_EQ(paused_progress, new_progress);
 
-    // Progress should not have changed much
-    auto new_progress = downloader.progress();
-    EXPECT_NEAR(paused_progress, new_progress, 0.1f);
+    // 先 resume 再放行 gate：保证 gate 之后的全部记账发生在 resume
+    // 之后（worker 冲出 gate 完成各段，组照常收口为成功）
+    downloader.resume();
+    gate_open.store(true, std::memory_order_release);
 
-    downloader.cancel();
     download_thread.join();
+    EXPECT_TRUE(success);
+    EXPECT_FLOAT_EQ(downloader.progress(), 1.0f);
+    EXPECT_EQ(downloader.completed_segments(), downloader.total_segments());
+
+    // 成品逐字节一致（各段内容 = 段内偏移 i%256）。seg_count 守卫：
+    // 锚点失败（start 未起 worker）时报告失败而非除零崩进程
+    if (seg_count > 0) {
+        std::ifstream result(output_path, std::ios::binary);
+        ASSERT_TRUE(result.is_open());
+        const Bytes total_size = 1024 * 10;
+        const Bytes segment_size = total_size / seg_count;
+        std::vector<uint8_t> expected(static_cast<std::size_t>(total_size));
+        for (Bytes base = 0; base < total_size; base += segment_size) {
+            for (Bytes i = 0; i < segment_size; ++i) {
+                expected[static_cast<std::size_t>(base + i)] =
+                    static_cast<uint8_t>(i % 256);
+            }
+        }
+        std::vector<uint8_t> content(static_cast<std::size_t>(total_size));
+        result.read(reinterpret_cast<char*>(content.data()),
+                    static_cast<std::streamsize>(total_size));
+        EXPECT_EQ(result.gcount(), static_cast<std::streamsize>(total_size));
+        EXPECT_EQ(std::memcmp(content.data(), expected.data(),
+                              static_cast<std::size_t>(total_size)),
+                  0);
+    }
     std::remove(output_path.c_str());
 }
 
