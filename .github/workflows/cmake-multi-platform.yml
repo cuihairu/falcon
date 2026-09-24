@@ -50,13 +50,20 @@ jobs:
         timeout-minutes: 5
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build libcurl4-openssl-dev libsqlite3-dev
+          # libgtest-dev：GTest 缺席时 Dependencies.cmake 会静默跳过全部
+          # 测试目标，ctest 零清单仍退出 0——job 绿但测试面为空（长期
+          # 假绿的根因，2026-09-24 实证）。Test 步骤配 --no-tests=error
+          # 双保险，杜绝再次零测试假绿
+          sudo apt-get install -y cmake ninja-build libcurl4-openssl-dev libsqlite3-dev libgtest-dev
 
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos-latest'
         timeout-minutes: 5
         run: |
-          brew install cmake ninja curl expat 2>/dev/null || brew upgrade cmake ninja curl expat 2>/dev/null || true
+          # googletest：Dependencies.cmake 的 GTest_DIR 提示分支本就支持
+          # brew 布局（/opt/homebrew/lib/cmake/GTest），但依赖清单从未
+          # 装过它——macOS 的测试从未在 CI 真跑过（同 ubuntu 假绿根因）
+          brew install cmake ninja curl expat googletest 2>/dev/null || brew upgrade cmake ninja curl expat googletest 2>/dev/null || true
 
       - name: Setup vcpkg (Windows)
         if: matrix.os == 'windows-latest'
@@ -131,7 +138,9 @@ jobs:
       - name: Test
         timeout-minutes: 15
         working-directory: ${{ steps.strings.outputs.build-output-dir }}
-        run: ctest --build-config ${{ matrix.build_type }} --output-on-failure --timeout 120
+        # --no-tests=error：清单为空（依赖缺失导致测试全被跳过）时
+        # ctest 默认仍退出 0——显式置错让「假绿」在此处即红
+        run: ctest --build-config ${{ matrix.build_type }} --output-on-failure --timeout 120 --no-tests=error
 
   coverage:
     name: Coverage (Ubuntu)
