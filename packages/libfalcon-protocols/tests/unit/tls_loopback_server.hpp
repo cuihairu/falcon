@@ -24,6 +24,7 @@
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <poll.h>
+#include <csignal>
 #define CLOSE_SOCKET(fd) close(fd)
 #define POLL(fd_ptr, count, timeout_ms) ::poll((fd_ptr), (count), (timeout_ms))
 #endif
@@ -171,6 +172,15 @@ public:
                const std::string& client_ca_cert = {}) {
 #ifdef _WIN32
         ensure_winsock_for_tls_test();
+#else
+        // macOS 特有红面（run 35940031281 首次真跑实证）：accept 线程
+        // 的 pthread_sigmask 屏蔽在 Linux 足够（同步信号投递给生成线
+        // 程），macOS XNU 的 socket 层以 psignal 做**进程级**投递——
+        // 写线程的线程级屏蔽不隔离，任一未屏蔽线程（gtest 主线程）照
+        // 样被杀（TlsRequestWriteFailFailsCleanly 死于 SIGPIPE，0.1s）。
+        // 进程级忽略让写失败以 EPIPE 返回值出现（OpenSSL 正常处理写
+        // 失败），与 edges 测试文件服务器 start() 的既有先例同法
+        signal(SIGPIPE, SIG_IGN);
 #endif
         if (!falcon_test_tls::generate_self_signed_cert(key_path,
                                                     cert_path)) {
