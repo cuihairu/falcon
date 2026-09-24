@@ -135,8 +135,13 @@ TEST(MetalinkParseTest, EqualRankAllNoPriority) {
     ASSERT_EQ(urls.size(), 2u);
     EXPECT_EQ(urls[0].priority, kNoPriority);
     EXPECT_EQ(urls[1].priority, kNoPriority);
-    EXPECT_TRUE(urls[0].url == "http://first/" &&
-                urls[1].url == "http://second/");
+    // 同 rank 组内顺序是实现细节（C 标准 qsort 不稳定，MSVC CRT 与
+    // glibc 的同 rank 排序行为不同），只做集合断言（沿垃圾 priority
+    // 用例的先例形态）
+    EXPECT_TRUE((urls[0].url == "http://first/" &&
+                 urls[1].url == "http://second/") ||
+                (urls[0].url == "http://second/" &&
+                 urls[1].url == "http://first/"));
 }
 
 TEST(MetalinkParseTest, QueryAndFragmentPreservedInUrl) {
