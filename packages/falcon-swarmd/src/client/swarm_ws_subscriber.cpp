@@ -12,6 +12,8 @@
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
+// Windows 无 POSIX poll；WSAPoll 同语义（pollfd/POLLOUT/超时 ms）
+#define poll WSAPoll
 using swarm_socket_t = SOCKET;
 constexpr swarm_socket_t kSwarmInvalidSocket = INVALID_SOCKET;
 #else

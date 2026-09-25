@@ -25,6 +25,7 @@ enable_testing()
 
 add_executable(falcon_swarm_unit_tests
     swarm_unit_tests.cpp
+    swarm_config_test.cpp
 )
 
 target_link_libraries(falcon_swarm_unit_tests

@@ -2,6 +2,20 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-25 - P2SP 阶段 0 批 4 收尾：swarmd_config 补矿 14 用例 + MSVC 编译面两修复 + 三份文档 + 铁账收口
+- **swarmd_config 补矿**（「覆盖率不回退」铁律收口）：`swarmd_config.cpp` 编译单元从可执行移入 `falcon_swarm_server`（PRIVATE 链 `falcon_daemon_core`——`get_default_config_dir` 符号依赖，static lib 的 $<LINK_ONLY> 对测试可执行可见）+ 新增 `tests/swarm_config_test.cpp` **14 用例**挂 unit_tests（全字段往返/缺键保留默认/六类错误路径 can't-open·parse·root·两节非 object·两键类型错/未知节与未知键告警/路径键 ~/ 展开/`expand_home_path` 直测含 "~"、~user 非语义形态原样返回）——配置解析纯逻辑不留 e2e 覆盖（e2e 仅 bad-config 一条剧本），对位 daemon config 10 用例矩阵
+- **MSVC 编译面两处收口**（批 3 run 36076043736 Qt6 Windows job 唯一红，8 job 中仅此一处；批 2 的 NOMINMAX 修复经本 run 验证生效——C2589 未再现）：① `swarm_client.cpp` chrono rep（MSVC long long）brace-init 到 `Options::timeout_ms(long)` 窄化 C2397 → 显式 static_cast（macOS tv_usec 教训的 MSVC 版）；② `swarm_ws_subscriber.cpp` POSIX `::poll` C3861 → Windows 分支 `#define poll WSAPoll`（winsock2.h 同语义，pollfd/POLLOUT 已在用）；两修复随批 4 push 由 CI Windows job 收口
+- **测试 70 → 84**（unit 28→42；`ctest -R Swarm` 子串匹配只命中 71——13 个新用例名不含 "Swarm" 子串，全集按 84 记）；build-cov 全量 ctest **2536/2537 过零失败零抖动**（667s 串行，15 skip 设计内——惯犯 #55/#933 本轮也未出现）；ASan Swarm 套件 89/89（84 + 5 他包子串误匹配）零告警
+- **铁账（build-cov 单树新鲜数据）**：分母 17724 → **19580**（+1856 = swarmd 新包 + 拆库重组），行 miss **491 → 890**（批 3 后实测 984，批 4 补矿净收 94 行 + 分支命中净收 120 点），行 **97.23% → 95.5%** / 函数 98.8% → 98.5% / 分支 56.70% → 55.0%（分母 34826 → 38890）。−1.7 点定性 = **全新网络栈包的增量稀释**（与 NAT 批次 97.66→97.33、metalink 批次 97.34→97.23 同性质，幅度大因新包体量 ~2000 行）；可确定性测的面已收口（config 14 用例），剩余 swarmd miss 沿批 3 定性：传输层防御（RPC server HTTP 解析/socket/WS 会话错误分支）、main.cpp CLI parse 助手（匿名命名空间，行为面 e2e 已覆盖）、client/subscriber 网络循环时序窗口、EVP 防御链残面（六注入点已收主干）
+
+### 2026-09-25 - P2SP 阶段 0 落地：falcon-swarmd 包（swarm 目录服务器 + SwarmClient）+ daemon 拆库
+- **范围**（设计文档 `docs/p2sp_network_design.md` §12 阶段 0，用户点名实施）：`falcon-swarmd` 单二进制（两步注册挑战/心跳/查询/WS 通知 + register/query 双限频器 + Bearer 准入 + 群组令牌 + 黑名单）+ 节点侧 `SwarmClient`（注册两步状态机/心跳线程 -32003 自愈重注册/查询/退订）；**阶段 0 无 announce 面**（用户裁决「空表往返」——资源表无写入路径恒空，query 合法 session → sha256 回显 + 空 sources，`SwarmResource` 结构与读取逻辑在位，阶段 1 加 upsert 即通）
+- **三批提交**：① 8d5e366 基建拆库（daemon 包拆 `falcon_ws_protocol`（websocket_frame 消除两处重复编译债，swarmd 成第三消费方）+ `falcon_daemon_core`（daemon.cpp 拆出，源零改动）+ swarmd 包骨架 + 注入点 6 个）；② 4c351a9 swarmd server（SwarmServerState 单锁 + 通知锁外 + now 全入参零时钟依赖 / RpcHandlers 纯逻辑 / RateLimiter per-key 时间戳窗口 / RpcServer 传输层沿 json_rpc_server 形态换命名空间 + swarmd_config + main）；③ 50b42bd SwarmClient（SwarmHttpClient curl + Bearer / SwarmWsSubscriber 收订专用 WS（握手带 Authorization 头，~200 行）/ SwarmKeyStore PEM 0600 / SwarmClient）+ 真 二进制 e2e（fork+execv，POSIX-only）
+- **线协议**（JSON-RPC 2.0）：`falcon.swarm.register`（两步：身份 params → 同 params + challenge_sig；step1 快照 canonical_json，step2 要求去 challenge_sig 后逐字节一致——nonce/node_id 绑定 + 防参数偷换）/ heartbeat / query / unsubscribe；通知 params 为 **object**（与 daemon 数组式不同）：`falcon.swarm.onPeerJoined`（首次出现才广播）/ `onPeerLeft`（心跳超时 sweep 摘除）；错误码 -32001 Bearer（401）/ -32002 限频（429 同发）/ -32003 未知/过期 session / -32004 群组令牌 / -32005 签名/指纹/黑名单
+- **编码定案**：pubkey = DER(SPKI) 小写 hex 88 字符；签名 hex 128；nonce hex 16；challenge/session = RAND_bytes(16)→hex 32（session `s-` 前缀）；node_id 指纹 = sha256_hex(DER) 前 32 字符；签名 payload = `method\n + nonce\n + sha256_hex(params_json)`，Ed25519 一步式 EVP（md=NULL）；私钥 PEM 落盘 0600、解析失败报错绝不静默覆盖（私钥即节点身份）
+- **测试 70 用例四 target**（unit 28 + loopback 29 + client 10 + e2e 3，`ctest -R Swarm`）：验收三要素全落——① 回环 e2e（两节点 + 一 server：注册挑战往返/心跳超时摘除/查询/WS 通知到达 + 真二进制全流程含 SIGTERM exit 0）；② 注入面（错令牌 -32001/-32004、错签名/指纹劫持/重放 -32005、限频 429/-32002、socket/listen/EVP 六注入点干净错误路径）；③ 线协议对拍（canonical 排序嵌套、RFC 8032 TEST1/TEST2 签验向量独立生成、sha256("") RFC 6234、防同一 bug 自我印证——测试侧 SwarmCrypto 独立重导 canonical→payload→verify）；状态类 now 全显式入参（虚拟时钟确定性收口，限频/过期用例零 sleep 零竞速）
+- **CI 红面收口（批 2，run 36069921229 Qt6 Windows job）**：main.cpp:68/85 `std::numeric_limits<...>::max()` 被 windows.h min/max 函数式宏展开 C2589——Linux glibc 无此宏本机绿系统性掩盖；修复 `falcon_swarm_common` PUBLIC `NOMINMAX`（target 级传递免疫全部消费 target，falcon_protocols 先例）
+
 ### 2026-09-24 - CI 红面收口三轮：RangeLiarServer SIGPIPE 竞速红面（Linux 无插桩 Release 曝光，1f44064 同教训在另一测试基建再现）
 - **红面**（run 35947196187，commit e8636cf 触发——纯设计文档 commit 零代码改动不可能是引入者）：8 job 全绿唯 `build (ubuntu-latest, Release, clang)` 红，ctest #1309 `RangeIntegrity.SegmentedPathAgainstRangeLiarFailsClean` 0.01s 死于 SIGPIPE（exit code 8，整个测试进程被信号杀死）；同 run Coverage job（插桩树）绿、本机多核恒绿不复现
 - **根因闭环（纯竞速两面 + 测试基建裸奔）**：RangeLiarServer（range_integrity_test.cpp）的存在意义就是被客户端「失败收口」——HEAD 宣称 Accept-Ranges、GET 忽略 Range 一律回 200 全量，分段路径收到 200 头（非 206）即 abort 连接（RST）；conn 线程还在 `send_all` 发 8KB body，对已关/RST socket 写 → 内核触发 SIGPIPE 杀死整个测试进程。该服务器**从未有 SIGPIPE 防护**（1f44064 只修了 tls_loopback_server.hpp——macOS 红面曝光的共享头，本基建漏网）。竞速两面性：send 先完成则绿（插桩树慢恒绿掩盖、本机回环快恒绿掩盖），RST 先到则红——**无插桩 Release 客户端失败收口更快更易命中**，这正是 Coverage job 绿而 clang Release job 红的分叉解释；Windows 无 SIGPIPE 语义，该红面只暴露于 POSIX
@@ -3211,6 +3225,7 @@ graph TD
     B --> F["libfalcon-drives"];
     B --> G["falcon-cli"];
     B --> H["falcon-daemon"];
+    B --> P["falcon-swarmd"];
 
     A --> I["apps/"];
     I --> J["desktop"];
@@ -3231,6 +3246,7 @@ graph TD
     click F "./packages/libfalcon-drives/CLAUDE.md" "查看网盘库文档"
     click G "./packages/falcon-cli/CLAUDE.md" "查看 CLI 文档"
     click H "./packages/falcon-daemon/CLAUDE.md" "查看 Daemon 文档"
+    click P "./packages/falcon-swarmd/CLAUDE.md" "查看 swarmd 文档"
 ```
 
 ---
@@ -3245,6 +3261,7 @@ graph TD
 | `packages/libfalcon-drives` | 网盘/云存储/搜索/配置管理 | `Falcon::drives` | 开发中 |
 | `packages/falcon-cli` | 命令行下载工具 | `falcon-cli` | 开发中 |
 | `packages/falcon-daemon` | 后台守护进程 + RPC 服务 | `falcon-daemon` | 开发中 |
+| `packages/falcon-swarmd` | P2SP swarm 目录服务器 + 节点侧 SwarmClient | `falcon-swarmd` | 开发中（阶段 0） |
 | `apps/desktop` | GUI 桌面应用（Qt6） | `falcon-desktop` | 规划中 |
 | `apps/web` | Web 管理界面（预留） | — | 规划中 |
 
@@ -3543,6 +3560,12 @@ falcon/                              # 项目根目录
 │       ├── CLAUDE.md
 │       ├── src/
 │       └── tests/
+│
+│   └── falcon-swarmd/               # P2SP swarm 目录服务器（阶段 0）
+│       ├── CMakeLists.txt
+│       ├── CLAUDE.md
+│       ├── src/                     # common(协议/密码学) + server + client + main
+│       └── tests/                   # unit/loopback/client/e2e 四 target
 │
 ├── apps/                            # 应用层（GUI/Web）
 │   ├── desktop/                     # 桌面应用（预留）

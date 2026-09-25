@@ -29,7 +29,10 @@ SwarmClient::SwarmClient(SwarmClientConfig cfg, SwarmKeyMaterial key)
     : cfg_(std::move(cfg)),
       key_(std::move(key)),
       http_(SwarmHttpClient::Options{cfg_.host, cfg_.port, cfg_.server_token,
-                                     cfg_.rpc_timeout_ms.count()}) {}
+                                     // chrono rep 在 MSVC 是 long long，
+                                     // brace-init 到 long 需显式收窄
+                                     static_cast<long>(
+                                         cfg_.rpc_timeout_ms.count())}) {}
 
 SwarmClient::~SwarmClient() { stop(); }
 

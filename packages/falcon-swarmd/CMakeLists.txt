@@ -78,13 +78,20 @@ add_library(falcon_swarm_server STATIC
     src/server/swarm_rpc_server.hpp
     src/server/swarm_server_state.cpp
     src/server/swarm_server_state.hpp
+    # 配置加载编进 server 库（可执行已链 server）——单测可链接直达
+    src/swarmd_config.cpp
+    src/swarmd_config.hpp
 )
 
 # falcon_ws_protocol：RFC 6455 帧协议层（daemon 包拆出的共享库）
+# falcon_daemon_core：swarmd_config 的 get_default_config_dir（PRIVATE——
+# 仅实现符号依赖，不进公共头）
 target_link_libraries(falcon_swarm_server
     PUBLIC
         falcon_swarm_common
         falcon_ws_protocol
+    PRIVATE
+        falcon_daemon_core
 )
 
 target_include_directories(falcon_swarm_server
@@ -130,7 +137,6 @@ endif()
 # ============================================================================
 add_executable(falcon-swarmd
     src/main.cpp
-    src/swarmd_config.cpp
 )
 
 target_link_libraries(falcon-swarmd

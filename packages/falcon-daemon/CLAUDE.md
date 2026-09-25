@@ -6,6 +6,22 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-25 - P2SP 阶段 0 批 1：拆库（falcon_ws_protocol + falcon_daemon_core，源零改动）
+- **`falcon_ws_protocol`**（新静态库）：`src/rpc/websocket_frame.{hpp,cpp}`
+  移入——消除 CMakeLists 自认的两处重复编译债（同一源文件既编进
+  rpc_server 库又编进 rpc_client 库），swarmd 包成为第三消费方而非
+  第四份拷贝。**nlohmann 守卫之外**（零外部依赖不应连坐——守卫
+  return() 时该库照常构建）
+- **`falcon_daemon_core`**（新静态库）：`src/daemon.cpp` 拆出（此前
+  既编进 daemon 可执行又编进 rpc_server 测试辅助），main.cpp 与 rpc
+  库共享；RpcEventBridge / RpcServer 构造面不改（main 复用
+  DaemonManager 语义零变化）
+- 全部改动为构建图级：源文件零改动、rpc 两库的对外 target 名
+  （falcon_daemon_rpc / falcon_daemon_rpc_client）与导出头零变化，
+  测试目标 link 关系相应追加 ws_protocol/core
+- 验证：daemon 全部 rpc 测试目标零失败、清单数不减；下游
+  falcon-swarmd 包（同批 add_subdirectory）编译绿
+
 ### 2026-09-14 - 覆盖率批次 I：websocket_rpc_client.cpp 99 → 9 miss + 原始 WS 测试服务器
 - `websocket_rpc_client_test.cpp` 增量 18 用例（29 → 47，挂
   `falcon_daemon_rpc_client_tests`），新增 `RawWsServer` 可编程原
@@ -206,6 +222,13 @@
    Falcon 扩展进度通知
 4. **任务持久化**：SQLite 状态/进度实时落库，停机保存、重启恢复
 5. **多客户端支持**：无状态 HTTP 请求，天然支持多客户端并发
+
+### 包内静态库（2026-09-25 拆库，源零改动）
+
+| Target | 内容 | 消费方 |
+|---|---|---|
+| `falcon_ws_protocol` | RFC 6455 帧编解码（websocket_frame，零外部依赖） | daemon rpc 两库 + `falcon-swarmd` 包 |
+| `falcon_daemon_core` | DaemonManager 生命周期/信号/停机排水（daemon.cpp） | main.cpp + swarmd main 形态参照 |
 
 ## 源码结构
 
