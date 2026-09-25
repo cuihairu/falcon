@@ -54,6 +54,11 @@ target_link_libraries(falcon_swarm_common
         OpenSSL::Crypto
 )
 
+# NOMINMAX：windows.h 的 min/max 函数式宏污染 std::min/std::max/numeric_limits
+# （批 2 CI Qt6 Windows 红面 C2589——main.cpp numeric_limits::max()）；PUBLIC
+# 传递让同包消费 target 一并免疫。
+target_compile_definitions(falcon_swarm_common PUBLIC NOMINMAX)
+
 target_include_directories(falcon_swarm_common
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -88,6 +93,37 @@ target_include_directories(falcon_swarm_server
 )
 
 target_compile_features(falcon_swarm_server PRIVATE cxx_std_17)
+
+# ============================================================================
+# 客户端：节点侧 SwarmClient（注册/心跳/查询/退订 + WS 收订）
+# HTTP 通道走 libcurl；CURL 缺席只跳过 client（server + 二进制照建）。
+# ============================================================================
+find_package(CURL QUIET)
+if(TARGET CURL::libcurl)
+    add_library(falcon_swarm_client STATIC
+        src/client/swarm_client.cpp
+        src/client/swarm_client.hpp
+        src/client/swarm_http_client.cpp
+        src/client/swarm_http_client.hpp
+        src/client/swarm_key_store.cpp
+        src/client/swarm_key_store.hpp
+        src/client/swarm_ws_subscriber.cpp
+        src/client/swarm_ws_subscriber.hpp
+    )
+
+    target_link_libraries(falcon_swarm_client
+        PUBLIC
+            falcon_swarm_common
+        PRIVATE
+            falcon_ws_protocol
+            CURL::libcurl
+    )
+
+    target_compile_features(falcon_swarm_client PRIVATE cxx_std_17)
+else()
+    message(STATUS "CURL not found: falcon_swarm_client skipped "
+                   "(server + falcon-swarmd binary still built)")
+endif()
 
 # ============================================================================
 # 可执行：falcon-swarmd（配置 + main；链 server 与 daemon 包拆出的 core）
