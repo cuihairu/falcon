@@ -32,19 +32,19 @@ features:
 
 ### 安装
 
-\`\`\`bash
+```bash
 # 从源码构建
 git clone https://github.com/cuihairu/falcon.git
 cd falcon
 cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
-\`\`\`
+```
 
 当前文档以源码构建为主，不再假设 Homebrew、APT 或预编译安装包已经对外发布。
 
 ### 基本使用
 
-\`\`\`bash
+```bash
 # 下载单个文件
 falcon-cli https://example.com/file.zip
 
@@ -56,11 +56,11 @@ falcon-cli -i urls.txt -j 3
 
 # 通过代理下载
 falcon-cli https://example.com/file.zip --proxy http://127.0.0.1:7890
-\`\`\`
+```
 
 ### C++ API
 
-\`\`\`cpp
+```cpp
 #include <falcon/falcon.hpp>
 
 int main() {
@@ -80,7 +80,7 @@ int main() {
     }
     return 0;
 }
-\`\`\`
+```
 
 ## 项目结构
 

@@ -97,20 +97,20 @@ docs/
 
 ### 代码块
 
-\`\`\`cpp
+```cpp
 #include <iostream>
 int main() {
     std::cout << "Hello, World!" << std::endl;
 }
-\`\`\`
+```
 
 ### 自定义容器
 
-\`\`\`md
+```md
 ::: details 点击查看详情
 隐藏的内容
 :::
-\`\`\`
+```
 
 ## 部署
 

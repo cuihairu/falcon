@@ -18,7 +18,7 @@ export default defineConfig({
   outDir: ".vitepress/dist",
   themeConfig: {
     siteTitle: "Falcon 下载器",
-    logo: "/favicon.svg",
+    logo: "/logo.svg",
     nav: [
       { text: "指南", link: "/guide/" },
       { text: "协议支持", link: "/protocols/" },
@@ -102,7 +102,7 @@ export default defineConfig({
   },
   head: [
     ["link", { rel: "icon", type: "image/svg+xml", href: `${base}favicon.svg` }],
-    ["meta", { name: "theme-color", content: "#3c8772" }],
+    ["meta", { name: "theme-color", content: "#f97316" }],
     ["meta", { property: "og:type", content: "website" }],
     ["meta", { property: "og:locale", content: "zh-CN" }],
     ["meta", { property: "og:title", content: "Falcon 下载器" }],
