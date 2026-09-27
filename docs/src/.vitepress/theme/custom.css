@@ -1,126 +1,428 @@
 /*
- * falcon docs theme — Mintlify design system（popular-web-designs skill / templates/mintlify.md）
- * × falcon brand：淡橙 #ffa07a（与 assets/falcon.svg logo 同色）/ 亮色模式用 #f97316 保证可读对比
+ * falcon docs theme — "warm console" design system
+ * (taste-skill 重设计，替换上一版 Mintlify 风格皮肤)
  *
- * Mintlify 关键特征落地：
- *  - 白底 + 5% 黑度边框分隔（不靠阴影/灰底）
- *  - feature 卡片 16px 圆角、icon 用 brand-soft 底
- *  - 按钮全 pill（9999px）——Mintlify 签名形状
- *  - 标题紧字距（display 级 -0.8px）、正文 150% 行高
- *  - brand 色只用于 CTA/hover/focus，不做大面积填充
+ * 方向：开发者文档壳，暖石色中性底 + falcon 橙系强调
+ * （#c2410c / #f97316），logo 鲑橙 #ffa07a 作为双主题统一的
+ * CTA 表面；代码区带等宽字体的控制台细节。
+ *
+ * 形状规则（全站唯一，处处遵守）：
+ *   按钮/输入/小标签 8px · 卡片与代码块 12px · 行内代码 4px
+ * 对比规则：文字配对按 WCAG AA 校验（正文 ≥ 4.5:1）。
+ * 文案红线：用户可见字符串零 em-dash。
  */
 
 :root {
-  /* ---- brand：falcon 橙 ---- */
-  --vp-c-brand-1: #f97316;
-  --vp-c-brand-2: #ea580c;
-  --vp-c-brand-3: #c2410c;
-  --vp-c-brand-soft: rgba(249, 115, 22, 0.14);
+  /* ---- 中性底：暖石色系（不做纯白/纯黑） ---- */
+  --vp-c-bg: #fcfbf9;
+  --vp-c-bg-alt: #f6f3ef;
+  --vp-c-bg-soft: #f7f5f1;
+  --vp-c-bg-elv: #ffffff;
 
-  --vp-button-brand-bg: #f97316;
-  --vp-button-brand-hover-bg: #ea580c;
-  --vp-button-brand-active-bg: #c2410c;
-  --vp-button-brand-border: transparent;
+  --vp-c-text-1: #292524; /* 14.7:1 */
+  --vp-c-text-2: #57534e; /* 7.4:1 */
+  --vp-c-text-3: #78716c; /* 4.6:1 */
 
-  /* hero：名字渐变（深橙→橙→浅橙）+ 大气渐变底（Mintlify atmospheric wash，橙版） */
+  --vp-c-divider: rgba(41, 37, 36, 0.1);
+  --vp-c-gutter: rgba(41, 37, 36, 0.08);
+
+  /* ---- brand：falcon 橙（亮色侧压深保可读） ---- */
+  --vp-c-brand-1: #c2410c; /* 链接/正文强调 5.0:1 */
+  --vp-c-brand-2: #ea580c; /* hover */
+  --vp-c-brand-3: #f97316; /* 填充点缀 */
+  --vp-c-brand-soft: rgba(249, 115, 22, 0.13);
+
+  /* ---- CTA：logo 鲑橙底 + 深咖啡字（9.1:1，双主题同形） ---- */
+  --vp-button-brand-bg: #ffa07a;
+  --vp-button-brand-text: #27140a;
+  --vp-button-brand-border: rgba(255, 160, 122, 0);
+  --vp-button-brand-hover-bg: #ff9064;
+  --vp-button-brand-hover-text: #27140a;
+  --vp-button-brand-hover-border: rgba(255, 160, 122, 0);
+  --vp-button-brand-active-bg: #f28352;
+  --vp-button-brand-active-text: #27140a;
+  --vp-button-brand-active-border: rgba(255, 160, 122, 0);
+
+  --vp-button-alt-bg: #ffffff;
+  --vp-button-alt-text: #292524;
+  --vp-button-alt-border: rgba(41, 37, 36, 0.15);
+  --vp-button-alt-hover-bg: #f7f5f1;
+  --vp-button-alt-hover-text: #c2410c;
+  --vp-button-alt-hover-border: rgba(249, 115, 22, 0.5);
+  --vp-button-alt-active-bg: #f1eee9;
+  --vp-button-alt-active-text: #c2410c;
+  --vp-button-alt-active-border: rgba(249, 115, 22, 0.6);
+
+  /* ---- hero ---- */
   --vp-home-hero-name-color: transparent;
-  --vp-home-hero-name-background: linear-gradient(115deg, #c2410c 8%, #f97316 52%, #fdba74 96%);
-  --vp-home-hero-image-background: linear-gradient(135deg, rgba(249, 115, 22, 0.26) 0%, rgba(253, 186, 116, 0.1) 45%, rgba(255, 255, 255, 0) 80%);
-  --vp-home-hero-image-filter: blur(56px);
+  --vp-home-hero-name-background: linear-gradient(
+    118deg,
+    #c2410c 0%,
+    #f97316 52%,
+    #fb923c 100%
+  );
+  --vp-home-hero-image-background: radial-gradient(
+    circle,
+    rgba(255, 160, 122, 0.38) 0%,
+    rgba(249, 115, 22, 0.14) 45%,
+    transparent 68%
+  );
+  --vp-home-hero-image-filter: blur(52px);
 
-  --vp-custom-outline: #f97316;
-  --vp-c-brand-inverse: #ffffff;
+  /* ---- 提示块：tip 归 brand 橙，info 中性，warning/danger 语义色 ---- */
+  --vp-custom-block-info-border: rgba(41, 37, 36, 0.14);
+  --vp-custom-block-info-text: var(--vp-c-text-1);
+  --vp-custom-block-info-bg: #f7f5f1;
+  --vp-custom-block-tip-border: rgba(234, 88, 12, 0.42);
+  --vp-custom-block-tip-text: var(--vp-c-text-1);
+  --vp-custom-block-tip-bg: rgba(249, 115, 22, 0.08);
+  --vp-custom-block-warning-border: rgba(202, 138, 4, 0.45);
+  --vp-custom-block-warning-text: var(--vp-c-text-1);
+  --vp-custom-block-warning-bg: rgba(217, 119, 6, 0.08);
+  --vp-custom-block-danger-border: rgba(220, 38, 38, 0.42);
+  --vp-custom-block-danger-text: var(--vp-c-text-1);
+  --vp-custom-block-danger-bg: rgba(220, 38, 38, 0.07);
 
-  /* Mintlify：分隔线用 5% 黑度（亮色） */
-  --vp-c-divider: rgba(0, 0, 0, 0.06);
-  --vp-c-gutter: rgba(0, 0, 0, 0.05);
+  /* ---- 代码：暖色控制台面板 ---- */
+  --vp-code-color: #c2410c;
+  --vp-code-bg: rgba(249, 115, 22, 0.09);
+  --vp-code-link-color: #c2410c;
+  --vp-code-link-hover-color: #9a3412;
+  --vp-code-block-bg: #f8f6f2;
+  --vp-code-line-height: 1.7;
+  --vp-code-line-highlight-color: rgba(249, 115, 22, 0.12);
+  --vp-code-lang-color: #78716c;
+  --vp-code-copy-code-bg: rgba(41, 37, 36, 0.05);
+  --vp-code-copy-code-hover-bg: rgba(249, 115, 22, 0.16);
+  --vp-code-copy-code-border-color: transparent;
+  --vp-code-copy-code-active-text: #c2410c;
+  --vp-code-tab-text-color: #57534e;
+  --vp-code-tab-bg: #f8f6f2;
+  --vp-code-tab-divider: transparent;
+  --vp-code-tab-active-bar-color: #ea580c;
+
+  /* ---- 本地搜索 ---- */
+  --vp-local-search-highlight-bg: #c2410c;
+  --vp-local-search-highlight-text: #ffffff;
+  --vp-local-search-selected-bg: rgba(249, 115, 22, 0.1);
+  --vp-local-search-selected-border: rgba(249, 115, 22, 0.4);
+
+  /* ---- 结构面 ---- */
+  --vp-nav-bg-color: var(--vp-c-bg);
+  --vp-local-nav-bg-color: var(--vp-c-bg);
+  --vp-sidebar-bg-color: var(--vp-c-bg);
+
+  /* ---- 字体：自托管 Geist + Geist Mono，CJK 走系统回退 ---- */
+  --vp-font-family-base:
+    "Geist Variable", "Geist", ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    "Noto Sans CJK SC", "Helvetica Neue", Arial, sans-serif;
+  --vp-font-family-mono:
+    "Geist Mono Variable", "Geist Mono", ui-monospace, "SF Mono",
+    "JetBrains Mono", Menlo, Consolas, "Liberation Mono", monospace;
 }
 
 .dark {
-  /* 暗色：brand 直接用 logo 的淡橙 #ffa07a（暗底上可读且与 logo 同源） */
+  --vp-c-bg: #161311; /* 暖近黑 */
+  --vp-c-bg-alt: #131010;
+  --vp-c-bg-soft: #1d1917;
+  --vp-c-bg-elv: #211d1a;
+
+  --vp-c-text-1: #f2efec; /* 16.2:1 */
+  --vp-c-text-2: #b6ada6; /* 7.9:1 */
+  --vp-c-text-3: #8d847d;
+
+  --vp-c-divider: rgba(255, 255, 255, 0.1);
+  --vp-c-gutter: rgba(255, 255, 255, 0.08);
+
+  /* 暗色 brand 直接用 logo 鲑橙（暗底上 9.3:1 且与 logo 同源） */
   --vp-c-brand-1: #ffa07a;
-  --vp-c-brand-2: #fb923c;
-  --vp-c-brand-3: #fdba74;
-  --vp-c-brand-soft: rgba(255, 160, 122, 0.16);
+  --vp-c-brand-2: #fdba74;
+  --vp-c-brand-3: #fb923c;
+  --vp-c-brand-soft: rgba(255, 160, 122, 0.15);
 
-  --vp-button-brand-bg: #f97316;
-  --vp-button-brand-hover-bg: #fb923c;
-  --vp-button-brand-active-bg: #ffa07a;
+  --vp-button-alt-bg: #1d1917;
+  --vp-button-alt-text: #f2efec;
+  --vp-button-alt-border: rgba(255, 255, 255, 0.14);
+  --vp-button-alt-hover-bg: #241f1c;
+  --vp-button-alt-hover-text: #ffa07a;
+  --vp-button-alt-hover-border: rgba(255, 160, 122, 0.5);
+  --vp-button-alt-active-bg: #292421;
+  --vp-button-alt-active-text: #ffa07a;
+  --vp-button-alt-active-border: rgba(255, 160, 122, 0.6);
 
-  --vp-home-hero-name-background: linear-gradient(115deg, #fdba74 8%, #ffa07a 52%, #fed7aa 96%);
-  --vp-home-hero-image-background: linear-gradient(135deg, rgba(255, 160, 122, 0.22) 0%, rgba(254, 215, 170, 0.08) 45%, rgba(0, 0, 0, 0) 80%);
+  --vp-home-hero-name-background: linear-gradient(
+    118deg,
+    #fdba74 0%,
+    #ffa07a 55%,
+    #fb923c 100%
+  );
+  --vp-home-hero-image-background: radial-gradient(
+    circle,
+    rgba(255, 160, 122, 0.3) 0%,
+    rgba(251, 146, 60, 0.1) 45%,
+    transparent 68%
+  );
 
-  --vp-custom-outline: #ffa07a;
+  --vp-custom-block-info-border: rgba(255, 255, 255, 0.14);
+  --vp-custom-block-info-bg: #1d1917;
+  --vp-custom-block-tip-border: rgba(255, 160, 122, 0.4);
+  --vp-custom-block-tip-bg: rgba(255, 160, 122, 0.09);
+  --vp-custom-block-warning-border: rgba(234, 179, 8, 0.45);
+  --vp-custom-block-warning-bg: rgba(217, 119, 6, 0.12);
+  --vp-custom-block-danger-border: rgba(248, 113, 113, 0.42);
+  --vp-custom-block-danger-bg: rgba(220, 38, 38, 0.12);
 
-  /* Mintlify 暗色：白 8% 分隔 */
-  --vp-c-divider: rgba(255, 255, 255, 0.08);
-  --vp-c-gutter: rgba(255, 255, 255, 0.06);
+  --vp-code-color: #ffa07a;
+  --vp-code-bg: rgba(255, 160, 122, 0.12);
+  --vp-code-link-color: #ffa07a;
+  --vp-code-link-hover-color: #fdba74;
+  --vp-code-block-bg: #1c1916;
+  --vp-code-line-highlight-color: rgba(255, 160, 122, 0.12);
+  --vp-code-lang-color: #8d847d;
+  --vp-code-copy-code-bg: rgba(255, 255, 255, 0.05);
+  --vp-code-copy-code-hover-bg: rgba(255, 160, 122, 0.18);
+  --vp-code-copy-code-active-text: #ffa07a;
+  --vp-code-tab-text-color: #b6ada6;
+  --vp-code-tab-bg: #1c1916;
+  --vp-code-tab-active-bar-color: #ffa07a;
+
+  --vp-local-search-highlight-bg: #ffa07a;
+  --vp-local-search-highlight-text: #27140a;
 }
 
-/* ---- feature 卡片（Mintlify：16px 圆角 + 5% 边框 + brand-soft icon 底） ---- */
-.VPFeature {
-  border-radius: 16px;
+/* ---- 基础 ---- */
+
+html {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizelegibility;
+}
+
+::selection {
+  background: rgba(249, 115, 22, 0.28);
+}
+
+:focus-visible {
+  outline: 2px solid var(--vp-c-brand-1);
+  outline-offset: 2px;
+}
+
+/* ---- 导航：细发丝线 + 活动项橙色下划标 ---- */
+
+.VPNavBarMenuLink {
+  position: relative;
+  transition: color 0.2s;
+}
+
+/* 活动态文字色由 VitePress 默认规则给 brand-1（scoped 高于本表），叠橙色下划标 */
+.VPNavBarMenuLink.active::after {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 6px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--vp-c-brand-1);
+}
+
+/* 本地搜索触发钮（VitePress 复用 DocSearch 样式类） */
+.DocSearch-Button {
+  border-radius: 8px;
   border: 1px solid var(--vp-c-divider);
-  transition: border-color 0.25s;
+  background: var(--vp-c-bg-soft);
+  transition: border-color 0.2s;
 }
+
+.DocSearch-Button:hover {
+  border-color: rgba(249, 115, 22, 0.5);
+  box-shadow: none;
+  background: var(--vp-c-bg-soft);
+}
+
+.DocSearch-Button .DocSearch-Button-Placeholder {
+  color: var(--vp-c-text-3);
+}
+
+.DocSearch-Button .DocSearch-Button-Key {
+  border-radius: 4px;
+  border: 1px solid var(--vp-c-divider);
+  background: var(--vp-c-bg);
+  color: var(--vp-c-text-3);
+  box-shadow: none;
+}
+
+/* ---- hero ---- */
+
+.VPHero .name {
+  letter-spacing: -0.02em;
+}
+
+.VPHero .image-src {
+  width: 232px;
+  height: auto;
+  filter: drop-shadow(0 16px 44px rgba(249, 115, 22, 0.3));
+}
+
+/* ---- 按钮：8px 圆角 + 等重触感 ---- */
+
+.VPButton {
+  border-radius: 8px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.VPButton.brand {
+  box-shadow: 0 8px 24px -10px rgba(249, 115, 22, 0.55);
+}
+
+/* ---- feature 卡片：12px 圆角暖面板 + 首卡 brand 渐染 ---- */
+
+.VPFeature {
+  border-radius: 12px;
+  border: 1px solid var(--vp-c-divider);
+  background: var(--vp-c-bg-soft);
+  transition:
+    border-color 0.25s ease,
+    transform 0.25s ease;
+}
+
 .VPFeature:hover {
-  border-color: rgba(249, 115, 22, 0.35);
+  border-color: rgba(249, 115, 22, 0.42);
+  transform: translateY(-2px);
 }
+
 .dark .VPFeature:hover {
-  border-color: rgba(255, 160, 122, 0.35);
+  border-color: rgba(255, 160, 122, 0.42);
 }
+
+.VPFeature:active {
+  transform: translateY(0);
+}
+
 .VPFeature .icon {
-  border-radius: 16px;
+  border-radius: 10px;
   background-color: var(--vp-c-brand-soft);
   color: var(--vp-c-brand-1);
 }
 
-/* ---- 按钮：Mintlify 全 pill 签名形状 ---- */
-.VPButton {
-  border-radius: 9999px;
-  font-weight: 500;
-  letter-spacing: 0.01em;
-}
+/* 6 卡等权对称（Redesign-Preserve：内容结构不动），不做首卡特例 */
 
-/* ---- 标题紧字距（Mintlify display tracking） ---- */
+/* ---- 文档正文 ---- */
+
 .vp-doc h1,
 .vp-doc h2,
-.VPDoc h1,
-.VPDoc h2 {
-  letter-spacing: -0.6px;
-}
-.vp-doc h1 {
-  letter-spacing: -0.8px;
+.vp-doc h3 {
+  letter-spacing: -0.02em;
 }
 
-/* ---- 正文阅读舒适度（Mintlify 150% 行高） ---- */
-.vp-doc p,
-.vp-doc li {
-  line-height: 1.7;
-}
-
-/* ---- inline code：小圆角 + 淡底（Mintlify radius scale 4px） ---- */
-.vp-doc code {
-  border-radius: 4px;
-}
-
-/* ---- 代码块：顶部薄 brand 线提示（brand 只做点缀不做填充） ---- */
-.vp-code-group .vp-code-group-tabs,
-.vp-doc div[class*="language-"]::after {
-  border-radius: 16px;
-}
-
-/* ---- 链接 hover 用 brand（Mintlify: link hover = brand） ---- */
 .vp-doc a {
+  text-underline-offset: 3px;
   text-decoration-color: rgba(249, 115, 22, 0.4);
 }
+
 .vp-doc a:hover {
   color: var(--vp-c-brand-1);
   text-decoration-color: var(--vp-c-brand-1);
 }
 
-/* ---- outline / sidebar 当前项：brand 指示 ---- */
-.VPDocOutlineItem .outline-link.level-2:hover,
-.VPDocOutlineItem .outline-link.level-3:hover {
+/* 表格：表头软底 + 行 hover 暖染（保持横向滚动能力，不套圆角） */
+.vp-doc th {
+  background: var(--vp-c-bg-soft);
+  font-weight: 600;
+}
+
+.vp-doc tbody tr {
+  background: transparent;
+  transition: background-color 0.15s;
+}
+
+.vp-doc tbody tr:nth-child(2n) {
+  background: transparent;
+}
+
+.vp-doc tbody tr:hover {
+  background: rgba(249, 115, 22, 0.045);
+}
+
+.dark .vp-doc tbody tr:hover {
+  background: rgba(255, 160, 122, 0.05);
+}
+
+/* 引用块：橙色左缘 + 暖底 */
+.vp-doc blockquote {
+  border-left: 3px solid rgba(249, 115, 22, 0.5);
+  background: rgba(249, 115, 22, 0.045);
+  border-radius: 0 8px 8px 0;
+  color: var(--vp-c-text-2);
+}
+
+.dark .vp-doc blockquote {
+  border-left-color: rgba(255, 160, 122, 0.5);
+  background: rgba(255, 160, 122, 0.05);
+}
+
+/* 行内代码：4px 小圆角（形状规则） */
+.vp-doc code {
+  border-radius: 4px;
+}
+
+/* ---- 代码块：12px 圆角控制台面板 ---- */
+
+.vp-doc div[class*="language-"] {
+  border-radius: 12px;
+  border: 1px solid var(--vp-c-divider);
+}
+
+.line-numbers-wrapper {
+  color: var(--vp-c-text-3);
+}
+
+.vp-doc div[class*="language-"] > button.copy {
+  border-radius: 8px;
+  transition:
+    background-color 0.2s,
+    transform 0.15s;
+}
+
+.vp-doc div[class*="language-"] > button.copy:active {
+  transform: translateY(1px);
+}
+
+/* 代码组 tab：等宽小标签 + 橙色活动条（token 已定色） */
+.vp-code-group .tabs label {
+  font-family: var(--vp-font-family-mono);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+/* ---- 文档页脚翻页 ---- */
+
+.VPDocFooter .pager-link {
+  border-radius: 10px;
+  transition:
+    border-color 0.2s,
+    color 0.2s;
+}
+
+.VPDocFooter .pager-link:hover {
+  border-color: rgba(249, 115, 22, 0.5);
   color: var(--vp-c-brand-1);
+}
+
+.dark .VPDocFooter .pager-link:hover {
+  border-color: rgba(255, 160, 122, 0.5);
+}
+
+/* ---- 动效尊重系统偏好 ---- */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
 }

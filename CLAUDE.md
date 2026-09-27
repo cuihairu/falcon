@@ -2,6 +2,18 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-27 - 文档站主题重设计「warm console」（taste-skill）+ logo 方向全站核对（全部朝左，零改动）
+- **logo 方向核对结论（用户报「鸟头向左」疑虑，实况全部已朝左）**：assets/falcon.svg / docs/src/public/logo.svg / favicon.svg 三处字节级一致（15e8245 已加 `translate(1024,0) scale(-1,1)` 镜像 + fill #ffa07a）；assets/falcon.png 像素分析头部朝左（左缘突出 69 点 vs 右缘 28）；线上 https://cuihairu.github.io/falcon/ 部署 commit == 本地 origin/main（15e8245），浏览器截图 + 像素分析 hero logo（亮 65L/36R、暗 85L/36R）与导航 logo（(2,0)/(2,1)）均朝左；全库无 og:image/meta 图；README 无内嵌位图 logo。**用户所见朝右页面最可能是浏览器缓存**，零代码改动
+- **主题重设计（taste-skill 代行——提示词点名的 `popular-web-designs` skill 不在本环境可用清单，报告如实披露替换）**：方向「warm developer console」，三拨盘 VARIANCE 5 / MOTION 3 / DENSITY 4；Redesign-Preserve 协议（IA/slug/导航文案/内容结构零变化，fence 修复不回退）
+  - 色板：暖石色中性底（亮 #fcfbf9 / 暗 #161311，全站无纯 #000/#fff），falcon 橙单强调色（亮 #c2410c 链接 5.0:1 / 暗 #ffa07a 9.3:1），**CTA 双主题统一鲑橙 #ffa07a 底 + 深咖啡 #27140a 字（9.1:1）**——与旧版 Mintlify 皮（#f97316+白药丸）明显区分；全配对 WCAG AA 校验，文案零 em-dash
+  - 字体：自托管 @fontsource-variable/geist + geist-mono（'Geist Variable'/'Geist Mono Variable'，CJK 系统回退栈），零外部字体请求
+  - 形状系统单一规则：按钮/输入 8px · 卡片/代码块 12px · 行内代码 4px；卡片 hover 上浮 2px + 橙描边；tip 提示块归 brand 橙
+  - VitePress token 全表覆盖：custom-block/code 族/local-search/nav·sidebar·local-nav 底色 + hero 名字渐变（118deg 三橙）+ hero 图径向光晕；代码块 lineNumbers + shiki 双主题（github-light/dark）+ editLink + hero logo image（index.md 增量三行）
+  - **导航活动态修复（vitepress 1.6.4 机制考古）**：`isActive` 精确匹配语义——无 activeMatch 时子页（/guide/getting-started）导航永不活动；config.mts 五项补 `activeMatch`（前缀正则，faq 用 `^/faq` 防前缀误吃）后活动项 brand-1 着色 + 自绘 2px 橙下划标（`.VPNavBarMenuLink.active::after`）生效；自写的 `.active{color:text-1}` 为 scoped 规则 `[data-v]` 特异性击败的死代码已删
+- **测量级教训**：① vitepress preview（sirv 生产模式）**启动时构建文件表**——rebuild 换 hash 的新资源 404（旧 HTML 内容从磁盘按请求读、新 CSS 文件名不在启动表），呈现「HTML 有 active 类但整页无样式白底蓝链」；**每次 rebuild 后必须重启 preview**（本轮白底截图 + 两主题字节 md5 相同即此症状：无样式页与配色无关）；② Vue scoped 样式带 `[data-v-xxx]` 属性选择器，特异性 (0,3,0) 压过主题层双类 (0,2,0)——想覆盖组件 scoped 规则需更高特异性而非依赖加载序
+- **门禁**：`pnpm docs:build` 绿（12.5s）；Playwright 回环截图自验（light/dark × home/guide/protocols × hero/full 12 张 + nav/code/table 特写）——双主题 bg 像素精确命中（#fcfbf9/#161311）、CTA 鲑橙双主题在位、导航下划标像素在位、hero 与导航 logo 朝左复核；无 tag 无 release
+- 下一个 todo 候选：#2 SFTP（阻塞：SSH2 协议栈无轻量 mock 方案）
+
 ### 2026-09-25 - P2SP 阶段 0 批 4 收尾：swarmd_config 补矿 14 用例 + MSVC 编译面两修复 + 三份文档 + 铁账收口
 - **swarmd_config 补矿**（「覆盖率不回退」铁律收口）：`swarmd_config.cpp` 编译单元从可执行移入 `falcon_swarm_server`（PRIVATE 链 `falcon_daemon_core`——`get_default_config_dir` 符号依赖，static lib 的 $<LINK_ONLY> 对测试可执行可见）+ 新增 `tests/swarm_config_test.cpp` **14 用例**挂 unit_tests（全字段往返/缺键保留默认/六类错误路径 can't-open·parse·root·两节非 object·两键类型错/未知节与未知键告警/路径键 ~/ 展开/`expand_home_path` 直测含 "~"、~user 非语义形态原样返回）——配置解析纯逻辑不留 e2e 覆盖（e2e 仅 bad-config 一条剧本），对位 daemon config 10 用例矩阵
 - **MSVC 编译面两处收口**（批 3 run 36076043736 Qt6 Windows job 唯一红，8 job 中仅此一处；批 2 的 NOMINMAX 修复经本 run 验证生效——C2589 未再现）：① `swarm_client.cpp` chrono rep（MSVC long long）brace-init 到 `Options::timeout_ms(long)` 窄化 C2397 → 显式 static_cast（macOS tv_usec 教训的 MSVC 版）；② `swarm_ws_subscriber.cpp` POSIX `::poll` C3861 → Windows 分支 `#define poll WSAPoll`（winsock2.h 同语义，pollfd/POLLOUT 已在用）；两修复随批 4 push 由 CI Windows job 收口

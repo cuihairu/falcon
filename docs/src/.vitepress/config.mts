@@ -16,15 +16,23 @@ export default defineConfig({
   cleanUrls: true,
   lastUpdated: true,
   outDir: ".vitepress/dist",
+  markdown: {
+    lineNumbers: true,
+    theme: { light: "github-light", dark: "github-dark" },
+  },
   themeConfig: {
     siteTitle: "Falcon 下载器",
     logo: "/logo.svg",
+    editLink: {
+      pattern: "https://github.com/cuihairu/falcon/edit/main/docs/src/:path",
+      text: "在 GitHub 上编辑此页",
+    },
     nav: [
-      { text: "指南", link: "/guide/" },
-      { text: "协议支持", link: "/protocols/" },
-      { text: "开发者", link: "/developer/" },
-      { text: "API 参考", link: "/api/" },
-      { text: "常见问题", link: "/faq" },
+      { text: "指南", link: "/guide/", activeMatch: "/guide/" },
+      { text: "协议支持", link: "/protocols/", activeMatch: "/protocols/" },
+      { text: "开发者", link: "/developer/", activeMatch: "/developer/" },
+      { text: "API 参考", link: "/api/", activeMatch: "/api/" },
+      { text: "常见问题", link: "/faq", activeMatch: "^/faq" },
     ],
     sidebar: {
       "/guide/": [

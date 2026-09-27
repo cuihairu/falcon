@@ -5,6 +5,9 @@ hero:
   name: Falcon 下载器
   text: 现代化、跨平台的 C++ 下载解决方案
   tagline: 面向 CLI、Daemon、桌面端和可扩展协议栈的下载能力集合
+  image:
+    src: /logo.svg
+    alt: Falcon 徽标
   actions:
     - theme: brand
       text: 快速开始
