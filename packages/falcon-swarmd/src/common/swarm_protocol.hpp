@@ -4,7 +4,7 @@
 // falcon-swarmd 线协议单一事实源（docs/p2sp_network_design.md §7.3/§8）
 //
 // 方法/通知/错误码/线字段名常量 + canonical JSON 序列化 + 签名 payload
-// 组装 + 时间格式助手。client 与 server 共用本头文件，两端对拍以这里
+// 组装 + 时间格式助手。client 与 Rendezvous 服务端共用本头文件，两端对拍以这里
 // 为唯一出处（防同一语义两端各写一份漂移）。
 //
 // 编码定案（§8.1）：
@@ -43,7 +43,7 @@ inline constexpr char kNotifyPeerJoined[] = "falcon.swarm.onPeerJoined";
 inline constexpr char kNotifyPeerLeft[] = "falcon.swarm.onPeerLeft";
 
 // ---- 应用层错误码（-32001..-32005；与 JSON-RPC 标准码 -32700/-32600/
-// ---- -32601/-32602/-32603 分层，server 对外与 client 解包共用）----------
+// ---- -32601/-32602/-32603 分层，服务端对外与 client 解包共用）----------
 inline constexpr int kErrBearer = -32001;          // Bearer 准入失败（HTTP 401）
 inline constexpr int kErrRateLimited = -32002;     // 限频（HTTP 侧同时 429）
 inline constexpr int kErrUnknownSession = -32003;  // 未知/过期 session
@@ -76,7 +76,7 @@ inline constexpr char kFieldUrl[] = "url";
 inline constexpr char kFieldEtag[] = "etag";
 inline constexpr char kFieldLastModified[] = "last_modified";
 
-// 挑战值 / 会话凭据生成（server 侧；RAND_bytes 失败返回空串，调用方
+// 挑战值 / 会话凭据生成（服务端侧；RAND_bytes 失败返回空串，调用方
 // 判空走内部错误收口）。挑战 = hex(32)；session = "s-" + hex(32)（§9.3
 // 随机 128b+，前缀用于线上形态肉眼区分）。
 std::string make_challenge_value();

@@ -20,7 +20,7 @@
 // （swarm_rpc_server.cpp 通知构造实锤，与 daemon 数组式 params 分叉）。
 // ============================================================================
 
-#include "swarm_server_harness.hpp"
+#include "swarm_rdv_harness.hpp"
 
 #include <chrono>
 
@@ -66,7 +66,7 @@ std::optional<nlohmann::json> read_until_method(SwarmWsClient& client,
 // ===========================================================================
 
 TEST(SwarmLoopback, HealthEndpointNoAuth) {
-    SwarmServerHarness harness;
+    SwarmRendezvousHarness harness;
     ASSERT_TRUE(harness.ok());
 
     auto reply = http_request(harness.port(),
@@ -99,7 +99,7 @@ TEST(SwarmLoopback, HealthEndpointNoAuth) {
 TEST(SwarmLoopback, BearerMissingRejected) {
     HarnessConfig cfg;
     cfg.server_token = "tok";
-    SwarmServerHarness harness(cfg);
+    SwarmRendezvousHarness harness(cfg);
     ASSERT_TRUE(harness.ok());
 
     const auto out = http_rpc_call(harness.port(), kMethodHeartbeat,
@@ -113,7 +113,7 @@ TEST(SwarmLoopback, BearerMissingRejected) {
 TEST(SwarmLoopback, BearerWrongRejected) {
     HarnessConfig cfg;
     cfg.server_token = "tok";
-    SwarmServerHarness harness(cfg);
+    SwarmRendezvousHarness harness(cfg);
     ASSERT_TRUE(harness.ok());
 
     const auto out =
@@ -127,7 +127,7 @@ TEST(SwarmLoopback, BearerWrongRejected) {
 TEST(SwarmLoopback, BearerOkPassesThroughToDispatch) {
     HarnessConfig cfg;
     cfg.server_token = "tok";
-    SwarmServerHarness harness(cfg);
+    SwarmRendezvousHarness harness(cfg);
     ASSERT_TRUE(harness.ok());
 
     // 正确 Bearer 过门后进分发（未知方法 → -32601 而非 401，证明分层）
@@ -140,7 +140,7 @@ TEST(SwarmLoopback, BearerOkPassesThroughToDispatch) {
 TEST(SwarmLoopback, WsUpgradeRequiresBearer) {
     HarnessConfig cfg;
     cfg.server_token = "tok";
-    SwarmServerHarness harness(cfg);
+    SwarmRendezvousHarness harness(cfg);
     ASSERT_TRUE(harness.ok());
 
     SwarmWsClient ws;
@@ -156,7 +156,7 @@ TEST(SwarmLoopback, WsUpgradeRequiresBearer) {
 // ===========================================================================
 
 TEST(SwarmLoopback, ParseErrorYields32700) {
-    SwarmServerHarness harness;
+    SwarmRendezvousHarness harness;
     ASSERT_TRUE(harness.ok());
 
     // 原始非 JSON body（不经 http_post_json 的序列化）
@@ -176,7 +176,7 @@ TEST(SwarmLoopback, ParseErrorYields32700) {
 }
 
 TEST(SwarmLoopback, InvalidRequestWhenMethodMissing) {
-    SwarmServerHarness harness;
+    SwarmRendezvousHarness harness;
     ASSERT_TRUE(harness.ok());
 
     const nlohmann::json body = {{"jsonrpc", "2.0"}, {"id", 7},
@@ -191,7 +191,7 @@ TEST(SwarmLoopback, InvalidRequestWhenMethodMissing) {
 }
 
 TEST(SwarmLoopback, ParamsNotObjectYields32600Not32602) {
-    SwarmServerHarness harness;
+    SwarmRendezvousHarness harness;
     ASSERT_TRUE(harness.ok());
 
     // params 为数组：传输层 Invalid Request 拒绝（-32600），先于方法
@@ -205,7 +205,7 @@ TEST(SwarmLoopback, ParamsNotObjectYields32600Not32602) {
 }
 
 TEST(SwarmLoopback, UnknownMethodNotFound) {
-    SwarmServerHarness harness;
+    SwarmRendezvousHarness harness;
     ASSERT_TRUE(harness.ok());
 
     const auto out = http_rpc_call(harness.port(), "falcon.swarm.nope",
@@ -216,7 +216,7 @@ TEST(SwarmLoopback, UnknownMethodNotFound) {
 }
 
 TEST(SwarmLoopback, AnnounceRetractNotImplementedInPhaseZero) {
-    SwarmServerHarness harness;
+    SwarmRendezvousHarness harness;
     ASSERT_TRUE(harness.ok());
 
     const auto a = http_rpc_call(harness.port(), kMethodAnnounce,
@@ -235,7 +235,7 @@ TEST(SwarmLoopback, AnnounceRetractNotImplementedInPhaseZero) {
 }
 
 TEST(SwarmLoopback, WrongPathNotFound) {
-    SwarmServerHarness harness;
+    SwarmRendezvousHarness harness;
     ASSERT_TRUE(harness.ok());
 
     auto reply = http_request(harness.port(),
@@ -251,7 +251,7 @@ TEST(SwarmLoopback, WrongPathNotFound) {
 }
 
 TEST(SwarmLoopback, WrongMethodNotAllowed) {
-    SwarmServerHarness harness;
+    SwarmRendezvousHarness harness;
     ASSERT_TRUE(harness.ok());
 
     auto reply = http_request(harness.port(),
@@ -270,7 +270,7 @@ TEST(SwarmLoopback, WrongMethodNotAllowed) {
 // ===========================================================================
 
 TEST(SwarmLoopback, RegisterMissingFieldsInvalidParams) {
-    SwarmServerHarness harness;
+    SwarmRendezvousHarness harness;
     ASSERT_TRUE(harness.ok());
 
     const auto out =
@@ -283,7 +283,7 @@ TEST(SwarmLoopback, RegisterMissingFieldsInvalidParams) {
 }
 
 TEST(SwarmLoopback, RegisterFieldShapeGates) {
-    SwarmServerHarness harness;
+    SwarmRendezvousHarness harness;
     ASSERT_TRUE(harness.ok());
     SwarmTestNode node;
     ASSERT_TRUE(node.valid());
@@ -318,7 +318,7 @@ TEST(SwarmLoopback, RegisterFieldShapeGates) {
 }
 
 TEST(SwarmLoopback, RegisterChallengeRoundtripLoopback) {
-    SwarmServerHarness harness;
+    SwarmRendezvousHarness harness;
     ASSERT_TRUE(harness.ok());
     SwarmTestNode node;
     ASSERT_TRUE(node.valid());
@@ -340,7 +340,7 @@ TEST(SwarmLoopback, RegisterChallengeRoundtripLoopback) {
 TEST(SwarmLoopback, GroupTokenMismatchAndAccept) {
     HarnessConfig cfg;
     cfg.group_token = "g-secret";
-    SwarmServerHarness harness(cfg);
+    SwarmRendezvousHarness harness(cfg);
     ASSERT_TRUE(harness.ok());
     SwarmTestNode node;
     ASSERT_TRUE(node.valid());
@@ -365,7 +365,7 @@ TEST(SwarmLoopback, BlacklistedNodeRejectedAtStep1) {
     SwarmTestNode node;
     HarnessConfig cfg;
     cfg.blacklist = {node.node_id()};
-    SwarmServerHarness harness(cfg);
+    SwarmRendezvousHarness harness(cfg);
     ASSERT_TRUE(harness.ok());
 
     const auto flow =
@@ -377,7 +377,7 @@ TEST(SwarmLoopback, BlacklistedNodeRejectedAtStep1) {
 }
 
 TEST(SwarmLoopback, IdHijackRejectedAtStep1) {
-    SwarmServerHarness harness;
+    SwarmRendezvousHarness harness;
     ASSERT_TRUE(harness.ok());
     SwarmTestNode victim;
     SwarmTestNode attacker;
@@ -396,7 +396,7 @@ TEST(SwarmLoopback, IdHijackRejectedAtStep1) {
 }
 
 TEST(SwarmLoopback, BadSignatureRejected) {
-    SwarmServerHarness harness;
+    SwarmRendezvousHarness harness;
     ASSERT_TRUE(harness.ok());
     SwarmTestNode node;
 
@@ -419,7 +419,7 @@ TEST(SwarmLoopback, BadSignatureRejected) {
 }
 
 TEST(SwarmLoopback, ParamsMismatchReplayRejected) {
-    SwarmServerHarness harness;
+    SwarmRendezvousHarness harness;
     ASSERT_TRUE(harness.ok());
     SwarmTestNode node;
 
@@ -447,7 +447,7 @@ TEST(SwarmLoopback, ParamsMismatchReplayRejected) {
 // ===========================================================================
 
 TEST(SwarmLoopback, HeartbeatRoundtripAndUnknownSession) {
-    SwarmServerHarness harness;
+    SwarmRendezvousHarness harness;
     ASSERT_TRUE(harness.ok());
     SwarmTestNode node;
     const auto flow =
@@ -468,7 +468,7 @@ TEST(SwarmLoopback, HeartbeatRoundtripAndUnknownSession) {
 }
 
 TEST(SwarmLoopback, HeartbeatMissingSessionInvalidParams) {
-    SwarmServerHarness harness;
+    SwarmRendezvousHarness harness;
     ASSERT_TRUE(harness.ok());
 
     const auto out =
@@ -479,7 +479,7 @@ TEST(SwarmLoopback, HeartbeatMissingSessionInvalidParams) {
 }
 
 TEST(SwarmLoopback, QueryEmptyIndexWellFormedLoopback) {
-    SwarmServerHarness harness;
+    SwarmRendezvousHarness harness;
     ASSERT_TRUE(harness.ok());
     SwarmTestNode node;
     const auto flow =
@@ -514,7 +514,7 @@ TEST(SwarmLoopback, QueryEmptyIndexWellFormedLoopback) {
 }
 
 TEST(SwarmLoopback, UnsubscribeRemovesPeerLoopback) {
-    SwarmServerHarness harness;
+    SwarmRendezvousHarness harness;
     ASSERT_TRUE(harness.ok());
     SwarmTestNode node;
     const auto flow =
@@ -539,7 +539,7 @@ TEST(SwarmLoopback, UnsubscribeRemovesPeerLoopback) {
 // ===========================================================================
 
 TEST(SwarmLoopback, WsPingPong) {
-    SwarmServerHarness harness;
+    SwarmRendezvousHarness harness;
     ASSERT_TRUE(harness.ok());
 
     SwarmWsClient ws;
@@ -552,7 +552,7 @@ TEST(SwarmLoopback, WsPingPong) {
 }
 
 TEST(SwarmLoopback, WsPeerJoinedNotificationFanout) {
-    SwarmServerHarness harness;
+    SwarmRendezvousHarness harness;
     ASSERT_TRUE(harness.ok());
 
     // 订阅者先连（广播时已在订阅者表）
@@ -576,7 +576,7 @@ TEST(SwarmLoopback, WsPeerJoinedNotificationFanout) {
 }
 
 TEST(SwarmLoopback, WsPeerLeftOnHeartbeatTimeoutSweep) {
-    SwarmServerHarness harness;  // 默认 timeout=2s / sweep=50ms（测试值）
+    SwarmRendezvousHarness harness;  // 默认 timeout=2s / sweep=50ms（测试值）
     ASSERT_TRUE(harness.ok());
 
     SwarmWsClient sub;
@@ -607,7 +607,7 @@ TEST(SwarmLoopback, WsPeerLeftOnHeartbeatTimeoutSweep) {
 TEST(SwarmLoopback, RateLimitRegister429) {
     HarnessConfig cfg;
     cfg.rate_register_per_min = 2;
-    SwarmServerHarness harness(cfg);
+    SwarmRendezvousHarness harness(cfg);
     ASSERT_TRUE(harness.ok());
     SwarmTestNode node;
 
@@ -630,7 +630,7 @@ TEST(SwarmLoopback, RateLimitRegister429) {
 TEST(SwarmLoopback, RateLimitQuery429) {
     HarnessConfig cfg;
     cfg.rate_query_per_min = 1;
-    SwarmServerHarness harness(cfg);
+    SwarmRendezvousHarness harness(cfg);
     ASSERT_TRUE(harness.ok());
     SwarmTestNode node;
     const auto flow =

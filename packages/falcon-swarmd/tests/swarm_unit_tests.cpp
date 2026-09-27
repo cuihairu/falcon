@@ -1,23 +1,23 @@
 // ============================================================================
-// falcon-swarmd 线协议对拍 + 限频器 + 服务器状态单测（阶段 0）
+// falcon-swarmd 线协议对拍 + 限频器 + Rendezvous 状态单测（阶段 0）
 //
 // 三块：
 //   SwarmProtocol  —— canonical JSON / signing payload / RFC 8032 Ed25519
 //                     向量（TEST1/TEST2 全链独立实算入库，见各用例注释）/
 //                     指纹推导 / hex 与 RFC 3339 助手
 //   SwarmRateLimiter —— 虚拟时钟（now 显式入参）零 sleep
-//   SwarmServerState —— 注册两步/挑战单次消耗/参数快照绑定/黑名单/群组令牌/
+//   SwarmRendezvousState —— 注册两步/挑战单次消耗/参数快照绑定/黑名单/群组令牌/
 //                     心跳续租/清扫摘除/空表查询（阶段 0「空表往返」裁决）
 //
 // 时钟纪律：State 与限频器的 now 一律显式入参——单测用
-// SwarmServerState::Clock::now() 取基点后自行加减推进，零真实等待。
+// SwarmRendezvousState::Clock::now() 取基点后自行加减推进，零真实等待。
 // ============================================================================
 
 #include "common/swarm_crypto.hpp"
 #include "common/swarm_protocol.hpp"
-#include "server/swarm_rate_limiter.hpp"
-#include "server/swarm_server_state.hpp"
-#include "swarm_server_harness.hpp"
+#include "rdv/swarm_rate_limiter.hpp"
+#include "rdv/swarm_rdv_state.hpp"
+#include "swarm_rdv_harness.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -60,9 +60,9 @@ std::vector<uint8_t> spki_der_from_raw_hex(const std::string& raw_hex) {
 }
 
 // State 单测用配置（TTL 全部拉长——过期路径由用例显式构造越界时刻）
-SwarmServerState::Config state_config(std::string group_token = {},
+SwarmRendezvousState::Config state_config(std::string group_token = {},
                                       std::vector<std::string> blacklist = {}) {
-    SwarmServerState::Config cfg;
+    SwarmRendezvousState::Config cfg;
     cfg.group_token = std::move(group_token);
     cfg.blacklist = std::move(blacklist);
     cfg.heartbeat_interval = std::chrono::seconds(10);
@@ -73,15 +73,15 @@ SwarmServerState::Config state_config(std::string group_token = {},
 
 // 完整注册两步（State 直调形态）；返回 SwarmReply 与 session。
 struct StateRegisterOutcome {
-    SwarmServerState::SwarmReply reply;
+    SwarmRendezvousState::SwarmReply reply;
     std::string session;
     bool ok = false;
 };
 
-StateRegisterOutcome register_via_state(SwarmServerState& state,
+StateRegisterOutcome register_via_state(SwarmRendezvousState& state,
                                         const SwarmTestNode& node,
                                         const std::string& nonce,
-                                        SwarmServerState::Clock::time_point now) {
+                                        SwarmRendezvousState::Clock::time_point now) {
     StateRegisterOutcome out;
     const nlohmann::json step1 = node.step1_params(nonce);
     const std::string canonical = canonical_json(step1);
@@ -296,14 +296,14 @@ TEST(SwarmRateLimiter, ZeroMaxEventsMeansUnlimited) {
 }
 
 // ===========================================================================
-// SwarmServerState：注册两步 / 挑战纪律 / 门禁 / 心跳 / 清扫 / 空表查询
+// SwarmRendezvousState：注册两步 / 挑战纪律 / 门禁 / 心跳 / 清扫 / 空表查询
 // ===========================================================================
 
-TEST(SwarmServerState, RegisterChallengeFlowIssuesSession) {
-    SwarmServerState state(state_config());
+TEST(SwarmRendezvousState, RegisterChallengeFlowIssuesSession) {
+    SwarmRendezvousState state(state_config());
     SwarmTestNode node;
     ASSERT_TRUE(node.valid());
-    const auto t0 = SwarmServerState::Clock::now();
+    const auto t0 = SwarmRendezvousState::Clock::now();
 
     const std::string nonce = "0011223344556677";
     const nlohmann::json step1 = node.step1_params(nonce);
@@ -332,11 +332,11 @@ TEST(SwarmServerState, RegisterChallengeFlowIssuesSession) {
     EXPECT_EQ(state.peer_count(), 1u);
 }
 
-TEST(SwarmServerState, SnapshotMismatchBetweenStepsRejected) {
-    SwarmServerState state(state_config());
+TEST(SwarmRendezvousState, SnapshotMismatchBetweenStepsRejected) {
+    SwarmRendezvousState state(state_config());
     SwarmTestNode node;
     ASSERT_TRUE(node.valid());
-    const auto t0 = SwarmServerState::Clock::now();
+    const auto t0 = SwarmRendezvousState::Clock::now();
 
     const std::string nonce = "0011223344556677";
     const std::string canonical1 =
@@ -355,11 +355,11 @@ TEST(SwarmServerState, SnapshotMismatchBetweenStepsRejected) {
     EXPECT_EQ(state.peer_count(), 0u);
 }
 
-TEST(SwarmServerState, ChallengeExpiredRejected) {
-    SwarmServerState state(state_config());
+TEST(SwarmRendezvousState, ChallengeExpiredRejected) {
+    SwarmRendezvousState state(state_config());
     SwarmTestNode node;
     ASSERT_TRUE(node.valid());
-    const auto t0 = SwarmServerState::Clock::now();
+    const auto t0 = SwarmRendezvousState::Clock::now();
 
     const std::string nonce = "0011223344556677";
     const std::string canonical = canonical_json(node.step1_params(nonce));
@@ -375,11 +375,11 @@ TEST(SwarmServerState, ChallengeExpiredRejected) {
     EXPECT_EQ(r2.error_code, kErrSignature);
 }
 
-TEST(SwarmServerState, ChallengeConsumedOnFirstComplete) {
-    SwarmServerState state(state_config());
+TEST(SwarmRendezvousState, ChallengeConsumedOnFirstComplete) {
+    SwarmRendezvousState state(state_config());
     SwarmTestNode node;
     ASSERT_TRUE(node.valid());
-    const auto t0 = SwarmServerState::Clock::now();
+    const auto t0 = SwarmRendezvousState::Clock::now();
 
     const std::string nonce = "0011223344556677";
     const std::string canonical = canonical_json(node.step1_params(nonce));
@@ -396,11 +396,11 @@ TEST(SwarmServerState, ChallengeConsumedOnFirstComplete) {
     EXPECT_EQ(replay.error_code, kErrSignature);
 }
 
-TEST(SwarmServerState, BlacklistedNodeNeverGetsChallenge) {
+TEST(SwarmRendezvousState, BlacklistedNodeNeverGetsChallenge) {
     SwarmTestNode node;
     ASSERT_TRUE(node.valid());
-    SwarmServerState state(state_config({}, {node.node_id()}));
-    const auto t0 = SwarmServerState::Clock::now();
+    SwarmRendezvousState state(state_config({}, {node.node_id()}));
+    const auto t0 = SwarmRendezvousState::Clock::now();
 
     const std::string nonce = "0011223344556677";
     const std::string canonical = canonical_json(node.step1_params(nonce));
@@ -416,11 +416,11 @@ TEST(SwarmServerState, BlacklistedNodeNeverGetsChallenge) {
     EXPECT_EQ(r2.error_code, kErrSignature);
 }
 
-TEST(SwarmServerState, GroupTokenMismatchRejected) {
-    SwarmServerState state(state_config("circle-token"));
+TEST(SwarmRendezvousState, GroupTokenMismatchRejected) {
+    SwarmRendezvousState state(state_config("circle-token"));
     SwarmTestNode node;
     ASSERT_TRUE(node.valid());
-    const auto t0 = SwarmServerState::Clock::now();
+    const auto t0 = SwarmRendezvousState::Clock::now();
 
     const std::string nonce = "0011223344556677";
     const std::string canonical = canonical_json(node.step1_params(nonce));
@@ -435,13 +435,13 @@ TEST(SwarmServerState, GroupTokenMismatchRejected) {
     EXPECT_TRUE(r2.ok()) << r2.error_message;
 }
 
-TEST(SwarmServerState, FingerprintPubkeyMismatchRejected) {
+TEST(SwarmRendezvousState, FingerprintPubkeyMismatchRejected) {
     // ID 抢注：B 节点自报 A 的 node_id（配 B 的 pubkey）→ 指纹自洽门拒绝
-    SwarmServerState state(state_config());
+    SwarmRendezvousState state(state_config());
     SwarmTestNode victim;
     SwarmTestNode attacker;
     ASSERT_TRUE(victim.valid() && attacker.valid());
-    const auto t0 = SwarmServerState::Clock::now();
+    const auto t0 = SwarmRendezvousState::Clock::now();
 
     const std::string nonce = "0011223344556677";
     const std::string canonical =
@@ -452,18 +452,18 @@ TEST(SwarmServerState, FingerprintPubkeyMismatchRejected) {
     EXPECT_EQ(r1.error_code, kErrSignature);
 }
 
-TEST(SwarmServerState, HeartbeatUnknownSessionRejected) {
-    SwarmServerState state(state_config());
+TEST(SwarmRendezvousState, HeartbeatUnknownSessionRejected) {
+    SwarmRendezvousState state(state_config());
     auto hb = state.heartbeat("s-deadbeefdeadbeefdeadbeefdeadbeef",
-                              SwarmServerState::Clock::now());
+                              SwarmRendezvousState::Clock::now());
     EXPECT_FALSE(hb.ok());
     EXPECT_EQ(hb.error_code, kErrUnknownSession);
 }
 
-TEST(SwarmServerState, HeartbeatRenewsAndExpiredSessionRejected) {
-    SwarmServerState state(state_config());
+TEST(SwarmRendezvousState, HeartbeatRenewsAndExpiredSessionRejected) {
+    SwarmRendezvousState state(state_config());
     SwarmTestNode node;
-    const auto t0 = SwarmServerState::Clock::now();
+    const auto t0 = SwarmRendezvousState::Clock::now();
     auto reg = register_via_state(state, node, "0011223344556677", t0);
     ASSERT_TRUE(reg.ok) << reg.reply.error_message;
 
@@ -482,10 +482,10 @@ TEST(SwarmServerState, HeartbeatRenewsAndExpiredSessionRejected) {
     EXPECT_EQ(hb3.error_code, kErrUnknownSession);
 }
 
-TEST(SwarmServerState, SweepRemovesExpiredSessionWithPeerLeft) {
-    SwarmServerState state(state_config());
+TEST(SwarmRendezvousState, SweepRemovesExpiredSessionWithPeerLeft) {
+    SwarmRendezvousState state(state_config());
     SwarmTestNode node;
-    const auto t0 = SwarmServerState::Clock::now();
+    const auto t0 = SwarmRendezvousState::Clock::now();
     auto reg = register_via_state(state, node, "0011223344556677", t0);
     ASSERT_TRUE(reg.ok) << reg.reply.error_message;
     EXPECT_EQ(state.peer_count(), 1u);
@@ -506,12 +506,12 @@ TEST(SwarmServerState, SweepRemovesExpiredSessionWithPeerLeft) {
     EXPECT_FALSE(state.has_session(reg.session));
 }
 
-TEST(SwarmServerState, QueryEmptyIndexReturnsWellFormedMiss) {
+TEST(SwarmRendezvousState, QueryEmptyIndexReturnsWellFormedMiss) {
     // 阶段 0「空表往返」裁决：资源表恒空（无 announce 写入路径），
     // 合法 session 查询恒返回 {sha256 回显 + sources 空数组}
-    SwarmServerState state(state_config());
+    SwarmRendezvousState state(state_config());
     SwarmTestNode node;
-    const auto t0 = SwarmServerState::Clock::now();
+    const auto t0 = SwarmRendezvousState::Clock::now();
     auto reg = register_via_state(state, node, "0011223344556677", t0);
     ASSERT_TRUE(reg.ok) << reg.reply.error_message;
 
@@ -528,10 +528,10 @@ TEST(SwarmServerState, QueryEmptyIndexReturnsWellFormedMiss) {
     EXPECT_EQ(q2.error_code, kErrUnknownSession);
 }
 
-TEST(SwarmServerState, UnsubscribeRemovesSessionAndEmitsPeerLeft) {
-    SwarmServerState state(state_config());
+TEST(SwarmRendezvousState, UnsubscribeRemovesSessionAndEmitsPeerLeft) {
+    SwarmRendezvousState state(state_config());
     SwarmTestNode node;
-    const auto t0 = SwarmServerState::Clock::now();
+    const auto t0 = SwarmRendezvousState::Clock::now();
     auto reg = register_via_state(state, node, "0011223344556677", t0);
     ASSERT_TRUE(reg.ok) << reg.reply.error_message;
 
@@ -551,10 +551,10 @@ TEST(SwarmServerState, UnsubscribeRemovesSessionAndEmitsPeerLeft) {
     EXPECT_EQ(off2.error_code, kErrUnknownSession);
 }
 
-TEST(SwarmServerState, ReregisterRotatesSessionWithoutPeerJoinedReplay) {
-    SwarmServerState state(state_config());
+TEST(SwarmRendezvousState, ReregisterRotatesSessionWithoutPeerJoinedReplay) {
+    SwarmRendezvousState state(state_config());
     SwarmTestNode node;
-    const auto t0 = SwarmServerState::Clock::now();
+    const auto t0 = SwarmRendezvousState::Clock::now();
 
     auto first = register_via_state(state, node, "0011223344556677", t0);
     ASSERT_TRUE(first.ok) << first.reply.error_message;

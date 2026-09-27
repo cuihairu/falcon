@@ -4,13 +4,13 @@
 // SwarmClient：节点侧 swarm 会话客户端（阶段 0：注册/心跳/查询/退订）
 //
 // 生命周期 = start() 起 WS 收订 + 两步注册 + 心跳线程；stop() 退订收口。
-// 心跳线程对 -32003（未知/过期 session）自动重注册自愈——server 侧心跳
+// 心跳线程对 -32003（未知/过期 session）自动重注册自愈——Rendezvous 侧心跳
 // 超时摘除（sweep）后节点侧无感恢复。
 //
 // 关键语义：
 //   - 会话数据（session/node_id/计数）由 mutex 保护（心跳线程与查询
 //     调用方并发）；观测访问器线程安全。
-//   - detach() = 停心跳但保持注册（模拟进程崩溃：server 心跳超时后
+//   - detach() = 停心跳但保持注册（模拟进程崩溃：Rendezvous 心跳超时后
 //     摘除并广播 onPeerLeft——e2e 心跳超时用例的客户端侧入口）。
 //   - 析构 = detach + unsubscribe 尽力（一次性 HTTP，失败静默）+ WS 收订
 //     停机，绝不阻塞退出路径（daemon RAII 先例）。
@@ -65,7 +65,7 @@ public:
     /// 退订 + 停机（幂等）。
     void stop();
 
-    /// 停心跳线程但保持注册态（模拟崩溃；server 心跳超时后摘除）。
+    /// 停心跳线程但保持注册态（模拟崩溃；Rendezvous 心跳超时后摘除）。
     void detach();
 
     /// 查询资源来源（阶段 0 空表：合法 session → sha256 回显 + 空数组）。

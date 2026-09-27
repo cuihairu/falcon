@@ -6,12 +6,12 @@
 //     → SwarmClient 注册/心跳/空表查询 → SIGTERM 信号停机 exit 0
 //     （gcda 铁律：子进程恒 SIGTERM 优雅收尾，SIGKILL 仅兜底）
 //   - 心跳超时摘除端到端：client detach()（停心跳保持注册）→
-//     server sweep 摘除 → 订阅侧收 onPeerLeft
+//     Rendezvous sweep 摘除 → 订阅侧收 onPeerLeft
 //   - 配置面：坏 JSON 配置文件非零退出（daemonize 前报错）+ --help 零退出
 // ============================================================================
 
 #include "client/swarm_client.hpp"
-#include "swarm_server_harness.hpp"
+#include "swarm_rdv_harness.hpp"
 
 #include <gtest/gtest.h>
 
@@ -272,7 +272,7 @@ nlohmann::json wait_notification(SwarmWsClient& ws, const std::string& method,
 }  // namespace
 
 // ===========================================================================
-// 全流程：二进制 + client 库 × 同一 server
+// 全流程：二进制 + client 库 × 同一 Rendezvous
 // ===========================================================================
 
 TEST(SwarmBinaryE2E, BinaryFullFlow) {
@@ -345,7 +345,7 @@ TEST(SwarmBinaryE2E, BinaryHeartbeatTimeoutE2E) {
     std::string error;
     ASSERT_TRUE(client.start(&error)) << error;
 
-    // detach = 模拟崩溃：停心跳、保持注册 → server 心跳超时摘除
+    // detach = 模拟崩溃：停心跳、保持注册 → Rendezvous 心跳超时摘除
     client.detach();
 
     const nlohmann::json left =

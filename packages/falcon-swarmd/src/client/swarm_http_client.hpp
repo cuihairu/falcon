@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// SwarmHttpClient：节点 → 目录服务器的 HTTP 传输（libcurl 薄封装）
+// SwarmHttpClient：节点 → Rendezvous 的 HTTP 传输（libcurl 薄封装）
 //
 // 职责单一：POST JSON 到 RPC 端点（带 Bearer 头）+ GET /v1/health 探测。
 // 每次调用独立 curl_easy handle（handle 复用残留教训：CURLOPT_* 在

@@ -4,9 +4,13 @@
 
 # falcon-swarmd
 
-P2SP 共享网络的 swarm 目录服务器与节点侧客户端（设计文档 `docs/p2sp_network_design.md` §12 阶段 0）。单一包内三个静态库 + 一个可执行：server 与 client 共享 `swarm_protocol` 单一事实源，回环测试一处覆盖两端。
+P2SP 共享网络的 **Rendezvous Service**（会合/发现服务，俗称 tracker）与节点侧客户端（设计文档 `docs/p2sp_network_design.md` §12 阶段 0）。单一包内三个静态库 + 一个可执行：服务端与 client 共享 `swarm_protocol` 单一事实源，回环测试一处覆盖两端。
 
 ## 变更记录 (Changelog)
+
+### 2026-09-27 - 服务更名 Rendezvous Service（用户拍板术语统一）
+- 文档/目标/文件/符号统一：CMake target `falcon_swarm_server` → `falcon_swarm_rdv`；`src/server/` → `src/rdv/`；`SwarmServerState/SwarmServerOptions/SwarmServerHarness/SwarmRpcServer` → `SwarmRendezvousState/SwarmRendezvousOptions/SwarmRendezvousHarness/SwarmRendezvousServer`；`swarm_server_state.*` → `swarm_rdv_state.*`、`swarm_server_loopback_test.cpp` → `swarm_rdv_loopback_test.cpp`、`swarm_server_harness.hpp` → `swarm_rdv_harness.hpp`；注入点 `SwarmServerSocket/Listen` → `SwarmRdvSocket/Listen`（libfalcon-core）
+- 保留项（技术事实/线协议契约，不为改而改）：`server_token`（config 键 + CLI `--server-token`）、`kFieldServerTime`/"server_time"（线字段）、`swarm_rpc_server.{hpp,cpp}` 文件名（传输层命名，沿 daemon `json_rpc_server` 形制）、`SwarmRendezvousServer` 类名中的 Server（HTTP/WS 服务器角色语义）、中文注释里的"服务器"角色词
 
 ### 2026-09-25 - P2SP 阶段 0 落地（三批提交：基建拆库 8d5e366 / server 4c351a9 / client+e2e 50b42bd）
 - 实现设计文档 §12 阶段 0 全范围：`falcon-swarmd` 单二进制（两步注册挑战/心跳/查询/WS 通知 + 双限频器 + Bearer 准入）+ 节点侧 `SwarmClient`（注册两步状态机/心跳自愈/查询/退订，无公告——用户裁决「空表往返」）
@@ -21,11 +25,11 @@ P2SP 共享网络的 swarm 目录服务器与节点侧客户端（设计文档 `
 | Target | 内容 | 链接 |
 |---|---|---|
 | `falcon_swarm_common` | 线协议常量/canonical JSON/签名 payload/Ed25519/SHA-256 | core + nlohmann + OpenSSL::Crypto + falcon_ws_protocol |
-| `falcon_swarm_server` | SwarmServerState/RpcHandlers/RateLimiter/RpcServer 传输层 + swarmd_config | common + ws_protocol + daemon_core(PRIVATE) |
+| `falcon_swarm_rdv` | SwarmRendezvousState/RpcHandlers/RateLimiter/传输层（swarm_rpc_server）+ swarmd_config | common + ws_protocol + daemon_core(PRIVATE) |
 | `falcon_swarm_client` | SwarmHttpClient/SwarmWsSubscriber/SwarmKeyStore/SwarmClient | common + ws_protocol + CURL |
-| `falcon-swarmd`（可执行） | main（daemonize/信号停机） | server + falcon_daemon_core |
+| `falcon-swarmd`（可执行） | main（daemonize/信号停机） | rendezvous（falcon_swarm_rdv）+ falcon_daemon_core |
 
-包级守卫链：`falcon_ws_protocol`/`falcon_daemon_core`（daemon 包拆出）缺失 → WARNING + return()；OpenSSL 缺 `OpenSSL::Crypto` → 同上（编译期整体跳过，对齐 storage 云浏览器先例）；CURL 缺失只跳 client（server 面单独可用）。`FALCON_BUILD_SWARMD` 默认 ON。
+包级守卫链：`falcon_ws_protocol`/`falcon_daemon_core`（daemon 包拆出）缺失 → WARNING + return()；OpenSSL 缺 `OpenSSL::Crypto` → 同上（编译期整体跳过，对齐 storage 云浏览器先例）；CURL 缺失只跳 client（rendezvous 面单独可用）。`FALCON_BUILD_SWARMD` 默认 ON。
 
 ## 线协议（JSON-RPC 2.0，HTTP POST /jsonrpc + WS 通知）
 
@@ -46,12 +50,12 @@ P2SP 共享网络的 swarm 目录服务器与节点侧客户端（设计文档 `
 
 ## 关键设计
 
-- **SwarmServerState 单锁**：peer/session/challenge/资源表一把 mutex；通知一律锁外（锁内摘除 + 攒列表）；`now` 全部显式入参（状态类零时钟依赖——测试推进虚拟时钟确定性收口）
+- **SwarmRendezvousState 单锁**：peer/session/challenge/资源表一把 mutex；通知一律锁外（锁内摘除 + 攒列表）；`now` 全部显式入参（状态类零时钟依赖——测试推进虚拟时钟确定性收口）
 - **限频器**：per-key 时间戳窗口（`map<string, deque<time_point>>`），`allow(key, now)` now 入参；`max_events==0` = 不限；实例化 register-per-IP 与 query-per-IP 两个
 - **传输层独立瘦实现**（方案 B）：零 daemon 源改动，socket/WS 会话/广播/停机模式沿 `json_rpc_server.cpp` 形态换命名空间；WS 帧协议复用 `falcon_ws_protocol`（第三消费方）
 - **准入分叉**：swarmd 用 `Authorization: Bearer`（daemon JSON-RPC 用 `token:` 首参——两者不兼容，测试钉死）
 - **start() 内 POSIX `signal(SIGPIPE, SIG_IGN)`** + Windows call_once Winsock；WS 服务器停机先 shutdown 全部 fd 再 join（daemon 先例）
-- **SwarmClient 心跳自愈**：心跳线程对 `-32003` 自动重注册换新 session（server sweep 摘除后节点无感恢复）；`detach()` = 停心跳保注册（模拟进程崩溃，e2e 心跳超时用例的客户端侧入口）
+- **SwarmClient 心跳自愈**：心跳线程对 `-32003` 自动重注册换新 session（Rendezvous sweep 摘除后节点无感恢复）；`detach()` = 停心跳保注册（模拟进程崩溃，e2e 心跳超时用例的客户端侧入口）
 - 阶段 0 **无 announce 面**：资源表无写入路径恒空；query 合法 session → sha256 回显 + 空 sources（「空表往返」用户裁决）；`SwarmResource` 结构 + 表 + 读取逻辑在位（query 真实消费），阶段 1 加 upsert 即通
 
 ## 测试（84 用例四 target）
@@ -60,7 +64,7 @@ P2SP 共享网络的 swarm 目录服务器与节点侧客户端（设计文档 `
 |---|---|---|
 | `falcon_swarm_unit_tests` | 42 | canonical JSON/签名 payload 对拍（RFC 8032 TEST1/TEST2 向量 + 指纹推导）/限频器虚拟时钟/状态过期注入 now/密钥往返/**swarm.json 配置 14 用例**（往返/错误路径六类/告警/~/默认保留） |
 | `falcon_swarm_loopback_tests` | 29 | 真 socket 回环：HTTP/WS 握手/通知帧形制/错误路径全集（-32001..-32005、-32600/1/2、429）/限频/注入点（socket/listen/EVP 四点） |
-| `falcon_swarm_client_tests` | 10 | SwarmClient × 回环 server：注册往返/心跳存活/退订摘除/会话过期自愈/空表查询/传输失败/错令牌双路径/密钥往返/0600 |
+| `falcon_swarm_client_tests` | 10 | SwarmClient × 回环 Rendezvous：注册往返/心跳存活/退订摘除/会话过期自愈/空表查询/传输失败/错令牌双路径/密钥往返/0600 |
 | `falcon_swarm_e2e_tests` | 3 | 真二进制 fork+execv（POSIX-only）：全流程含通知到达、心跳超时摘除、坏配置非零退出 + SIGTERM exit 0（gcda 铁律） |
 
 防「同一 bug 自我印证」：回环测试侧用 SwarmCrypto 独立重导 canonical→payload→verify（s3_browser_auth_test 惯例）；RFC 向量独立生成。

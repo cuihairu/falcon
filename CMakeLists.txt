@@ -34,7 +34,7 @@ option(FALCON_BUILD_DAEMON "Build daemon service" ON)
 # Swarm 目录服务器（P2SP 网络，docs/p2sp_network_design.md §12 阶段 0）。
 # 依赖 FALCON_BUILD_DAEMON=ON（复用 daemon 包的 falcon_ws_protocol /
 # falcon_daemon_core）；缺 nlohmann_json 或 OpenSSL 时整包优雅跳过
-option(FALCON_BUILD_SWARMD "Build swarm directory server (falcon-swarmd)" ON)
+option(FALCON_BUILD_SWARMD "Build swarm rendezvous service (falcon-swarmd)" ON)
 option(FALCON_BUILD_DESKTOP "Build desktop GUI application" ON)
 
 # 插件开关

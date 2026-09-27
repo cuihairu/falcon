@@ -6,7 +6,7 @@
 #                                  限频器（虚拟时钟）+ 服务器状态（注入 now）
 #   falcon_swarm_loopback_tests —— 真 socket 回环：HTTP/WS/错误路径/限频
 #
-# 两者都链 falcon_swarm_server（SwarmServerState/SwarmRateLimiter 编在其中，
+# 两者都链 falcon_swarm_rdv（SwarmRendezvousState/SwarmRateLimiter 编在其中，
 # PUBLIC 传递 falcon_swarm_common 与 falcon_ws_protocol 的头与库）。
 # ============================================================================
 
@@ -30,7 +30,7 @@ add_executable(falcon_swarm_unit_tests
 
 target_link_libraries(falcon_swarm_unit_tests
     PRIVATE
-        falcon_swarm_server
+        falcon_swarm_rdv
         GTest::gtest
         GTest::gtest_main
         Threads::Threads
@@ -48,13 +48,13 @@ gtest_discover_tests(falcon_swarm_unit_tests
 )
 
 add_executable(falcon_swarm_loopback_tests
-    swarm_server_loopback_test.cpp
-    swarm_server_harness.hpp
+    swarm_rdv_loopback_test.cpp
+    swarm_rdv_harness.hpp
 )
 
 target_link_libraries(falcon_swarm_loopback_tests
     PRIVATE
-        falcon_swarm_server
+        falcon_swarm_rdv
         GTest::gtest
         GTest::gtest_main
         Threads::Threads
@@ -72,18 +72,18 @@ gtest_discover_tests(falcon_swarm_loopback_tests
 )
 
 # ============================================================================
-# SwarmClient × 回环 server（client 库在位才编——CURL 缺席时跳过）
+# SwarmClient × 回环 Rendezvous（client 库在位才编——CURL 缺席时跳过）
 # ============================================================================
 if(TARGET falcon_swarm_client)
     add_executable(falcon_swarm_client_tests
         swarm_client_test.cpp
-        swarm_server_harness.hpp
+        swarm_rdv_harness.hpp
     )
 
     target_link_libraries(falcon_swarm_client_tests
         PRIVATE
             falcon_swarm_client
-            falcon_swarm_server
+            falcon_swarm_rdv
             GTest::gtest
             GTest::gtest_main
             Threads::Threads
@@ -107,13 +107,13 @@ endif()
 if(TARGET falcon_swarm_client AND NOT WIN32)
     add_executable(falcon_swarm_e2e_tests
         swarm_e2e_test.cpp
-        swarm_server_harness.hpp
+        swarm_rdv_harness.hpp
     )
 
     target_link_libraries(falcon_swarm_e2e_tests
         PRIVATE
             falcon_swarm_client
-            falcon_swarm_server
+            falcon_swarm_rdv
             GTest::gtest
             GTest::gtest_main
             Threads::Threads

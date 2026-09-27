@@ -1,13 +1,13 @@
 // ============================================================================
-// falcon-swarmd main：P2SP swarm 目录服务器入口（阶段 0，§12）
+// falcon-swarmd main：P2SP Rendezvous Service 入口（阶段 0，§12）
 //
 // 启动时序（daemon main.cpp 同形制）：配置文件预载（--conf-path/--no-conf，
 // daemonize 之前完成全部校验 fail-fast）→ 主解析循环在其上覆盖（优先级
-// CLI > 文件 > 默认）→ DaemonManager 守护化 → SwarmRpcServer start() →
+// CLI > 文件 > 默认）→ DaemonManager 守护化 → SwarmRendezvousServer start() →
 // run() 主循环等待停止信号。
 //
 // 停机语义：SIGTERM/SIGINT 经 DaemonManager 信号处理器置停止标志，run()
-// 返回前执行 stop 回调（server.stop() 排水），main 正常 return 0——
+// 返回前执行 stop 回调（service.stop() 排水），main 正常 return 0——
 // 绝不走 _exit（gcda 覆盖率数据依赖正常退出 flush）。
 //
 // 阶段 0 无 SIGHUP 热更：配置只在启动读取一次，reload 回调传 nullptr。
@@ -15,8 +15,8 @@
 
 #include "swarmd_config.hpp"
 #include "daemon/daemon.hpp"
-#include "server/swarm_rpc_server.hpp"
-#include "server/swarm_server_state.hpp"
+#include "rdv/swarm_rpc_server.hpp"
+#include "rdv/swarm_rdv_state.hpp"
 
 #include <falcon/logger.hpp>
 
@@ -32,7 +32,7 @@ namespace {
 using falcon::swarm::SwarmdFileConfig;
 
 void show_help() {
-    std::cout << "Falcon Swarm Directory Server (P2SP stage 0)\n\n";
+    std::cout << "Falcon Swarm Rendezvous Service (P2SP stage 0)\n\n";
     std::cout << "Usage:\n";
     std::cout << "  falcon-swarmd [options]\n\n";
     std::cout << "Options:\n";
@@ -248,7 +248,7 @@ int main(int argc, char* argv[]) {
     }
 
     // ------------------------------------------------------------------
-    // DaemonManager 装配与守护化（server start 之前——工作目录/stdio 重定向
+    // DaemonManager 装配与守护化（service start 之前——工作目录/stdio 重定向
     // 必须先于任何监听动作；配置校验已完成，daemonize 后零 fail-fast 路径）
     // ------------------------------------------------------------------
     falcon::daemon::DaemonConfig daemon_config;
@@ -271,9 +271,9 @@ int main(int argc, char* argv[]) {
     }
 
     // ------------------------------------------------------------------
-    // 服务器装配与启动
+    // Rendezvous 装配与启动
     // ------------------------------------------------------------------
-    falcon::swarm::SwarmServerState::Config state_config;
+    falcon::swarm::SwarmRendezvousState::Config state_config;
     state_config.group_token = config.group_token;
     state_config.blacklist = config.blacklist;
     state_config.heartbeat_interval =
@@ -282,36 +282,36 @@ int main(int argc, char* argv[]) {
         std::chrono::seconds(config.heartbeat_timeout_s);
     state_config.challenge_ttl = std::chrono::seconds(config.challenge_ttl_s);
 
-    falcon::swarm::SwarmServerState state(state_config);
+    falcon::swarm::SwarmRendezvousState state(state_config);
 
-    falcon::swarm::SwarmServerOptions server_options;
-    server_options.host = config.host;
-    server_options.port = config.port;
-    server_options.server_token = config.server_token;
-    server_options.sweep_interval =
+    falcon::swarm::SwarmRendezvousOptions service_options;
+    service_options.host = config.host;
+    service_options.port = config.port;
+    service_options.server_token = config.server_token;
+    service_options.sweep_interval =
         std::chrono::milliseconds(config.sweep_interval_ms);
-    server_options.rate_register_per_min = config.rate_register_per_min;
-    server_options.rate_query_per_min = config.rate_query_per_min;
+    service_options.rate_register_per_min = config.rate_register_per_min;
+    service_options.rate_query_per_min = config.rate_query_per_min;
 
-    falcon::swarm::SwarmRpcServer server(server_options, state);
-    if (!server.start()) {
-        std::cerr << "Failed to start swarm server: " << server.last_error()
+    falcon::swarm::SwarmRendezvousServer service(service_options, state);
+    if (!service.start()) {
+        std::cerr << "Failed to start rendezvous service: " << service.last_error()
                   << "\n";
         return 1;
     }
     if (!run_as_daemon) {
         std::cout << "falcon-swarmd listening on " << config.host << ":"
-                  << server.port() << "\n";
+                  << service.port() << "\n";
     }
 
     // 主循环：阻塞至停止信号（SIGTERM/SIGINT → stop 回调 → run 返回）。
     // 阶段 0 无 SIGHUP 热更，reload 回调传 nullptr。
     daemon_manager.run(
-        [&server]() {
-            server.stop();
+        [&service]() {
+            service.stop();
         },
         nullptr);
-    server.stop();  // 幂等双保险（run 内部回调已停过则无操作）
+    service.stop();  // 幂等双保险（run 内部回调已停过则无操作）
 
     FALCON_LOG_INFO_STREAM("swarmd stopped");
     return 0;

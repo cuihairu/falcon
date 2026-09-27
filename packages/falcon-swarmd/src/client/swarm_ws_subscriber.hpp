@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// SwarmWsSubscriber：swarm 目录服务器的收订专用 WebSocket 客户端
+// SwarmWsSubscriber：Rendezvous 的收订专用 WebSocket 客户端
 //
 // 与 daemon 的 WebSocketRpcClient 形态不同：只收不发业务请求（无 pending
 // call 机器）——握手带 Authorization: Bearer（服务器 /jsonrpc 升级门），

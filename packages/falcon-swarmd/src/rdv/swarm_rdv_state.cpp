@@ -1,8 +1,8 @@
 // ============================================================================
-// SwarmServerState 实现（见 swarm_server_state.hpp 头注释）
+// SwarmRendezvousState 实现（见 swarm_rdv_state.hpp 头注释）
 // ============================================================================
 
-#include "swarm_server_state.hpp"
+#include "swarm_rdv_state.hpp"
 
 #include "../common/swarm_crypto.hpp"
 #include "../common/swarm_protocol.hpp"
@@ -11,8 +11,8 @@ namespace falcon::swarm {
 
 namespace {
 
-SwarmServerState::SwarmReply make_error(int code, std::string message) {
-    SwarmServerState::SwarmReply reply;
+SwarmRendezvousState::SwarmReply make_error(int code, std::string message) {
+    SwarmRendezvousState::SwarmReply reply;
     reply.error_code = code;
     reply.error_message = std::move(message);
     return reply;
@@ -20,11 +20,11 @@ SwarmServerState::SwarmReply make_error(int code, std::string message) {
 
 }  // namespace
 
-SwarmServerState::SwarmServerState(Config cfg) : cfg_(std::move(cfg)) {
+SwarmRendezvousState::SwarmRendezvousState(Config cfg) : cfg_(std::move(cfg)) {
     blacklist_.insert(cfg_.blacklist.begin(), cfg_.blacklist.end());
 }
 
-SwarmServerState::SwarmReply SwarmServerState::start_register(
+SwarmRendezvousState::SwarmReply SwarmRendezvousState::start_register(
     const std::string& node_id, const std::string& pubkey_hex,
     const std::string& nonce, const std::string& group_token,
     const std::string& canonical_params, Clock::time_point now) {
@@ -71,7 +71,7 @@ SwarmServerState::SwarmReply SwarmServerState::start_register(
     return reply;
 }
 
-SwarmServerState::SwarmReply SwarmServerState::complete_register(
+SwarmRendezvousState::SwarmReply SwarmRendezvousState::complete_register(
     const std::string& node_id, const std::string& canonical_params_no_sig,
     const std::string& challenge_sig, Clock::time_point now) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -181,7 +181,7 @@ SwarmServerState::SwarmReply SwarmServerState::complete_register(
     return reply;
 }
 
-SwarmServerState::SwarmReply SwarmServerState::heartbeat(
+SwarmRendezvousState::SwarmReply SwarmRendezvousState::heartbeat(
     const std::string& session, Clock::time_point now) {
     std::lock_guard<std::mutex> lock(mutex_);
 
@@ -211,7 +211,7 @@ SwarmServerState::SwarmReply SwarmServerState::heartbeat(
     return reply;
 }
 
-SwarmServerState::SwarmReply SwarmServerState::query(
+SwarmRendezvousState::SwarmReply SwarmRendezvousState::query(
     const std::string& session, const std::string& sha256,
     Clock::time_point now) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -270,7 +270,7 @@ SwarmServerState::SwarmReply SwarmServerState::query(
     return reply;
 }
 
-SwarmServerState::SwarmReply SwarmServerState::unsubscribe(
+SwarmRendezvousState::SwarmReply SwarmRendezvousState::unsubscribe(
     const std::string& session, Clock::time_point now) {
     (void)now;
     std::lock_guard<std::mutex> lock(mutex_);
@@ -287,7 +287,7 @@ SwarmServerState::SwarmReply SwarmServerState::unsubscribe(
     return reply;
 }
 
-void SwarmServerState::erase_peer_locked(const std::string& node_id,
+void SwarmRendezvousState::erase_peer_locked(const std::string& node_id,
                                          std::vector<Notification>& out) {
     const auto pit = peers_.find(node_id);
     if (pit == peers_.end()) {
@@ -303,7 +303,7 @@ void SwarmServerState::erase_peer_locked(const std::string& node_id,
     out.push_back(std::move(n));
 }
 
-std::vector<SwarmServerState::Notification> SwarmServerState::sweep(
+std::vector<SwarmRendezvousState::Notification> SwarmRendezvousState::sweep(
     Clock::time_point now) {
     std::lock_guard<std::mutex> lock(mutex_);
 
@@ -351,12 +351,12 @@ std::vector<SwarmServerState::Notification> SwarmServerState::sweep(
     return out;
 }
 
-std::size_t SwarmServerState::peer_count() {
+std::size_t SwarmRendezvousState::peer_count() {
     std::lock_guard<std::mutex> lock(mutex_);
     return peers_.size();
 }
 
-bool SwarmServerState::has_session(const std::string& session) {
+bool SwarmRendezvousState::has_session(const std::string& session) {
     std::lock_guard<std::mutex> lock(mutex_);
     return sessions_.count(session) != 0;
 }

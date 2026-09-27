@@ -10,7 +10,7 @@ namespace falcon::swarm {
 
 namespace {
 
-using Clock = SwarmServerState::Clock;
+using Clock = SwarmRendezvousState::Clock;
 
 SwarmReply invalid_params(std::string message) {
     SwarmReply reply;
@@ -42,7 +42,7 @@ bool optional_string(const nlohmann::json& params, const char* key,
     return true;
 }
 
-SwarmReply handle_register(SwarmServerState& state,
+SwarmReply handle_register(SwarmRendezvousState& state,
                            const nlohmann::json& params,
                            Clock::time_point now) {
     const auto node_it = params.find(kFieldNodeId);
@@ -124,7 +124,7 @@ bool take_session(const nlohmann::json& params, std::string* session,
     return true;
 }
 
-SwarmReply handle_heartbeat(SwarmServerState& state,
+SwarmReply handle_heartbeat(SwarmRendezvousState& state,
                             const nlohmann::json& params,
                             Clock::time_point now) {
     std::string session;
@@ -135,7 +135,7 @@ SwarmReply handle_heartbeat(SwarmServerState& state,
     return state.heartbeat(session, now);
 }
 
-SwarmReply handle_query(SwarmServerState& state, const nlohmann::json& params,
+SwarmReply handle_query(SwarmRendezvousState& state, const nlohmann::json& params,
                         Clock::time_point now) {
     std::string session;
     SwarmReply err;
@@ -150,7 +150,7 @@ SwarmReply handle_query(SwarmServerState& state, const nlohmann::json& params,
     return state.query(session, sha_it->get<std::string>(), now);
 }
 
-SwarmReply handle_unsubscribe(SwarmServerState& state,
+SwarmReply handle_unsubscribe(SwarmRendezvousState& state,
                               const nlohmann::json& params,
                               Clock::time_point now) {
     std::string session;
@@ -163,10 +163,10 @@ SwarmReply handle_unsubscribe(SwarmServerState& state,
 
 }  // namespace
 
-SwarmReply dispatch_swarm_method(SwarmServerState& state,
+SwarmReply dispatch_swarm_method(SwarmRendezvousState& state,
                                  const std::string& method,
                                  const nlohmann::json& params,
-                                 SwarmServerState::Clock::time_point now) {
+                                 SwarmRendezvousState::Clock::time_point now) {
     if (!params.is_object()) {
         return invalid_params("params must be an object");
     }

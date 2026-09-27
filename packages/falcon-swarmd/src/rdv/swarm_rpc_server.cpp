@@ -1,5 +1,5 @@
 // ============================================================================
-// SwarmRpcServer 实现（见 swarm_rpc_server.hpp 头注释）
+// SwarmRendezvousServer 实现（见 swarm_rpc_server.hpp 头注释）
 //
 // 传输层骨架与 daemon json_rpc_server.cpp 形制同源（accept 线程 / 每连接
 // worker / WS 升级 / 停机顺序），准入与路由为 swarmd 线协议专属：
@@ -155,7 +155,7 @@ bool recv_into(int fd, std::string& out, std::size_t want_at_least,
 
 // 逐字节增量找 "\r\n\r\n"（头边界），解析请求行与头，按 Content-Length
 // 补收 body。畸形/超限/断连返回 nullopt。
-std::optional<SwarmRpcServer::HttpRequest> read_http_request(int fd) {
+std::optional<SwarmRendezvousServer::HttpRequest> read_http_request(int fd) {
     std::string raw;
     static constexpr std::size_t kHeaderLimit = 64 * 1024;
     static constexpr std::size_t kBodyLimit = 4 * 1024 * 1024;
@@ -174,7 +174,7 @@ std::optional<SwarmRpcServer::HttpRequest> read_http_request(int fd) {
 
     std::istringstream stream(head);
     std::string version;
-    SwarmRpcServer::HttpRequest req;
+    SwarmRendezvousServer::HttpRequest req;
     if (!(stream >> req.method >> req.path >> version)) {
         return std::nullopt;
     }
@@ -226,7 +226,7 @@ bool send_all(int fd, const std::string& data) {
     return true;
 }
 
-std::string format_http_response(const SwarmRpcServer::HttpResponse& resp) {
+std::string format_http_response(const SwarmRendezvousServer::HttpResponse& resp) {
     std::string out = "HTTP/1.1 " + std::to_string(resp.status_code) + " " +
                       resp.status_text + "\r\n";
     out += "Content-Type: application/json\r\n";
@@ -271,26 +271,26 @@ std::string error_envelope(const nlohmann::json& id, int code,
 
 }  // namespace
 
-SwarmRpcServer::SwarmRpcServer(SwarmServerOptions options,
-                               SwarmServerState& state)
+SwarmRendezvousServer::SwarmRendezvousServer(SwarmRendezvousOptions options,
+                               SwarmRendezvousState& state)
     : opts_(std::move(options)),
       state_(state),
       register_limiter_(opts_.rate_register_per_min, std::chrono::minutes(1)),
       query_limiter_(opts_.rate_query_per_min, std::chrono::minutes(1)) {}
 
-SwarmRpcServer::~SwarmRpcServer() { stop(); }
+SwarmRendezvousServer::~SwarmRendezvousServer() { stop(); }
 
-std::string SwarmRpcServer::last_error() const {
+std::string SwarmRendezvousServer::last_error() const {
     std::lock_guard<std::mutex> lock(last_error_mutex_);
     return last_error_;
 }
 
-void SwarmRpcServer::set_last_error(std::string message) {
+void SwarmRendezvousServer::set_last_error(std::string message) {
     std::lock_guard<std::mutex> lock(last_error_mutex_);
     last_error_ = std::move(message);
 }
 
-bool SwarmRpcServer::start() {
+bool SwarmRendezvousServer::start() {
     if (accept_thread_.joinable()) {
         return true;
     }
@@ -305,12 +305,12 @@ bool SwarmRpcServer::start() {
 #endif
 
     listen_fd_ = ::falcon::detail::inject_failure(
-                     ::falcon::detail::InjectPoint::SwarmServerSocket)
+                     ::falcon::detail::InjectPoint::SwarmRdvSocket)
                      ? -1
                      : ::socket(AF_INET, SOCK_STREAM, 0);
     if (listen_fd_ < 0) {
         set_last_error("socket() failed");
-        FALCON_LOG_ERROR_STREAM("SwarmRpcServer socket() failed");
+        FALCON_LOG_ERROR_STREAM("SwarmRendezvousServer socket() failed");
         return false;
     }
 
@@ -329,7 +329,7 @@ bool SwarmRpcServer::start() {
     if (::inet_pton(AF_INET, opts_.host.c_str(), &addr.sin_addr) != 1) {
         set_last_error("invalid bind host: " + opts_.host);
         FALCON_LOG_ERROR_STREAM(
-            "SwarmRpcServer inet_pton() failed for host=" << opts_.host);
+            "SwarmRendezvousServer inet_pton() failed for host=" << opts_.host);
         socket_close(listen_fd_);
         listen_fd_ = -1;
         return false;
@@ -337,7 +337,7 @@ bool SwarmRpcServer::start() {
     if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) !=
         0) {
         set_last_error("bind() failed");
-        FALCON_LOG_ERROR_STREAM("SwarmRpcServer bind() failed");
+        FALCON_LOG_ERROR_STREAM("SwarmRendezvousServer bind() failed");
         socket_close(listen_fd_);
         listen_fd_ = -1;
         return false;
@@ -354,10 +354,10 @@ bool SwarmRpcServer::start() {
     }
 
     if (::falcon::detail::inject_failure(
-            ::falcon::detail::InjectPoint::SwarmServerListen) ||
+            ::falcon::detail::InjectPoint::SwarmRdvListen) ||
         ::listen(listen_fd_, 128) != 0) {
         set_last_error("listen() failed");
-        FALCON_LOG_ERROR_STREAM("SwarmRpcServer listen() failed");
+        FALCON_LOG_ERROR_STREAM("SwarmRendezvousServer listen() failed");
         socket_close(listen_fd_);
         listen_fd_ = -1;
         return false;
@@ -370,7 +370,7 @@ bool SwarmRpcServer::start() {
     return true;
 }
 
-void SwarmRpcServer::stop() {
+void SwarmRendezvousServer::stop() {
     stop_requested_ = true;
     sweep_cv_.notify_all();
 
@@ -413,7 +413,7 @@ void SwarmRpcServer::stop() {
     }
 }
 
-void SwarmRpcServer::accept_loop() {
+void SwarmRendezvousServer::accept_loop() {
     while (!stop_requested_.load()) {
         // accept 缓冲按家族给足：sockaddr_storage 恒安全（IPv6 peer /
         // 平台语义差异教训，CI 红面 35480073040）
@@ -434,7 +434,7 @@ void SwarmRpcServer::accept_loop() {
     }
 }
 
-void SwarmRpcServer::handle_connection(int client_fd) {
+void SwarmRendezvousServer::handle_connection(int client_fd) {
     ScopedFd fd(client_fd);
     auto req = read_http_request(fd.fd);
     if (!req.has_value()) {
@@ -449,7 +449,7 @@ void SwarmRpcServer::handle_connection(int client_fd) {
                    format_http_response(handle_http_request(*req, peer)));
 }
 
-bool SwarmRpcServer::is_websocket_upgrade(const HttpRequest& req) const {
+bool SwarmRendezvousServer::is_websocket_upgrade(const HttpRequest& req) const {
     if (req.method != "GET") {
         return false;
     }
@@ -462,7 +462,7 @@ bool SwarmRpcServer::is_websocket_upgrade(const HttpRequest& req) const {
     return key != req.headers.end() && !key->second.empty();
 }
 
-bool SwarmRpcServer::bearer_ok(
+bool SwarmRendezvousServer::bearer_ok(
     const std::unordered_map<std::string, std::string>& headers) const {
     if (opts_.server_token.empty()) {
         return true;
@@ -487,7 +487,7 @@ bool SwarmRpcServer::bearer_ok(
                          opts_.server_token) == 0;
 }
 
-SwarmRpcServer::HttpResponse SwarmRpcServer::handle_http_request(
+SwarmRendezvousServer::HttpResponse SwarmRendezvousServer::handle_http_request(
     const HttpRequest& req, const std::string& peer) {
     // 健康面：无鉴权（连通性探测，无副作用）
     if (req.method == "GET" && req.path == "/v1/health") {
@@ -531,7 +531,7 @@ SwarmRpcServer::HttpResponse SwarmRpcServer::handle_http_request(
     return resp;
 }
 
-void SwarmRpcServer::handle_websocket(int client_fd, const HttpRequest& req) {
+void SwarmRendezvousServer::handle_websocket(int client_fd, const HttpRequest& req) {
     if (req.path != "/jsonrpc") {
         (void)send_all(client_fd, format_http_response([] {
             HttpResponse resp;
@@ -623,7 +623,7 @@ void SwarmRpcServer::handle_websocket(int client_fd, const HttpRequest& req) {
     }
 }
 
-bool SwarmRpcServer::ws_send_frame(int client_fd, std::uint8_t opcode,
+bool SwarmRendezvousServer::ws_send_frame(int client_fd, std::uint8_t opcode,
                                    const std::string& payload) {
     std::shared_ptr<WsClientState> state;
     {
@@ -638,7 +638,7 @@ bool SwarmRpcServer::ws_send_frame(int client_fd, std::uint8_t opcode,
     return send_all(client_fd, ws::ws_encode_frame(opcode, payload));
 }
 
-std::string SwarmRpcServer::handle_jsonrpc(const std::string& payload,
+std::string SwarmRendezvousServer::handle_jsonrpc(const std::string& payload,
                                            const std::string& peer,
                                            int* http_status) {
     *http_status = 200;
@@ -686,7 +686,7 @@ std::string SwarmRpcServer::handle_jsonrpc(const std::string& payload,
     SwarmReply reply;
     try {
         reply = dispatch_swarm_method(state_, method, params,
-                                      SwarmServerState::Clock::now());
+                                      SwarmRendezvousState::Clock::now());
     } catch (const std::exception& e) {
         return error_envelope(id, -32603,
                               std::string("Internal error: ") + e.what());
@@ -703,7 +703,7 @@ std::string SwarmRpcServer::handle_jsonrpc(const std::string& payload,
     return error_envelope(id, reply.error_code, reply.error_message);
 }
 
-void SwarmRpcServer::broadcast_notification(const std::string& method,
+void SwarmRendezvousServer::broadcast_notification(const std::string& method,
                                             const nlohmann::json& params) {
     // 通知帧无 id、params 为 object（与 daemon 数组式分叉，线协议钉死）
     const std::string body = nlohmann::json{
@@ -724,7 +724,7 @@ void SwarmRpcServer::broadcast_notification(const std::string& method,
     }
 }
 
-void SwarmRpcServer::sweep_loop() {
+void SwarmRendezvousServer::sweep_loop() {
     std::unique_lock<std::mutex> lock(sweep_mutex_);
     while (!stop_requested_.load()) {
         sweep_cv_.wait_for(lock, opts_.sweep_interval,
@@ -733,8 +733,8 @@ void SwarmRpcServer::sweep_loop() {
             break;
         }
         lock.unlock();
-        const std::vector<SwarmServerState::Notification> notes =
-            state_.sweep(SwarmServerState::Clock::now());
+        const std::vector<SwarmRendezvousState::Notification> notes =
+            state_.sweep(SwarmRendezvousState::Clock::now());
         for (const auto& note : notes) {
             broadcast_notification(note.method, note.params);
         }
@@ -742,7 +742,7 @@ void SwarmRpcServer::sweep_loop() {
     }
 }
 
-std::string SwarmRpcServer::peer_ip(int fd) const {
+std::string SwarmRendezvousServer::peer_ip(int fd) const {
     sockaddr_storage ss{};
     socket_len_t len = sizeof(ss);
     if (::getpeername(fd, reinterpret_cast<sockaddr*>(&ss), &len) != 0) {

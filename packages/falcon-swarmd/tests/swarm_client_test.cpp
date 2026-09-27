@@ -1,5 +1,5 @@
 // ============================================================================
-// SwarmClient × 回环 server（SwarmClientTest）
+// SwarmClient × 回环 Rendezvous（SwarmClientTest）
 //
 // 覆盖面（阶段 0 client 全生命周期）：
 //   - 两步注册往返拿 session + 心跳续期（wait_until 计数锚，零 sleep）
@@ -7,14 +7,14 @@
 //   - 会话过期自愈：测试直调 sweep(now+Δ) 确定性摘除 → client 心跳收
 //     -32003 → 自动重注册（虚拟时间支点，零竞速）
 //   - key store：PEM 落盘往返（同路径两次加载 node_id 一致）+ POSIX 0600
-//   - 注入面：死端口传输失败干净收口 / 错 server 令牌 -32001 /
+//   - 注入面：死端口传输失败干净收口 / 错 server_token -32001 /
 //     错群组令牌 -32004
 //   - 空表查询往返：合法 session → sha256 回显 + sources 空数组
 //     （用户裁决「空表往返」——阶段 0 无 announce，资源表恒空）
 // ============================================================================
 
 #include "client/swarm_client.hpp"
-#include "swarm_server_harness.hpp"
+#include "swarm_rdv_harness.hpp"
 
 #include <gtest/gtest.h>
 
@@ -41,7 +41,7 @@
 namespace fs = std::filesystem;
 using namespace falcon::swarm;
 using falcon::swarm::test::HarnessConfig;
-using falcon::swarm::test::SwarmServerHarness;
+using falcon::swarm::test::SwarmRendezvousHarness;
 using falcon::swarm::test::wait_until;
 
 namespace {
@@ -75,7 +75,7 @@ SwarmClientConfig make_client_config(std::uint16_t port,
 // ===========================================================================
 
 TEST(SwarmClientTest, RegisterRoundtripObtainsSession) {
-    SwarmServerHarness h;
+    SwarmRendezvousHarness h;
     ASSERT_TRUE(h.ok());
 
     auto key = load_or_create_swarm_key(make_temp_pem_path("reg"));
@@ -94,7 +94,7 @@ TEST(SwarmClientTest, RegisterRoundtripObtainsSession) {
 }
 
 TEST(SwarmClientTest, HeartbeatKeepsSessionAlive) {
-    SwarmServerHarness h;  // 心跳周期 1s（服务器下发），clamp 下界即 1s
+    SwarmRendezvousHarness h;  // 心跳周期 1s（服务器下发），clamp 下界即 1s
     ASSERT_TRUE(h.ok());
 
     auto key = load_or_create_swarm_key(make_temp_pem_path("hb"));
@@ -113,7 +113,7 @@ TEST(SwarmClientTest, HeartbeatKeepsSessionAlive) {
 }
 
 TEST(SwarmClientTest, UnsubscribeRemovesPeer) {
-    SwarmServerHarness h;
+    SwarmRendezvousHarness h;
     ASSERT_TRUE(h.ok());
 
     auto key = load_or_create_swarm_key(make_temp_pem_path("unsub"));
@@ -135,7 +135,7 @@ TEST(SwarmClientTest, UnsubscribeRemovesPeer) {
 // ===========================================================================
 
 TEST(SwarmClientTest, ReregisterSelfHealsAfterSessionExpiry) {
-    SwarmServerHarness h;  // 心跳周期 1s；timeout 2s（本用例用虚拟时间提前摘）
+    SwarmRendezvousHarness h;  // 心跳周期 1s；timeout 2s（本用例用虚拟时间提前摘）
     ASSERT_TRUE(h.ok());
 
     auto key = load_or_create_swarm_key(make_temp_pem_path("heal"));
@@ -171,7 +171,7 @@ TEST(SwarmClientTest, ReregisterSelfHealsAfterSessionExpiry) {
 // ===========================================================================
 
 TEST(SwarmClientTest, QueryEmptySourcesViaClient) {
-    SwarmServerHarness h;
+    SwarmRendezvousHarness h;
     ASSERT_TRUE(h.ok());
 
     auto key = load_or_create_swarm_key(make_temp_pem_path("query"));
@@ -240,7 +240,7 @@ TEST(SwarmClientTest, TransportFailureClean) {
 TEST(SwarmClientTest, WrongServerTokenRejected) {
     HarnessConfig cfg;
     cfg.server_token = "secret";
-    SwarmServerHarness h(cfg);
+    SwarmRendezvousHarness h(cfg);
     ASSERT_TRUE(h.ok());
 
     auto key = load_or_create_swarm_key(make_temp_pem_path("token"));
@@ -258,7 +258,7 @@ TEST(SwarmClientTest, WrongGroupTokenRejected) {
     HarnessConfig cfg;
     cfg.server_token = "secret";
     cfg.group_token = "group-secret";
-    SwarmServerHarness h(cfg);
+    SwarmRendezvousHarness h(cfg);
     ASSERT_TRUE(h.ok());
 
     auto key = load_or_create_swarm_key(make_temp_pem_path("group"));

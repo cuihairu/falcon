@@ -67,18 +67,18 @@ target_include_directories(falcon_swarm_common
 target_compile_features(falcon_swarm_common PRIVATE cxx_std_17)
 
 # ============================================================================
-# 服务端：状态/handlers/限频/传输层（阶段 0 server 全部面）
+# Rendezvous 服务端：状态/handlers/限频/传输层（阶段 0 全部面）
 # ============================================================================
-add_library(falcon_swarm_server STATIC
-    src/server/swarm_rate_limiter.cpp
-    src/server/swarm_rate_limiter.hpp
-    src/server/swarm_rpc_handlers.cpp
-    src/server/swarm_rpc_handlers.hpp
-    src/server/swarm_rpc_server.cpp
-    src/server/swarm_rpc_server.hpp
-    src/server/swarm_server_state.cpp
-    src/server/swarm_server_state.hpp
-    # 配置加载编进 server 库（可执行已链 server）——单测可链接直达
+add_library(falcon_swarm_rdv STATIC
+    src/rdv/swarm_rate_limiter.cpp
+    src/rdv/swarm_rate_limiter.hpp
+    src/rdv/swarm_rpc_handlers.cpp
+    src/rdv/swarm_rpc_handlers.hpp
+    src/rdv/swarm_rpc_server.cpp
+    src/rdv/swarm_rpc_server.hpp
+    src/rdv/swarm_rdv_state.cpp
+    src/rdv/swarm_rdv_state.hpp
+    # 配置加载编进 rendezvous 库（可执行已链该库）——单测可链接直达
     src/swarmd_config.cpp
     src/swarmd_config.hpp
 )
@@ -86,7 +86,7 @@ add_library(falcon_swarm_server STATIC
 # falcon_ws_protocol：RFC 6455 帧协议层（daemon 包拆出的共享库）
 # falcon_daemon_core：swarmd_config 的 get_default_config_dir（PRIVATE——
 # 仅实现符号依赖，不进公共头）
-target_link_libraries(falcon_swarm_server
+target_link_libraries(falcon_swarm_rdv
     PUBLIC
         falcon_swarm_common
         falcon_ws_protocol
@@ -94,16 +94,16 @@ target_link_libraries(falcon_swarm_server
         falcon_daemon_core
 )
 
-target_include_directories(falcon_swarm_server
+target_include_directories(falcon_swarm_rdv
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-target_compile_features(falcon_swarm_server PRIVATE cxx_std_17)
+target_compile_features(falcon_swarm_rdv PRIVATE cxx_std_17)
 
 # ============================================================================
 # 客户端：节点侧 SwarmClient（注册/心跳/查询/退订 + WS 收订）
-# HTTP 通道走 libcurl；CURL 缺席只跳过 client（server + 二进制照建）。
+# HTTP 通道走 libcurl；CURL 缺席只跳过 client（rendezvous + 二进制照建）。
 # ============================================================================
 find_package(CURL QUIET)
 if(TARGET CURL::libcurl)
@@ -129,11 +129,11 @@ if(TARGET CURL::libcurl)
     target_compile_features(falcon_swarm_client PRIVATE cxx_std_17)
 else()
     message(STATUS "CURL not found: falcon_swarm_client skipped "
-                   "(server + falcon-swarmd binary still built)")
+                   "(rendezvous + falcon-swarmd binary still built)")
 endif()
 
 # ============================================================================
-# 可执行：falcon-swarmd（配置 + main；链 server 与 daemon 包拆出的 core）
+# 可执行：falcon-swarmd（配置 + main；链 rendezvous 与 daemon 包拆出的 core）
 # ============================================================================
 add_executable(falcon-swarmd
     src/main.cpp
@@ -141,7 +141,7 @@ add_executable(falcon-swarmd
 
 target_link_libraries(falcon-swarmd
     PRIVATE
-        falcon_swarm_server
+        falcon_swarm_rdv
         falcon_daemon_core
 )
 

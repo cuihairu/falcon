@@ -230,7 +230,7 @@ void SwarmClient::heartbeat_loop() {
         heartbeat_count_.fetch_add(1);
 
         if (err.code == kErrUnknownSession) {
-            // 自愈：server sweep 已摘除本会话 → 重注册换新 session
+            // 自愈：Rendezvous sweep 已摘除本会话 → 重注册换新 session
             const SwarmError rerr = do_register();
             if (rerr.ok()) reregister_count_.fetch_add(1);
         }
@@ -266,7 +266,7 @@ void SwarmClient::detach() {
     }
     hb_cv_.notify_all();
     if (heartbeat_thread_.joinable()) heartbeat_thread_.join();
-    // 会话与 WS 收订保留（server 心跳超时后摘除并广播 onPeerLeft）
+    // 会话与 WS 收订保留（Rendezvous 心跳超时后摘除并广播 onPeerLeft）
 }
 
 void SwarmClient::stop() {

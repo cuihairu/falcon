@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// SwarmRpcServer：swarmd 传输层（docs/p2sp_network_design.md §7.2/§7.3）
+// SwarmRendezvousServer：swarmd 传输层（docs/p2sp_network_design.md §7.2/§7.3）
 //
 // 独立瘦传输层（与 daemon JsonRpcServer 形制同源、代码零共享）：TCP accept
 // 线程 + 每连接 worker + 同端口 WebSocket 升级（ws://host:port/jsonrpc）。
@@ -38,14 +38,14 @@
 #include <nlohmann/json.hpp>
 
 #include "swarm_rate_limiter.hpp"
-#include "swarm_server_state.hpp"
+#include "swarm_rdv_state.hpp"
 
 namespace falcon::swarm {
 
 struct WsClientState;
 
 // 传输层配置（swarm.json "swarm" 节 → main 装配；测试直接构造）。
-struct SwarmServerOptions {
+struct SwarmRendezvousOptions {
     std::string host = "127.0.0.1";
     std::uint16_t port = 0;            // 0 = 内核分配临时端口（测试/默认）
     std::string server_token;          // 空 = 不鉴权（测试/裸跑形态）
@@ -55,7 +55,7 @@ struct SwarmServerOptions {
     std::size_t rate_query_per_min = 120;    // 0 = 不限
 };
 
-class SwarmRpcServer {
+class SwarmRendezvousServer {
 public:
     // 请求/响应中间形态（.cpp 解析/组装；回环测试直接发裸 HTTP/WS 帧，
     // 不经这些结构）。headers 键已小写化、值已 trim。
@@ -72,11 +72,11 @@ public:
         std::string body;
     };
 
-    SwarmRpcServer(SwarmServerOptions options, SwarmServerState& state);
-    ~SwarmRpcServer();
+    SwarmRendezvousServer(SwarmRendezvousOptions options, SwarmRendezvousState& state);
+    ~SwarmRendezvousServer();
 
-    SwarmRpcServer(const SwarmRpcServer&) = delete;
-    SwarmRpcServer& operator=(const SwarmRpcServer&) = delete;
+    SwarmRendezvousServer(const SwarmRendezvousServer&) = delete;
+    SwarmRendezvousServer& operator=(const SwarmRendezvousServer&) = delete;
 
     // 起监听 + accept/sweep 线程。失败返回 false（last_error() 有因）。
     // 已在运行时幂等返回 true。
@@ -114,8 +114,8 @@ private:
     std::string peer_ip(int fd) const;
     void set_last_error(std::string message);
 
-    SwarmServerOptions opts_;
-    SwarmServerState& state_;
+    SwarmRendezvousOptions opts_;
+    SwarmRendezvousState& state_;
 
     int listen_fd_ = -1;
     std::atomic<std::uint16_t> port_{0};

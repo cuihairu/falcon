@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// SwarmServerState：swarmd 服务器内存状态（设计文档 §7.4 存储模型）
+// SwarmRendezvousState：Rendezvous 内存状态（设计文档 §7.4 存储模型）
 //
 // 节点表 + 会话表 + 挑战表 + 资源目录表，单把 mutex 保护（圈规模小，
 // 进程内 map 足够）。全部公开方法以 steady_clock::time_point 显式入参
@@ -74,7 +74,7 @@ struct SwarmChallenge {
     std::chrono::steady_clock::time_point expires_at{};
 };
 
-class SwarmServerState {
+class SwarmRendezvousState {
 public:
     using Clock = std::chrono::steady_clock;
 
@@ -104,10 +104,10 @@ public:
         bool ok() const { return error_code == 0; }
     };
 
-    explicit SwarmServerState(Config cfg);
+    explicit SwarmRendezvousState(Config cfg);
 
-    SwarmServerState(const SwarmServerState&) = delete;
-    SwarmServerState& operator=(const SwarmServerState&) = delete;
+    SwarmRendezvousState(const SwarmRendezvousState&) = delete;
+    SwarmRendezvousState& operator=(const SwarmRendezvousState&) = delete;
 
     // ---- 注册两步（§8.2）--------------------------------------------------
     // step1：黑名单/指纹自洽/group_token 三道门 → 记录挑战 → 挑战值。

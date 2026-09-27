@@ -1,4 +1,4 @@
-# Falcon 节点互发现与资源共享 Server 设计(P2SP 共享网络)
+# Falcon 节点互发现与资源共享 Rendezvous Service 设计(P2SP 共享网络)
 
 > [!NOTE]
 > 本文档为设计材料,全部内容尚未进入当前公开 API。本文承接 `todo.md` 中
@@ -11,7 +11,7 @@ Falcon 今天已有的能力(2026-09 现状):
 | 能力 | 现状 | 与本设计的关联 |
 |------|------|---------------|
 | V2 引擎多源分段(P2SP) | metalink 阶段 2 落地,同一文件多镜像段级换源 | **数据面已具备"从多个来源拉同一文件"的全部机制** |
-| daemon aria2 兼容 RPC | 28 方法,HTTP + WebSocket 同端口,自实现零新依赖 | server 与节点控制面的技术底座候选 |
+| daemon aria2 兼容 RPC | 28 方法,HTTP + WebSocket 同端口,自实现零新依赖 | Rendezvous 与节点控制面的技术底座候选 |
 | metalink | RFC 5854/Metalink3 双兼容,整文件哈希校验后才发布成品 | "哈希带外已知"的下载形态,天然支持下载中共享 |
 | BT/DHT | libtorrent 数据面 + 自研 DhtClient(Kademlia 迭代查找) | 检验过"对等网络"的全部工程约束(见 §4 选型) |
 | 任务持久化 | SQLite,停机恢复 | 节点侧公告状态机的持久化惯例参考 |
@@ -22,7 +22,7 @@ Falcon 今天已有的能力(2026-09 现状):
 - 多台机器各自维护自己的"这个 URL 哪里能下"的知识,无法互通;
 - 云机有公网带宽,NAS 在局域网,二者不能互为镜像源加速。
 
-**目标**:设计一个自托管的 rendezvous server(索引协调面),让用户自己的 falcon 节点互相发现、互为下载来源,并把"已完成文件 / 可用镜像 / 任务元数据"三类资源共享给圈内节点。数据面(文件字节)始终节点直连,**server 永不中继内容**。
+**目标**:设计一个自托管的 Rendezvous Service(俗称 tracker,索引协调面),让用户自己的 falcon 节点互相发现、互为下载来源,并把"已完成文件 / 可用镜像 / 任务元数据"三类资源共享给圈内节点。数据面(文件字节)始终节点直连,**Rendezvous 永不中继内容**。
 
 **非目标**(论证见 §3、§13):公共基础设施、全局内容搜索、匿名参与、任何形式的积分激励。
 
@@ -34,13 +34,13 @@ Falcon 今天已有的能力(2026-09 现状):
 
 | 编号 | 决策 |
 |------|------|
-| D1 | 网络形态 = 自托管私有 swarm:自架 server(索引面)+ 节点直连(数据面) |
+| D1 | 网络形态 = 自托管私有 swarm:自架 Rendezvous(索引面)+ 节点直连(数据面) |
 | D2 | 节点身份 = 持久化 Ed25519 密钥对,节点 ID = 公钥指纹 |
-| D3 | 发现机制 = 中心 rendezvous server 为权威面;mDNS 局域网发现延后;否决 DHT 路线 |
+| D3 | 发现机制 = 中心 Rendezvous Service 为权威面;mDNS 局域网发现延后;否决 DHT 路线 |
 | D4 | NAT 穿透 = 阶段一不做,以部署形态约束 + "拉取方主动连接"模型覆盖 |
 | D5 | 共享面 = 已完成文件 / 镜像 URL 列表 / 任务元数据 三类;分片级共享延后 |
 | D6 | 内容寻址与完整性 = SHA-256 全文件哈希,下载后 `verify_streaming` 校验 |
-| D7 | server 形态 = 独立单二进制,JSON-RPC over HTTP+WS,索引即离场 |
+| D7 | Rendezvous 形态 = 独立单二进制,JSON-RPC over HTTP+WS,索引即离场 |
 | D8 | 线协议 = JSON-RPC 2.0,`falcon.swarm.*` 方法族 + WS 事件通知 |
 | D9 | 安全 = TLS + 指纹 pinning、挑战-签名认证、限频/配额/吊销、共享默认关 |
 | D10 | 节点集成挂点 = TaskManager 层完成事件(非引擎层),CLI/config/daemon/RPC 四面配置 |
@@ -54,7 +54,7 @@ Falcon 今天已有的能力(2026-09 现状):
 ```
                     ┌─────────────────────┐
                     │  falcon-swarmd      │  用户自架(云机/NAS 任一)
-                    │  rendezvous server  │  索引面:注册/目录/公告/通知
+                    │ Rendezvous Service  │  索引面:注册/目录/公告/通知
                     └───────┬─────────────┘
               注册/心跳/公告/查询(TLS)
            ┌────────────┼────────────────┐
@@ -65,25 +65,25 @@ Falcon 今天已有的能力(2026-09 现状):
       └────┬────┘  └────┬────┘      └────┬────┘
            │            │                │
            └───── 数据面:HTTP 直连拉取 ────┘
-                 (V2 P2SP 分段语义,server 不经手)
+                 (V2 P2SP 分段语义,Rendezvous 不经手)
 ```
 
-- **索引面**:节点向 server 注册身份、公告资源、查询资源、订阅变更通知。
-- **数据面**:节点 A 需要文件 X(sha256 已知)→ 从 server 查得"节点 B、C 持有 X"→ A 直接向 B、C 的内嵌数据服务发起 HTTP Range 拉取,V2 引擎按既有 P2SP 语义分段、换源、校验。
+- **索引面**:节点向 Rendezvous 注册身份、公告资源、查询资源、订阅变更通知。
+- **数据面**:节点 A 需要文件 X(sha256 已知)→ 从 Rendezvous 查得"节点 B、C 持有 X"→ A 直接向 B、C 的内嵌数据服务发起 HTTP Range 拉取,V2 引擎按既有 P2SP 语义分段、换源、校验。
 
 ### 3.2 为什么是"自托管私有",而不是公共网络
 
 todo.md 立项备忘已对路线 C(中央索引)定性:需要服务器基建 + 运营 + 内容责任法务,"超出写代码范畴"。这个定性针对的是**公共**中央索引——面向不特定公众的内容分发索引,迅雷与电驴的被诉史说明这是产品生死级风险。自托管把三个问题同时消解:
 
-1. **运营主体**:server 是用户自己的一台机器(一次性二进制,类似 `aria2c` 的使用门槛),没有平台运营方。
-2. **内容责任**:共享圈是自己的机器群(家人 NAS + 自己的云机),节点间直接分享自有文件;server 只存"谁的哪个 sha256 在哪个地址"的索引元数据,不存内容,不提供搜索。
+1. **运营主体**:Rendezvous 是用户自己的一台机器(一次性二进制,类似 `aria2c` 的使用门槛),没有平台运营方。
+2. **内容责任**:共享圈是自己的机器群(家人 NAS + 自己的云机),节点间直接分享自有文件;Rendezvous 只存"谁的哪个 sha256 在哪个地址"的索引元数据,不存内容,不提供搜索。
 3. **冷启动**:公共网络的冷启动是产品问题(没人就没速度,备忘原文);私有网络**天然没有冷启动**——节点就是自己的机器,第一天就有完整拓扑。
 
-同时,"默认关"原则(§9.5)保证:不开共享的 falcon 用户,行为与今天逐字节一致;共享面即使开启,也只在用户明确配置的 server 与群组内可见。
+同时,"默认关"原则(§9.5)保证:不开共享的 falcon 用户,行为与今天逐字节一致;共享面即使开启,也只在用户明确配置的 Rendezvous 与群组内可见。
 
-### 3.3 为什么数据面不走 server 中继
+### 3.3 为什么数据面不走 Rendezvous 中继
 
-server 中继内容(TURN 式)会把自托管 server 的带宽变成全网瓶颈,并把 server 从"索引服务"升级成"内容分发服务"——恰好退回 3.2 要避开的法务形态。索引即离场:server 的响应里只有地址,字节只在节点之间流动。中继的例外出口见 §13(延后项)。
+Rendezvous 中继内容(TURN 式)会把自托管 Rendezvous 的带宽变成全网瓶颈,并把 Rendezvous 从"索引服务"升级成"内容分发服务"——恰好退回 3.2 要避开的法务形态。索引即离场:Rendezvous 的响应里只有地址,字节只在节点之间流动。中继的例外出口见 §13(延后项)。
 
 ---
 
@@ -93,16 +93,16 @@ server 中继内容(TURN 式)会把自托管 server 的带宽变成全网瓶颈,
 
 ### 4.1 方案对比
 
-#### 方案一:中心 rendezvous server(选定)
+#### 方案一:中心 Rendezvous Service(选定)
 
 **优点**:
 - 确定性:查询即应答,无迭代收敛延迟;节点数 <20 的私有圈子里,DHT 的 O(log N) 扩展性优势不存在,一个 HTTPS 请求直达优于多跳 UDP。
-- 可管理性:认证、限频、配额、吊销都在 server 一处落地(§9);DHT 里做不到"踢掉一个节点"。
+- 可管理性:认证、限频、配额、吊销都在 Rendezvous 一处落地(§9);DHT 里做不到"踢掉一个节点"。
 - 离线语义自然:节点下线后公告可带 TTL 存活;上线通知经 WS 推送即时到达。
-- 与 daemon 技术栈同源:daemon 已有自实现 HTTP+WS JSON-RPC 服务器(`packages/falcon-daemon/src/rpc/json_rpc_server.*`,含 WS 帧协议、token 认证、getsockname 端口回读先例),server 直接复用同一族栈,**零新依赖**。
+- 与 daemon 技术栈同源:daemon 已有自实现 HTTP+WS JSON-RPC 服务器(`packages/falcon-daemon/src/rpc/json_rpc_server.*`,含 WS 帧协议、token 认证、getsockname 端口回读先例),Rendezvous 直接复用同一族栈,**零新依赖**。
 
 **缺点**:
-- 单点:server 挂了共享面失效(§12 降级语义:下载不受任何影响)。
+- 单点:Rendezvous 挂了共享面失效(§12 降级语义:下载不受任何影响)。
 - 需要用户架一个服务(门槛与自建 aria2 RPC 相当)。
 
 #### 方案二:公共 BT DHT 桥接(备忘路线 A)——否决
@@ -128,11 +128,11 @@ server 中继内容(TURN 式)会把自托管 server 的带宽变成全网瓶颈,
 
 - 仅局域网内有效,跨网段/跨网(NAS 在家、云机在公网)失效,不能作为权威面。
 - 跨平台实现差异大(Avahi/Bonjour/自实现组播),与"三平台自包含测试基建"的仓库惯例冲突(同类教训:SFTP 因无法回环 mock 被阻塞)。
-- **延后触发条件**(§13):用户实测局域网场景下"server 不可达但同网段"的发现需求真实存在,再以自实现组播(mDNS 文本协议,无 Avahi 依赖)评估。
+- **延后触发条件**(§13):用户实测局域网场景下"Rendezvous 不可达但同网段"的发现需求真实存在,再以自实现组播(mDNS 文本协议,无 Avahi 依赖)评估。
 
 ### 4.2 选型结论
 
-**中心 rendezvous server 为唯一权威发现面**;mDNS 作为局域网加速层延后;DHT 路线(公共/私有)双双否决。发现的产出是"资源 → 持有节点集合(含可达地址与 NAT 标记)",供 §6 的共享模型与 §10 的引擎集成消费。
+**中心 Rendezvous Service 为唯一权威发现面**;mDNS 作为局域网加速层延后;DHT 路线(公共/私有)双双否决。发现的产出是"资源 → 持有节点集合(含可达地址与 NAT 标记)",供 §6 的共享模型与 §10 的引擎集成消费。
 
 ---
 
@@ -155,10 +155,10 @@ server 中继内容(TURN 式)会把自托管 server 的带宽变成全网瓶颈,
 
 落地规则:
 
-1. 节点注册/心跳经出站 TLS 到 server,**server 从连接源地址观察到节点出口 IP**,但源地址对数据面**默认不可信**(NAT 共享出口)。
+1. 节点注册/心跳经出站 TLS 到 Rendezvous,**Rendezvous 从连接源地址观察到节点出口 IP**,但源地址对数据面**默认不可信**(NAT 共享出口)。
 2. 节点公告的数据服务地址 = 显式配置的 `advertise_address`(ip:port),未配置则公告 `direct=false`(仅可发起、不可被拉取)。
 3. 查询方对 `direct=false` 的节点**不作为 P2SP 数据源**,仍可作为"镜像 URL 池"的成员(镜像拉取方向由节点自己发起,天然可穿 NAT)。
-4. server 对 `direct=false` 节点打 NAT 标记,供查询方过滤(§8 消息字段)。
+4. Rendezvous 对 `direct=false` 节点打 NAT 标记,供查询方过滤(§8 消息字段)。
 
 这个模型覆盖家庭场景的两个主要角色:NAS(通常端口映射或同网段访问)与桌面机(拉取方)。**覆盖不了的**:两个都在对称 NAT 后且都不愿做映射——它们互相不作为数据源,仍共享镜像 URL 与元数据(价值保留大半)。
 
@@ -167,8 +167,8 @@ server 中继内容(TURN 式)会把自托管 server 的带宽变成全网瓶颈,
 | 技术 | 解决什么 | 不现在做的理由 | 触发条件 |
 |------|---------|---------------|---------|
 | UPnP-PCP / NAT-PMP | NAT 后节点自动获得公网端口 | 路由器兼容性长尾;需本机地址枚举设施先行 | 用户实测端口映射摩擦显著 |
-| STUN + UDP/TCP 打洞 | 对称 NAT 之外的穿透 | server 协调打洞是新协议面;成功率取决于 NAT 类型,无法承诺 | UPnP 落地后仍有强需求 |
-| TURN 中继 | 兜底一切不可达 | 违背"索引即离场"(§3.3),server 带宽成本回到平台形态 | 仅评估,不承诺 |
+| STUN + UDP/TCP 打洞 | 对称 NAT 之外的穿透 | Rendezvous 协调打洞是新协议面;成功率取决于 NAT 类型,无法承诺 | UPnP 落地后仍有强需求 |
+| TURN 中继 | 兜底一切不可达 | 违背"索引即离场"(§3.3),Rendezvous 带宽成本回到平台形态 | 仅评估,不承诺 |
 
 ---
 
@@ -224,18 +224,18 @@ R1 资源以 **SHA-256 hex** 为主键。选 SHA-256 而非 SHA-1:
 |---------|---------------|-----------|
 | metalink | ✅(哈希带外已知) | ✅(校验已有哈希,无需重算) |
 | 普通 + 旁车存在 | ✅ | ✅ |
-| 普通,无旁车 | ⛔(只能从 server 之外的传统源下载) | ✅(完成后派生并公告) |
+| 普通,无旁车 | ⛔(只能从 Rendezvous 之外的传统源下载) | ✅(完成后派生并公告) |
 
 ### 6.5 权限与隐私边界
 
-- **群组制**:server 上按群组(至少一个,如 `family`)组织节点;公告/查询都携带群组令牌(§9.3),跨群组不可见。多群组支持(一个节点入多个圈子)延后。
+- **群组制**:Rendezvous 上按群组(至少一个,如 `family`)组织节点;公告/查询都携带群组令牌(§9.3),跨群组不可见。多群组支持(一个节点入多个圈子)延后。
 - **文件名可见性**:默认共享文件名;提供 `share.hash_only` 配置,R1 公告隐去文件名(消费方以 sha256 落盘,文件名自定)。
-- **共享开关层级**:全局 `--p2sp-share`(默认 **off**)→ 群组级(server 侧吊销节点即退出)→ 无单文件开关(阶段一;单文件粒度留待真实需求)。
+- **共享开关层级**:全局 `--p2sp-share`(默认 **off**)→ 群组级(Rendezvous 侧吊销节点即退出)→ 无单文件开关(阶段一;单文件粒度留待真实需求)。
 - **默认关**:与 todo.md 备忘"上传策略默认关闭(吸取迅雷舆论教训)"同一决策。共享开启 = 用户显式动作,且开关同时控制"公告"与"被拉取"两侧(不存在"只上传不下公告"的中间态,语义简单可审计)。
 
 ---
 
-## 7. Server 职责与 API(D7)
+## 7. Rendezvous Service 职责与 API(D7)
 
 ### 7.1 形态:独立单二进制 `falcon-swarmd`(暂名)
 
@@ -255,7 +255,7 @@ R1 资源以 **SHA-256 hex** 为主键。选 SHA-256 而非 SHA-1:
 
 ### 7.3 API 面(JSON-RPC 2.0,HTTP 与 WS 双承载)
 
-与 daemon 的 aria2.* 方法族并列同族,server 侧方法前缀 `falcon.swarm.`:
+与 daemon 的 aria2.* 方法族并列同族,Rendezvous 侧方法前缀 `falcon.swarm.`:
 
 ```
 POST /jsonrpc            # 与 daemon 同路径惯例;WS 升级亦在 /jsonrpc
@@ -264,15 +264,15 @@ Authorization: Bearer <server_token>     # 传输层准入(区别于节点身份
 
 | 方法 | 方向 | 作用 |
 |------|------|------|
-| `falcon.swarm.register` | 节点→server | 注册/重注册(密钥身份 + 群组令牌 + 可达性) |
-| `falcon.swarm.challenge` | server→节点 | 注册时的签名挑战(§9.2) |
-| `falcon.swarm.heartbeat` | 节点→server | 活性续租(60s 间隔,180s 超时) |
-| `falcon.swarm.announce` | 节点→server | 批量公告 R1/R2 资源(带 TTL) |
-| `falcon.swarm.retract` | 节点→server | 显式撤回资源(文件删除时) |
-| `falcon.swarm.query` | 节点→server | 按 sha256 / 文件名查询持有节点 |
-| `falcon.swarm.unsubscribe` | 节点→server | 优雅注销(清目录,通知在线节点) |
+| `falcon.swarm.register` | 节点→Rendezvous | 注册/重注册(密钥身份 + 群组令牌 + 可达性) |
+| `falcon.swarm.challenge` | Rendezvous→节点 | 注册时的签名挑战(§9.2) |
+| `falcon.swarm.heartbeat` | 节点→Rendezvous | 活性续租(60s 间隔,180s 超时) |
+| `falcon.swarm.announce` | 节点→Rendezvous | 批量公告 R1/R2 资源(带 TTL) |
+| `falcon.swarm.retract` | 节点→Rendezvous | 显式撤回资源(文件删除时) |
+| `falcon.swarm.query` | 节点→Rendezvous | 按 sha256 / 文件名查询持有节点 |
+| `falcon.swarm.unsubscribe` | 节点→Rendezvous | 优雅注销(清目录,通知在线节点) |
 
-WS 通知(server→节点,JSON-RPC notification 形态):
+WS 通知(Rendezvous→节点,JSON-RPC notification 形态):
 
 | 通知 | 触发 |
 |------|------|
@@ -282,10 +282,10 @@ WS 通知(server→节点,JSON-RPC notification 形态):
 
 HTTP GET 健康面:`GET /v1/health`(与桌面 IPC 的 `/v1/health` 惯例一致,无副作用探测)。
 
-### 7.4 server 存储模型
+### 7.4 Rendezvous 存储模型
 
 - 内存为主:节点表 + 资源表都是小圈规模(百级节点 × 千级资源),进程内 map 足够;
-- 可选 SQLite 落库(对齐 daemon TaskStorage 惦例):server 重启后目录保留,省去全群重公告风暴;资源表带 TTL 字段,加载时过期清扫;
+- 可选 SQLite 落库(对齐 daemon TaskStorage 惦例):Rendezvous 重启后目录保留,省去全群重公告风暴;资源表带 TTL 字段,加载时过期清扫;
 - 无持久化配置时纯内存运行(重启后节点凭重注册机制自愈,§12)。
 
 ---
@@ -294,21 +294,21 @@ HTTP GET 健康面:`GET /v1/health`(与桌面 IPC 的 `/v1/health` 惯例一致,
 
 ### 8.1 设计原则
 
-- **JSON-RPC 2.0 全家桶**:请求/响应/notification 三形态与 daemon 完全同构,客户端(`WebSocketRpcClient` / JSON-RPC HTTP 客户端)与 server 的分发层双侧都有现成代码;
+- **JSON-RPC 2.0 全家桶**:请求/响应/notification 三形态与 daemon 完全同构,客户端(`WebSocketRpcClient` / JSON-RPC HTTP 客户端)与 Rendezvous 的分发层双侧都有现成代码;
 - **签名覆盖规则**:对 `payload = method + "\n" + nonce + "\n" + sha256_hex(params_json)` 计算 Ed25519 签名,`params_json` 为紧凑 JSON(键序 = 本文档各示例的字段序,实现以 canonical 序列化函数固化)——简单、无歧义、易于两端对拍;
 - 时间戳全部 UTC RFC 3339;哈希全部小写 hex;节点指纹 = SHA-256(公钥 DER) 前十六字节 hex。
 
 ### 8.2 注册与挑战(证明身份)
 
 ```jsonc
-// ① 节点 → server:falcon.swarm.register(请求)
+// ① 节点 → Rendezvous:falcon.swarm.register(请求)
 {
   "jsonrpc": "2.0", "id": 1,
   "method": "falcon.swarm.register",
   "params": {
     "node_id": "9f86d081884c7d65",          // 节点指纹(16 字节 hex,32 字符)
     "pubkey": "MIIBIjANBg...",              // Ed25519 公钥(SPF base64 或 hex,实现定其一)
-    "group_token": "fam-7f3a...",           // 群组准入令牌(server 配置侧发放)
+    "group_token": "fam-7f3a...",           // 群组准入令牌(Rendezvous 配置侧发放)
     "advertise": {                          // 数据服务可达性;不可达则整个字段缺省
       "addr": "192.168.1.10:7800",
       "direct": true
@@ -318,31 +318,31 @@ HTTP GET 健康面:`GET /v1/health`(与桌面 IPC 的 `/v1/health` 惯例一致,
   }
 }
 
-// ② server → 节点:挑战(要求证明持有私钥)
+// ② Rendezvous → 节点:挑战(要求证明持有私钥)
 { "jsonrpc": "2.0", "id": 1,
   "result": { "status": "challenge", "challenge": "5f2c9e..." } }
 
-// ③ 节点 → server:签名回执(重发 register,附 challenge 签名;params 同①)
+// ③ 节点 → Rendezvous:签名回执(重发 register,附 challenge 签名;params 同①)
 { "jsonrpc": "2.0", "id": 2,
   "method": "falcon.swarm.register",
   "params": { "challenge_sig": "3041bd..." } }
 
-// ④ server → 节点:注册结果
+// ④ Rendezvous → 节点:注册结果
 { "jsonrpc": "2.0", "id": 2,
   "result": {
     "status": "ok",
-    "session": "s-71cc...",                 // 后续心跳/公告凭此(server 签发的会话凭据)
+    "session": "s-71cc...",                 // 后续心跳/公告凭此(Rendezvous 签发的会话凭据)
     "heartbeat_interval_s": 60,
     "server_time": "2026-09-22T12:00:00Z"
   } }
 ```
 
-挑战-签名的意义(为什么不是"注册即信任"):注册报文里的 `node_id` 是自报的,挑战回执把"持有该指纹对应私钥"变成 server 侧验证事实,杜绝 ID 抢注(§9.2)。
+挑战-签名的意义(为什么不是"注册即信任"):注册报文里的 `node_id` 是自报的,挑战回执把"持有该指纹对应私钥"变成 Rendezvous 侧验证事实,杜绝 ID 抢注(§9.2)。
 
 ### 8.3 公告(批量,带 TTL)
 
 ```jsonc
-// 节点 → server:falcon.swarm.announce
+// 节点 → Rendezvous:falcon.swarm.announce
 { "jsonrpc": "2.0", "id": 3,
   "method": "falcon.swarm.announce",
   "params": {
@@ -364,22 +364,22 @@ HTTP GET 健康面:`GET /v1/health`(与桌面 IPC 的 `/v1/health` 惯例一致,
   }
 }
 
-// server → 节点
+// Rendezvous → 节点
 { "jsonrpc": "2.0", "id": 3,
   "result": { "accepted": 2, "rejected": 0, "expires_at": "2026-09-23T12:00:00Z" } }
 ```
 
-`kind: "mirror"` 携带同一 sha256 时,server 端归并:资源 `e3b0c442...` = {持有节点 NAS(direct), 镜像 URL(...)}——查询方一次拿到 R1+R2 全部来源,正是 P2SP"多源"的语义。
+`kind: "mirror"` 携带同一 sha256 时,Rendezvous 端归并:资源 `e3b0c442...` = {持有节点 NAS(direct), 镜像 URL(...)}——查询方一次拿到 R1+R2 全部来源,正是 P2SP"多源"的语义。
 
 ### 8.4 查询(返回来源集合)
 
 ```jsonc
-// 节点 → server:falcon.swarm.query(按 sha256;文件名查询同理,fuzzy=false)
+// 节点 → Rendezvous:falcon.swarm.query(按 sha256;文件名查询同理,fuzzy=false)
 { "jsonrpc": "2.0", "id": 4,
   "method": "falcon.swarm.query",
   "params": { "session": "s-71cc...", "sha256": "e3b0c442..." } }
 
-// server → 节点
+// Rendezvous → 节点
 { "jsonrpc": "2.0", "id": 4,
   "result": {
     "sha256": "e3b0c442...", "name": "ubuntu-24.04.iso", "size": 5360366592,
@@ -401,7 +401,7 @@ HTTP GET 健康面:`GET /v1/health`(与桌面 IPC 的 `/v1/health` 惯例一致,
 ### 8.5 WS 通知(增量)
 
 ```jsonc
-// server → 节点(notification,无 id)
+// Rendezvous → 节点(notification,无 id)
 { "jsonrpc": "2.0",
   "method": "falcon.swarm.onResourceAdded",
   "params": {
@@ -422,30 +422,30 @@ HTTP GET 健康面:`GET /v1/health`(与桌面 IPC 的 `/v1/health` 惯例一致,
 1. **圈外窃听/篡改**(网络路径上的第三方)——传输加密解决;
 2. **身份冒充**(圈外节点伪装成圈内节点入库)——挑战-签名 + 群组令牌解决;
 3. **圈内恶意/失陷节点**(假数据、资源耗尽)——完整性校验(§6.3)+ 限频配额 + 人工吊销解决;
-4. **server 失陷**(最坏面:目录全泄漏)——缓解:目录里只有 sha256/文件名/地址,无内容无路径;TLS pinning 防中间人替身 server;
+4. **Rendezvous 失陷**(最坏面:目录全泄漏)——缓解:目录里只有 sha256/文件名/地址,无内容无路径;TLS pinning 防中间人替身 Rendezvous;
 5. **明确不防**:圈内向信节点故意扩散自己拿到的资源(技术无解,信任模型边界)。
 
 ### 9.2 认证:挑战-签名(Ed25519)
 
-- **为什么非对称**:pre-shared 对称令牌只能证明"是圈内成员",无法区分节点——不能按节点审计、限频、吊销,一个节点失陷 = 全群凭据失陷。Ed25519 私钥永不离机,server 只存公钥;
+- **为什么非对称**:pre-shared 对称令牌只能证明"是圈内成员",无法区分节点——不能按节点审计、限频、吊销,一个节点失陷 = 全群凭据失陷。Ed25519 私钥永不离机,Rendezvous 只存公钥;
 - **为什么 Ed25519**:OpenSSL 1.1.0+ 的 EVP API 原生支持(`EVP_PKEY_ED25519`,项目依赖表 OpenSSL 1.1+ 成立);签名短(64B)验签快,适合心跳/公告的高频签;
-- **挑战流程**:§8.2 的四步。nonce 由节点生成(防重放),challenge 由 server 生成(防预计算),签名对象绑定 node_id 与 nonce;
+- **挑战流程**:§8.2 的四步。nonce 由节点生成(防重放),challenge 由 Rendezvous 生成(防预计算),签名对象绑定 node_id 与 nonce;
 - **ID 抢注防护**:指纹 = 公钥哈希,同一指纹必然同一密钥对;抢占已有 node_id 的注册因挑战签不出来而失败。
 
 ### 9.3 传输与会话
 
-- **TLS 强制**:自托管场景无 CA,采用**自签证书 + 指纹 pinning**——节点配置 `server_fingerprint`(首次连接时人工确认录入,SSH known_hosts 同款信任模型);拒绝无 TLS 或指纹不符的 server;
+- **TLS 强制**:自托管场景无 CA,采用**自签证书 + 指纹 pinning**——节点配置 `server_fingerprint`(首次连接时人工确认录入,SSH known_hosts 同款信任模型);拒绝无 TLS 或指纹不符的 Rendezvous;
 - **会话凭据**:注册成功签发 `session`(随机 128b+),心跳/公告/查询凭 session 免重复签名;session 与节点指纹绑定、TTL 180s 随心跳续;
-- **群组令牌**:注册时验 `group_token`(server 配置发放,静态串即可——圈子准入是一次性人工动作,不需要轮换协议)。
+- **群组令牌**:注册时验 `group_token`(Rendezvous 配置发放,静态串即可——圈子准入是一次性人工动作,不需要轮换协议)。
 
 ### 9.4 内容责任防线(产品设计级,重于一切密码学)
 
 - 共享默认关(§6.5);开启是显式配置动作;
-- **无搜索**:server 只提供"按 sha256/精确文件名"查询,不做全文检索、不做浏览列表、不做热门推荐——目录天然不可被当作内容分发入口;
-- 圈子隔离:群组间资源互不可见;server 无"公共区"概念;
-- server 侧审计日志(谁在何时公告/查询了什么)默认开,自托管者可查。
+- **无搜索**:Rendezvous 只提供"按 sha256/精确文件名"查询,不做全文检索、不做浏览列表、不做热门推荐——目录天然不可被当作内容分发入口;
+- 圈子隔离:群组间资源互不可见;Rendezvous 无"公共区"概念;
+- Rendezvous 侧审计日志(谁在何时公告/查询了什么)默认开,自托管者可查。
 
-### 9.5 防滥用(server 侧行为约束)
+### 9.5 防滥用(Rendezvous 侧行为约束)
 
 | 手段 | 参数(默认) | 说明 |
 |------|-------------|------|
@@ -453,13 +453,13 @@ HTTP GET 健康面:`GET /v1/health`(与桌面 IPC 的 `/v1/health` 惯例一致,
 | 公告限频 | 每节点 60 请求/分钟、单次 ≤256 条 | 心跳期公告批量走 |
 | 查询限频 | 每节点 120 请求/分钟 | 消费方缓存 + WS 增量后查询频次低 |
 | 资源配额 | 每节点公告 ≤10k 条 | 防目录灌爆 |
-| 吊销 | server 配置 blacklist(node_id) | 立即摘节点与其全部公告,通知在线节点 `onPeerLeft` |
+| 吊销 | Rendezvous 配置 blacklist(node_id) | 立即摘节点与其全部公告,通知在线节点 `onPeerLeft` |
 
 超限行为:HTTP 429 + JSON-RPC error(code -32002),节点侧指数退避(§12)。
 
 ### 9.6 节点侧数据服务加固(阶段二,预置约束)
 
-内嵌 HTTP 数据服务(§10.3)只读、只认 sha256 路径(`GET /by-sha256/<hex>`),不暴露文件系统路径;请求校验群组成员性时以 server 会话外带(简化:首阶段同网段/私网信任,资源路径不可枚举——sha256 路径本身就是 256b 能量;加固阶段支持 per-request token)。
+内嵌 HTTP 数据服务(§10.3)只读、只认 sha256 路径(`GET /by-sha256/<hex>`),不暴露文件系统路径;请求校验群组成员性时以 Rendezvous 会话外带(简化:首阶段同网段/私网信任,资源路径不可枚举——sha256 路径本身就是 256b 能量;加固阶段支持 per-request token)。
 
 ---
 
@@ -472,7 +472,7 @@ HTTP GET 健康面:`GET /v1/health`(与桌面 IPC 的 `/v1/health` 惯例一致,
 | 面 | 挂点 | 字段 |
 |----|------|------|
 | CLI | `arg_parser` + `main.cpp` help + `config_loader` 三件套(JSON 读/写/合并) | `--p2sp-share`、`--swarm-server`、`--swarm-fingerprint`、`--p2sp-advertise` |
-| daemon | `daemon/config.hpp` `DownloadConfig` 节 + `config.cpp` 解析 + `main.cpp` apply + SIGHUP 对比重放 | `p2sp.share` / `p2sp.server` 等;SIGHUP 可热更公告开关,不可热更监听端口(restart required,对齐既有语义) |
+| daemon | `daemon/config.hpp` `DownloadConfig` 节 + `config.cpp` 解析 + `main.cpp` apply + SIGHUP 对比重放 | `p2sp.share` / `p2sp.Rendezvous` 等;SIGHUP 可热更公告开关,不可热更监听端口(restart required,对齐既有语义) |
 | RPC | `json_rpc_server.cpp` addUri 键映射(aria2 兼容键位惯例) | per-download `p2sp-share` 覆盖;`falcon.swarm.status`/`falcon.swarm.setShare` 扩展方法(桌面/浏览器扩展经既有 RPC 面控制共享,**UI 零新增协议**) |
 | 密钥 | `~/.config/falcon/swarm_key.pem`(权限 0600) | 首次开启共享时生成,持久化保身份稳定 |
 
@@ -511,11 +511,11 @@ R3 元数据用于:同名任务去重提示("圈内已有此文件,是否直接�
 
 | 故障 | 行为 | 恢复 |
 |------|------|------|
-| server 不可达 | 节点下载照常;公告/查询静默失败,指数退避(1s 起,×2,上限 5min,加抖动);WS 断线按既有 `WebSocketRpcClient` 重连节奏 | server 回来后 re-register(身份密钥稳定,session 重建)+ 全量重公告(本地公告状态在,增量补差) |
-| server 重启(无落库) | 同上;节点重注册风暴由注册限频(§9.5) + 客户端退避抖动吸收 | 全群在退避窗口内自愈 |
+| Rendezvous 不可达 | 节点下载照常;公告/查询静默失败,指数退避(1s 起,×2,上限 5min,加抖动);WS 断线按既有 `WebSocketRpcClient` 重连节奏 | Rendezvous 回来后 re-register(身份密钥稳定,session 重建)+ 全量重公告(本地公告状态在,增量补差) |
+| Rendezvous 重启(无落库) | 同上;节点重注册风暴由注册限频(§9.5) + 客户端退避抖动吸收 | 全群在退避窗口内自愈 |
 | 查询无结果 | 正常路径:走传统源(metalink 文档/URL 本身),无 swarm 参与 | 后台 WS `onResourceAdded` 到达时**不**自动重试已启动任务(阶段一语义简单;用户手动 refresh 触发重新查询) |
 | swarm 源拉取失败/超时/校验失败 | 段级换源到下一来源(既有 P2SP 语义);多次失败的节点地址进本地黑名单(会话级) | 会话结束即忘(公告 TTL 会自然刷新持有状态) |
-| 心跳超时被摘 | server 摘节点连带摘其公告;WS `onPeerLeft` 通知圈内 | 节点侧退避重注册 |
+| 心跳超时被摘 | Rendezvous 摘节点连带摘其公告;WS `onPeerLeft` 通知圈内 | 节点侧退避重注册 |
 | 公告 TTL 过期未续(节点退出) | 目录自然收敛 | — |
 | 本机共享开关关闭 | 停止公告与数据服务;**已公告资源走 `retract` 优雅撤回**;下载/查询行为保留(可配置 `share.one_way`:只消费不提供) | — |
 
@@ -527,12 +527,12 @@ R3 元数据用于:同名任务去重提示("圈内已有此文件,是否直接�
 
 > 每阶段独立可验收、可独立合入;验收形态对齐仓库测试惯例(回环集成测试,三平台自包含,无外部网络依赖)。
 
-### 阶段 0:server 原型 + 身份面
+### 阶段 0:Rendezvous 原型 + 身份面
 
 **范围**:`falcon-swarmd` 单二进制(register/challenge/heartbeat/query/WS 通知 + 限频);节点侧密钥生成与 `SwarmClient`(注册/心跳/查询,无公告)。
 
 **验收**:
-- 回环 e2e:两节点 + 一 server(test 固定端口/随机端口),注册挑战往返、心跳超时摘除、查询返回正确来源、WS 通知到达;
+- 回环 e2e:两节点 + 一 Rendezvous(test 固定端口/随机端口),注册挑战往返、心跳超时摘除、查询返回正确来源、WS 通知到达;
 - 注入面:注册失败(错令牌/签名错/限频触发)的干净错误路径(对齐仓库 `injection.hpp` 惯例);
 - 线协议对拍:canonical 序列化与签名的往返单测(对齐 BT Base32 向量"独立生成"惯例)。
 
@@ -541,8 +541,8 @@ R3 元数据用于:同名任务去重提示("圈内已有此文件,是否直接�
 **范围**:`SwarmAnnouncer`(TaskManager 层监听 + 后台哈希 + 公告)、配置面全链(CLI/config/daemon/RPC)、`retract`、TTL 续租。
 
 **验收**:
-- e2e:节点 A 完成下载 → server 目录可见 → 节点 B 查询命中(元数据一致);A 删除文件 → retract → B 查询落空;
-- **降级铁律验收**:server 进程杀死,A/B 下载任务(含进行中)全程无感,成品逐字节一致;
+- e2e:节点 A 完成下载 → Rendezvous 目录可见 → 节点 B 查询命中(元数据一致);A 删除文件 → retract → B 查询落空;
+- **降级铁律验收**:Rendezvous 进程杀死,A/B 下载任务(含进行中)全程无感,成品逐字节一致;
 - 默认关验收:全量既有 ctest 套件零变化(共享默认 off = 引擎/事件路径零侵入的回归证明)。
 
 ### 阶段 2:入站数据服务 + P2SP 拉取(数据面打通)
@@ -571,7 +571,7 @@ mDNS 局域网发现、R3 元数据消费(daemon 扩展方法 + 桌面去重提�
 | 全局内容搜索/浏览/热门 | §9.4:目录不可被当作分发入口;这是设计红线不是功能缺口 |
 | 匿名参与 | 与身份认证(D2)根本冲突;私有圈子无匿名需求 |
 | 积分/激励/信誉体系 | 私有小圈子无需博弈机制;激励体系是公共网络的产物 |
-| server 字节中继(TURN) | §3.3:把 server 推回内容分发形态 |
+| Rendezvous 字节中继(TURN) | §3.3:把 Rendezvous 推回内容分发形态 |
 | 端到端内容加密(消费方无法校验的加密共享) | §6.3 的校验链以明文哈希为锚;E2E 加密另立设计(需求未现) |
 | 移动端节点 | 移动网络 NAT 深度不可达(§5),共享价值趋零 |
 
@@ -582,7 +582,7 @@ mDNS 局域网发现、R3 元数据消费(daemon 扩展方法 + 桌面去重提�
 | NAT 打洞族(UPnP→STUN→中继评估,§5.3) | 用户实测 NAT 后节点作为数据源的缺失显著影响体验 |
 | 分片级共享(部分文件互传) | 大文件(GB+)在圈内"多机都要但没人下完"场景真实高频 |
 | 下载中动态加入源 | 长尾大文件下载中 swarm 新源出现的频次证明其价值 |
-| mDNS 局域网发现 | "server 不可达但同网段"场景真实存在 |
+| mDNS 局域网发现 | "Rendezvous 不可达但同网段"场景真实存在 |
 | 多群组成员关系 | 单用户多圈子需求出现 |
 | R3 元数据消费 | 阶段 1/2 落地后按桌面端需求评估 |
 
@@ -594,19 +594,19 @@ mDNS 局域网发现、R3 元数据消费(daemon 扩展方法 + 桌面去重提�
 |------|------|
 | Ed25519 在极旧 OpenSSL(<1.1.0)不可用 | 与 metalink 哈希同门禁:无能力时共享开关置灰,下载不受影响 |
 | canonical JSON 序列化两端不一致导致验签失败 | 单测往返对拍 + 线协议示例固化字段序(§8.1) |
-| swarmd 单点成为群内"必须在线"组件 | 降级矩阵(§11)把 server 故障的影响面钉死在共享增强层 |
+| swarmd 单点成为群内"必须在线"组件 | 降级矩阵(§11)把 Rendezvous 故障的影响面钉死在共享增强层 |
 | 公告哈希计算与用户 I/O 竞争 | 后台线程 + 低优先级顺序读(流式 256KB 分块本身顺序);可选 `share.hash_after_minutes` 错峰 |
 | 内嵌数据服务被局域网外扫描 | 默认绑定私网/指定接口;sha256 路径不可枚举;加固阶段 per-request token(§9.6) |
 
 **开放问题**(实现前需决断,不阻塞设计):
 1. R2 镜像公告的 URL 隐私:镜像 URL 可能含私有 token(如带签名的对象存储 URL)——首版由用户配置排除规则(默认不过滤,文档警示),还是默认正则过滤?倾向后者,待阶段 1 实现时定。
-2. session 凭据的持久化:server 重启后 session 失效全群重注册 vs session 落库续用——倾向前者(重注册协议本身就是幂等自愈路径,简单性优先)。
+2. session 凭据的持久化:Rendezvous 重启后 session 失效全群重注册 vs session 落库续用——倾向前者(重注册协议本身就是幂等自愈路径,简单性优先)。
 
 ---
 
 ## 15. 结论
 
-**形态**:自托管私有 swarm——用户自架 `falcon-swarmd`(索引面,复用 daemon 自实现 HTTP+WS JSON-RPC 栈,零新依赖),节点间数据面直连(复用 V2 P2SP 全部机制),server 索引即离场。
+**形态**:自托管私有 swarm——用户自架 `falcon-swarmd`(索引面,复用 daemon 自实现 HTTP+WS JSON-RPC 栈,零新依赖),节点间数据面直连(复用 V2 P2SP 全部机制),Rendezvous 索引即离场。
 
 **十条决策**:
 
@@ -614,7 +614,7 @@ mDNS 局域网发现、R3 元数据消费(daemon 扩展方法 + 桌面去重提�
 |---|------|---------|
 | D1 | 自托管私有 swarm | 内容责任/运营/冷启动三题同解(§3) |
 | D2 | Ed25519 持久身份,指纹即 ID | 节点级审计/吊销;防抢注(§9.2) |
-| D3 | 中心 server 权威;DHT 双路线否决 | 小圈子无 DHT 收益;仓库实证 DHT 公告面零基础且有公网暴露/NAT 失效结构缺陷(§4) |
+| D3 | 中心 Rendezvous 权威;DHT 双路线否决 | 小圈子无 DHT 收益;仓库实证 DHT 公告面零基础且有公网暴露/NAT 失效结构缺陷(§4) |
 | D4 | 阶段一不做穿透;拉取方主动连接 + direct 标记 | 部署形态覆盖主场景;本机地址设施零基础(§5) |
 | D5 | 共享面 = 成品/镜像/元数据 三类 | 由 P2SP 数据面需求反推;路径与历史不共享(§6.1) |
 | D6 | SHA-256 内容寻址 + 消费端强制校验,零特权 | 复用 `verify_streaming`;坏源下场与坏镜像一致(§6.3) |
@@ -623,6 +623,6 @@ mDNS 局域网发现、R3 元数据消费(daemon 扩展方法 + 桌面去重提�
 | D9 | TLS pinning + 挑战-签名 + 限频/配额/吊销 + 共享默认关 | 私有圈威胁模型全覆盖;默认关是产品红线(§9) |
 | D10 | TaskManager 层完成事件挂公告;查询注入镜像池 | 覆盖默认 V1 引擎,`dispatch_completed` 现成携带路径与总长(§10.2) |
 
-**路线图**:阶段 0(server + 身份)→ 阶段 1(公告/查询 + 完成钩子,下载面零改动)→ 阶段 2(数据面打通,混合源分段拉取)→ 阶段 3(按需)。每阶段独立验收,阶段 1 的"server 杀死下载无感"与"默认 off 全量测试零变化"是本设计两条不可妥协的验收铁律。
+**路线图**:阶段 0(Rendezvous + 身份)→ 阶段 1(公告/查询 + 完成钩子,下载面零改动)→ 阶段 2(数据面打通,混合源分段拉取)→ 阶段 3(按需)。每阶段独立验收,阶段 1 的"Rendezvous 杀死下载无感"与"默认 off 全量测试零变化"是本设计两条不可妥协的验收铁律。
 
 与 todo.md 备忘的对账:路线 C 的"中央索引"以**自托管私有**形态落地(避开其法务与运营定性的适用前提);备忘三件事中"索引公告"与"上传策略(默认关)"在本文完整设计,"入站监听"细化为阶段 2 的内嵌只读数据服务;备忘的 NAT 穿透评估(§5)与冷启动定性(§3.2)分别给出结论。

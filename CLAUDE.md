@@ -2,6 +2,12 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-27 - falcon-swarmd 服务更名 Rendezvous Service（用户拍板术语统一，零行为变化）
+- **术语定案**：swarmd 里协助节点互相发现的服务统一称 **Rendezvous Service**（会合/发现服务，首次出现括注 tracker）；设计文档 `docs/p2sp_network_design.md` 全文 65 处 standalone "server" 收敛（标题/图表框/方向记号），残余 token 恰为受保护标识符五枚
+- **代码改名清单**（git mv + 符号替换，行为零变化）：CMake target `falcon_swarm_server` → `falcon_swarm_rdv`；目录 `src/server/` → `src/rdv/`；类 `SwarmServerState→SwarmRendezvousState`、`SwarmServerOptions→SwarmRendezvousOptions`、`SwarmServerHarness→SwarmRendezvousHarness`、`SwarmRpcServer→SwarmRendezvousServer`；文件 `swarm_server_state.*→swarm_rdv_state.*`、`swarm_server_harness.hpp→swarm_rdv_harness.hpp`、`swarm_server_loopback_test.cpp→swarm_rdv_loopback_test.cpp`；注入点（libfalcon-core injection.hpp）`SwarmServerSocket/Listen→SwarmRdvSocket/Listen`；banner 与启动日志（"Falcon Swarm Rendezvous Service" / "Failed to start rendezvous service"）
+- **保留项（技术事实/线协议契约，不为改而改）**：`server_token`（config 键 + CLI `--server-token` + SwarmClientConfig 字段）、`kFieldServerTime`/"server_time" 线字段、`server_fingerprint`（设计文档配置名）、`swarm_rpc_server.{hpp,cpp}` 文件名（传输层命名，沿 daemon `json_rpc_server` 形制）、`SwarmRendezvousServer` 类名含 Server（HTTP/WS 服务器角色）、协议注释里 server/client 技术角色词与中文"服务器"角色词
+- **验证**：build-cov 全量重建 + FULL ctest 全绿（2499 passed 基线口径不变）；根 CMake `FALCON_BUILD_SWARMD` 描述同步（"Build swarm rendezvous service"）；包 CLAUDE.md current-state 更新 + 历史 changelog 不改写（4c351a9 等提交真实创建过 `falcon_swarm_server`）
+
 ### 2026-09-27 - 文档站主题重设计「warm console」（taste-skill）+ logo 方向全站核对（全部朝左，零改动）
 - **logo 方向核对结论（用户报「鸟头向左」疑虑，实况全部已朝左）**：assets/falcon.svg / docs/src/public/logo.svg / favicon.svg 三处字节级一致（15e8245 已加 `translate(1024,0) scale(-1,1)` 镜像 + fill #ffa07a）；assets/falcon.png 像素分析头部朝左（左缘突出 69 点 vs 右缘 28）；线上 https://cuihairu.github.io/falcon/ 部署 commit == 本地 origin/main（15e8245），浏览器截图 + 像素分析 hero logo（亮 65L/36R、暗 85L/36R）与导航 logo（(2,0)/(2,1)）均朝左；全库无 og:image/meta 图；README 无内嵌位图 logo。**用户所见朝右页面最可能是浏览器缓存**，零代码改动
 - **主题重设计（taste-skill 代行——提示词点名的 `popular-web-designs` skill 不在本环境可用清单，报告如实披露替换）**：方向「warm developer console」，三拨盘 VARIANCE 5 / MOTION 3 / DENSITY 4；Redesign-Preserve 协议（IA/slug/导航文案/内容结构零变化，fence 修复不回退）
@@ -3273,7 +3279,7 @@ graph TD
 | `packages/libfalcon-drives` | 网盘/云存储/搜索/配置管理 | `Falcon::drives` | 开发中 |
 | `packages/falcon-cli` | 命令行下载工具 | `falcon-cli` | 开发中 |
 | `packages/falcon-daemon` | 后台守护进程 + RPC 服务 | `falcon-daemon` | 开发中 |
-| `packages/falcon-swarmd` | P2SP swarm 目录服务器 + 节点侧 SwarmClient | `falcon-swarmd` | 开发中（阶段 0） |
+| `packages/falcon-swarmd` | P2SP Rendezvous Service（发现/会合服务）+ 节点侧 SwarmClient | `falcon-swarmd` | 开发中（阶段 0） |
 | `apps/desktop` | GUI 桌面应用（Qt6） | `falcon-desktop` | 规划中 |
 | `apps/web` | Web 管理界面（预留） | — | 规划中 |
 
@@ -3573,7 +3579,7 @@ falcon/                              # 项目根目录
 │       ├── src/
 │       └── tests/
 │
-│   └── falcon-swarmd/               # P2SP swarm 目录服务器（阶段 0）
+│   └── falcon-swarmd/               # P2SP Rendezvous Service（阶段 0）
 │       ├── CMakeLists.txt
 │       ├── CLAUDE.md
 │       ├── src/                     # common(协议/密码学) + server + client + main

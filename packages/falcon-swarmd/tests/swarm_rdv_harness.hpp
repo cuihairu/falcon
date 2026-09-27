@@ -1,9 +1,9 @@
 #pragma once
 
 // ============================================================================
-// falcon-swarmd 测试 harness：SwarmRpcServer port=0 回环基建
+// falcon-swarmd 测试 harness：SwarmRendezvousServer port=0 回环基建
 //
-// SwarmServerHarness   —— SwarmServerState + SwarmRpcServer 一体起停
+// SwarmRendezvousHarness   —— SwarmRendezvousState + SwarmRendezvousServer 一体起停
 //                         （默认限频 0=不限：无关用例不互染，限频用例显式
 //                         自建实例并设阈值）；测试用 TTL（秒级）直接可观测。
 // http_post/http_get   —— 裸 socket HTTP；服务器恒 Content-Length +
@@ -27,8 +27,8 @@
 #include "common/swarm_crypto.hpp"
 #include "common/swarm_protocol.hpp"
 #include "rpc/websocket_frame.hpp"
-#include "server/swarm_rpc_server.hpp"
-#include "server/swarm_server_state.hpp"
+#include "rdv/swarm_rpc_server.hpp"
+#include "rdv/swarm_rdv_state.hpp"
 
 #include <chrono>
 #include <condition_variable>
@@ -500,7 +500,7 @@ private:
 };
 
 // ===========================================================================
-// SwarmServerHarness：状态 + 传输层一体起停
+// SwarmRendezvousHarness：状态 + 传输层一体起停
 // ===========================================================================
 
 struct HarnessConfig {
@@ -515,42 +515,42 @@ struct HarnessConfig {
     std::size_t rate_query_per_min = 0;
 };
 
-class SwarmServerHarness {
+class SwarmRendezvousHarness {
 public:
-    explicit SwarmServerHarness(const HarnessConfig& cfg = {}) {
-        SwarmServerState::Config state_cfg;
+    explicit SwarmRendezvousHarness(const HarnessConfig& cfg = {}) {
+        SwarmRendezvousState::Config state_cfg;
         state_cfg.group_token = cfg.group_token;
         state_cfg.blacklist = cfg.blacklist;
         state_cfg.heartbeat_interval = cfg.heartbeat_interval;
         state_cfg.heartbeat_timeout = cfg.heartbeat_timeout;
         state_cfg.challenge_ttl = cfg.challenge_ttl;
-        state_ = std::make_unique<SwarmServerState>(state_cfg);
+        state_ = std::make_unique<SwarmRendezvousState>(state_cfg);
 
-        SwarmServerOptions opts;
+        SwarmRendezvousOptions opts;
         opts.host = "127.0.0.1";
         opts.port = 0;
         opts.server_token = cfg.server_token;
         opts.sweep_interval = cfg.sweep_interval;
         opts.rate_register_per_min = cfg.rate_register_per_min;
         opts.rate_query_per_min = cfg.rate_query_per_min;
-        server_ = std::make_unique<SwarmRpcServer>(opts, *state_);
+        server_ = std::make_unique<SwarmRendezvousServer>(opts, *state_);
         started_ = server_->start();
     }
 
-    ~SwarmServerHarness() {
+    ~SwarmRendezvousHarness() {
         if (server_) server_->stop();
     }
-    SwarmServerHarness(const SwarmServerHarness&) = delete;
-    SwarmServerHarness& operator=(const SwarmServerHarness&) = delete;
+    SwarmRendezvousHarness(const SwarmRendezvousHarness&) = delete;
+    SwarmRendezvousHarness& operator=(const SwarmRendezvousHarness&) = delete;
 
     bool ok() const { return started_; }
     std::uint16_t port() const { return server_->port(); }
-    SwarmServerState& state() { return *state_; }
-    SwarmRpcServer& server() { return *server_; }
+    SwarmRendezvousState& state() { return *state_; }
+    SwarmRendezvousServer& server() { return *server_; }
 
 private:
-    std::unique_ptr<SwarmServerState> state_;
-    std::unique_ptr<SwarmRpcServer> server_;
+    std::unique_ptr<SwarmRendezvousState> state_;
+    std::unique_ptr<SwarmRendezvousServer> server_;
     bool started_ = false;
 };
 
