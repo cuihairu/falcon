@@ -2,6 +2,16 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-28 - 桌面 Qt UI 重设计「warm console」（与文档站同源设计语言）+ theme_tokens 双主题全表
+- **设计语言统一（用户点名 Qt 桌面端用技能重设计；taste-skill 代行——`popular-web-designs` 不在本环境可用清单，如实披露）**：移植文档站已上线的 warm console 色板（暖石/暖黑中性底 + falcon 橙单强调），全线产品一套品牌配色；Design Read = 桌面工具重设计-preserve（IA/布局/组件/交互零变化，只换皮），拨盘 VARIANCE 3 / MOTION 1（QSS 静态）/ DENSITY 4
+- **改动面全收敛三文件**：`theme_tokens.hpp`（12 语义角色双主题全表——light window #f6f4f1 / text #292524 / accent #c2410c 系 hover #9a3412 pressed #7c2d12；dark window #1b1714 / card #262019 / text #f2ede8 / accent #ffa07a 系 hover #ffb28c pressed #e0875e / **accent_text #27140a 深咖啡**；danger 双主题 #c42b1c 保持；中性 hover overlay rgba 黑白 alpha 保持）+ 双 QSS 数值全表 + checkbox 内嵌 base64 SVG 重生成（改色不改形 rx=3）
+- **dark CTA 语义修正**：旧 dark `primaryButton:pressed { background:#003e6b; color:#ffffff }` 是「accent 变深 + 文字翻白」的蓝底语义；新鲑橙 pressed #e0875e 仍为亮底，**删除白字翻转**保持「亮底深字」（#27140a 于 #e0875e 7.7:1）——CTA 双主题统一「亮底深字」与文档站同构；dark navTab:checked 文字 #ffffff → #ffa07a（与 light 的 accent 文字成对，此前两主题活动态不同构）
+- **形状单一规则（Qt 尺度）**：按钮/输入（QPushButton/QLineEdit/QComboBox/QSpinBox/searchEdit）4→8px；卡片/面板（QGroupBox/QMenu/downloadHero/summaryCard/taskCard）8→12px；小件（toolButton/rowActionButton/menu item/QToolTip/navTab/viewSegmentButton）4px 保持；viewSegmented 容器 6→8px；进度条/滚动条 handle 高度半圆（2/3px）保持
+- **字体决策（如实记录取舍）**：保持系统原生栈（"Segoe UI Variable Text"/"Segoe UI"/-apple-system/"PingFang SC"/"Microsoft YaHei"）不引入文档站的自托管 Geist——桌面原生渲染 hinting 优于 web 字体、qrc 零增重、CJK 回退链已有；品牌一致性经色彩/形状语言达成，不追求字体字面一致
+- **托盘菜单覆盖确认**：ThemeManager `qApp->setStyleSheet` 全应用作用域，托盘 QMenu 自动继承（用户任务书点名面）；src/ 零硬编码颜色（grep 实证），palette_for 从 token 全表派生 QPalette 自动跟随——改 token 即全局生效
+- **对比度**（WCAG AA，与文档站同值同验）：light #c2410c 于 #f6f4f1 4.8:1、白字于其上 5.0:1；dark #ffa07a 于 #1b1714 9.0:1、#27140a 于其上 9.1:1；次级文字 light #57534e 6.9:1 / dark #b5aca3 7.6:1
+- **验证**：增量重建零告警 + backend tests 6/6；ui_sandbox 28 张（7 视图 × 亮暗 × 1200/960）——双主题 bg 像素精确命中（#f6f4f1/#1b1714，8 点采样全过）+ 主视图/对话框/设置页/网格视图目测验收；BEFORE 基线 /tmp/ui_before vs AFTER /tmp/ui_warm；两 QSS 110 规则严格成对 + 旧值零残留（26 个旧 hex grep 零命中）+ accent 各 12 处成对
+
 ### 2026-09-28 - 桌面端 logo 全链路替换（assets/falcon.svg 头朝左鲑橙）+ UI slogan 删除 + Windows RC 资源接线修复
 - **icon 渲染链**（assets/falcon.svg 为唯一事实源，viewBox 0 0 1024 1024，`translate(1024,0) scale(-1,1)` 镜像头朝左、fill #ffa07a）：cairosvg 逐尺寸矢量直渲（非 256 基图缩放）→ Pillow ICO `append_images` 打包 7 尺寸（16/24/32/48/64/128/256，替换旧朝右深橙 4 帧 BMP .ico）→ 手写 PNG-in-ICNS 容器（OSType icp4/icp5/ic07..ic14 + big-endian 长度头）→ hicolor 9 尺寸 PNG（16..512）+ falcon-desktop.desktop 入库
 - **引用点全替换**：① exe 内嵌图标——app.rc 引用本就接线，真缺陷是顶层 `project(LANGUAGES CXX)` 未启用 RC → `.rc` 被 CMake **静默忽略**（configure/build 全绿），nightly exe PE 解析实证 res_rva=None 零资源段；修复顶层 `if(WIN32) enable_language(RC) endif()`；② 窗口图标 main.cpp `setWindowIcon(QIcon(":/icons/falcon.svg"))`（qrc 内联，无磁盘路径依赖）；③ 托盘 main_window.cpp SP_ComputerIcon → qrc logo；④ 顶栏品牌区 brand_mark_ 蓝「F」色盒 → 24px 真 logo（QSS #brandMark 双主题 `background: transparent`）；⑤ macOS Info.plist.in 补 CFBundleIconFile（bundle 目标未启用，前瞻接线）；⑥ Linux 安装规则 desktop CMakeLists `UNIX AND NOT APPLE` 分支 install .desktop + hicolor 目录；⑦ nightly AppImage 图标从 `touch` 零字节占位 → cp 仓库 hicolor 256px（`cd build-desktop/bin` 后 repo root = `../..`，cp 路径两级）

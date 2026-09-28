@@ -2,6 +2,15 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-28 - UI 重设计「warm console」（theme_tokens 双主题全表 + 双 QSS 数值全表 + 形状三档收口）
+- **设计语言**：与文档站同源 warm console（暖石/暖黑中性底 + falcon 橙单强调）；重设计-preserve（IA/布局/组件零变化只换皮）；taste-skill 代行（`popular-web-designs` 不在本环境可用清单）；字体保持系统原生栈（桌面 hinting 优于自托管 web 字体，品牌一致性经色彩/形状达成）
+- **token 全表**（theme_tokens.hpp，palette_for 派生 QPalette 自动跟随）：light window #f6f4f1 / card #ffffff / text #292524 / secondary #57534e / disabled #a8a29e / accent #c2410c（hover #9a3412 / pressed #7c2d12）/ divider #e7e5e4；dark window #1b1714 / card #262019 / text #f2ede8 / secondary #b5aca3 / disabled #6e665e / accent #ffa07a（hover #ffb28c / pressed #e0875e）/ accent_text #27140a / divider #37302a；danger #c42b1c 双主题不变；checkbox 内嵌 base64 SVG 重生成（改色不改形）
+- **QSS 结构性修正**：① dark `primaryButton:pressed` 删除 `color:#ffffff` 白字翻转（鲑橙 pressed #e0875e 仍为亮底，CTA 双主题统一「亮底深字」）；② dark `navTab:checked` 文字 #ffffff → #ffa07a（与 light accent 文字成对）；③ 控件族暖化（#333333→#312a24、#4d4d4d→#4a423a、#d9d9d9→#dcd7d1、#f9f9f9→#f5f2ee、#ececec→#edeae5、#3d3d3d→#3a322b、#5a5a5a→#554b41、checkbox stroke #8f8f8f→#a29a92）
+- **形状单一规则**：按钮/输入 4→8px · 卡片/面板（QGroupBox/QMenu/Hero/任务卡）8→12px · 小件（工具钮/行内钮/菜单项/tooltip/navTab/段钮）4px 保持 · 条形（进度/滚动）高度半圆保持
+- **托盘菜单**：qApp->setStyleSheet 全应用作用域自动继承，零额外改动
+- **验证**：增量重建零告警 + backend tests 6/6；ui_sandbox 28 张双主题×双尺寸——bg 像素精确命中（#f6f4f1/#1b1714 八点全过）、主视图/对话框/设置页/网格目测验收；双 QSS 110 规则成对、26 个旧 hex 零残留、accent 各 12 处成对；BEFORE /tmp/ui_before vs AFTER /tmp/ui_warm
+
+
 ### 2026-09-28 - logo 全链路替换（qrc SVG + .ico/.icns/hicolor 资产）+ 顶栏 slogan 删除 + DaemonAddTaskRoundTrip 抖动修复
 - **应用图标资产**（渲染源 assets/falcon.svg，头朝左 + 鲑橙 #ffa07a，cairosvg 逐尺寸矢量直渲）：`resources/icons/falcon.svg`（qrc `/icons` 前缀 alias）、`resources/windows/falcon.ico`（替换旧朝右深橙 4 帧 BMP——新 7 尺寸 PNG 帧 16..256，Pillow append_images 打包）、`resources/macos/falcon.icns`（手写 PNG-in-ICNS 容器，icp4/icp5/ic07..ic14 十 chunk）、`resources/linux/hicolor/{16..512}x*/apps/falcon-desktop.png` 九尺寸 + `falcon-desktop.desktop` 启动器（Icon=falcon-desktop）
 - **运行时引用点**：main.cpp `setWindowIcon(QIcon(":/icons/falcon.svg"))`（qrc 内联）；main_window.cpp 托盘 SP_ComputerIcon → qrc logo；top_bar.cpp 品牌区 brand_mark_ 从蓝「F」色盒换 24px 真 logo pixmap + #brandMark 双主题 QSS `background: transparent`（蓝盒描边/圆角删除）；**「高速下载工作台」slogan 删除**（brand_subtitle_ 成员 + title_stack + 双 QSS #brandSubtitle 规则整链移除，顶栏单行化）
