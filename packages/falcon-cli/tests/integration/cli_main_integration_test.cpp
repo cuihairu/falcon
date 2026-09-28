@@ -12,6 +12,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <chrono>
@@ -20,7 +21,10 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <arpa/inet.h>
@@ -703,6 +707,433 @@ TEST_F(CliMainIntegrationTest, ConfigFromHomeDirectoryIsUsed) {
     auto r = run_cli(fast_fail_args(out_dir_, kRefusedUrlA));
     EXPECT_EQ(r.exit_code, 1);
     EXPECT_TRUE(contains(r.err, "FAIL"));
+}
+
+// ============================================================================
+// Success paths (loopback HTTP server serving a deterministic payload)
+// ============================================================================
+
+/// 确定性 payload（不依赖随机源，跨平台逐字节一致）
+std::string make_payload(std::size_t size, unsigned char seed) {
+    std::string payload(size, '\0');
+    for (std::size_t i = 0; i < size; ++i) {
+        payload[i] = static_cast<char>(static_cast<unsigned char>(seed + i * 31u));
+    }
+    return payload;
+}
+
+bool file_bytes_equals(const std::filesystem::path& path,
+                       const std::string& expected) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return false;
+    const std::string contents((std::istreambuf_iterator<char>(f)),
+                               std::istreambuf_iterator<char>());
+    return contents == expected;
+}
+
+/**
+ * @brief 慢速本地 HTTP 服务器（成功路径专用）
+ *
+ * 忠实应答 HEAD（200 + Content-Length + Accept-Ranges + ETag）与 Range
+ * 请求（206 精确切片 + Content-Range，越界 416），任意路径都以同一
+ * payload 应答；按 chunk_delay_ms 分块慢发制造进度回调窗口；记录每个
+ * 请求的原始头块供测试断言配置项（UA/自定义头/referer）真实到达。
+ */
+class SlowFileServer {
+public:
+    SlowFileServer(std::string payload, int chunk_delay_ms)
+        : payload_(std::move(payload)), chunk_delay_ms_(chunk_delay_ms) {}
+
+    ~SlowFileServer() { stop(); }
+    SlowFileServer(const SlowFileServer&) = delete;
+    SlowFileServer& operator=(const SlowFileServer&) = delete;
+
+    bool start() {
+        const int s = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (s < 0) return false;
+        int one = 1;
+        ::setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        addr.sin_port = 0;
+        if (::bind(s, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 ||
+            ::listen(s, 16) != 0) {
+            ::close(s);
+            return false;
+        }
+        sockaddr_in bound{};
+        socklen_t len = sizeof(bound);
+        if (::getsockname(s, reinterpret_cast<sockaddr*>(&bound), &len) != 0) {
+            ::close(s);
+            return false;
+        }
+        port_ = ntohs(bound.sin_port);
+        listen_fd_ = s;
+        accept_thread_ = std::thread([this] { accept_loop(); });
+        return true;
+    }
+
+    /// 指定路径的下载 URL
+    std::string url(const std::string& path) const {
+        return "http://127.0.0.1:" + std::to_string(port_) + path;
+    }
+
+    void stop() {
+        if (listen_fd_ >= 0) {
+            ::shutdown(listen_fd_, SHUT_RDWR);
+            ::close(listen_fd_);
+            listen_fd_ = -1;
+        }
+        if (accept_thread_.joinable()) accept_thread_.join();
+        // join accept 线程后再收连接线程：此后不再有新的 push
+        for (auto& t : conn_threads_) {
+            if (t.joinable()) t.join();
+        }
+        conn_threads_.clear();
+    }
+
+    /// 已收到请求的原始头块快照（含请求行，按到达顺序）
+    std::vector<std::string> requests() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return requests_;
+    }
+
+private:
+    void accept_loop() {
+        while (listen_fd_ >= 0) {
+            pollfd pfd{};
+            pfd.fd = listen_fd_;
+            pfd.events = POLLIN;
+            if (::poll(&pfd, 1, 200) <= 0) continue;
+            const int c = ::accept(listen_fd_, nullptr, nullptr);
+            if (c < 0) continue;
+            conn_threads_.emplace_back([this, c] { handle_connection(c); });
+        }
+    }
+
+    void handle_connection(int fd) {
+        std::string req;
+        char buf[2048];
+        while (req.find("\r\n\r\n") == std::string::npos &&
+               req.size() < 32 * 1024) {
+            const ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
+            if (n <= 0) break;
+            req.append(buf, buf + n);
+        }
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            requests_.push_back(req);
+        }
+
+        const bool is_head = req.rfind("HEAD", 0) == 0;
+        // Range: bytes=A-B / bytes=A-（无 B = 到文件尾），双边界忠实解析
+        bool has_range = false;
+        std::size_t range_begin = 0;
+        std::size_t range_end = std::string::npos;
+        const std::string range_key = "Range: bytes=";
+        const auto range_pos = req.find(range_key);
+        if (range_pos != std::string::npos) {
+            has_range = true;
+            std::size_t i = range_pos + range_key.size();
+            while (i < req.size() && req[i] >= '0' && req[i] <= '9') {
+                range_begin =
+                    range_begin * 10 + static_cast<std::size_t>(req[i] - '0');
+                ++i;
+            }
+            if (i < req.size() && req[i] == '-') {
+                ++i;
+                if (i < req.size() && req[i] >= '0' && req[i] <= '9') {
+                    range_end = 0;
+                    while (i < req.size() && req[i] >= '0' && req[i] <= '9') {
+                        range_end = range_end * 10 +
+                                    static_cast<std::size_t>(req[i] - '0');
+                        ++i;
+                    }
+                }
+            }
+        }
+
+        const std::string common =
+            "Accept-Ranges: bytes\r\nETag: \"falcon-cli-it\"\r\n"
+            "Connection: close\r\n";
+        if (is_head) {
+            const std::string head =
+                "HTTP/1.1 200 OK\r\nContent-Length: " +
+                std::to_string(payload_.size()) + "\r\n" + common + "\r\n";
+            send_all(fd, head.data(), head.size());
+            ::close(fd);
+            return;
+        }
+
+        if (has_range && range_begin >= payload_.size()) {
+            const std::string resp =
+                "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Length: 0\r\n" +
+                common + "\r\n";
+            send_all(fd, resp.data(), resp.size());
+            ::close(fd);
+            return;
+        }
+
+        const char* data = payload_.data();
+        std::size_t size = payload_.size();
+        std::string status_head;
+        if (has_range) {
+            const std::size_t end =
+                range_end == std::string::npos
+                    ? payload_.size() - 1
+                    : std::min(range_end, payload_.size() - 1);
+            status_head =
+                "HTTP/1.1 206 Partial Content\r\nContent-Length: " +
+                std::to_string(end - range_begin + 1) +
+                "\r\nContent-Range: bytes " + std::to_string(range_begin) +
+                "-" + std::to_string(end) + "/" +
+                std::to_string(payload_.size()) + "\r\n" + common + "\r\n";
+            data += range_begin;
+            size = end - range_begin + 1;
+        } else {
+            status_head =
+                "HTTP/1.1 200 OK\r\nContent-Length: " +
+                std::to_string(payload_.size()) + "\r\n" + common + "\r\n";
+        }
+
+        if (!send_all(fd, status_head.data(), status_head.size())) {
+            ::close(fd);
+            return;
+        }
+        const std::size_t chunk = 16 * 1024;
+        std::size_t off = 0;
+        while (off < size) {
+            const std::size_t n = std::min(chunk, size - off);
+            if (!send_all(fd, data + off, n)) break;
+            off += n;
+            if (chunk_delay_ms_ > 0) {
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(chunk_delay_ms_));
+            }
+        }
+        ::close(fd);
+    }
+
+    static bool send_all(int fd, const char* data, std::size_t size) {
+        std::size_t off = 0;
+        while (off < size) {
+#ifdef __APPLE__
+            const int flags = 0;
+#else
+            const int flags = MSG_NOSIGNAL;
+#endif
+            const ssize_t n = ::send(fd, data + off, size - off, flags);
+            if (n <= 0) return false;
+            off += static_cast<std::size_t>(n);
+        }
+        return true;
+    }
+
+    std::string payload_;
+    int chunk_delay_ms_;
+    int listen_fd_ = -1;
+    uint16_t port_ = 0;
+    std::thread accept_thread_;
+    std::vector<std::thread> conn_threads_;
+    mutable std::mutex mutex_;
+    std::vector<std::string> requests_;
+};
+
+TEST_F(CliMainIntegrationTest, SingleSuccessDownloadReportsProgressAndFileInfo) {
+    const std::string payload = make_payload(256 * 1024, 0x5A);
+    SlowFileServer server(payload, 30);
+    ASSERT_TRUE(server.start());
+
+    auto args = fast_fail_prefix(out_dir_);
+    args.push_back("-v");
+    args.push_back("--file-allocation");
+    args.push_back("trunc");
+    args.push_back(server.url("/success-payload.bin"));
+
+    auto r = run_cli(args);
+    server.stop();
+
+    EXPECT_FALSE(r.timed_out);
+    EXPECT_EQ(r.exit_code, 0) << r.out << r.err;
+    EXPECT_TRUE(contains(r.out, "Downloading:"));
+    EXPECT_TRUE(contains(r.out, "OK [Task"));
+    EXPECT_TRUE(contains(r.out, "FileInfo [Task"));
+    EXPECT_TRUE(contains(r.out, "Size: 256.0 KB"));
+    // 终态进度穿透节流，监听者必见 100%
+    EXPECT_TRUE(contains(r.out, "100.0%"));
+    EXPECT_FALSE(contains(r.err, "FAIL"));
+    // 单任务全成功不打印 N OK 摘要行
+    EXPECT_FALSE(contains(r.out, "FAILED"));
+    EXPECT_TRUE(file_bytes_equals(out_dir_ / "success-payload.bin", payload));
+}
+
+TEST_F(CliMainIntegrationTest, BatchSuccessDownloadPrintsMultiTaskProgressAndSummary) {
+    const std::string payload = make_payload(192 * 1024, 0xA5);
+    SlowFileServer server(payload, 30);
+    ASSERT_TRUE(server.start());
+
+    auto args = fast_fail_prefix(out_dir_);
+    args.push_back("-j");
+    args.push_back("2");
+    args.push_back(server.url("/multi-a.bin"));
+    args.push_back(server.url("/multi-b.bin"));
+
+    auto r = run_cli(args);
+    server.stop();
+
+    EXPECT_FALSE(r.timed_out);
+    EXPECT_EQ(r.exit_code, 0) << r.out << r.err;
+    EXPECT_TRUE(contains(r.out, "Downloading 2 tasks"));
+    EXPECT_TRUE(contains(r.out, "Waiting..."));
+    EXPECT_TRUE(contains(r.out, "2 OK"));
+    EXPECT_TRUE(file_bytes_equals(out_dir_ / "multi-a.bin", payload));
+    EXPECT_TRUE(file_bytes_equals(out_dir_ / "multi-b.bin", payload));
+}
+
+TEST_F(CliMainIntegrationTest, RichConfigMergedIntoSuccessfulDownload) {
+    const std::string payload = make_payload(128 * 1024, 0x77);
+    SlowFileServer server(payload, 30);
+    ASSERT_TRUE(server.start());
+
+    // 全字段非默认配置：走 merge_config_with_file 的「CLI 为默认值才采纳」
+    // 各分支；CLI 侧 -H/-o/-p 覆盖/补充 config 之外的字段。
+    const auto cfg = work_dir_ / "rich-config.json";
+    {
+        std::ofstream of(cfg);
+        of << "{\n"
+           << "  \"max_connections\": 2,\n"
+           << "  \"timeout_seconds\": 15,\n"
+           << "  \"max_retries\": 1,\n"
+           << "  \"default_download_dir\": \"" << out_dir_.string() << "\",\n"
+           << "  \"speed_limit\": 4194304,\n"
+           << "  \"user_agent\": \"FalconIt/1.0\",\n"
+           << "  \"referer\": \"http://ref.example/\",\n"
+           << "  \"cookie_file\": \"" << (work_dir_ / "cookies.txt").string()
+           << "\",\n"
+           << "  \"http_username\": \"ituser\",\n"
+           << "  \"http_password\": \"itpass\",\n"
+           << "  \"client_cert\": \"" << (work_dir_ / "no-such-cert.pem").string()
+           << "\",\n"
+           << "  \"client_key\": \"" << (work_dir_ / "no-such-key.pem").string()
+           << "\",\n"
+           << "  \"rpc_secret\": \"it-secret\",\n"
+           << "  \"rpc_listen_port\": 6801,\n"
+           << "  \"verbose\": true,\n"
+           << "  \"resume_enabled\": false,\n"
+           << "  \"auto_renaming\": true,\n"
+           << "  \"conditional_download\": true,\n"
+           << "  \"file_allocation\": \"trunc\",\n"
+           << "  \"seed_ratio\": 2.5,\n"
+           << "  \"seed_time_minutes\": 30,\n"
+           << "  \"verify_ssl\": false,\n"
+           << "  \"headers\": { \"X-From-Config\": \"yes\" }\n"
+           << "}\n";
+    }
+
+    // 不带 -d/-t/-r：让 default_download_dir/timeout/max_retries 从 config
+    // 采纳（CLI 显式值会抢占这些分支）。
+    const std::vector<std::string> args{
+        "--retry-wait", "0",
+        "-C", cfg.string(),
+        "-o", "named.bin",
+        "-p", "high",
+        "-H", "X-From-Cli: hi",
+        server.url("/cfg-source.bin")};
+
+    auto r = run_cli(args);
+    server.stop();
+
+    EXPECT_FALSE(r.timed_out);
+    EXPECT_EQ(r.exit_code, 0) << r.out << r.err;
+    EXPECT_TRUE(contains(r.out, "OK [Task"));
+    EXPECT_TRUE(file_bytes_equals(out_dir_ / "named.bin", payload));
+
+    // 配置项真实到达服务器：UA/referer/自定义头（config + CLI 各一）
+    const auto reqs = server.requests();
+    ASSERT_FALSE(reqs.empty());
+    bool saw_get = false;
+    for (const auto& req : reqs) {
+        if (req.rfind("GET", 0) == 0) {
+            saw_get = true;
+            EXPECT_NE(req.find("User-Agent: FalconIt/1.0"), std::string::npos)
+                << req;
+            EXPECT_NE(req.find("Referer: http://ref.example/"), std::string::npos)
+                << req;
+            EXPECT_NE(req.find("X-From-Config: yes"), std::string::npos) << req;
+            EXPECT_NE(req.find("X-From-Cli: hi"), std::string::npos) << req;
+        }
+    }
+    EXPECT_TRUE(saw_get);
+}
+
+TEST_F(CliMainIntegrationTest, InvalidHttpEngineValueFailsFast) {
+    auto args = fast_fail_args(out_dir_, kRefusedUrlA);
+    args.push_back("--http-engine");
+    args.push_back("v3");
+
+    auto r = run_cli(args);
+    EXPECT_EQ(r.exit_code, 1);
+    EXPECT_TRUE(contains(r.err, "invalid value for --http-engine"));
+    EXPECT_TRUE(contains(r.err, "v3"));
+}
+
+TEST_F(CliMainIntegrationTest, ShowConfigPathMarksExistingHomeConfig) {
+    const auto cfg_dir = home_dir_ / ".config" / "falcon";
+    std::filesystem::create_directories(cfg_dir);
+    {
+        std::ofstream of(cfg_dir / "config.json");
+        of << "{}\n";
+    }
+
+    auto r = run_cli({"--show-config-path"});
+    EXPECT_EQ(r.exit_code, 0);
+    EXPECT_TRUE(contains(r.out, ".config/falcon/config.json"));
+    EXPECT_TRUE(contains(r.out, "(exists)"));
+}
+
+TEST_F(CliMainIntegrationTest, HttpEngineV2SuccessDownloadCompletes) {
+    const std::string payload = make_payload(256 * 1024, 0x3C);
+    SlowFileServer server(payload, 30);
+    ASSERT_TRUE(server.start());
+
+    auto args = fast_fail_prefix(out_dir_);
+    args.push_back("--http-engine");
+    args.push_back("v2");
+    args.push_back(server.url("/v2-payload.bin"));
+
+    auto r = run_cli(args);
+    server.stop();
+
+    EXPECT_FALSE(r.timed_out);
+    EXPECT_EQ(r.exit_code, 0) << r.out << r.err;
+    EXPECT_TRUE(contains(r.out, "OK [Task"));
+    EXPECT_TRUE(file_bytes_equals(out_dir_ / "v2-payload.bin", payload));
+}
+
+TEST_F(CliMainIntegrationTest, InteractivePauseAndResumeKeysReport) {
+    // 停滞监听器让任务停在 Downloading，pty 键 'p'/'r' 分别触发
+    // interactive_control_loop 的暂停/恢复分支。
+    uint16_t port = 0;
+    const int listener = open_stall_listener(port);
+    ASSERT_GE(listener, 0);
+
+    const std::vector<std::string> args{
+        "-d", out_dir_.string(),
+        "-r", "0",
+        "-t", "3",
+        "http://127.0.0.1:" + std::to_string(port) + "/stall.bin"};
+
+    auto r = run_cli_interactive(args, "pr", 800);
+    ::close(listener);
+
+    EXPECT_FALSE(r.timed_out);
+    EXPECT_TRUE(contains(r.out, "[p] Pause"));
+    EXPECT_TRUE(contains(r.out, "Paused all active tasks"));
+    EXPECT_TRUE(contains(r.out, "Resumed all paused tasks"));
+    // 3s 超时后任务失败收口（pty runner 三路流汇入同一从端，FAIL 摘要在 out）
+    EXPECT_TRUE(contains(r.out, "FAIL"));
+    EXPECT_EQ(r.exit_code, 1);
 }
 
 // ============================================================================
