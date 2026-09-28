@@ -49,6 +49,7 @@ gtest_discover_tests(falcon_swarm_unit_tests
 
 add_executable(falcon_swarm_loopback_tests
     swarm_rdv_loopback_test.cpp
+    swarm_rpc_transport_test.cpp
     swarm_rdv_harness.hpp
 )
 

@@ -8,6 +8,15 @@ P2SP 共享网络的 **Rendezvous Service**（会合/发现服务，俗称 track
 
 ## 变更记录 (Changelog)
 
+### 2026-09-28 - 传输层边界收口（swarm_rpc_server miss 96 → 22，21 新用例）+ 注入点零消费更正
+- **21 新用例三套件**挂 `falcon_swarm_loopback_tests`（29 → 50，全量 ctest 绿）：
+  - **SwarmRpcTransport 10**（裸 socket `raw_exchange`，drop 剧本必须半关写端 `SHUT_WR`/`SD_SEND`——否则与服务器 recv 互等只能靠 SO_RCVTIMEO 兜底）：HTTP 解析失败族（缺 CL → -32700 / 头区超限 / 半截头 / 垃圾请求行 / body 超限 / 短 body 全部静默断连 + 头值 trim 无语义）/ Bearer 边界（"Bearer" 恰等前缀长、Basic 非 Bearer scheme → 401）/ 信封非 object → -32600
+  - **SwarmRpcLifecycle 5**：start() 重入幂等 / `SwarmRdvSocket`·`SwarmRdvListen` 注入 → false + last_error 精确串 + 解除后同实例重试成功 / 非法 bind host / 端口冲突
+  - **SwarmRpcWs 6**：非 /jsonrpc 升级 404 / **TEXT·BINARY JSON-RPC 请求-响应（WS 请求路径此前从未被测**）/ CLOSE 回显断开 / 坏操作码 CLOSE 1002 / PONG 忽略后会话存活
+- **更正**：下表曾称「注入点（socket/listen/EVP 四点）已测」——`SwarmRdvSocket`/`SwarmRdvListen` 实为全测试目录零消费（真被测的只有 swarm_crypto EVP 四点），本批为前两者首个消费方
+- **定性跳过 15 行 `#####`（证据在测试文件头）**：RST 微秒窗竞速 3（222/564/722）+ accept 竞速 1（428）+ 结构不可达 5（633 表查无 / 749 恒成功 / 252-253 default）+ IPv6 分支 757-764（服务器 AF_INET-only）+ 行归属伪影 2（498/557 带计数）；`=====` 7 行 = 多实例共享行部分执行伪影
+- gcov 双口径：单对象 ##### 75 → 15 恰为跳过集合；gcovr XML 单文件 96 → 22
+
 ### 2026-09-27 - 服务更名 Rendezvous Service（用户拍板术语统一）
 - 文档/目标/文件/符号统一：CMake target `falcon_swarm_server` → `falcon_swarm_rdv`；`src/server/` → `src/rdv/`；`SwarmServerState/SwarmServerOptions/SwarmServerHarness/SwarmRpcServer` → `SwarmRendezvousState/SwarmRendezvousOptions/SwarmRendezvousHarness/SwarmRendezvousServer`；`swarm_server_state.*` → `swarm_rdv_state.*`、`swarm_server_loopback_test.cpp` → `swarm_rdv_loopback_test.cpp`、`swarm_server_harness.hpp` → `swarm_rdv_harness.hpp`；注入点 `SwarmServerSocket/Listen` → `SwarmRdvSocket/Listen`（libfalcon-core）
 - 保留项（技术事实/线协议契约，不为改而改）：`server_token`（config 键 + CLI `--server-token`）、`kFieldServerTime`/"server_time"（线字段）、`swarm_rpc_server.{hpp,cpp}` 文件名（传输层命名，沿 daemon `json_rpc_server` 形制）、`SwarmRendezvousServer` 类名中的 Server（HTTP/WS 服务器角色语义）、中文注释里的"服务器"角色词
@@ -58,12 +67,12 @@ P2SP 共享网络的 **Rendezvous Service**（会合/发现服务，俗称 track
 - **SwarmClient 心跳自愈**：心跳线程对 `-32003` 自动重注册换新 session（Rendezvous sweep 摘除后节点无感恢复）；`detach()` = 停心跳保注册（模拟进程崩溃，e2e 心跳超时用例的客户端侧入口）
 - 阶段 0 **无 announce 面**：资源表无写入路径恒空；query 合法 session → sha256 回显 + 空 sources（「空表往返」用户裁决）；`SwarmResource` 结构 + 表 + 读取逻辑在位（query 真实消费），阶段 1 加 upsert 即通
 
-## 测试（84 用例四 target）
+## 测试（105 用例四 target）
 
 | Target | 数 | 覆盖 |
 |---|---|---|
 | `falcon_swarm_unit_tests` | 42 | canonical JSON/签名 payload 对拍（RFC 8032 TEST1/TEST2 向量 + 指纹推导）/限频器虚拟时钟/状态过期注入 now/密钥往返/**swarm.json 配置 14 用例**（往返/错误路径六类/告警/~/默认保留） |
-| `falcon_swarm_loopback_tests` | 29 | 真 socket 回环：HTTP/WS 握手/通知帧形制/错误路径全集（-32001..-32005、-32600/1/2、429）/限频/注入点（socket/listen/EVP 四点） |
+| `falcon_swarm_loopback_tests` | 50 | 真 socket 回环：HTTP/WS 握手/通知帧形制/错误路径全集（-32001..-32005、-32600/1/2、429）/限频/注入点（socket/listen 两点 2026-09-28 起真测，EVP 四点在 crypto 测试）/**传输层边界 21 用例**（HTTP 解析失败族/Bearer 边界/start() 生命周期/WS 帧协议面） |
 | `falcon_swarm_client_tests` | 10 | SwarmClient × 回环 Rendezvous：注册往返/心跳存活/退订摘除/会话过期自愈/空表查询/传输失败/错令牌双路径/密钥往返/0600 |
 | `falcon_swarm_e2e_tests` | 3 | 真二进制 fork+execv（POSIX-only）：全流程含通知到达、心跳超时摘除、坏配置非零退出 + SIGTERM exit 0（gcda 铁律） |
 

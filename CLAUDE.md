@@ -2,6 +2,19 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-28 - 覆盖率批次：swarm_rpc_server 传输层收口（XML miss 96 → 22，21 新用例）+ socket/listen 注入点零消费更正
+- **台账选型**：`swarm_rpc_server.cpp` 为 swarmd 包最大可达矿（gcovr XML 口径 96 miss / 单对象 75 行）——批次 P 先例（daemon `json_rpc_server` raw-socket 68→15）证明传输层分支可裸 socket 直达
+- **21 新用例三套件**挂 `falcon_swarm_loopback_tests`（29 → 50；全量 ctest **2528/2528 过零失败** 721.4s，13 skip 设计内）：
+  - SwarmRpcTransport 10（裸 socket `raw_exchange` helper）：HTTP 解析失败族——缺 Content-Length → 200+-32700 / 头区超限（64KB 头 + 4MB 上限）drop / 半截头断连 drop / 垃圾请求行 drop / 声明 body 超限 drop / 声明 100 实发 5 短 body drop / 头值 `X-Junk  :   padded-value   ` trim 无语义影响；Bearer 边界——"Bearer" 恰等于前缀长度（无 token）与非 Bearer scheme（Basic）双双 401+kErrBearer；JSON-RPC 信封 body 合法 JSON 但非 object → -32600
+  - SwarmRpcLifecycle 5：start() 重入幂等（true + 端口不变 + 服务照常）/ `SwarmRdvSocket`·`SwarmRdvListen` 注入 → false + last_error 精确串（"socket() failed"/"listen() failed"）+ 解除后同实例重试成功（start() 入口清 last_error 的契约同时钉住）/ 非法 bind host → "invalid bind host: not-an-ip" / 端口冲突 → "bind() failed"
+  - SwarmRpcWs 6：升级三件套齐但 path 非 /jsonrpc → 404+-32600 envelope / **TEXT·BINARY JSON-RPC 请求-响应往返（WS 请求路径此前从未被测**——既有 29 用例只测 ping/广播/升级 401，TEXT/BINARY→handle_jsonrpc→TEXT 回帧全链首覆盖）/ CLOSE 帧原样回显后服务器断开 / 非法操作码 0x3 → CLOSE `"\x03\xEA"`（1002 大端）+ 断开 / PONG 帧忽略（无排队帧）且后续 PING 得 PONG 证会话存活
+- **测量级更正**：包 changelog 曾称「注入点（socket/listen/EVP 四点）已测」——grep 实证 `SwarmRdvSocket`/`SwarmRdvListen` 全测试目录零消费（真被测的只有 swarm_crypto EVP 四点），本批为前两者首个消费方
+- **drop 连接剧本关键设计**：客户端发完请求必须半关写端（`shutdown SHUT_WR`/`SD_SEND`）——否则「服务器 recv 等 body ↔ 客户端 recv 等应答」互等只能靠 SO_RCVTIMEO 兜底；`raw_exchange(port, request, half_close_after_send)` 参数结构性消除（超限/短 body 类 drop 用例不半关则时序不成立）
+- **定性跳过 15 行 `#####`（证据在案写进测试文件头）**：RST 微秒窗竞速 3（222/564 请求应答·101 应答 send 失败需 RST 在 recv→send 微秒窗到达；722 广播死 fd 同族）+ accept 竞速 1（428 ECONNABORTED）+ 结构不可达 5（633 `ws_send_frame` 表查无防御——调用点全持表内 fd，快照-发送窗即 722 同族竞速；749 活 fd getpeername 恒成功；252-253 status_text default 调用点全传枚举内值）+ IPv6 分支 757-764（服务器 AF_INET-only，peer 恒 v4）+ 行归属伪影 2（498 hits=0 但 L500 hits=83；557 hits=0 但 L560-563 hits=13）；另有 `=====` 7 行（132-134 stoull catch / 238 status_text 尾行 / 690-693 dispatch 内部 catch）= 多函数实例共享行部分执行，gcovr merge-use-line-min 记 miss——实例水分族不追
+- **gcov 双口径复核**：单对象 ##### **75 → 15 恰为定性跳过集合零多零少**、目标行逐行命中（167 hits=1042 头循环累计、307 hits=91 重入守卫累计）；gcovr XML 单文件 **96 → 22**（净收 74）
+- **铁账（build-cov 单树新鲜数据）**：分母 19253/1968/39620 不变（本批零生产改动），行 miss 918 → **858**（**95.2% → 95.5%**）/ 函数 1937 → 1939（**98.4% → 98.5%**）/ 分支 21716 → 21800（**54.8% → 55.0%**，净收 84 点）——全包净收 60 行 < 单文件净收 74，差额为他文件时序窗口自然抖动 −14（沿 A6/A8 先例方向随机）
+- 假设注明：非交互模式，文档与提交信息自拟；下一候选缺口沿台账：falcon-swarmd main.cpp 66（e2e CLI 参数分支）、daemon json_rpc_server.cpp 50
+
 ### 2026-09-28 - CLI main.cpp 成功路径收口（139 miss → 9）+ b630c89 CI 终验绿 + build 树 ghost 残留终清
 - **b630c89 收口确认**：run 36386927417 `--failed` rerun 后 **success 零红 job**——修复目标 macOS `V2PauseThenResume` 本 run 绿；唯一红面 Windows `IncrementalDownloadTest.Performance_ManySmallFiles`（3116ms vs 3000ms 阈值，+3.9%）定性负载抖动惯犯，rerun 复绿零改动（「rerun 确认 + 记录，不改阈值」纪律）
 - **CLI 集成测试 +8 用例（20 → 28，falcon_cli_integration_tests 29 全绿）**：`SlowFileServer` 内联慢速 HTTP 服务器（仿 daemon RangeFileServer：端口 0 + getsockname、HEAD 忠实 200+Content-Length+Accept-Ranges+ETag、Range 忠实 206 切片/越界 416、16KB 块间 30ms 慢发造进度窗口、MSG_NOSIGNAL send_all、stop() 先 join accept 再 join conn_threads_）+ **请求头块观测**（mutex 守护 vector 记录原始请求）——配置项「真实到达线上」首次可断言
