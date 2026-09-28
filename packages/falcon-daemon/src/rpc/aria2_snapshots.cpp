@@ -115,6 +115,19 @@ std::optional<TaskSnapshot> snapshot_from_status_json(const nlohmann::json& stat
         const auto v = prio->get<int>();
         if (v >= 0 && v <= 3) snap.priority = static_cast<falcon::TaskPriority>(v);
     }
+
+    // Falcon 扩展字段：做种计量快照（BitTorrent；非 BT 任务/旧版 daemon 缺省恒零）
+    snap.seed_uploaded_bytes = parse_u64(status, "seedUploadedBytes");
+    snap.seed_downloaded_bytes = parse_u64(status, "seedDownloadedBytes");
+    snap.seed_total_size = parse_u64(status, "seedTotalSize");
+    if (const auto it = status.find("seededSeconds");
+        it != status.end() && it->is_number()) {
+        snap.seeded_seconds = it->get<double>();
+    }
+    if (const auto it = status.find("seedingActive");
+        it != status.end() && it->is_boolean()) {
+        snap.seeding_active = it->get<bool>();
+    }
     return snap;
 }
 

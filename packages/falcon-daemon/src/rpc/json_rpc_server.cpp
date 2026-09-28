@@ -195,6 +195,8 @@ static json download_options_to_json(const falcon::DownloadOptions& options) {
     out["retry-wait"] = std::to_string(options.retry_delay_seconds);
     out["max-connection-per-server"] = std::to_string(options.max_connections);
     out["max-download-limit"] = std::to_string(options.speed_limit);
+    out["seed-ratio"] = std::to_string(options.seed_ratio);
+    out["seed-time"] = std::to_string(options.seed_time_minutes);
     json headers = json::object();
     for (const auto& [key, value] : options.headers) {
         headers[key] = value;
@@ -226,6 +228,13 @@ static json task_to_status_json(const falcon::DownloadTask& task) {
     out["errorMessage"] = task.error_message();
     out["files"] = files_json(task.output_path(), task.total_bytes(),
                               task.downloaded_bytes(), task.url(), false);
+    // Falcon 扩展字段：做种计量快照（BitTorrent；非 BT 任务恒零）
+    const auto seed = task.get_seed_info();
+    out["seedUploadedBytes"] = std::to_string(seed.uploaded_bytes);
+    out["seedDownloadedBytes"] = std::to_string(seed.downloaded_bytes);
+    out["seedTotalSize"] = std::to_string(seed.total_size);
+    out["seededSeconds"] = seed.seeded_seconds;
+    out["seedingActive"] = seed.seeding_active;
     return out;
 }
 
@@ -1023,6 +1032,7 @@ JsonRpcServer::HttpResponse JsonRpcServer::handle_jsonrpc(const std::string& bod
                     "aria2.saveSession",
                     "aria2.purgeDownloadResult",
                     "aria2.removeDownloadResult",
+                    "falcon.stopSeeding",
                     "system.listMethods",
                     "system.multicall",
                 });
@@ -1179,6 +1189,30 @@ JsonRpcServer::HttpResponse JsonRpcServer::handle_jsonrpc(const std::string& bod
                 return task_id_to_gid(*tid);
             }
 
+            if (m == "falcon.stopSeeding") {
+                // Falcon 扩展：p = [gid]——请求任务停止做种（BitTorrent）。
+                // 置粘性标志，BT 监控循环下一 tick 与策略达标同路径收口。
+                // 错误码约定：1 = 任务不支持做种（非 BT/未在做种），2 = gid 不存在
+                if (!p.is_array() || p.empty() || !p[0].is_string()) {
+                    return json{{"error", json{{"code", -32602}, {"message", "Invalid params"}}}};
+                }
+                auto tid = gid_to_task_id(p[0].get<std::string>());
+                if (!tid) {
+                    return json{{"error", json{{"code", 2}, {"message", "Task not found"}}}};
+                }
+                auto task = engine_->get_task(*tid);
+                if (!task) {
+                    return json{{"error", json{{"code", 2}, {"message", "Task not found"}}}};
+                }
+                const auto seed = task->get_seed_info();
+                if (!seed.seeding_active) {
+                    return json{{"error", json{{"code", 1},
+                                               {"message", "Task is not seeding"}}}};
+                }
+                task->request_stop_seeding();
+                return task_id_to_gid(*tid);
+            }
+
             if (m == "aria2.changeGlobalOption") {
                 // aria2 签名是 (secret, options)：token 剥离后 options 就在 p[0]
                 if (!p.is_array() || p.empty() || !p[0].is_object()) {
@@ -1305,6 +1339,38 @@ JsonRpcServer::HttpResponse JsonRpcServer::handle_jsonrpc(const std::string& bod
                     if (o.contains("max-download-limit")) {
                         if (o["max-download-limit"].is_string()) options.speed_limit = static_cast<falcon::BytesPerSecond>(std::stoull(o["max-download-limit"].get<std::string>()));
                         if (o["max-download-limit"].is_number_integer()) options.speed_limit = static_cast<falcon::BytesPerSecond>(o["max-download-limit"].get<std::uint64_t>());
+                    }
+
+                    // 做种策略（BitTorrent）：字符串（aria2 风格）与数值双
+                    // 形态；负值钳 0（与 CLI --seed-ratio/--seed-time 同语义）
+                    if (o.contains("seed-ratio")) {
+                        double ratio = -1.0;
+                        if (o["seed-ratio"].is_string()) {
+                            try {
+                                ratio = std::stod(o["seed-ratio"].get<std::string>());
+                            } catch (const std::exception&) {
+                                ratio = -1.0;
+                            }
+                        }
+                        if (o["seed-ratio"].is_number()) {
+                            ratio = o["seed-ratio"].get<double>();
+                        }
+                        options.seed_ratio = std::max(0.0, ratio);
+                    }
+                    if (o.contains("seed-time")) {
+                        double minutes = -1.0;
+                        if (o["seed-time"].is_string()) {
+                            try {
+                                minutes = std::stod(o["seed-time"].get<std::string>());
+                            } catch (const std::exception&) {
+                                minutes = -1.0;
+                            }
+                        }
+                        if (o["seed-time"].is_number()) {
+                            minutes = o["seed-time"].get<double>();
+                        }
+                        options.seed_time_minutes = static_cast<std::size_t>(
+                            std::max(0.0, minutes));
                     }
 
                     if (o.contains("header")) {

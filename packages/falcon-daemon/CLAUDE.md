@@ -6,6 +6,12 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-28 - 做种计量 RPC 面（tellStatus 扩展字段 + falcon.stopSeeding + addUri seed 选项）
+- **tellStatus Falcon 扩展字段**：`seedUploadedBytes/seedDownloadedBytes/seedTotalSize`（aria2 字符串风格）+ `seededSeconds`（数值）+ `seedingActive`（布尔）——读 `DownloadTask::get_seed_info()`（core 新 SeedInfo 快照），非 BT 任务恒零值；`TaskSnapshot`（daemon 包）增同名五字段 + `seed_ratio()` 访问器（分母 = max(downloaded, total_size)，分母 0 返 0，与 seed_policy 同式）
+- **新方法 `falcon.stopSeeding`**（p=[gid]）：置粘性标志 `request_stop_seeding()`，BT 监控循环下一 tick 与策略达标同一收口路径；错误码 1 = 任务非做种态（get_seed_info().seeding_active == false）/ 2 = gid 不存在；成功回 gid；已注册进 system.listMethods
+- **addUri 选项 `seed-ratio`/`seed-time`**：字符串（aria2 风格，stod 解析失败回落负值）与数值双形态；负值钳 0（std::max(0.0, x)，与 CLI --seed-ratio/--seed-time 同语义）；getOptions 回传两键
+- 测试：桌面 download_backend_test 4 新用例经真实 JsonRpcServer 回环覆盖全链（快照往返/错误码/哨兵默认/钳 0）
+
 ### 2026-09-25 - P2SP 阶段 0 批 1：拆库（falcon_ws_protocol + falcon_daemon_core，源零改动）
 - **`falcon_ws_protocol`**（新静态库）：`src/rpc/websocket_frame.{hpp,cpp}`
   移入——消除 CMakeLists 自认的两处重复编译债（同一源文件既编进

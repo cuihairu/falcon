@@ -74,6 +74,8 @@ signals:
     void priority_changed(falcon::TaskId id, falcon::TaskPriority priority);
     void pause_requested(falcon::TaskId id);
     void resume_requested(falcon::TaskId id);
+    /// 停止做种（BitTorrent；仅对 seeding_active 任务出现菜单项）
+    void stop_seeding_requested(falcon::TaskId id);
 
 private slots:
     void on_new_task_clicked();
@@ -123,6 +125,12 @@ private:
     static QString filename_for(const falcon::daemon::rpc::TaskSnapshot& snapshot);
     static QString format_bytes(uint64_t bytes);
     static QString format_speed(uint64_t bytes_per_second);
+    static QString seeding_text(const falcon::daemon::rpc::TaskSnapshot& snapshot);
+    static QString seed_ratio_text(const falcon::daemon::rpc::TaskSnapshot& snapshot);
+    static QString seed_duration_text(const falcon::daemon::rpc::TaskSnapshot& snapshot);
+    // 做种列汇总("做种中 · 1.20 · 2时15分";无做种信息为空串)与明细 tooltip
+    static QString seed_column_text(const falcon::daemon::rpc::TaskSnapshot& snapshot);
+    static QString seed_column_tooltip(const falcon::daemon::rpc::TaskSnapshot& snapshot);
     // 活动任务才显示速度,暂停/终态显示 "—"(0 B/s 是无信息量噪音)
     static QString speed_display_text(const falcon::daemon::rpc::TaskSnapshot& snapshot);
 

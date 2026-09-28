@@ -232,4 +232,14 @@ ProgressInfo DownloadTask::get_progress_info() const {
     return info;
 }
 
+SeedInfo DownloadTask::get_seed_info() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return seed_info_;
+}
+
+void DownloadTask::update_seed_info(const SeedInfo& info) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    seed_info_ = info;
+}
+
 }  // namespace falcon

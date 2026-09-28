@@ -12,8 +12,11 @@
 #include <QPushButton>
 #include <QLabel>
 #include <QComboBox>
+#include <QDoubleSpinBox>
 #include <QSpinBox>
 #include <QPlainTextEdit>
+
+#include <cstddef>
 
 #include "../utils/url_detector.hpp"
 
@@ -35,6 +38,8 @@ public:
 
     void set_default_save_path(const QString& path);
     void set_default_connections(int count);
+    /// 做种默认值预填（BT 任务的 seed-ratio/seed-time；min 分钟钳 0）
+    void set_seed_defaults(double ratio, std::size_t minutes);
     void set_request_referrer(const QString& referrer);
     void set_request_user_agent(const QString& user_agent);
     void set_request_cookies(const QString& cookies);
@@ -71,6 +76,11 @@ public:
      * @return User agent string
      */
     QString get_user_agent() const;
+
+    /// 做种份额比（BT 任务完成后的做种停止阈值；aria2 seed-ratio 同语义）
+    double get_seed_ratio() const;
+    /// 做种时长上限（分钟；0 = 不限时，纯按 ratio 停止）
+    std::size_t get_seed_time_minutes() const;
 
 private slots:
     /**
@@ -111,6 +121,8 @@ private:
     QLineEdit* save_path_edit_;
     QPushButton* browse_button_;
     QSpinBox* connections_spin_;
+    QDoubleSpinBox* seed_ratio_spin_;
+    QSpinBox* seed_time_spin_;
     QComboBox* user_agent_combo_;
     QLineEdit* referrer_edit_;
     QPlainTextEdit* cookies_edit_;

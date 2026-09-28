@@ -18,6 +18,7 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QPushButton>
 #include <QStackedWidget>
@@ -67,6 +68,21 @@ std::vector<TaskSnapshot> demo_tasks()
         return snapshot;
     };
 
+    auto make_seeding = [&make](falcon::TaskId id, const char* url,
+                                std::uint64_t uploaded, double seconds,
+                                bool active) {
+        // 做种任务:BT 完成后进入做种阶段(Completed + seed 扩展字段);
+        // uploaded/total 直接决定 ratio 展示
+        auto snapshot = make(id, url, falcon::TaskStatus::Completed, 1.0,
+                             4296000000ULL, 0);
+        snapshot.seed_uploaded_bytes = uploaded;
+        snapshot.seed_downloaded_bytes = 4296000000ULL;
+        snapshot.seed_total_size = 4296000000ULL;
+        snapshot.seeded_seconds = seconds;
+        snapshot.seeding_active = active;
+        return snapshot;
+    };
+
     return {
         make(1, "https://cdn.example.com/media/ubuntu-24.04.3-desktop-amd64.iso",
              falcon::TaskStatus::Downloading, 0.683, 6120000000ULL, 11250000),
@@ -79,6 +95,12 @@ std::vector<TaskSnapshot> demo_tasks()
         make(5, "https://cdn.example.com/videos/season-01.m3u8",
              falcon::TaskStatus::Failed, 0.08, 780000000ULL, 0,
              "HTTP 404 Not Found"),
+        // 做种中:ratio 1.20 / 已做种 2时15分
+        make_seeding(6, "https://tracker.example.org/torrents/falcon-live-dvd.iso",
+                     5155200000ULL, 8100.0, true),
+        // 达标已停止:ratio 1.00 / 做种 60 分
+        make_seeding(7, "https://tracker.example.org/torrents/podcast-pack.zip",
+                     4296000000ULL, 3600.0, false),
     };
 }
 
@@ -231,14 +253,29 @@ int main(int argc, char** argv)
         shell.download->toggle_display_style();
         snap("download_grid_" + suffix);
         shell.download->toggle_display_style();
-        go(1); // 已完成
+        go(1); // 已完成(做种任务在此视图,做种列/卡片做种摘要在位)
         snap("download_completed_" + suffix);
+        shell.download->toggle_display_style();
+        snap("download_completed_grid_" + suffix);
+        shell.download->toggle_display_style();
         go(3); // 云盘空间
         snap("cloud_" + suffix);
         go(2); // 资源发现
         snap("discovery_" + suffix);
         go(4); // 偏好设置
         snap("settings_" + suffix);
+        // 做种设置组特写(滚动区在折叠线以下,整窗截图看不到)
+        for (auto* box : shell.root->findChildren<QGroupBox*>()) {
+            if (box->title().contains(QString::fromUtf8("做种"))) {
+                const QString path = out_dir + "/settings_seeding_" + suffix + ".png";
+                if (!box->grab().save(path)) {
+                    std::fprintf(stderr, "failed to save %s\n", qPrintable(path));
+                } else {
+                    std::printf("saved %s\n", qPrintable(path));
+                }
+                break;
+            }
+        }
         snap_add_dialog("add_dialog_" + suffix);
     };
 

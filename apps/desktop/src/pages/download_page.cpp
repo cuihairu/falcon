@@ -21,6 +21,7 @@
 #include <QFrame>
 #include <QFileInfo>
 #include <QSet>
+#include <QStringList>
 #include <QToolButton>
 #include <algorithm>
 
@@ -247,13 +248,14 @@ void DownloadPage::create_header_bar()
 void DownloadPage::create_task_table()
 {
     task_table_ = new QTableWidget(this);
-    task_table_->setColumnCount(6);
+    task_table_->setColumnCount(7);
     task_table_->setHorizontalHeaderLabels({
         tr("文件名"),
         tr("进度"),
         tr("大小"),
         tr("速度"),
         tr("状态"),
+        tr("做种"),
         tr("操作")
     });
 
@@ -279,7 +281,8 @@ void DownloadPage::create_task_table()
     task_table_->setColumnWidth(2, 100);  // 大小
     task_table_->setColumnWidth(3, 100);  // 速度
     task_table_->setColumnWidth(4, 88);   // 状态
-    task_table_->setColumnWidth(5, 80);   // 操作
+    task_table_->setColumnWidth(5, 200);  // 做种(状态 · ratio · 时长;单行不折)
+    task_table_->setColumnWidth(6, 80);   // 操作
 
     task_table_->setObjectName("taskTable");
 }
@@ -500,6 +503,11 @@ void DownloadPage::sync_task_row(const TaskRecord& record)
     status_item->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     task_table_->setItem(row, 4, status_item);
 
+    // 做种(状态 · ratio · 时长;上传/下载量收进 tooltip)
+    auto* seed_item = new QTableWidgetItem(seed_column_text(record.snapshot));
+    seed_item->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    task_table_->setItem(row, 5, seed_item);
+
     // 操作按钮(图标化;暂停⇄继续按状态切换,click 统一走状态分发)
     auto* actions_widget = new QWidget(this);
     auto* actions_layout = new QHBoxLayout(actions_widget);
@@ -532,7 +540,7 @@ void DownloadPage::sync_task_row(const TaskRecord& record)
     connect(delete_btn, &QToolButton::clicked, this, &DownloadPage::on_delete_selected);
     actions_layout->addWidget(delete_btn);
 
-    task_table_->setCellWidget(row, 5, actions_widget);
+    task_table_->setCellWidget(row, 6, actions_widget);
     update_row_texts(row, record);
     update_empty_state();
 }
@@ -553,6 +561,10 @@ void DownloadPage::update_row_texts(int row, const TaskRecord& record)
     }
     if (auto* status_item = task_table_->item(row, 4)) {
         status_item->setText(record.status_text);
+    }
+    if (auto* seed_item = task_table_->item(row, 5)) {
+        seed_item->setText(seed_column_text(snap));
+        seed_item->setToolTip(seed_column_tooltip(snap));
     }
     if (auto* widget = task_table_->cellWidget(row, 1)) {
         if (auto* bar = widget->findChild<QProgressBar*>()) {
@@ -806,6 +818,77 @@ QString DownloadPage::speed_display_text(
     return active ? format_speed(snapshot.speed) : QStringLiteral("—");
 }
 
+QString DownloadPage::seeding_text(
+    const falcon::daemon::rpc::TaskSnapshot& snapshot)
+{
+    // 快照只有 seeding_active 布尔量,无法区分"达标停止"与"手动停止"——
+    // 统一显示"已停止",细节(达标或手动)由 tooltip/托盘通知说明
+    if (snapshot.seeding_active) {
+        return QObject::tr("做种中");
+    }
+    if (snapshot.seed_uploaded_bytes > 0) {
+        return QObject::tr("已停止");
+    }
+    return QString();
+}
+
+QString DownloadPage::seed_ratio_text(
+    const falcon::daemon::rpc::TaskSnapshot& snapshot)
+{
+    const double ratio = snapshot.seed_ratio();
+    if (ratio <= 0.0) {
+        return QString();
+    }
+    return QString::number(ratio, 'f', 2);
+}
+
+QString DownloadPage::seed_duration_text(
+    const falcon::daemon::rpc::TaskSnapshot& snapshot)
+{
+    if (snapshot.seeded_seconds < 60.0) {
+        return QString();
+    }
+    const auto total_minutes = static_cast<long long>(snapshot.seeded_seconds / 60.0);
+    if (total_minutes >= 60) {
+        return QObject::tr("%1时%2分")
+            .arg(total_minutes / 60)
+            .arg(total_minutes % 60);
+    }
+    return QObject::tr("%1分").arg(total_minutes);
+}
+
+// 做种列汇总文本:"做种中 · 1.20 · 2时15分";无做种信息返回空串
+QString DownloadPage::seed_column_text(
+    const falcon::daemon::rpc::TaskSnapshot& snapshot)
+{
+    const QString status = seeding_text(snapshot);
+    if (status.isEmpty()) {
+        return QString();
+    }
+    QString text = status;
+    if (const QString ratio = seed_ratio_text(snapshot); !ratio.isEmpty()) {
+        text += QStringLiteral(" · ") + ratio;
+    }
+    if (const QString duration = seed_duration_text(snapshot); !duration.isEmpty()) {
+        text += QStringLiteral(" · ") + duration;
+    }
+    return text;
+}
+
+// 做种 tooltip:上传/下载量明细(表格列宽装不下,收进悬浮提示)
+QString DownloadPage::seed_column_tooltip(
+    const falcon::daemon::rpc::TaskSnapshot& snapshot)
+{
+    QStringList lines;
+    lines << tr("上传 %1 / 下载 %2")
+                 .arg(format_bytes(snapshot.seed_uploaded_bytes),
+                      format_bytes(snapshot.seed_downloaded_bytes));
+    if (!snapshot.seeding_active) {
+        lines << tr("做种已结束(达标或手动停止)");
+    }
+    return lines.join(QLatin1Char('\n'));
+}
+
 void DownloadPage::show_context_menu(const QPoint& pos)
 {
     const auto* item = task_table_->itemAt(pos);
@@ -834,6 +917,13 @@ void DownloadPage::show_context_menu(const QPoint& pos)
         auto* resume_action = menu.addAction(tr("继续"));
         connect(resume_action, &QAction::triggered, this,
                 [this, id = record->snapshot.id]() { emit resume_requested(id); });
+    }
+
+    // 停止做种(做种中的 BitTorrent 任务;终态停止,任务保持已完成)
+    if (record->snapshot.seeding_active) {
+        auto* stop_seed_action = menu.addAction(tr("停止做种"));
+        connect(stop_seed_action, &QAction::triggered, this,
+                [this, id = record->snapshot.id]() { emit stop_seeding_requested(id); });
     }
 
     menu.addSeparator();
@@ -1005,6 +1095,13 @@ void DownloadPage::show_grid_context_menu(const QPoint& pos)
                 [this, id = snapshot.id]() { emit resume_requested(id); });
     }
 
+    // 停止做种(同 show_context_menu)
+    if (snapshot.seeding_active) {
+        auto* stop_seed_action = menu.addAction(tr("停止做种"));
+        connect(stop_seed_action, &QAction::triggered, this,
+                [this, id = snapshot.id]() { emit stop_seeding_requested(id); });
+    }
+
     menu.addSeparator();
 
     // 按值捕获快照内容，理由同 show_context_menu
@@ -1131,8 +1228,14 @@ QWidget* DownloadPage::create_task_card(const TaskRecord& record)
     size_label->setObjectName("cardInfoLabel");
     info_layout->addWidget(size_label);
 
-    auto* speed_label = new QLabel(speed_display_text(snap), card);
+    // 做种任务:速度槽位(终态恒为 "—")改显做种摘要,明细收进 tooltip
+    const QString seed_summary = seed_column_text(snap);
+    auto* speed_label = new QLabel(
+        seed_summary.isEmpty() ? speed_display_text(snap) : seed_summary, card);
     speed_label->setObjectName("cardInfoLabel");
+    if (!seed_summary.isEmpty()) {
+        speed_label->setToolTip(seed_column_tooltip(snap));
+    }
     info_layout->addWidget(speed_label);
 
     auto* status_label = new QLabel(record.status_text, card);

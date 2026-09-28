@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <functional>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <utility>
 
@@ -41,7 +42,31 @@ falcon::daemon::rpc::TaskSnapshot snapshot_from_download_task(
     snap.speed = static_cast<std::uint64_t>(task.speed());
     snap.error_message = task.error_message();
     snap.priority = task.get_priority();
+    const auto seed = task.get_seed_info();
+    snap.seed_uploaded_bytes = seed.uploaded_bytes;
+    snap.seed_downloaded_bytes = seed.downloaded_bytes;
+    snap.seed_total_size = seed.total_size;
+    snap.seeded_seconds = seed.seeded_seconds;
+    snap.seeding_active = seed.seeding_active;
     return snap;
+}
+
+// ============================================================================
+// 做种默认值填充（两后端共用）
+// ============================================================================
+
+/// seed_ratio < 0 是桌面层约定的"未显式设置"哨兵（IPC/扩展/发现页等
+/// 无对话框路径），按全局做种默认填充；对话框路径 >= 0 已显式携带
+/// 两字段，原样透传。
+falcon::DownloadOptions with_seed_defaults(const falcon::DownloadOptions& options,
+                                           double ratio,
+                                           std::size_t minutes) {
+    auto out = options;
+    if (out.seed_ratio < 0) {
+        out.seed_ratio = ratio;
+        out.seed_time_minutes = minutes;
+    }
+    return out;
 }
 
 // ============================================================================
@@ -76,7 +101,8 @@ public:
                            const falcon::DownloadOptions& options,
                            bool start_immediately) override {
         AddTaskResult result;
-        auto task = engine_->add_task(url, options);
+        auto task = engine_->add_task(
+            url, with_seed_defaults(options, seed_ratio_default_, seed_time_default_));
         if (!task) {
             result.error = "URL is not supported";
             return result;
@@ -105,6 +131,21 @@ public:
                                std::size_t global_speed_limit_bytes) override {
         engine_->set_max_concurrent_tasks(max_concurrent_tasks);
         engine_->set_global_speed_limit(global_speed_limit_bytes);
+    }
+
+    void apply_seed_defaults(double seed_ratio,
+                             std::size_t seed_time_minutes) override {
+        seed_ratio_default_ = seed_ratio;
+        seed_time_default_ = seed_time_minutes;
+    }
+
+    bool stop_seeding(falcon::TaskId id) override {
+        const auto task = engine_->get_task(id);
+        if (!task || !task->get_seed_info().seeding_active) {
+            return false;
+        }
+        task->request_stop_seeding();
+        return true;
     }
 
     std::vector<falcon::daemon::rpc::TaskSnapshot> fetch_tasks() override {
@@ -148,6 +189,8 @@ public:
 
 private:
     std::unique_ptr<falcon::DownloadEngine> engine_;
+    double seed_ratio_default_ = 1.0;
+    std::size_t seed_time_default_ = 0;
 };
 
 // ============================================================================
@@ -184,6 +227,13 @@ nlohmann::json options_to_aria2(const falcon::DownloadOptions& options) {
     }
     out["max-download-limit"] =
         options.speed_limit > 0 ? std::to_string(options.speed_limit) : "0";
+    // 做种策略（Falcon daemon 扩展键；aria2 严格客户端/服务器忽略未知键）
+    {
+        std::ostringstream ratio_stream;
+        ratio_stream << options.seed_ratio;
+        out["seed-ratio"] = ratio_stream.str();
+    }
+    out["seed-time"] = std::to_string(options.seed_time_minutes);
     const auto cookie = options.headers.find("Cookie");
     if (cookie != options.headers.end() && !cookie->second.empty()) {
         out["header"] = nlohmann::json::array({"Cookie: " + cookie->second});
@@ -227,7 +277,9 @@ public:
         AddTaskResult result;
         (void)start_immediately;  // aria2.addUri 默认即启动（除非 forcePause 选项）
         falcon::daemon::rpc::JsonRpcError err;
-        auto gid = client_.add_uri({url}, options_to_aria2(options), &err);
+        const auto filled = with_seed_defaults(options, seed_ratio_default_,
+                                               seed_time_default_);
+        auto gid = client_.add_uri({url}, options_to_aria2(filled), &err);
         if (!gid) {
             result.error = err.message.empty() ? "addUri failed" : err.message;
             return result;
@@ -278,6 +330,19 @@ public:
         (void)client_.change_global_option(options);
     }
 
+    void apply_seed_defaults(double seed_ratio,
+                             std::size_t seed_time_minutes) override {
+        seed_ratio_default_ = seed_ratio;
+        seed_time_default_ = seed_time_minutes;
+    }
+
+    bool stop_seeding(falcon::TaskId id) override {
+        falcon::daemon::rpc::JsonRpcError err;
+        return static_cast<bool>(client_.call("falcon.stopSeeding",
+                                              nlohmann::json::array({gid_for(id)}),
+                                              &err));
+    }
+
     std::vector<falcon::daemon::rpc::TaskSnapshot> fetch_tasks() override {
         std::vector<falcon::daemon::rpc::TaskSnapshot> out;
         falcon::daemon::rpc::JsonRpcError err;
@@ -311,6 +376,8 @@ private:
     falcon::daemon::rpc::WebSocketRpcClient client_;
     std::mutex dispatch_mutex_;  // wake_callback_ 与通知分发互斥
     std::function<void()> wake_callback_;
+    double seed_ratio_default_ = 1.0;
+    std::size_t seed_time_default_ = 0;
 };
 
 } // namespace

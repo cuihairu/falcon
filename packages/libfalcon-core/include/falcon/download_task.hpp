@@ -17,6 +17,16 @@ namespace falcon {
 // Forward declarations
 class IProtocolHandler;
 
+/// 做种状态快照（BitTorrent 完成下载后进入做种阶段的计量信息）。
+/// BT 插件按监控周期发布，UI/RPC 轮询读取——无监听事件、纯快照。
+struct SeedInfo {
+    std::uint64_t uploaded_bytes = 0;    ///< 累计上传字节（真实载荷，不含协议开销）
+    std::uint64_t downloaded_bytes = 0;  ///< 累计下载字节
+    std::uint64_t total_size = 0;        ///< torrent 总长
+    double seeded_seconds = 0.0;         ///< 已做种时长（秒）
+    bool seeding_active = false;         ///< 当前是否处于做种阶段
+};
+
 /// Download task class representing a single download operation
 class DownloadTask : public std::enable_shared_from_this<DownloadTask> {
 public:
@@ -98,6 +108,9 @@ public:
     /// Get estimated remaining time
     [[nodiscard]] Duration estimated_remaining() const noexcept;
 
+    /// Get seeding snapshot (BitTorrent only; all-zero before seeding starts)
+    [[nodiscard]] SeedInfo get_seed_info() const;
+
     /// Check if task is active (downloading or preparing)
     [[nodiscard]] bool is_active() const noexcept;
 
@@ -124,6 +137,15 @@ public:
     /// @return true if cancelled successfully
     bool cancel();
 
+    /// Request that seeding stop (BitTorrent). 粘性标志：跨 pause/resume
+    /// 存活，直到任务移除；BT 监控循环与策略达标走同一收口路径。
+    void request_stop_seeding() noexcept { stop_seeding_requested_.store(true); }
+
+    /// Whether stop-seeding was requested
+    [[nodiscard]] bool stop_seeding_requested() const noexcept {
+        return stop_seeding_requested_.load();
+    }
+
     /// Wait for task to complete
     void wait();
 
@@ -148,6 +170,9 @@ public:
 
     /// Update progress (internal)
     void update_progress(Bytes downloaded, Bytes total, BytesPerSecond speed);
+
+    /// Publish seeding snapshot (internal; called by BT plugin monitor loop)
+    void update_seed_info(const SeedInfo& info);
 
     /// Set file info (internal)
     void set_file_info(const FileInfo& info);
@@ -192,6 +217,10 @@ private:
     std::condition_variable cv_;
     std::atomic<bool> cancel_requested_{false};
     std::atomic<bool> pause_requested_{false};
+    std::atomic<bool> stop_seeding_requested_{false};
+
+    /// 做种快照：BT 插件监控线程发布、UI/RPC 线程读取，mutex_ 守护
+    SeedInfo seed_info_;
 };
 
 }  // namespace falcon

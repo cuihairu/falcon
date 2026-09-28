@@ -48,12 +48,27 @@ public:
     // ---- 全局设置 ----
     virtual void apply_global_settings(std::size_t max_concurrent_tasks,
                                        std::size_t global_speed_limit_bytes) = 0;
+    /// 做种全局默认值（IPC/扩展等无对话框路径的新任务按此填充；
+    /// 对话框路径总是显式携带两字段，不受影响）。负 ratio 视为未设。
+    virtual void apply_seed_defaults(double seed_ratio,
+                                     std::size_t seed_time_minutes) {
+        (void)seed_ratio;
+        (void)seed_time_minutes;
+    }
 
     // ---- 查询 ----
     /// 全量任务快照（active + waiting + stopped）；后端不可达时返回空列表
     virtual std::vector<falcon::daemon::rpc::TaskSnapshot> fetch_tasks() = 0;
     /// 全局统计；不可用时返回 nullopt
     virtual std::optional<falcon::daemon::rpc::GlobalStats> fetch_stats() = 0;
+
+    // ---- 做种控制（BitTorrent） ----
+    /// 请求任务停止做种。仅在做种中的任务上成功；任务不存在或未在做种
+    /// 返回 false。
+    virtual bool stop_seeding(falcon::TaskId id) {
+        (void)id;
+        return false;
+    }
 
     // ---- 事件驱动（可选能力） ----
     /// 注册"有新事件"唤醒回调：daemon 推送通知（任务状态变更/进度更新）时

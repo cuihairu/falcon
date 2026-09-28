@@ -27,6 +27,24 @@ struct TaskSnapshot {
     std::string error_message;
     falcon::TaskPriority priority = falcon::TaskPriority::Normal;
 
+    // 做种计量快照（Falcon 扩展字段；非 BT 任务/历史记录恒零）
+    std::uint64_t seed_uploaded_bytes = 0;
+    std::uint64_t seed_downloaded_bytes = 0;
+    std::uint64_t seed_total_size = 0;
+    double seeded_seconds = 0.0;
+    bool seeding_active = false;
+
+    /// 做种份额比：uploaded / max(downloaded, total_size)；分母 0 返 0
+    /// （与 seed_policy 的 ratio 分母同式）
+    [[nodiscard]] double seed_ratio() const noexcept {
+        const std::uint64_t denom =
+            seed_downloaded_bytes > seed_total_size ? seed_downloaded_bytes
+                                                    : seed_total_size;
+        if (denom == 0) return 0.0;
+        return static_cast<double>(seed_uploaded_bytes) /
+               static_cast<double>(denom);
+    }
+
     bool is_finished() const noexcept;
 };
 

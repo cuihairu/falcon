@@ -124,6 +124,19 @@ void DownloadService::apply_global_settings(std::size_t max_concurrent_tasks,
     });
 }
 
+void DownloadService::apply_seed_defaults(double seed_ratio,
+                                          std::size_t seed_time_minutes)
+{
+    enqueue([this, seed_ratio, seed_time_minutes]() {
+        backend_->apply_seed_defaults(seed_ratio, seed_time_minutes);
+    });
+}
+
+void DownloadService::stop_seeding(falcon::TaskId id)
+{
+    enqueue([this, id]() { (void)backend_->stop_seeding(id); });
+}
+
 void DownloadService::request_refresh()
 {
     {
@@ -206,6 +219,18 @@ void DownloadService::publish_transitions(
             emit task_completed(id, QString::fromStdString(snap.output_path));
         } else if (snap.status == falcon::TaskStatus::Failed) {
             emit task_failed(id, QString::fromStdString(snap.error_message));
+        }
+    }
+
+    // 做种停止（seeding_active 翻转；任务保持 Completed 终态不触发上面的
+    // 状态迁移）——达标自动停止与手动停止同路径提示
+    for (const auto& [id, snap] : current) {
+        const auto prev = last_snapshot_.find(id);
+        if (prev == last_snapshot_.end()) {
+            continue;
+        }
+        if (prev->second.seeding_active && !snap.seeding_active) {
+            emit seeding_stopped(id, QString::fromStdString(snap.output_path));
         }
     }
 

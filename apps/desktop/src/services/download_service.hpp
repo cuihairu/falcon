@@ -67,6 +67,10 @@ public:
     void set_priority(falcon::TaskId id, falcon::TaskPriority priority);
     void apply_global_settings(std::size_t max_concurrent_tasks,
                                std::size_t global_speed_limit_bytes);
+    /// 做种全局默认值（IPC/扩展路径新任务按此填充；负 ratio 视为未设）
+    void apply_seed_defaults(double seed_ratio, std::size_t seed_time_minutes);
+    /// 请求任务停止做种（BitTorrent；仅在做种中的任务上生效）
+    void stop_seeding(falcon::TaskId id);
 
     /// 请求立即刷一轮快照（顶栏手动刷新）。线程安全；worker 忙碌时
     /// 只置位，由下一轮循环消化（天然合并）。
@@ -83,6 +87,8 @@ signals:
     void task_completed(falcon::TaskId id, const QString& output_path);
     /// 任务失败（从快照变化推断）
     void task_failed(falcon::TaskId id, const QString& error_message);
+    /// 做种停止（达标自动停或手动停；从快照 seeding_active 翻转推断）
+    void seeding_stopped(falcon::TaskId id, const QString& output_path);
 
 private:
     void enqueue(std::function<void()>&& job);

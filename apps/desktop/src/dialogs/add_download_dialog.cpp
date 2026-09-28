@@ -32,6 +32,8 @@ AddDownloadDialog::AddDownloadDialog(const UrlInfo& url_info, QWidget* parent)
     , save_path_edit_(nullptr)
     , browse_button_(nullptr)
     , connections_spin_(nullptr)
+    , seed_ratio_spin_(nullptr)
+    , seed_time_spin_(nullptr)
     , user_agent_combo_(nullptr)
     , referrer_edit_(nullptr)
     , cookies_edit_(nullptr)
@@ -55,6 +57,17 @@ void AddDownloadDialog::set_default_connections(int count)
 {
     if (connections_spin_) {
         connections_spin_->setValue(count);
+    }
+}
+
+void AddDownloadDialog::set_seed_defaults(double ratio, std::size_t minutes)
+{
+    if (seed_ratio_spin_) {
+        seed_ratio_spin_->setValue(ratio < 0.0 ? 1.0 : ratio);
+    }
+    if (seed_time_spin_) {
+        seed_time_spin_->setValue(
+            static_cast<int>(minutes > 525600 ? 525600 : minutes));
     }
 }
 
@@ -85,6 +98,19 @@ int AddDownloadDialog::get_connections() const
 QString AddDownloadDialog::get_user_agent() const
 {
     return user_agent_combo_->currentText();
+}
+
+double AddDownloadDialog::get_seed_ratio() const
+{
+    // spinbox 范围非负；防御性钳 0（负值视为「下完即停」语义）
+    const double v = seed_ratio_spin_ ? seed_ratio_spin_->value() : 1.0;
+    return v < 0.0 ? 0.0 : v;
+}
+
+std::size_t AddDownloadDialog::get_seed_time_minutes() const
+{
+    const int v = seed_time_spin_ ? seed_time_spin_->value() : 0;
+    return v > 0 ? static_cast<std::size_t>(v) : 0;
 }
 
 QString AddDownloadDialog::get_referrer() const
@@ -302,6 +328,27 @@ QWidget* AddDownloadDialog::create_options_section_widget()
     connections_spin_->setRange(1, 16);
     connections_spin_->setValue(4);
     layout->addRow(conn_label, connections_spin_);
+
+    // 做种策略（BitTorrent；aria2 seed-ratio / seed-time 同语义）
+    auto* seed_ratio_label = new QLabel(tr("做种份额比:"), this);
+    seed_ratio_spin_ = new QDoubleSpinBox(this);
+    seed_ratio_spin_->setRange(0.0, 999.0);
+    seed_ratio_spin_->setSingleStep(0.05);
+    seed_ratio_spin_->setDecimals(2);
+    seed_ratio_spin_->setValue(1.0);
+    seed_ratio_spin_->setToolTip(
+        tr("上传量达到下载量的该倍数后停止做种；0 = 不按份额停止"));
+    layout->addRow(seed_ratio_label, seed_ratio_spin_);
+
+    auto* seed_time_label = new QLabel(tr("做种时长:"), this);
+    seed_time_spin_ = new QSpinBox(this);
+    seed_time_spin_->setRange(0, 525600);
+    seed_time_spin_->setValue(0);
+    seed_time_spin_->setSuffix(tr(" 分钟"));
+    seed_time_spin_->setSpecialValueText(tr("不限时"));
+    seed_time_spin_->setToolTip(
+        tr("下载完成后持续做种的最长时间；0 = 不限时"));
+    layout->addRow(seed_time_label, seed_time_spin_);
 
     // User agent
     auto* ua_label = new QLabel(tr("User Agent:"), this);

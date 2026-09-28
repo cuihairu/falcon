@@ -2,6 +2,16 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-28 - 做种 UI 全链路（做种列 + 双设置入口 + 手动停止 + 哨兵默认协议）
+- **下载页 7 列**：新增做种列（200px——170px 下「做种中 · 1.20 · 2时15分」mid-token 折行「2时15/分」；单行完整显示 `状态 · ratio · 时长`），数据来自 TaskSnapshot seed 扩展字段（ratio 分母 max(downloaded, total_size)）；**诚实性**：快照仅 seeding_active 布尔量，达标与手动停止不可区分 → 统一显「已停止」+ tooltip「做种已结束（达标或手动停止）」；非 BT 任务恒「—」
+- **操作面**：已完成视图操作列对做种任务显「停止做种」钮（→ `DownloadService::stop_seeding` → backend → RPC falcon.stopSeeding）；网格卡片复用速度槽位显做种摘要 + tooltip（Completed 任务速度恒「—」，槽位天然空闲）；做种结束托盘通知「做种已停止」（notifications 开关门控）
+- **设置双入口**：设置页「做种（BitTorrent）」组（ratio 0-999 step 0.05 默认 1.0 + 时长 0-525600 分钟 special「不限时」，reset_to_defaults 补 1.0/0）+ 添加对话框高级区做种两行（set_seed_defaults 预填全局值）；load/save_settings 持久化 seed_ratio/seed_time_minutes；启动与设置变更两路 apply_seed_defaults 到活动后端
+- **哨兵协议**：`DownloadOptions::seed_ratio < 0` = 「用户未显式设置」——IPC/扩展/发现页路径 add_download_task 置 -1.0，backend with_seed_defaults 仅负值时填全局默认（两字段同填）；对话框 >= 0 原样透传（用户确认值不被覆写）
+- **backend 层**：IDownloadBackend 增 stop_seeding/apply_seed_defaults（daemon 路径映射 falcon.stopSeeding；InProcess 后端直调 DownloadTask）；TaskSnapshot seed 五字段双后端直通
+- **测试 6 → 10**：SeedingHandler（seed:// 协议做种形态同构 BT 收口语义）+ 4 用例（快照 RPC 往返与手动停止全链 / 错误路径 / 哨兵 vs 显式 / addUri 钳 0），20 轮压测零失败；`engine_.get_task()` 返回智能指针，测试用 `auto` 不能 `auto*`
+- **ui_sandbox 28 → 36 张**：demo 做种任务 ×2 + 已完成网格视图 ×4 + 设置页做种组特写 ×4（QGroupBox 标题匹配 grab——滚动区折叠线以下整窗截图不可见）；36 张逐张目测通过
+- **验证**：build-desktop 全量重建零 error + backend tests 10/10；daemon 五套件 + protocols 回归绿
+
 ### 2026-09-28 - UI 重设计「warm console」（theme_tokens 双主题全表 + 双 QSS 数值全表 + 形状三档收口）
 - **设计语言**：与文档站同源 warm console（暖石/暖黑中性底 + falcon 橙单强调）；重设计-preserve（IA/布局/组件零变化只换皮）；taste-skill 代行（`popular-web-designs` 不在本环境可用清单）；字体保持系统原生栈（桌面 hinting 优于自托管 web 字体，品牌一致性经色彩/形状达成）
 - **token 全表**（theme_tokens.hpp，palette_for 派生 QPalette 自动跟随）：light window #f6f4f1 / card #ffffff / text #292524 / secondary #57534e / disabled #a8a29e / accent #c2410c（hover #9a3412 / pressed #7c2d12）/ divider #e7e5e4；dark window #1b1714 / card #262019 / text #f2ede8 / secondary #b5aca3 / disabled #6e665e / accent #ffa07a（hover #ffb28c / pressed #e0875e）/ accent_text #27140a / divider #37302a；danger #c42b1c 双主题不变；checkbox 内嵌 base64 SVG 重生成（改色不改形）

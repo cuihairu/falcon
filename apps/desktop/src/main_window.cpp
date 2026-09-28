@@ -291,12 +291,29 @@ void MainWindow::ensure_download_service()
             this, &MainWindow::on_task_completed);
     connect(download_service_, &DownloadService::task_failed,
             this, &MainWindow::on_task_failed);
+    connect(download_service_, &DownloadService::seeding_stopped,
+            this, [this](falcon::TaskId id, const QString& output_path) {
+                Q_UNUSED(id);
+                if (!settings_page_ || !settings_page_->is_notifications_enabled()) {
+                    return;
+                }
+                if (system_tray_ && system_tray_->isVisible()) {
+                    system_tray_->showMessage(
+                        tr("做种已停止"),
+                        tr("%1\n做种已结束（达标或手动停止）。").arg(output_path),
+                        QSystemTrayIcon::Information,
+                        3000);
+                }
+            });
 
-    // 全局设置（并发数/限速）需在首次轮询前生效
+    // 全局设置（并发数/限速/做种默认值）需在首次轮询前生效
     if (settings_page_) {
         download_service_->apply_global_settings(
             static_cast<std::size_t>(settings_page_->get_max_concurrent_downloads()),
             static_cast<std::size_t>(settings_page_->get_global_speed_limit()) * 1024);
+        download_service_->apply_seed_defaults(
+            settings_page_->get_seed_ratio(),
+            static_cast<std::size_t>(settings_page_->get_seed_time_minutes()));
     }
 
     // 500ms 仅作兜底轮询：daemon RPC 后端经 WebSocket 事件流收到通知
@@ -316,6 +333,8 @@ void MainWindow::show_add_download_dialog(UrlInfo url_info, const IncomingDownlo
     if (settings_page_) {
         dialog.set_default_save_path(settings_page_->get_default_download_dir());
         dialog.set_default_connections(settings_page_->get_default_connections());
+        dialog.set_seed_defaults(settings_page_->get_seed_ratio(),
+                                 static_cast<std::size_t>(settings_page_->get_seed_time_minutes()));
     }
 
     if (request_context) {
@@ -336,6 +355,9 @@ void MainWindow::show_add_download_dialog(UrlInfo url_info, const IncomingDownlo
     options.output_filename = dialog.get_file_name().toStdString();
     options.user_agent = dialog.get_user_agent().toStdString();
     options.referer = dialog.get_referrer().toStdString();
+    // 对话框路径显式携带做种策略（用户看到并确认的值，不被全局默认覆写）
+    options.seed_ratio = dialog.get_seed_ratio();
+    options.seed_time_minutes = dialog.get_seed_time_minutes();
 
     // 应用任务速度限制（KB/s -> bytes/s）
     if (settings_page_) {
@@ -358,6 +380,9 @@ bool MainWindow::add_download_task(const QString& url, bool start_immediately)
     ensure_download_service();
 
     falcon::DownloadOptions options;
+    // 无对话框路径（剪贴板/扩展/发现页直达）：seed_ratio < 0 是桌面层
+    // 「未显式设置」哨兵，后端按全局做种默认填充
+    options.seed_ratio = -1.0;
     if (settings_page_) {
         options.max_connections = static_cast<std::size_t>(settings_page_->get_default_connections());
         options.output_directory = settings_page_->get_default_download_dir().toStdString();
@@ -444,6 +469,12 @@ void MainWindow::create_pages()
                     download_service_->resume_task(id);
                 }
             });
+    connect(download_page_, &DownloadPage::stop_seeding_requested,
+            this, [this](falcon::TaskId id) {
+                if (download_service_) {
+                    download_service_->stop_seeding(id);
+                }
+            });
 
     // 云盘页面
     auto* cloud_page = new CloudPage(this);
@@ -517,6 +548,10 @@ void MainWindow::load_settings()
         settings.value("task_speed_limit_kb", 0).toInt());
     settings_page_->set_global_speed_limit(
         settings.value("global_speed_limit_kb", 0).toInt());
+    settings_page_->set_seed_ratio(
+        settings.value("seed_ratio", 1.0).toDouble());
+    settings_page_->set_seed_time_minutes(
+        settings.value("seed_time_minutes", 0).toInt());
     settings_page_->set_action_when_completed(
         settings.value("action_when_completed", 0).toInt());
     settings_page_->set_notifications_enabled(
@@ -550,6 +585,8 @@ void MainWindow::save_settings() const
     settings.setValue("retry_count", settings_page_->get_retry_count());
     settings.setValue("task_speed_limit_kb", settings_page_->get_task_speed_limit());
     settings.setValue("global_speed_limit_kb", settings_page_->get_global_speed_limit());
+    settings.setValue("seed_ratio", settings_page_->get_seed_ratio());
+    settings.setValue("seed_time_minutes", settings_page_->get_seed_time_minutes());
     settings.setValue("action_when_completed", settings_page_->get_action_when_completed());
     settings.setValue("notifications_enabled", settings_page_->is_notifications_enabled());
     settings.setValue("sound_notifications_enabled", settings_page_->is_sound_notifications_enabled());
@@ -575,6 +612,9 @@ void MainWindow::apply_settings_to_runtime()
         download_service_->apply_global_settings(
             static_cast<std::size_t>(settings_page_->get_max_concurrent_downloads()),
             static_cast<std::size_t>(settings_page_->get_global_speed_limit()) * 1024);
+        download_service_->apply_seed_defaults(
+            settings_page_->get_seed_ratio(),
+            static_cast<std::size_t>(settings_page_->get_seed_time_minutes()));
     }
 }
 

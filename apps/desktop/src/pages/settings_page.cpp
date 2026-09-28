@@ -98,6 +98,16 @@ void SettingsPage::set_global_speed_limit(int kb_per_sec)
     global_speed_limit_spin_->setValue(kb_per_sec);
 }
 
+void SettingsPage::set_seed_ratio(double ratio)
+{
+    seed_ratio_spin_->setValue(ratio < 0.0 ? 1.0 : ratio);
+}
+
+void SettingsPage::set_seed_time_minutes(int minutes)
+{
+    seed_time_spin_->setValue(minutes < 0 ? 0 : minutes);
+}
+
 void SettingsPage::set_open_file_when_completed(bool enabled)
 {
     set_action_when_completed(enabled ? 1 : 0);
@@ -196,6 +206,16 @@ int SettingsPage::get_global_speed_limit() const
     return global_speed_limit_spin_->value();
 }
 
+double SettingsPage::get_seed_ratio() const
+{
+    return seed_ratio_spin_->value();
+}
+
+int SettingsPage::get_seed_time_minutes() const
+{
+    return seed_time_spin_->value();
+}
+
 bool SettingsPage::is_open_file_when_completed() const
 {
     return completion_action_combo_ ? completion_action_combo_->currentIndex() == 1 : false;
@@ -254,6 +274,10 @@ void SettingsPage::reset_to_defaults()
     task_speed_limit_spin_->setValue(0);
     global_speed_limit_spin_->setValue(0);
 
+    // Seeding defaults（aria2 同语义：ratio 1.0 / 不限时）
+    seed_ratio_spin_->setValue(1.0);
+    seed_time_spin_->setValue(0);
+
     // Completion action settings (0 = do nothing)
     completion_action_combo_->setCurrentIndex(0);
 
@@ -304,6 +328,7 @@ void SettingsPage::setup_ui()
     scroll_layout->addWidget(create_clipboard_section_widget());
     scroll_layout->addWidget(create_download_section_widget());
     scroll_layout->addWidget(create_speed_limit_section_widget());
+    scroll_layout->addWidget(create_seeding_section_widget());
     scroll_layout->addWidget(create_completion_action_section_widget());
     scroll_layout->addWidget(create_connection_section_widget());
     scroll_layout->addWidget(create_notification_section_widget());
@@ -473,6 +498,65 @@ QWidget* SettingsPage::create_speed_limit_section_widget()
     // 说明文字
     auto* desc_label = new QLabel(
         tr("限速有助于控制带宽占用；全局限速对所有下载任务生效。"),
+        this
+    );
+    desc_label->setWordWrap(true);
+    desc_label->setObjectName("cardInfoLabel");
+    layout->addRow("", desc_label);
+
+    return group;
+}
+
+QWidget* SettingsPage::create_seeding_section_widget()
+{
+    auto* group = new QGroupBox(tr("做种（BitTorrent）"), this);
+
+    auto* layout = new QFormLayout(group);
+    layout->setSpacing(16);
+    layout->setContentsMargins(16, 8, 16, 16);
+    layout->setLabelAlignment(Qt::AlignRight);
+
+    // seed-ratio 默认值
+    auto* ratio_label = new QLabel(tr("做种份额比:"), this);
+    auto* ratio_layout = new QHBoxLayout();
+    ratio_layout->setSpacing(8);
+
+    seed_ratio_spin_ = new QDoubleSpinBox(this);
+    seed_ratio_spin_->setRange(0.0, 999.0);
+    seed_ratio_spin_->setSingleStep(0.05);
+    seed_ratio_spin_->setDecimals(2);
+    seed_ratio_spin_->setValue(1.0);
+    ratio_layout->addWidget(seed_ratio_spin_);
+
+    auto* ratio_hint = new QLabel(tr("（0 = 不按份额停止）"), this);
+    ratio_hint->setObjectName("cardInfoLabel");
+    ratio_layout->addWidget(ratio_hint);
+    ratio_layout->addStretch();
+
+    layout->addRow(ratio_label, ratio_layout);
+
+    // seed-time 默认值（分钟）
+    auto* time_label = new QLabel(tr("做种时长:"), this);
+    auto* time_layout = new QHBoxLayout();
+    time_layout->setSpacing(8);
+
+    seed_time_spin_ = new QSpinBox(this);
+    seed_time_spin_->setRange(0, 525600);
+    seed_time_spin_->setValue(0);
+    seed_time_spin_->setSuffix(tr(" 分钟"));
+    seed_time_spin_->setSpecialValueText(tr("不限时"));
+    time_layout->addWidget(seed_time_spin_);
+
+    auto* time_hint = new QLabel(tr("（0 = 不限时，仅按份额比停止）"), this);
+    time_hint->setObjectName("cardInfoLabel");
+    time_layout->addWidget(time_hint);
+    time_layout->addStretch();
+
+    layout->addRow(time_label, time_layout);
+
+    // 说明文字
+    auto* desc_label = new QLabel(
+        tr("做种默认值对新 BitTorrent 任务生效；满足任一条件（份额比或时长）即停止做种。"),
         this
     );
     desc_label->setWordWrap(true);

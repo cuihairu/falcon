@@ -9,6 +9,7 @@
 
 #include <QWidget>
 #include <QCheckBox>
+#include <QDoubleSpinBox>
 #include <QSpinBox>
 #include <QLineEdit>
 #include <QComboBox>
@@ -44,6 +45,8 @@ public:
     void set_sound_notifications_enabled(bool enabled);
     void set_task_speed_limit(int kb_per_sec);
     void set_global_speed_limit(int kb_per_sec);
+    void set_seed_ratio(double ratio);
+    void set_seed_time_minutes(int minutes);
     void set_open_file_when_completed(bool enabled);
     void set_action_when_completed(int action);
     void set_theme_display(bool dark_mode);
@@ -105,6 +108,11 @@ public:
      */
     int get_global_speed_limit() const;
 
+    /// 做种全局默认：份额比（新 BT 任务的 seed-ratio 缺省值）
+    double get_seed_ratio() const;
+    /// 做种全局默认：时长上限（分钟；0 = 不限时）
+    int get_seed_time_minutes() const;
+
     /**
      * @brief Get whether to open file when download completes
      * @return true if should open file
@@ -161,6 +169,7 @@ private:
     QWidget* create_clipboard_section_widget();
     QWidget* create_download_section_widget();
     QWidget* create_speed_limit_section_widget();
+    QWidget* create_seeding_section_widget();
     QWidget* create_completion_action_section_widget();
     QWidget* create_connection_section_widget();
     QWidget* create_notification_section_widget();
@@ -190,6 +199,10 @@ private:
     // Speed limit settings
     QSpinBox* task_speed_limit_spin_;
     QSpinBox* global_speed_limit_spin_;
+
+    // Seeding defaults（BitTorrent 做种策略）
+    QDoubleSpinBox* seed_ratio_spin_;
+    QSpinBox* seed_time_spin_;
 
     // Completion action settings
     QComboBox* completion_action_combo_;

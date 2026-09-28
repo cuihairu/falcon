@@ -414,7 +414,17 @@ void BitTorrentHandler::download(DownloadTask::Ptr task, IEventListener* listene
                                       static_cast<std::uint64_t>(st.total_payload_download),
                                       static_cast<std::uint64_t>(st.total_wanted),
                                       seeded_seconds};
-                if (seeding_complete(limits, stats)) {
+                // 做种快照每 tick 发布（UI/RPC 轮询读取，无监听事件）
+                SeedInfo seed;
+                seed.uploaded_bytes = stats.uploaded;
+                seed.downloaded_bytes = stats.downloaded;
+                seed.total_size = stats.total_size;
+                seed.seeded_seconds = stats.seeded_seconds;
+                seed.seeding_active = true;
+                task->update_seed_info(seed);
+                // 手动停止做种与策略达标走同一收口路径
+                if (seeding_complete(limits, stats) ||
+                    task->stop_seeding_requested()) {
                     // 收口：移除 torrent（默认保留磁盘文件），任务 Completed。
                     // 首次观察即满足（ratio/time 均 0）= 下载完成立即停
                     remove_torrent(task->id());
@@ -422,12 +432,16 @@ void BitTorrentHandler::download(DownloadTask::Ptr task, IEventListener* listene
                     task->update_progress(
                         static_cast<Bytes>(st.total_payload_download),
                         static_cast<Bytes>(st.total_wanted), 0);
+                    // 收口前最后一次快照：达标已停止（seeding_active=false）
+                    seed.seeding_active = false;
+                    task->update_seed_info(seed);
                     task->set_status(TaskStatus::Completed);
                     FALCON_LOG_INFO("BitTorrent seeding finished "
                                     "(uploaded={}, target ratio={}, "
-                                    "time={} min): {}",
+                                    "time={} min, manual_stop={}): {}",
                                     st.total_payload_upload, limits.ratio,
-                                    limits.time_minutes, task->id());
+                                    limits.time_minutes,
+                                    task->stop_seeding_requested(), task->id());
                     return;
                 }
             }
