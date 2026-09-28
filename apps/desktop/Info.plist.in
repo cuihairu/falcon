@@ -10,6 +10,8 @@
   <string>Falcon Desktop</string>
   <key>CFBundleDisplayName</key>
   <string>Falcon Desktop</string>
+  <key>CFBundleIconFile</key>
+  <string>falcon</string>
   <key>CFBundleVersion</key>
   <string>${PROJECT_VERSION}</string>
   <key>CFBundleShortVersionString</key>

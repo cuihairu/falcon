@@ -10,6 +10,7 @@
 #include "../utils/icon_utils.hpp"
 
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QMouseEvent>
 #include <QWindow>
 
@@ -46,25 +47,18 @@ void TopBar::setup_ui()
     auto* brand_layout = new QHBoxLayout();
     brand_layout->setSpacing(10);
 
-    brand_mark_ = new QLabel(tr("F"), this);
+    // 品牌 logo：仓库 falcon 标（qrc 内联 SVG，鲑橙 #ffa07a，头朝左）
+    brand_mark_ = new QLabel(this);
     brand_mark_->setObjectName("brandMark");
     brand_mark_->setAlignment(Qt::AlignCenter);
-    brand_mark_->setFixedSize(30, 30);
+    brand_mark_->setFixedSize(26, 26);
+    brand_mark_->setPixmap(QIcon(":/icons/falcon.svg").pixmap(24, 24));
     brand_layout->addWidget(brand_mark_);
-
-    auto* title_stack = new QVBoxLayout();
-    title_stack->setSpacing(0);
-    title_stack->setContentsMargins(0, 0, 0, 0);
 
     brand_title_ = new QLabel(tr("Falcon"), this);
     brand_title_->setObjectName("brandTitle");
-    title_stack->addWidget(brand_title_);
+    brand_layout->addWidget(brand_title_);
 
-    brand_subtitle_ = new QLabel(tr("高速下载工作台"), this);
-    brand_subtitle_->setObjectName("brandSubtitle");
-    title_stack->addWidget(brand_subtitle_);
-
-    brand_layout->addLayout(title_stack);
     main_layout->addLayout(brand_layout);
 
     // 搜索框(回车 → 过滤下载任务);限宽,不随窗口无限拉伸

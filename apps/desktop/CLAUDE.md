@@ -2,6 +2,15 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-28 - logo 全链路替换（qrc SVG + .ico/.icns/hicolor 资产）+ 顶栏 slogan 删除 + DaemonAddTaskRoundTrip 抖动修复
+- **应用图标资产**（渲染源 assets/falcon.svg，头朝左 + 鲑橙 #ffa07a，cairosvg 逐尺寸矢量直渲）：`resources/icons/falcon.svg`（qrc `/icons` 前缀 alias）、`resources/windows/falcon.ico`（替换旧朝右深橙 4 帧 BMP——新 7 尺寸 PNG 帧 16..256，Pillow append_images 打包）、`resources/macos/falcon.icns`（手写 PNG-in-ICNS 容器，icp4/icp5/ic07..ic14 十 chunk）、`resources/linux/hicolor/{16..512}x*/apps/falcon-desktop.png` 九尺寸 + `falcon-desktop.desktop` 启动器（Icon=falcon-desktop）
+- **运行时引用点**：main.cpp `setWindowIcon(QIcon(":/icons/falcon.svg"))`（qrc 内联）；main_window.cpp 托盘 SP_ComputerIcon → qrc logo；top_bar.cpp 品牌区 brand_mark_ 从蓝「F」色盒换 24px 真 logo pixmap + #brandMark 双主题 QSS `background: transparent`（蓝盒描边/圆角删除）；**「高速下载工作台」slogan 删除**（brand_subtitle_ 成员 + title_stack + 双 QSS #brandSubtitle 规则整链移除，顶栏单行化）
+- **构建接线**：Windows exe 内嵌图标依赖顶层 `enable_language(RC)`（app.rc 引用本就接线，但 project(LANGUAGES CXX) 下 .rc 被静默忽略——PE 解析零资源段实证）；desktop CMakeLists 新增 `UNIX AND NOT APPLE` 分支 install .desktop + hicolor 到 `share/applications`、`share/icons`；Info.plist.in 补 CFBundleIconFile=falcon（bundle 目标未启用，前瞻）；nightly AppImage 图标 cp 仓库 hicolor 256px 替换 touch 占位
+- **既有测试抖动修复**：DaemonAddTaskRoundTrip 立即断言 Downloading 撞 addUri 返回与 daemon worker 出队的异步窗口（20% 失败率）→ 2ms 轮询等待（5s 预算）后断言其余字段，20/20 压测绿
+- **界面内 icon 审计结论**：qrc 27 个 Lucide 线性图标为现行 Fluent 体系功能组件（非旧品牌资产，UI 重设计批随设计语言统一），保留；唯一旧品牌资产即「F」盒 + 旧 .ico，已换
+- **验证**：增量重建零告警（icon_utils.hpp -Wcomment 顺带收口）；backend tests 6/6；ui_sandbox 28 张双主题 × 双尺寸截图目测验收（logo 在位、slogan 消失、960 布局不破）
+
+
 ### 2026-09-19 - 浏览器扩展 IPC 只读查询端点 + /v1/add 应答被模态对话框绑架缺陷修复
 - **只读查询端点三件套**（浏览器扩展任务面板数据面）：`GET /v1/health`
   （无副作用连通性探测，静态 JSON）/ `GET /v1/tasks`（任务快照数组）/

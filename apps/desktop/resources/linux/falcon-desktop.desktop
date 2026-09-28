@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Falcon
+GenericName=Download Manager
+Comment=Modern multi-protocol download manager
+Exec=falcon-desktop
+Icon=falcon-desktop
+Terminal=false
+Categories=Network;FileTransfer;
+Keywords=download;falcon;http;bittorrent;

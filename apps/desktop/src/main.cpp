@@ -6,6 +6,7 @@
  */
 
 #include <QApplication>
+#include <QIcon>
 #include <QTranslator>
 #include <QLibraryInfo>
 #include <QLocale>
@@ -48,6 +49,10 @@ int main(int argc, char* argv[])
     app.setApplicationName("Falcon");
     app.setApplicationVersion("0.1.0");
     app.setOrganizationName("FalconTeam");
+
+    // 应用图标（任务栏/窗口管理器）：仓库 logo（assets/falcon.svg 的副本，
+    // 头朝左 + 鲑橙 #ffa07a），qrc 内联，无磁盘路径依赖
+    app.setWindowIcon(QIcon(":/icons/falcon.svg"));
 
     // Qt base translations (widgets, dialogs, etc)
     QTranslator qt_translator;

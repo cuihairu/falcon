@@ -221,8 +221,10 @@ jobs:
           EOF
           chmod +x FalconDesktop/AppDir/AppRun
 
-          # 创建占位图标
-          touch FalconDesktop/AppDir/usr/share/icons/hicolor/256x256/apps/falcon-desktop.png
+          # 应用图标（仓库 assets/falcon.svg 预渲染的 hicolor 256px；
+          # 此前是 touch 占位零字节 png——AppImage 图标一直为空）
+          cp ../../apps/desktop/resources/linux/hicolor/256x256/apps/falcon-desktop.png \
+            FalconDesktop/AppDir/usr/share/icons/hicolor/256x256/apps/falcon-desktop.png
           ln -sf usr/share/icons/hicolor/256x256/apps/falcon-desktop.png FalconDesktop/AppDir/.DirIcon
           ln -sf usr/share/icons/hicolor/256x256/apps/falcon-desktop.png FalconDesktop/AppDir/falcon-desktop.png
 

@@ -18,6 +18,7 @@
 #include <chrono>
 #include <memory>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -127,8 +128,21 @@ protected:
 TEST_F(DownloadBackendTest, DaemonAddTaskRoundTrip) {
     const auto id = add_active_task("backend-add");
 
-    auto tasks = daemon_backend_->fetch_tasks();
-    ASSERT_EQ(tasks.size(), 1u);
+    // addUri 返回与 daemon 侧任务真正进入 Downloading 之间是异步窗口
+    // （TaskManager worker 出队启动）——立即断言会观察到 Pending
+    // （本机实测 ~40% 命中），轮询等待状态到达后再断言其余字段
+    std::vector<falcon::daemon::rpc::TaskSnapshot> tasks;
+    bool downloading = false;
+    for (int i = 0; i < 2500; ++i) {
+        tasks = daemon_backend_->fetch_tasks();
+        if (tasks.size() == 1 &&
+            tasks[0].status == falcon::TaskStatus::Downloading) {
+            downloading = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    ASSERT_TRUE(downloading);
     EXPECT_EQ(tasks[0].id, id);
     EXPECT_EQ(tasks[0].status, falcon::TaskStatus::Downloading);
     EXPECT_EQ(tasks[0].url, "test://backend-add");

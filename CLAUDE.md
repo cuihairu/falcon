@@ -2,6 +2,16 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-28 - 桌面端 logo 全链路替换（assets/falcon.svg 头朝左鲑橙）+ UI slogan 删除 + Windows RC 资源接线修复
+- **icon 渲染链**（assets/falcon.svg 为唯一事实源，viewBox 0 0 1024 1024，`translate(1024,0) scale(-1,1)` 镜像头朝左、fill #ffa07a）：cairosvg 逐尺寸矢量直渲（非 256 基图缩放）→ Pillow ICO `append_images` 打包 7 尺寸（16/24/32/48/64/128/256，替换旧朝右深橙 4 帧 BMP .ico）→ 手写 PNG-in-ICNS 容器（OSType icp4/icp5/ic07..ic14 + big-endian 长度头）→ hicolor 9 尺寸 PNG（16..512）+ falcon-desktop.desktop 入库
+- **引用点全替换**：① exe 内嵌图标——app.rc 引用本就接线，真缺陷是顶层 `project(LANGUAGES CXX)` 未启用 RC → `.rc` 被 CMake **静默忽略**（configure/build 全绿），nightly exe PE 解析实证 res_rva=None 零资源段；修复顶层 `if(WIN32) enable_language(RC) endif()`；② 窗口图标 main.cpp `setWindowIcon(QIcon(":/icons/falcon.svg"))`（qrc 内联，无磁盘路径依赖）；③ 托盘 main_window.cpp SP_ComputerIcon → qrc logo；④ 顶栏品牌区 brand_mark_ 蓝「F」色盒 → 24px 真 logo（QSS #brandMark 双主题 `background: transparent`）；⑤ macOS Info.plist.in 补 CFBundleIconFile（bundle 目标未启用，前瞻接线）；⑥ Linux 安装规则 desktop CMakeLists `UNIX AND NOT APPLE` 分支 install .desktop + hicolor 目录；⑦ nightly AppImage 图标从 `touch` 零字节占位 → cp 仓库 hicolor 256px（`cd build-desktop/bin` 后 repo root = `../..`，cp 路径两级）
+- **界面内 icon 替换清单结论**：qrc 内 27 个 Lucide v0.294.0 线性图标为现行 Fluent 体系的功能组件（非旧品牌资产，Task D UI 重设计批随设计语言统一审视），保留；唯一旧品牌资产 = 顶栏「F」盒 + 旧 falcon.ico，均已换新；about/欢迎页无 logo 位；无 og:image/meta 位图
+- **UI 文案**：顶栏 slogan「高速下载工作台」删除（brand_subtitle_ 成员 + title_stack + 双 QSS #brandSubtitle 规则整链移除，顶栏单行化）；README/文档定位语保留
+- **测试抖动修复**：DaemonAddTaskRoundTrip 立即断言 status==Downloading 撞 addUri 返回与 daemon worker 出队启动的异步窗口（本机 20% 失败率）——改 2ms 轮询等待（5s 预算）状态到达后再断言其余字段，修复后 20/20 全绿
+- **测量级教训**：① CMake 对未启用语言的处理是**静默忽略**源文件而非报错——`.rc/.m/.mm` 等语言专属源文件必须核对 `enable_language` 前提，编译绿不证明资源在（与「编译不查资源」教训同族）；② ICO/ICNS 多尺寸资产必须逐尺寸独立矢量渲染，256 基图缩到 16px 的模糊肉眼可辨；③ PE 零资源段的判定脚本链：e_lfanew → COFF → optional header data directory[2] → section table rva2off（nightly 包二进制验收复用）
+- **验证**：build-desktop 增量重建零告警（icon_utils.hpp -Wcomment 既有告警顺带收口）；falcon_desktop_backend_tests 6/6 绿；ui_sandbox 离屏截图 28 张（7 视图 × 亮暗 × 1200/960）双主题目测验收——品牌区 logo 在位、slogan 消失、960 挤压布局不破；BEFORE 基线（蓝 F 盒 + slogan）留档对比。Windows RC 编译与 AppImage 图标靠 CI 收口（本机无 MSVC/appimagetool）
+
+
 ### 2026-09-27 - falcon-swarmd 服务更名 Rendezvous Service（用户拍板术语统一，零行为变化）
 - **术语定案**：swarmd 里协助节点互相发现的服务统一称 **Rendezvous Service**（会合/发现服务，首次出现括注 tracker）；设计文档 `docs/p2sp_network_design.md` 全文 65 处 standalone "server" 收敛（标题/图表框/方向记号），残余 token 恰为受保护标识符五枚
 - **代码改名清单**（git mv + 符号替换，行为零变化）：CMake target `falcon_swarm_server` → `falcon_swarm_rdv`；目录 `src/server/` → `src/rdv/`；类 `SwarmServerState→SwarmRendezvousState`、`SwarmServerOptions→SwarmRendezvousOptions`、`SwarmServerHarness→SwarmRendezvousHarness`、`SwarmRpcServer→SwarmRendezvousServer`；文件 `swarm_server_state.*→swarm_rdv_state.*`、`swarm_server_harness.hpp→swarm_rdv_harness.hpp`、`swarm_server_loopback_test.cpp→swarm_rdv_loopback_test.cpp`；注入点（libfalcon-core injection.hpp）`SwarmServerSocket/Listen→SwarmRdvSocket/Listen`；banner 与启动日志（"Falcon Swarm Rendezvous Service" / "Failed to start rendezvous service"）

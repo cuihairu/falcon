@@ -92,7 +92,8 @@ set(RESOURCES
     resources.qrc
 )
 
-# Windows 资源文件（图标、版本信息）
+# Windows 资源文件（图标、版本信息）。RC 语言在顶层 CMakeLists 的 WIN32
+# 分支 enable_language(RC)——未启用时 .rc 被静默忽略（nightly 零资源段教训）
 if(WIN32 AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows/app.rc")
   list(APPEND SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows/app.rc")
 endif()
@@ -224,4 +225,16 @@ if(NOT APPLE)
       )
     endif()
   endif()
+endif()
+
+# Linux 桌面集成（应用图标 + 启动器入口；hicolor PNG 由 assets/falcon.svg
+# 渲染提交，尺寸 16..512）。AppImage nightly 亦从仓库同名路径取 256px 图标。
+if(UNIX AND NOT APPLE)
+  include(GNUInstallDirs)
+  install(FILES resources/linux/falcon-desktop.desktop
+      DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
+  )
+  install(DIRECTORY resources/linux/hicolor
+      DESTINATION ${CMAKE_INSTALL_DATADIR}/icons
+  )
 endif()

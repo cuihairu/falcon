@@ -2,7 +2,7 @@
  * @file icon_utils.hpp
  * @brief 内嵌 SVG 图标工具(Lucide 风格,主题感知着色)
  *
- * 图标资源位于 resources/icons/*.svg(stroke="currentColor"),渲染时按
+ * 图标资源位于 resources/icons/ 目录(stroke="currentColor"),渲染时按
  * 当前主题 token 着色。themed() 返回的 QIcon 绑定语义色角色,主题切换后
  * 已设置的按钮图标无需重新赋值即可换色。
  *

@@ -447,11 +447,7 @@ QProgressBar::chunk {
 }
 
 #brandMark {
-    background-color: #4cc2ff;
-    color: #1b1b1b;
-    border-radius: 6px;
-    font-size: 14px;
-    font-weight: 700;
+    background: transparent;
 }
 
 #brandTitle {
@@ -459,12 +455,6 @@ QProgressBar::chunk {
     color: #ffffff;
     font-size: 16px;
     font-weight: 600;
-}
-
-#brandSubtitle {
-    background: transparent;
-    color: #c8c8c8;
-    font-size: 12px;
 }
 
 /* ---------- 7. 侧栏 ---------- */

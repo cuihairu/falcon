@@ -56,7 +56,6 @@ private:
 
     QLabel* brand_mark_ = nullptr;
     QLabel* brand_title_ = nullptr;
-    QLabel* brand_subtitle_ = nullptr;
     // 搜索相关
     QLineEdit* search_edit_ = nullptr;
 

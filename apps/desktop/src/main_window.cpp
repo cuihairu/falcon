@@ -603,10 +603,8 @@ void MainWindow::setup_system_tray()
     // 创建托盘图标
     system_tray_ = new QSystemTrayIcon(this);
 
-    // 设置托盘图标（使用内置图标或自定义图标）
-    // 这里使用标准图标作为示例，实际应该使用应用图标
-    QIcon tray_icon = style()->standardIcon(QStyle::SP_ComputerIcon);
-    system_tray_->setIcon(tray_icon);
+    // 设置托盘图标：应用 logo（qrc 内联 SVG，主题引擎按需缩放）
+    system_tray_->setIcon(QIcon(":/icons/falcon.svg"));
 
     // 创建托盘菜单
     tray_menu_ = new QMenu(this);

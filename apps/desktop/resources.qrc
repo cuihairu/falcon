@@ -4,6 +4,7 @@
         <file alias="fluent_dark.qss">resources/styles/fluent_dark.qss</file>
     </qresource>
     <qresource prefix="/icons">
+        <file alias="falcon.svg">resources/icons/falcon.svg</file>
         <file alias="minus.svg">resources/icons/minus.svg</file>
         <file alias="square.svg">resources/icons/square.svg</file>
         <file alias="restore.svg">resources/icons/restore.svg</file>
