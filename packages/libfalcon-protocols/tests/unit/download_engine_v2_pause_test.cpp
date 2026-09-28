@@ -351,6 +351,264 @@ private:
     std::vector<std::thread> conn_threads_;
 };
 
+/// 请求记录（接受顺序）：断言恢复链路形态用
+struct OrphanRequestRecord {
+    bool has_range = false;
+    Bytes range_start = 0;
+};
+
+/**
+ * @brief 恢复初始连接段号 k>0 钉子服务器（32B / 4 段 × 8B）
+ *
+ * 按 Range 特征编排，与连接序号无关：
+ * - 无 Range：200 全量快发（初始连接 = 段 0 下载源；修复后 abandon
+ *   的全新重下初始连接）
+ * - Range 起点 ∈ {8,16,24}（段 1..3）且慢发配额未耗尽（恰 3 个）：
+ *   206 头声明整段 8B 但只发段内前 2B 后阻塞等客户端关闭——留出
+ *   「段 0 完成 + 段 1..3 各 2B 半截」的暂停态。恢复后的全新重下
+ *   再次分段，新段连接起点同样落在 {8,16,24}，配额已耗尽按 206
+ *   全段快发（否则重下永挂）
+ * - 其他 Range 起点（恢复初始连接对段 1 断点的续传 Range 起点 10）：
+ *   206 全段快发
+ */
+class SegmentOrphanServer {
+public:
+    ~SegmentOrphanServer() { stop(); }  // RAII：joinable 线程析构即 terminate
+
+    bool start(const std::string& body) {
+#ifdef _WIN32
+        ensure_winsock_for_pause_test();
+#endif
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            body_ = body;
+        }
+        listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (listen_fd_ < 0) return false;
+        int reuse = 1;
+        ::setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR,
+                     reinterpret_cast<const char*>(&reuse), sizeof(reuse));
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = 0;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 ||
+            ::listen(listen_fd_, 16) != 0) {
+            CLOSE_SOCKET(listen_fd_);
+            listen_fd_ = -1;
+            return false;
+        }
+        sockaddr_in bound{};
+        sock_len len = sizeof(bound);
+        if (::getsockname(listen_fd_, reinterpret_cast<sockaddr*>(&bound), &len) != 0) {
+            stop();
+            return false;
+        }
+        port_ = ntohs(bound.sin_port);
+        running_ = true;
+        accept_thread_ = std::thread([this] { accept_loop(); });
+        return true;
+    }
+
+    // 幂等：显式调用后 RAII 守卫的兜底调用必须安全
+    void stop() {
+        running_ = false;
+        if (listen_fd_ >= 0) {
+            CLOSE_SOCKET(listen_fd_);
+            listen_fd_ = -1;
+        }
+        if (accept_thread_.joinable()) accept_thread_.join();
+        for (auto& t : conn_threads_) {
+            if (t.joinable()) t.join();
+        }
+        conn_threads_.clear();
+    }
+
+    int port() const { return port_; }
+
+    std::string url(const std::string& path) const {
+        return "http://127.0.0.1:" + std::to_string(port_) + path;
+    }
+
+    std::vector<OrphanRequestRecord> requests_snapshot() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return requests_;
+    }
+
+    /// 慢发段连接观察到客户端关闭（sweep 收走挂起连接的服务器侧证据）
+    int stalled_closed() const { return stalled_closed_.load(); }
+
+    /// 已进入半截慢发分支的段连接数（三个段连接全部挂起的锚）
+    int stall_served() const { return stall_served_.load(); }
+
+private:
+    void accept_loop() {
+        while (running_) {
+            struct pollfd pfd;
+            pfd.fd = listen_fd_;
+            pfd.events = POLLIN;
+            pfd.revents = 0;
+            if (POLL(&pfd, 1, 500) <= 0) {
+                continue;
+            }
+            sockaddr_in peer{};
+            sock_len peer_len = sizeof(peer);
+            int conn = ::accept(listen_fd_, reinterpret_cast<sockaddr*>(&peer), &peer_len);
+            if (conn < 0) {
+                if (!running_) return;
+                continue;
+            }
+            conn_threads_.emplace_back([this, conn] { serve(conn); });
+        }
+    }
+
+    void serve(int conn) {
+        std::string request;
+        char buf[4096];
+        while (request.find("\r\n\r\n") == std::string::npos &&
+               request.size() < 64 * 1024) {
+            recv_ssize n = ::recv(conn, buf, sizeof(buf), 0);
+            if (n <= 0) {
+                CLOSE_SOCKET(conn);
+                return;
+            }
+            request.append(buf, static_cast<std::size_t>(n));
+        }
+
+        std::string body;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            body = body_;
+        }
+
+        // Range 头简易解析（"bytes=S-E"）：起点决定路由，终点供忠实应答
+        Bytes range_start = 0;
+        Bytes range_end = 0;
+        bool has_range = false;
+        {
+            const auto at = request.find("Range: bytes=");
+            if (at != std::string::npos) {
+                std::size_t i = at + std::string("Range: bytes=").size();
+                auto parse_number = [&]() -> Bytes {
+                    Bytes value = 0;
+                    while (i < request.size() && request[i] >= '0' &&
+                           request[i] <= '9') {
+                        value = value * 10 +
+                                static_cast<Bytes>(request[i] - '0');
+                        ++i;
+                    }
+                    return value;
+                };
+                range_start = parse_number();
+                if (i < request.size() && request[i] == '-') {
+                    ++i;
+                    range_end = parse_number();
+                } else {
+                    range_end = static_cast<Bytes>(body.size()) - 1;
+                }
+                has_range = true;
+            }
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            requests_.push_back({has_range, range_start});
+        }
+
+        const std::string common =
+            "Content-Type: application/octet-stream\r\n"
+            "Accept-Ranges: bytes\r\n"
+            "ETag: \"orphan-resume-test\"\r\n"
+            "Connection: close\r\n";
+
+        if (!has_range) {
+            const std::string header =
+                "HTTP/1.1 200 OK\r\n" + common +
+                "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n";
+            send_all(conn, header.data(), header.size());
+            send_all(conn, body.data(), body.size());
+            CLOSE_SOCKET(conn);
+            return;
+        }
+
+        const bool in_stall_set = range_start == 8 || range_start == 16 ||
+                                  range_start == 24;
+        if (in_stall_set && stall_slots_.fetch_add(1) < 3) {
+            stall_served_.fetch_add(1);
+            // 206 声明整段 8B（起点 + 段长 - 1 与请求一致），只发段内
+            // 前 2B 后阻塞——半截段 + 挂起连接
+            const auto off = static_cast<std::size_t>(range_start);
+            const std::string header =
+                "HTTP/1.1 206 Partial Content\r\n" + common +
+                "Content-Range: bytes " + std::to_string(range_start) + "-" +
+                std::to_string(range_start + 7) + "/" +
+                std::to_string(body.size()) + "\r\n"
+                "Content-Length: 8\r\n\r\n";
+            if (!send_all(conn, header.data(), header.size()) ||
+                !send_all(conn, body.data() + off, 2)) {
+                CLOSE_SOCKET(conn);
+                return;
+            }
+            // 等客户端关闭（sweep 收走挂起命令时关 fd → recv 返回 ≤0）
+            recv_ssize n = ::recv(conn, buf, sizeof(buf), 0);
+            if (n <= 0) stalled_closed_.fetch_add(1);
+            CLOSE_SOCKET(conn);
+            return;
+        }
+
+        // 其他 Range（恢复初始连接 bytes=10-15）/ 配额耗尽（重下新段
+        // 连接）：206 忠实应答请求区间
+        const auto off = static_cast<std::size_t>(range_start);
+        const auto end = static_cast<std::size_t>(range_end);
+        const std::string slice =
+            off < body.size()
+                ? body.substr(off, end >= off ? end - off + 1 : 0)
+                : std::string();
+        const std::string header =
+            "HTTP/1.1 206 Partial Content\r\n" + common +
+            "Content-Range: bytes " + std::to_string(range_start) + "-" +
+            std::to_string(range_end) + "/" +
+            std::to_string(body.size()) + "\r\n"
+            "Content-Length: " + std::to_string(slice.size()) + "\r\n\r\n";
+        send_all(conn, header.data(), header.size());
+        send_all(conn, slice.data(), slice.size());
+        CLOSE_SOCKET(conn);
+    }
+
+    bool send_all(int conn, const char* data, std::size_t size) {
+        std::size_t sent = 0;
+        while (sent < size) {
+            recv_ssize n = ::send(conn, data + sent,
+#ifdef _WIN32
+                                  static_cast<int>(size - sent),
+#else
+                                  size - sent,
+#endif
+#ifdef _WIN32
+                                  0);
+#else
+                                  MSG_NOSIGNAL);
+#endif
+            if (n <= 0) return false;
+            sent += static_cast<std::size_t>(n);
+        }
+        return true;
+    }
+
+    mutable std::mutex mutex_;
+    std::string body_;
+    std::vector<OrphanRequestRecord> requests_;
+    std::atomic<int> stall_slots_{0};
+    std::atomic<int> stall_served_{0};
+    std::atomic<int> stalled_closed_{0};
+
+    int listen_fd_ = -1;
+    int port_ = 0;
+    std::atomic<bool> running_{false};
+    std::thread accept_thread_;
+    std::vector<std::thread> conn_threads_;
+};
+
 /// 轮询等待条件成立（10ms 步进；超时返回 false）
 template <typename Pred>
 bool wait_for(Pred&& pred, int timeout_ms) {
@@ -715,6 +973,106 @@ TEST(DownloadEngineV2Pause, MultiSegmentPauseResumeAbandonsForFreshDownload) {
 
     EXPECT_EQ(read_file_content(out_path), body) << "成品逐字节一致";
     EXPECT_FALSE(std::filesystem::exists(temp_path));
+    std::error_code rm_ec;
+    std::filesystem::remove_all(dir, rm_ec);
+}
+
+/// 恢复初始连接段号 k>0 孤儿命令钉子（CI macOS V2PauseThenResume
+/// Timeout 120s 红面根因，run 36369471846；rerun 绿 + 本机 30/30 绿
+/// 但机制实锤为窄窗口真产品缺陷）：同进程多段暂停恢复时若段 0 已
+/// 完成，恢复初始连接携带的是段 1 断点的续传 Range（segment_id_=1），
+/// 响应落入 determine_download_strategy 的段路由分支且组处于多段态，
+/// 重建门禁（!is_multi_segment）跳过其余段重建——被暂停清扫收走的
+/// 段连接无人重建，组 ACTIVE 且零挂起命令，超时清理扫不到 → 永挂。
+/// 修复：恢复初始连接显式打标记（set_resume_initial），响应转回
+/// schedule_resume_download 的多段防御（abandon 全新重下）。
+/// 编排（32B / 4 段 × 8B，服务器按 Range 特征路由、与连接序号无关）：
+/// 段 1..3 的连接各只发段内前 2B 后阻塞（慢发配额恰 3 个），锚定
+/// 「段 0 完成 + 段 1..3 各 2B 半截」的稳定态后暂停；恢复初始连接
+/// 必然携带 bytes=10-15（段 1 断点 = 8+2）。修复前：响应按段路由只
+/// 续完段 1，段 2/3 的连接无人重建 → 30s 终态等待超时红（引擎由
+/// RAII 兜底停机，进程不挂死）；修复后：abandon 全新重下完成。
+TEST(DownloadEngineV2Pause,
+     MultiSegmentResumeInitialNonZeroSegmentRebuildsOrphans) {
+    const std::string body = make_body(32);
+    SegmentOrphanServer server;
+    ASSERT_TRUE(server.start(body));
+
+    const std::string dir = temp_dir_for("orphanresume");
+    std::filesystem::create_directories(dir);
+    const std::string out_path =
+        (std::filesystem::path(dir) / "orphan.bin").string();
+    const std::string temp_path = out_path + ".falcon.tmp";
+    const std::string ctrl_path = out_path + ".falcon.ctrl";
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    config.enable_disk_cache = false;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options;
+    options.output_filename = out_path;
+    options.max_connections = 4;
+    options.max_retries = 0;
+    options.min_segment_size = 8;
+
+    const TaskId task_id =
+        engine.add_download(server.url("/orphan.bin"), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    EngineRunner runner(engine);
+
+    // 推进到稳定半截态：组聚合接收量 = 8（段 0）+ 2×3（半截段）= 14，
+    // 按写入即记账（与落盘冲刷解耦——2B 直写滞留 ofstream 流缓冲属
+    // 正常时滞），停摆后不再增长。此锚确定段 1 断点（2B）已记账，
+    // 恢复初始连接必然携带 bytes=10-15（首个「有进度未完成」段 = 段 1）
+    ASSERT_TRUE(
+        wait_for([&] { return group->downloaded_bytes() >= 14; }, 15000))
+        << "未在时限内推进到半截稳定态（段 0 完成 + 段 1..3 各 2B）";
+
+    // 暂停：sweep 收走三个半截段连接（服务器侧观察到客户端关闭）
+    ASSERT_TRUE(engine.pause_task(task_id));
+    ASSERT_TRUE(wait_for(
+        [&] { return group->status() == RequestGroupStatus::PAUSED; }, 5000));
+    ASSERT_TRUE(wait_for([&] { return server.stalled_closed() >= 3; }, 5000))
+        << "暂停清扫未收走半截段连接";
+
+    // 恢复：初始连接带段 1 断点的续传 Range（bytes=10-15）。
+    // 修复前：响应按段路由续完段 1 后其余段无人重建 → 永挂（本等待
+    // 30s 超时红）；修复后：转回恢复调度多段防御 → abandon 全新重下
+    ASSERT_TRUE(engine.resume_task(task_id));
+    ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
+    ASSERT_EQ(group->status(), RequestGroupStatus::COMPLETED)
+        << group->error_message();
+
+    runner.shutdown_and_join();
+    server.stop();
+
+    // 请求序铁证：必须出现过段 1 断点（起点 10）的恢复初始连接
+    //（用例前提），且其后必须出现无 Range 的全新初始连接（abandon
+    // 重下路径）
+    const auto requests = server.requests_snapshot();
+    bool saw_resume_range = false;
+    bool saw_fresh_after = false;
+    for (const auto& r : requests) {
+        if (!saw_resume_range) {
+            if (r.has_range && r.range_start == 10) saw_resume_range = true;
+        } else if (!r.has_range) {
+            saw_fresh_after = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(saw_resume_range)
+        << "未观察到段 1 断点（起点 10）的恢复初始连接，用例前提不成立";
+    EXPECT_TRUE(saw_fresh_after)
+        << "恢复初始连接之后未出现无 Range 全新连接（未走 abandon 重下）";
+    EXPECT_GE(server.stalled_closed(), 3);
+
+    EXPECT_EQ(read_file_content(out_path), body) << "成品逐字节一致";
+    EXPECT_FALSE(std::filesystem::exists(temp_path));
+    EXPECT_FALSE(std::filesystem::exists(ctrl_path));
     std::error_code rm_ec;
     std::filesystem::remove_all(dir, rm_ec);
 }

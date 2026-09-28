@@ -1461,6 +1461,9 @@ AbstractCommand::ExecutionResult HttpInitiateConnectionCommand::send_http_reques
     if (segment_retry_) {
         response_cmd->set_segment_retry_routing(true);
     }
+    if (resume_initial_) {
+        response_cmd->set_resume_initial(true);
+    }
     schedule_next(engine, std::move(response_cmd));
     return ExecutionResult::OK;
 }
@@ -1590,9 +1593,11 @@ bool HttpResponseCommand::execute(DownloadEngineV2* engine) {
         // 段上下文（分段响应或段 0 重试连接的响应，判定同
         // determine_download_strategy 的段分支）：先试段级换源重试，
         // 预算耗尽才走失败收口。段响应拒绝（200 代替 206 等）由此
-        // 换源；暂停恢复的初始连接不在此列（走连接级重试保留恢复语义）
+        // 换源；暂停恢复的初始连接不在此列（走连接级重试保留恢复
+        // 语义）——含段号 k > 0 的恢复初始连接（其响应若按段路由会
+        // 跳过其余段重建），连接级重试重建处重打恢复标记
         const bool in_segment_context =
-            segment_id_ > 0 || segment_retry_routing_;
+            (segment_id_ > 0 && !resume_initial_) || segment_retry_routing_;
         if (in_segment_context) {
             if (HttpSegmentRetryCommand::schedule_retry(
                     engine, get_task_id(), segment_id_,
@@ -1985,6 +1990,10 @@ bool HttpResponseCommand::handle_redirect(DownloadEngineV2* engine) {
     auto follow = std::make_unique<HttpInitiateConnectionCommand>(
         get_task_id(), redirect_url, options_);
     follow->set_redirect_depth(redirect_depth_ + 1);
+    // 恢复初始连接的 3xx 跟随仍是恢复初始连接：标记原样传播（未标记
+    // 时为无操作），响应路由不因重定向退化为段路由（k>0 形态会跳过
+    // 其余段重建）
+    follow->set_resume_initial(resume_initial_);
     // 段连接的 3xx 不再退化为初始响应：跟随连接原样携带段范围（判定
     // 与 fail 路径的 in_segment_context 一致——段 0 重试连接的跟随同
     // 样保留）；segment_retry_ 让跟随响应维持段上下文路由与换源资格
@@ -2257,6 +2266,18 @@ bool HttpResponseCommand::determine_download_strategy(DownloadEngineV2* engine) 
     // 流程不受影响
     if (segment_id_ > 0 ||
         (segment_retry_routing_ && group && group->is_multi_segment())) {
+        // 同进程多段暂停恢复的初始连接（显式标记）：激活时段 0 已完成
+        // 时续传 Range 的段号 k > 0，响应在此落入段路由分支且组处于
+        // 多段态，下方重建门禁（!is_multi_segment）跳过其余段重建——
+        // 被暂停清扫收走的段连接无人重建，组 ACTIVE 且零挂起命令，
+        // 超时清理扫不到（CI macOS V2PauseThenResume 红面根因）。与
+        // 段 0 形态（segment_id_==0 落下方 schedule_resume_download）
+        // 同一收敛：转回恢复调度，由多段防御放弃续传全新重下。跨会话
+        // 恢复组尚未进入多段态，不经此路（走下方既有重建分支，零变化）
+        if (resume_initial_ && group && group->is_multi_segment() &&
+            group->has_resume_state()) {
+            return schedule_resume_download(engine, *group);
+        }
         if (group && group->has_resume_state() && !group->is_multi_segment()) {
             group->prepare_resumed_multi_segment();
             schedule_remaining_resume_segments(engine, *group, segment_id_);
@@ -3590,7 +3611,13 @@ bool HttpRetryCommand::execute(DownloadEngineV2* engine) {
         auto* group_man = engine->request_group_man();
         auto* group = group_man ? group_man->find_group(get_task_id()) : nullptr;
         if (group) {
-            apply_group_resume_range(*next_cmd, *group);
+            // 恢复初始连接（多段组 + 续传状态）失败后重建仍带组内
+            // 续传 Range——恢复标记必须重打，否则 k>0 形态的响应按
+            // 段路由跳过其余段重建（永挂根因经由重试链再入）
+            if (apply_group_resume_range(*next_cmd, *group) &&
+                group->is_multi_segment()) {
+                next_cmd->set_resume_initial(true);
+            }
             // If-Range 是主镜像（uris_[0]，ETag 的归属者）的验证值：
             // 多镜像轮转后重试连接落在非主镜像时必须剥离（续传内容
             // 一致性由 206 校验兜底，误带会造成有效续传被拒）

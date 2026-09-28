@@ -276,6 +276,19 @@ public:
     void set_segment_retry(bool value) noexcept { segment_retry_ = value; }
 
     /**
+     * @brief 标记本连接是暂停恢复激活的初始连接（带组内续传 Range）
+     *
+     * 恢复激活时段 0 可能已完成，初始连接承载的续传 Range 段号 k 可以
+     * 大于 0——响应到达时以 segment_id_>0 落入段路由分支，而同进程
+     * 恢复组仍处多段态，既有重建门禁（!is_multi_segment）会跳过其余
+     * 段重建：被暂停清扫收走的段连接无人重建，组 ACTIVE 且零挂起命令
+     * 永挂。此标记让响应命令转回 schedule_resume_download 的既有多段
+     * 防御（与段 0 形态同一收敛）。与 set_segment_retry 方向相反：
+     * 那是"按段路由、保段进度"，这是"回到恢复调度"
+     */
+    void set_resume_initial(bool value) noexcept { resume_initial_ = value; }
+
+    /**
      * @brief 获取分段编号
      */
     SegmentId range_segment_id() const noexcept { return range_segment_id_; }
@@ -373,6 +386,10 @@ private:
 
     // 段级换源重试的重建连接标记（沿命令链传给响应命令决定响应路由）
     bool segment_retry_ = false;
+
+    // 暂停恢复激活的初始连接标记（沿命令链传给响应命令决定响应路由；
+    // 与 segment_retry_ 语义相反的两类带 Range 连接，实际互斥）
+    bool resume_initial_ = false;
 
     // If-Range 验证值（续传请求附带；非续传请求为空）
     std::string if_range_;
@@ -536,6 +553,17 @@ public:
     }
 
     /**
+     * @brief 标记响应来自暂停恢复激活的初始连接（连接阶段携带而来）
+     *
+     * 同进程多段恢复的初始连接可承载段 k > 0 的续传 Range（段 0 已
+     * 完成），响应以 segment_id_>0 落入段路由分支会跳过其余段重建
+     * （被暂停清扫收走的段连接无人重建，永挂根因）——此标记让
+     * determine_download_strategy 转回 schedule_resume_download 的
+     * 多段防御
+     */
+    void set_resume_initial(bool value) noexcept { resume_initial_ = value; }
+
+    /**
      * @brief 设置重定向深度（连接阶段携带而来）
      *
      * HttpInitiateConnectionCommand 把自己的深度带进响应命令，
@@ -588,6 +616,9 @@ private:
 
     // 段级换源重试的重建连接标记（决定段 0 重试响应的路由分支）
     bool segment_retry_routing_ = false;
+
+    // 暂停恢复激活的初始连接标记（决定 k>0 续传响应转回恢复调度而非段路由）
+    bool resume_initial_ = false;
 
     // 重定向深度（连接阶段携带而来，超链防护）
     int redirect_depth_ = 0;

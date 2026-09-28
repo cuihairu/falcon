@@ -297,7 +297,12 @@ std::unique_ptr<Command> RequestGroup::create_initial_command() {
     auto cmd = std::make_unique<HttpInitiateConnectionCommand>(id_, current_uri(), options_);
     // 跨会话恢复：init() 已从控制文件加载续传状态时，初始连接直接
     // 携带第一个未完成段的 Range 与 If-Range（无有效断点时为无操作）
-    apply_group_resume_range(*cmd, *this);
+    if (apply_group_resume_range(*cmd, *this)) {
+        // 带组内续传 Range 的激活初始连接打标记：同进程多段恢复时段 0
+        // 可能已完成（k > 0），响应按段路由会跳过其余段重建——必须让
+        // 响应命令转回 schedule_resume_download 的多段防御
+        cmd->set_resume_initial(true);
+    }
     return cmd;
 }
 
