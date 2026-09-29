@@ -117,6 +117,10 @@ public:
 
     bool pause_task(falcon::TaskId id) override { return engine_->pause_task(id); }
     bool resume_task(falcon::TaskId id) override { return engine_->resume_task(id); }
+    // 引擎 remove_task 只收终态任务——删除暂停/下载中任务前先 cancel
+    // （顺带修复"删除暂停任务静默失败"：TaskManager 的 is_finished
+    // 不含 Paused，此前 remove 对 Paused 任务恒返回 false）。
+    bool cancel_task(falcon::TaskId id) override { return engine_->cancel_task(id); }
     bool remove_task(falcon::TaskId id) override { return engine_->remove_task(id); }
 
     std::size_t remove_finished_tasks() override {

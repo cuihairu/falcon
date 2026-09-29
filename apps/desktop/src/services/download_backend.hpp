@@ -40,6 +40,13 @@ public:
                                    bool start_immediately) = 0;
     virtual bool pause_task(falcon::TaskId id) = 0;
     virtual bool resume_task(falcon::TaskId id) = 0;
+    /// 取消活动/暂停中的任务（回收到终态，使 remove_task 可以移除）。
+    /// 仅进程内后端支持；默认实现为无操作（daemon 的 aria2.remove
+    /// 本就对活动任务生效，无需此步）。
+    virtual bool cancel_task(falcon::TaskId id) {
+        (void)id;
+        return false;
+    }
     virtual bool remove_task(falcon::TaskId id) = 0;
     /// 返回清除的任务数
     virtual std::size_t remove_finished_tasks() = 0;

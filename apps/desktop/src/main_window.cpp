@@ -12,6 +12,7 @@
 #include "pages/download_page.hpp"
 #include "pages/cloud_page.hpp"
 #include "pages/discovery_page.hpp"
+#include "pages/trash_page.hpp"
 #include "pages/settings_page.hpp"
 #include "dialogs/add_download_dialog.hpp"
 #include "utils/clipboard_monitor.hpp"
@@ -20,6 +21,8 @@
 #include "ipc/http_server.hpp"
 #include "services/download_service.hpp"
 #include "services/download_backend.hpp"
+#include "services/update_checker.hpp"
+#include "utils/icon_utils.hpp"
 
 #include <QHBoxLayout>
 #include <QWidget>
@@ -132,6 +135,7 @@ MainWindow::MainWindow(QWidget* parent)
     , status_bar_(nullptr)
     , content_stack_(nullptr)
     , download_page_(nullptr)
+    , trash_page_(nullptr)
     , settings_page_(nullptr)
     , clipboard_monitor_(nullptr)
     , ipc_server_(nullptr)
@@ -139,6 +143,7 @@ MainWindow::MainWindow(QWidget* parent)
     , tray_menu_(nullptr)
     , theme_manager_(nullptr)
     , download_service_(nullptr)
+    , update_checker_(nullptr)
 {
     // 初始化主题管理器（必须在 setup_ui 之前）
     theme_manager_ = new ThemeManager(this);
@@ -156,6 +161,7 @@ MainWindow::MainWindow(QWidget* parent)
     apply_settings_to_runtime();
     setup_ipc_server();
     ensure_download_service();
+    check_for_updates_on_startup();
 }
 
 MainWindow::~MainWindow()
@@ -268,8 +274,10 @@ void MainWindow::ensure_download_service()
     }
 
     // 按设置选择后端：daemon 模式经 JSON-RPC 访问 falcon-daemon，
-    // 否则维持进程内引擎直连
+    // 否则维持进程内引擎直连。回收站仅进程内后端启用（目录为
+    // <下载目录>/.falcon-trash）；daemon 路径保持旧行为（remove 即删）。
     std::unique_ptr<IDownloadBackend> backend;
+    std::string trash_dir;
     if (settings_page_ && settings_page_->is_daemon_mode_enabled()) {
         falcon::daemon::rpc::JsonRpcClientConfig config;
         config.url = settings_page_->get_daemon_rpc_url().toStdString();
@@ -278,9 +286,13 @@ void MainWindow::ensure_download_service()
         backend = make_daemon_rpc_backend(std::move(config));
     } else {
         backend = make_inprocess_backend();
+        if (settings_page_) {
+            trash_dir = settings_page_->get_default_download_dir().toStdString()
+                        + "/.falcon-trash";
+        }
     }
 
-    download_service_ = new DownloadService(std::move(backend), this);
+    download_service_ = new DownloadService(std::move(backend), std::move(trash_dir), this);
     connect(download_service_, &DownloadService::tasks_refreshed,
             this, &MainWindow::on_tasks_refreshed);
     connect(download_service_, &DownloadService::stats_refreshed,
@@ -305,8 +317,19 @@ void MainWindow::ensure_download_service()
                         3000);
                 }
             });
+    // 回收站内容变化（入站/恢复/清理）→ 全量重拉并刷新回收站页
+    connect(download_service_, &DownloadService::trash_changed,
+            this, [this]() {
+                if (trash_page_) {
+                    trash_page_->set_entries(download_service_->trash_list());
+                }
+            });
+    // 首次填充：清单在 TrashStore 构造时已加载，等变更才有数据会空一屏
+    if (trash_page_) {
+        trash_page_->set_entries(download_service_->trash_list());
+    }
 
-    // 全局设置（并发数/限速/做种默认值）需在首次轮询前生效
+    // 全局设置（并发数/限速/做种默认值/回收站保留天数）需在首次轮询前生效
     if (settings_page_) {
         download_service_->apply_global_settings(
             static_cast<std::size_t>(settings_page_->get_max_concurrent_downloads()),
@@ -314,6 +337,8 @@ void MainWindow::ensure_download_service()
         download_service_->apply_seed_defaults(
             settings_page_->get_seed_ratio(),
             static_cast<std::size_t>(settings_page_->get_seed_time_minutes()));
+        download_service_->set_trash_retention_days(
+            settings_page_->get_trash_retention_days());
     }
 
     // 500ms 仅作兜底轮询：daemon RPC 后端经 WebSocket 事件流收到通知
@@ -425,6 +450,10 @@ void MainWindow::create_side_bar()
         content_stack_->setCurrentIndex(PAGE_DISCOVERY);
     });
 
+    connect(side_bar_, &SideBar::trashClicked, this, [this]() {
+        content_stack_->setCurrentIndex(PAGE_TRASH);
+    });
+
     connect(side_bar_, &SideBar::settingsClicked, this, [this]() {
         content_stack_->setCurrentIndex(PAGE_SETTINGS);
     });
@@ -487,6 +516,28 @@ void MainWindow::create_pages()
             this, &MainWindow::on_configured_download_requested);
     connect(discovery_page, &DiscoveryPage::direct_download_requested,
             this, &MainWindow::on_direct_download_requested);
+
+    // 回收站页面（操作转发 DownloadService，trash_changed 回来后刷新）
+    trash_page_ = new TrashPage(this);
+    content_stack_->addWidget(trash_page_);
+    connect(trash_page_, &TrashPage::restore_requested,
+            this, [this](std::uint64_t id) {
+                if (download_service_) {
+                    download_service_->trash_restore(id);
+                }
+            });
+    connect(trash_page_, &TrashPage::purge_requested,
+            this, [this](std::uint64_t id) {
+                if (download_service_) {
+                    download_service_->trash_purge(id);
+                }
+            });
+    connect(trash_page_, &TrashPage::clear_requested,
+            this, [this]() {
+                if (download_service_) {
+                    download_service_->trash_clear();
+                }
+            });
 
     // 设置页面
     settings_page_ = new SettingsPage(this);
@@ -564,6 +615,10 @@ void MainWindow::load_settings()
         settings.value("daemon_rpc_url", "http://127.0.0.1:6800/jsonrpc").toString());
     settings_page_->set_daemon_rpc_secret(
         settings.value("daemon_rpc_secret", "").toString());
+    settings_page_->set_check_updates_on_startup_enabled(
+        settings.value("check_updates_on_startup", true).toBool());
+    settings_page_->set_trash_retention_days(
+        settings.value("trash_retention_days", 7).toInt());
 
     settings.endGroup();
 }
@@ -593,8 +648,36 @@ void MainWindow::save_settings() const
     settings.setValue("daemon_mode_enabled", settings_page_->is_daemon_mode_enabled());
     settings.setValue("daemon_rpc_url", settings_page_->get_daemon_rpc_url());
     settings.setValue("daemon_rpc_secret", settings_page_->get_daemon_rpc_secret());
+    settings.setValue("check_updates_on_startup",
+                      settings_page_->is_check_updates_on_startup_enabled());
+    settings.setValue("trash_retention_days",
+                      settings_page_->get_trash_retention_days());
     settings.endGroup();
     settings.sync();
+}
+
+void MainWindow::check_for_updates_on_startup()
+{
+    if (!settings_page_ || !settings_page_->is_check_updates_on_startup_enabled()) {
+        return;
+    }
+
+    update_checker_ = new UpdateChecker(this);
+    connect(update_checker_, &UpdateChecker::update_available, this,
+            [this](const QString& latest, const QString& url) {
+        // 启动静默检查仅托盘通知（发现页/设置页不打扰）；url 需用户
+        // 自行前往设置页查看或访问 GitHub 发布页，不接入 messageClicked
+        Q_UNUSED(url);
+        if (system_tray_ && system_tray_->isVisible()) {
+            system_tray_->showMessage(
+                tr("发现新版本"),
+                tr("Falcon %1 已发布，可在设置页检查更新获取发布页链接。").arg(latest),
+                QSystemTrayIcon::Information, 8000);
+        }
+    });
+    // up_to_date / check_failed 在启动路径一律静默（网络不通等情况不打扰）
+
+    update_checker_->check_for_updates();
 }
 
 void MainWindow::apply_settings_to_runtime()
@@ -615,6 +698,8 @@ void MainWindow::apply_settings_to_runtime()
         download_service_->apply_seed_defaults(
             settings_page_->get_seed_ratio(),
             static_cast<std::size_t>(settings_page_->get_seed_time_minutes()));
+        download_service_->set_trash_retention_days(
+            settings_page_->get_trash_retention_days());
     }
 }
 
@@ -650,11 +735,13 @@ void MainWindow::setup_system_tray()
     tray_menu_ = new QMenu(this);
 
     auto* show_action = tray_menu_->addAction(tr("显示主窗口"));
+    show_action->setIcon(QIcon(":/icons/falcon.svg"));
     connect(show_action, &QAction::triggered, this, &MainWindow::on_tray_show_clicked);
 
     tray_menu_->addSeparator();
 
     auto* quit_action = tray_menu_->addAction(tr("退出"));
+    quit_action->setIcon(icons::themed(icons::Id::X));
     connect(quit_action, &QAction::triggered, this, &MainWindow::on_tray_quit_clicked);
 
     system_tray_->setContextMenu(tray_menu_);
@@ -764,7 +851,12 @@ void MainWindow::on_remove_task_requested(falcon::TaskId id)
         return;
     }
 
-    download_service_->remove_task(id);
+    // 进程内后端走回收站（文件暂存可恢复）；daemon 后端保持旧行为
+    if (download_service_->trash_available()) {
+        download_service_->remove_task_to_trash(id);
+    } else {
+        download_service_->remove_task(id);
+    }
 }
 
 void MainWindow::on_remove_finished_tasks_requested()

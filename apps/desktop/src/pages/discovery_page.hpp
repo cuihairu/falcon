@@ -23,11 +23,9 @@ namespace falcon::desktop {
 /**
  * @brief 发现页面 - 资源搜索与发现
  *
- * 支持多种资源搜索：
- * - 磁力链接搜索
- * - HTTP/HTTPS 资源搜索
- * - 网盘资源搜索
- * - FTP 资源搜索
+ * 搜索完全由 ~/.config/falcon/engines.json 配置驱动（不内置第三方
+ * 站点适配器）：引擎的添加/启停在设置页「资源搜索」组或直接编辑
+ * engines.json 完成；本页提供关键词搜索 + 排序/大小过滤 + 结果下载。
  */
 class DiscoveryPage : public QWidget
 {
@@ -56,9 +54,6 @@ private slots:
 
     // 打开链接
     void open_link();
-
-    // 搜索类型改变
-    void on_search_type_changed(int index);
 
     // 显示结果详情
     void show_item_details(int row);
@@ -98,11 +93,9 @@ private:
     QLineEdit* search_input_;
     QPushButton* search_button_;
     QPushButton* clear_button_;
-    QComboBox* search_type_combo_;
     QComboBox* sort_combo_;
 
     // 过滤栏
-    QComboBox* category_filter_;
     QComboBox* size_filter_;
     QLineEdit* min_size_edit_;
     QLineEdit* max_size_edit_;
@@ -117,10 +110,8 @@ private:
     // 当前搜索结果
     QList<SearchResultItem> current_results_;
 
-    // 搜索设置
+    // 搜索设置（引擎集合由 engines.json 驱动，此处只保留本页可控项）
     struct SearchSettings {
-        QString search_type = "magnet";  // magnet, http, cloud, ftp
-        QString category = "all";        // all, video, audio, document, software
         QString sort_by = "relevance";   // relevance, size, date, seeders
         int max_results = 50;
     } settings_;

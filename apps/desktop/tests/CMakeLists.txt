@@ -18,7 +18,11 @@ enable_testing()
 
 add_executable(falcon_desktop_backend_tests
     download_backend_test.cpp
+    trash_store_test.cpp
+    search_engine_catalog_test.cpp
     ../src/services/download_backend.cpp
+    ../src/services/trash_store.cpp
+    ../src/services/search_engine_catalog.cpp
 )
 
 # 测试 harness 直接使用真实 JsonRpcServer：其符号在 falcon_daemon_rpc 中
@@ -27,6 +31,7 @@ target_link_libraries(falcon_desktop_backend_tests
     PRIVATE
         falcon_daemon_rpc
         falcon_daemon_rpc_client
+        Falcon::drives
         GTest::gtest
         GTest::gtest_main
         Threads::Threads

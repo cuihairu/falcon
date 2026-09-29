@@ -13,6 +13,8 @@
 #include <QVBoxLayout>
 #include <QButtonGroup>
 
+#include "../utils/icon_utils.hpp"
+
 namespace falcon::desktop {
 
 /**
@@ -20,9 +22,9 @@ namespace falcon::desktop {
  *
  * 结构：
  * - 我的下载（标签页：下载中/已完成）
- * - 发现与空间（资源发现、云盘空间、偏好设置）
+ * - 发现与空间（资源发现、云盘空间、回收站、偏好设置）
  *
- * 全部 5 个导航钮同属一个 exclusive QButtonGroup——任意时刻有且仅有
+ * 全部 6 个导航钮同属一个 exclusive QButtonGroup——任意时刻有且仅有
  * 一个高亮,与内容页一一对应。
  */
 class SideBar : public QWidget
@@ -39,6 +41,7 @@ public:
 signals:
     void cloudClicked();
     void discoveryClicked();
+    void trashClicked();
     void settingsClicked();
     void downloadingTabClicked();
     void completedTabClicked();
@@ -47,7 +50,7 @@ private:
     void setup_ui();
     void create_download_section();
     void create_space_section();
-    QPushButton* create_nav_button(const QString& text);
+    QPushButton* create_nav_button(const QString& text, icons::Id icon);
     QWidget* create_separator();
 
     // 主布局
@@ -64,7 +67,8 @@ private:
     // 发现与空间区域
     QPushButton* library_button_;
     QPushButton* third_party_button_;
-    QPushButton* recycle_bin_button_;
+    QPushButton* trash_button_;
+    QPushButton* settings_button_;
 
     QWidget* footer_card_ = nullptr;
     QLabel* footer_value_ = nullptr;

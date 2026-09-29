@@ -32,12 +32,15 @@
 #include "pages/discovery_page.hpp"
 #include "pages/download_page.hpp"
 #include "pages/settings_page.hpp"
+#include "pages/trash_page.hpp"
+#include "services/trash_store.hpp"
 #include "utils/theme_manager.hpp"
 #include "widgets/status_bar.hpp"
 #include "widgets/top_bar.hpp"
 
 #include <rpc/aria2_snapshots.hpp>
 
+#include <ctime>
 #include <string>
 #include <vector>
 
@@ -108,7 +111,40 @@ struct Shell {
     QWidget* root = nullptr;
     QStackedWidget* stack = nullptr;
     DownloadPage* download = nullptr;
+    TrashPage* trash = nullptr;
 };
+
+/// 回收站演示条目（与 MainWindow 实际删除路径写入的记录同构）
+std::vector<falcon::desktop::TrashEntry> demo_trash_entries()
+{
+    const std::int64_t now = std::time(nullptr);
+    auto entry = [&now](std::uint64_t id, const char* name, std::uint64_t bytes,
+                        const char* status, bool in_trash,
+                        std::int64_t age_seconds) {
+        falcon::desktop::TrashEntry e;
+        e.id = id;
+        e.url = std::string("https://cdn.example.com/media/") + name;
+        e.output_path = std::string("/home/user/Downloads/") + name;
+        e.file_name = name;
+        e.total_bytes = bytes;
+        e.status = status;
+        e.file_in_trash = in_trash;
+        if (in_trash) {
+            e.trash_file_path = "/home/user/Downloads/.falcon-trash/"
+                                + std::to_string(id) + "_" + name;
+        }
+        e.deleted_at = now - age_seconds;
+        return e;
+    };
+    return {
+        entry(12, "ubuntu-24.04.3-desktop-amd64.iso", 5700000000ULL,
+              "completed", true, 3600 * 5),
+        entry(9, "project-archive.zip", 4296000000ULL, "completed", true,
+              3600 * 49),
+        entry(5, "suspended-transfer.bin", 730000000ULL, "cancelled", false,
+              3600 * 26),
+    };
+}
 
 Shell build_shell()
 {
@@ -132,11 +168,13 @@ Shell build_shell()
     auto* download = new DownloadPage;
     auto* cloud = new CloudPage;
     auto* discovery = new DiscoveryPage;
+    auto* trash = new TrashPage;
     auto* settings = new SettingsPage;
-    stack->addWidget(download);
-    stack->addWidget(cloud);
-    stack->addWidget(discovery);
-    stack->addWidget(settings);
+    stack->addWidget(download);   // 0
+    stack->addWidget(cloud);      // 1
+    stack->addWidget(discovery);  // 2
+    stack->addWidget(trash);      // 3
+    stack->addWidget(settings);   // 4
     body->addWidget(stack, 1);
     root_layout->addLayout(body, 1);
 
@@ -156,13 +194,16 @@ Shell build_shell()
                      stack, [stack] { stack->setCurrentIndex(1); });
     QObject::connect(side_bar, &SideBar::discoveryClicked,
                      stack, [stack] { stack->setCurrentIndex(2); });
-    QObject::connect(side_bar, &SideBar::settingsClicked,
+    QObject::connect(side_bar, &SideBar::trashClicked,
                      stack, [stack] { stack->setCurrentIndex(3); });
+    QObject::connect(side_bar, &SideBar::settingsClicked,
+                     stack, [stack] { stack->setCurrentIndex(4); });
 
     Shell shell;
     shell.root = central;
     shell.stack = stack;
     shell.download = download;
+    shell.trash = trash;
     return shell;
 }
 
@@ -215,6 +256,7 @@ int main(int argc, char** argv)
     };
 
     shell.download->update_tasks(demo_tasks());
+    shell.trash->set_entries(demo_trash_entries());
     if (auto* status = shell.root->findChild<StatusBar*>()) {
         status->set_download_speed(15370000);
         status->set_task_counts(2, 1);
@@ -239,7 +281,7 @@ int main(int argc, char** argv)
     };
 
     // 经侧栏按钮真实点击切页(信号 + QButtonGroup 选中态同步),
-    // navTab 创建序:0 下载中 / 1 已完成 / 2 资源发现 / 3 云盘空间 / 4 偏好设置
+    // navTab 创建序:0 下载中 / 1 已完成 / 2 资源发现 / 3 云盘空间 / 4 回收站 / 5 偏好设置
     const auto nav_tabs = shell.root->findChildren<QPushButton*>("navTab");
     const auto go = [&nav_tabs](int idx) {
         if (idx < nav_tabs.size()) {
@@ -262,18 +304,30 @@ int main(int argc, char** argv)
         snap("cloud_" + suffix);
         go(2); // 资源发现
         snap("discovery_" + suffix);
-        go(4); // 偏好设置
+        go(4); // 回收站
+        snap("trash_" + suffix);
+        go(5); // 偏好设置
         snap("settings_" + suffix);
-        // 做种设置组特写(滚动区在折叠线以下,整窗截图看不到)
+        // 设置组特写(做种/回收站/关于与更新组在滚动区折叠线以下,整窗截图看不到)
         for (auto* box : shell.root->findChildren<QGroupBox*>()) {
-            if (box->title().contains(QString::fromUtf8("做种"))) {
-                const QString path = out_dir + "/settings_seeding_" + suffix + ".png";
-                if (!box->grab().save(path)) {
-                    std::fprintf(stderr, "failed to save %s\n", qPrintable(path));
-                } else {
-                    std::printf("saved %s\n", qPrintable(path));
-                }
-                break;
+            const QString title = box->title();
+            QString tag;
+            if (title.contains(QString::fromUtf8("做种"))) {
+                tag = "settings_seeding";
+            } else if (title.contains(QString::fromUtf8("回收站"))) {
+                tag = "settings_trash";
+            } else if (title.contains(QString::fromUtf8("资源搜索"))) {
+                tag = "settings_search";
+            } else if (title.contains(QString::fromUtf8("关于与更新"))) {
+                tag = "settings_about";
+            } else {
+                continue;
+            }
+            const QString path = out_dir + "/" + tag + "_" + suffix + ".png";
+            if (!box->grab().save(path)) {
+                std::fprintf(stderr, "failed to save %s\n", qPrintable(path));
+            } else {
+                std::printf("saved %s\n", qPrintable(path));
             }
         }
         snap_add_dialog("add_dialog_" + suffix);

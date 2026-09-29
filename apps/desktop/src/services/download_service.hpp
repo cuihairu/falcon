@@ -8,10 +8,12 @@
 #pragma once
 
 #include <services/download_backend.hpp>
+#include <services/trash_store.hpp>
 
 #include <QObject>
 #include <QString>
 
+#include <atomic>
 #include <condition_variable>
 #include <chrono>
 #include <deque>
@@ -42,7 +44,10 @@ class DownloadService : public QObject
     Q_OBJECT
 
 public:
+    /// trash_dir 非空时启用回收站（仅进程内后端传入；daemon 后端保持
+    /// 旧行为：remove 即彻底删除）。目录为 <下载目录>/.falcon-trash。
     explicit DownloadService(std::unique_ptr<IDownloadBackend> backend,
+                             std::string trash_dir,
                              QObject* parent = nullptr);
     ~DownloadService() override;
 
@@ -72,6 +77,21 @@ public:
     /// 请求任务停止做种（BitTorrent；仅在做种中的任务上生效）
     void stop_seeding(falcon::TaskId id);
 
+    // ---- 回收站 ----
+    /// 回收站是否可用（进程内后端 + trash_dir 非空）
+    bool trash_available() const { return trash_store_ != nullptr; }
+    /// 删除任务进回收站：活动/暂停任务先取消再移除；Completed 任务的
+    /// 成品文件移入回收站目录，其余只记录。
+    void remove_task_to_trash(falcon::TaskId id);
+    /// 回收站条目快照（store 内部互斥，GUI 线程可直读）
+    std::vector<TrashEntry> trash_list() const;
+    /// 恢复/彻底删除/清空（变更后发 trash_changed）
+    void trash_restore(std::uint64_t id);
+    void trash_purge(std::uint64_t id);
+    void trash_clear();
+    /// 自动清理保留天数（<=0 不自动清理；启动时的过期清理按此值执行）
+    void set_trash_retention_days(int days) { trash_retention_days_.store(days); }
+
     /// 请求立即刷一轮快照（顶栏手动刷新）。线程安全；worker 忙碌时
     /// 只置位，由下一轮循环消化（天然合并）。
     void request_refresh();
@@ -89,6 +109,9 @@ signals:
     void task_failed(falcon::TaskId id, const QString& error_message);
     /// 做种停止（达标自动停或手动停；从快照 seeding_active 翻转推断）
     void seeding_stopped(falcon::TaskId id, const QString& output_path);
+    /// 回收站内容变化（入站/恢复/彻底删除/清空/过期清理）；GUI 收到后
+    /// 调 trash_list() 重新拉取并刷新回收站页
+    void trash_changed();
 
 private:
     void enqueue(std::function<void()>&& job);
@@ -99,6 +122,10 @@ private:
     void publish_transitions(const std::vector<falcon::daemon::rpc::TaskSnapshot>& tasks);
 
     std::unique_ptr<IDownloadBackend> backend_;
+
+    /// 回收站（trash_dir 非空才有实例）；变更类操作在 worker 线程执行
+    std::unique_ptr<TrashStore> trash_store_;
+    std::atomic<int> trash_retention_days_{7};
 
     std::thread worker_;
     std::mutex mutex_;

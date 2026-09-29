@@ -8,15 +8,32 @@
 #include "download_service.hpp"
 
 #include <QDebug>
+#include <chrono>
+#include <filesystem>
 #include <stdexcept>
 
 namespace falcon::desktop {
 
+namespace {
+
+std::int64_t now_epoch_seconds()
+{
+    return std::chrono::duration_cast<std::chrono::seconds>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
+}
+
+} // namespace
+
 DownloadService::DownloadService(std::unique_ptr<IDownloadBackend> backend,
+                                 std::string trash_dir,
                                  QObject* parent)
     : QObject(parent)
     , backend_(std::move(backend))
 {
+    if (!trash_dir.empty()) {
+        trash_store_ = std::make_unique<TrashStore>(std::move(trash_dir));
+    }
 }
 
 DownloadService::~DownloadService()
@@ -42,6 +59,18 @@ void DownloadService::start(int poll_interval_ms)
     // 事件驱动：后端有事件源（daemon 通知）时即时刷新，轮询降为兜底
     backend_->set_wake_callback([this]() { request_refresh(); });
     worker_ = std::thread([this]() { worker_loop(); });
+    // 启动时按保留天数清理过期回收站条目（days <= 0 不自动清理）
+    if (trash_store_) {
+        enqueue([this]() {
+            const int days = trash_retention_days_.load();
+            if (days <= 0) {
+                return;
+            }
+            if (trash_store_->purge_expired(days, now_epoch_seconds()) > 0) {
+                emit trash_changed();
+            }
+        });
+    }
 }
 
 void DownloadService::stop()
@@ -135,6 +164,99 @@ void DownloadService::apply_seed_defaults(double seed_ratio,
 void DownloadService::stop_seeding(falcon::TaskId id)
 {
     enqueue([this, id]() { (void)backend_->stop_seeding(id); });
+}
+
+void DownloadService::remove_task_to_trash(falcon::TaskId id)
+{
+    enqueue([this, id]() {
+        if (!trash_store_) {
+            // 无回收站能力（daemon 后端路径）：保持旧语义直接移除
+            (void)backend_->remove_task(id);
+            return;
+        }
+
+        // 快照先行：终态前元数据（取消/失败后快照仍含该任务一轮）
+        TrashEntry entry;
+        bool was_active = false;
+        try {
+            for (const auto& snap : backend_->fetch_tasks()) {
+                if (snap.id != id) {
+                    continue;
+                }
+                entry.id = id;
+                entry.url = snap.url;
+                entry.output_path = snap.output_path;
+                entry.total_bytes = snap.total_bytes;
+                was_active = !snap.is_finished();
+                if (was_active) {
+                    entry.status = "cancelled";
+                } else if (snap.status == falcon::TaskStatus::Completed) {
+                    entry.status = "completed";
+                } else if (snap.status == falcon::TaskStatus::Failed) {
+                    entry.status = "failed";
+                } else {
+                    entry.status = "cancelled";
+                }
+                break;
+            }
+        } catch (const std::exception&) {
+            // 快照拉取失败也照常走移除（条目缺元数据可接受）
+        }
+
+        // 活动/暂停任务先取消（引擎 remove_task 只收终态；daemon 后端
+        // 无 cancel_task 语义，aria2.remove 本就对活动任务生效）
+        if (was_active) {
+            (void)backend_->cancel_task(id);
+        }
+        if (!backend_->remove_task(id)) {
+            return; // 移除失败不入回收站（任务仍在列表，用户可重试）
+        }
+
+        entry.deleted_at = now_epoch_seconds();
+        // 仅 Completed 且成品文件在位才移入；取消/失败的半成品不动
+        std::string move_file;
+        std::error_code ec;
+        if (entry.status == "completed" && !entry.output_path.empty()
+            && std::filesystem::is_regular_file(entry.output_path, ec)) {
+            move_file = entry.output_path;
+        }
+        if (!trash_store_->add(std::move(entry), move_file)) {
+            qWarning() << "trash: failed to add entry for task" << id;
+        }
+        emit trash_changed();
+    });
+}
+
+std::vector<TrashEntry> DownloadService::trash_list() const
+{
+    return trash_store_ ? trash_store_->list() : std::vector<TrashEntry>{};
+}
+
+void DownloadService::trash_restore(std::uint64_t id)
+{
+    enqueue([this, id]() {
+        if (trash_store_->restore(id)) {
+            emit trash_changed();
+        }
+    });
+}
+
+void DownloadService::trash_purge(std::uint64_t id)
+{
+    enqueue([this, id]() {
+        if (trash_store_->purge(id)) {
+            emit trash_changed();
+        }
+    });
+}
+
+void DownloadService::trash_clear()
+{
+    enqueue([this]() {
+        if (trash_store_->clear() > 0) {
+            emit trash_changed();
+        }
+    });
 }
 
 void DownloadService::request_refresh()

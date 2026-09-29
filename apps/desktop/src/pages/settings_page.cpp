@@ -7,6 +7,9 @@
 
 #include "settings_page.hpp"
 
+#include "../services/search_engine_catalog.hpp"
+#include "../services/update_checker.hpp"
+
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFormLayout>
@@ -43,6 +46,10 @@ SettingsPage::SettingsPage(QWidget* parent)
     , sound_notification_checkbox_(nullptr)
     , current_theme_label_(nullptr)
     , theme_toggle_button_(nullptr)
+    , check_updates_button_(nullptr)
+    , update_result_label_(nullptr)
+    , check_updates_on_startup_checkbox_(nullptr)
+    , update_checker_(nullptr)
     , apply_button_(nullptr)
     , reset_button_(nullptr)
 {
@@ -108,6 +115,11 @@ void SettingsPage::set_seed_time_minutes(int minutes)
     seed_time_spin_->setValue(minutes < 0 ? 0 : minutes);
 }
 
+void SettingsPage::set_trash_retention_days(int days)
+{
+    trash_retention_spin_->setValue(days < 0 ? 7 : days);
+}
+
 void SettingsPage::set_open_file_when_completed(bool enabled)
 {
     set_action_when_completed(enabled ? 1 : 0);
@@ -148,6 +160,13 @@ void SettingsPage::set_daemon_rpc_secret(const QString& secret)
 {
     if (daemon_secret_edit_) {
         daemon_secret_edit_->setText(secret);
+    }
+}
+
+void SettingsPage::set_check_updates_on_startup_enabled(bool enabled)
+{
+    if (check_updates_on_startup_checkbox_) {
+        check_updates_on_startup_checkbox_->setChecked(enabled);
     }
 }
 
@@ -216,6 +235,11 @@ int SettingsPage::get_seed_time_minutes() const
     return seed_time_spin_->value();
 }
 
+int SettingsPage::get_trash_retention_days() const
+{
+    return trash_retention_spin_->value();
+}
+
 bool SettingsPage::is_open_file_when_completed() const
 {
     return completion_action_combo_ ? completion_action_combo_->currentIndex() == 1 : false;
@@ -240,6 +264,13 @@ QString SettingsPage::get_daemon_rpc_url() const
 QString SettingsPage::get_daemon_rpc_secret() const
 {
     return daemon_secret_edit_ ? daemon_secret_edit_->text() : QString();
+}
+
+bool SettingsPage::is_check_updates_on_startup_enabled() const
+{
+    return check_updates_on_startup_checkbox_
+               ? check_updates_on_startup_checkbox_->isChecked()
+               : false;
 }
 
 //==============================================================================
@@ -278,6 +309,9 @@ void SettingsPage::reset_to_defaults()
     seed_ratio_spin_->setValue(1.0);
     seed_time_spin_->setValue(0);
 
+    // Trash defaults（保留 7 天自动清理）
+    trash_retention_spin_->setValue(7);
+
     // Completion action settings (0 = do nothing)
     completion_action_combo_->setCurrentIndex(0);
 
@@ -294,6 +328,9 @@ void SettingsPage::reset_to_defaults()
     // Notification settings
     notifications_checkbox_->setChecked(true);
     sound_notification_checkbox_->setChecked(false);
+
+    // About & update settings
+    check_updates_on_startup_checkbox_->setChecked(true);
 }
 
 void SettingsPage::apply_settings()
@@ -329,9 +366,12 @@ void SettingsPage::setup_ui()
     scroll_layout->addWidget(create_download_section_widget());
     scroll_layout->addWidget(create_speed_limit_section_widget());
     scroll_layout->addWidget(create_seeding_section_widget());
+    scroll_layout->addWidget(create_trash_section_widget());
+    scroll_layout->addWidget(create_search_engines_section_widget());
     scroll_layout->addWidget(create_completion_action_section_widget());
     scroll_layout->addWidget(create_connection_section_widget());
     scroll_layout->addWidget(create_notification_section_widget());
+    scroll_layout->addWidget(create_about_section_widget());
 
     scroll_layout->addStretch();
 
@@ -566,6 +606,105 @@ QWidget* SettingsPage::create_seeding_section_widget()
     return group;
 }
 
+QWidget* SettingsPage::create_trash_section_widget()
+{
+    auto* group = new QGroupBox(tr("回收站"), this);
+
+    auto* layout = new QFormLayout(group);
+    layout->setSpacing(16);
+    layout->setContentsMargins(16, 8, 16, 16);
+    layout->setLabelAlignment(Qt::AlignRight);
+
+    // 保留天数
+    auto* days_label = new QLabel(tr("文件保留:"), this);
+    auto* days_layout = new QHBoxLayout();
+    days_layout->setSpacing(8);
+
+    trash_retention_spin_ = new QSpinBox(this);
+    trash_retention_spin_->setRange(0, 365);
+    trash_retention_spin_->setValue(7);
+    trash_retention_spin_->setSuffix(tr(" 天"));
+    trash_retention_spin_->setSpecialValueText(tr("不自动清理"));
+    days_layout->addWidget(trash_retention_spin_);
+
+    auto* days_hint = new QLabel(tr("（0 = 不自动清理，仅手动清空）"), this);
+    days_hint->setObjectName("cardInfoLabel");
+    days_layout->addWidget(days_hint);
+    days_layout->addStretch();
+
+    layout->addRow(days_label, days_layout);
+
+    // 说明文字
+    auto* desc_label = new QLabel(
+        tr("删除任务时，成品文件移入下载目录的 .falcon-trash 暂存；超过保留天数后启动时自动清理，期间可随时恢复。"),
+        this
+    );
+    desc_label->setWordWrap(true);
+    desc_label->setObjectName("cardInfoLabel");
+    layout->addRow("", desc_label);
+
+    return group;
+}
+
+QWidget* SettingsPage::create_search_engines_section_widget()
+{
+    auto* group = new QGroupBox(tr("资源搜索"), this);
+
+    auto* layout = new QFormLayout(group);
+    layout->setSpacing(16);
+    layout->setContentsMargins(16, 8, 16, 16);
+    layout->setLabelAlignment(Qt::AlignRight);
+
+    // 首次使用生成全 disabled 示例模板（已有配置绝不覆盖）
+    const std::string config_path = SearchEngineCatalog::default_path();
+    SearchEngineCatalog::ensure_default(config_path);
+
+    // 引擎勾选行：启停即时落盘（set_enabled 单键翻转，其余字段原样保留；
+    // 不存成员——勾选态以磁盘为准，重开页面重读即与发现页搜索一致）
+    SearchEngineCatalog catalog(config_path);
+    if (!catalog.load()) {
+        auto* err_label = new QLabel(
+            tr("engines.json 无法解析（格式无效），请修正文件内容后重启应用。"),
+            this);
+        err_label->setWordWrap(true);
+        err_label->setObjectName("cardInfoLabel");
+        layout->addRow("", err_label);
+        return group;
+    }
+
+    for (const auto& engine : catalog.engines()) {
+        const QString engine_name = QString::fromStdString(engine.name);
+        auto* box = new QCheckBox(engine_name, this);
+        box->setChecked(engine.enabled);
+        box->setToolTip(tr("%1\n勾选即启用该引擎（即时生效，下次搜索可见）。")
+                            .arg(QString::fromStdString(engine.base_url)));
+        connect(box, &QCheckBox::toggled, this,
+                [config_path, engine_name](bool checked) {
+                    SearchEngineCatalog(config_path)
+                        .set_enabled(engine_name.toStdString(), checked);
+                });
+        layout->addRow(box);
+    }
+
+    // 说明文字
+    auto* desc_label = new QLabel(
+        tr("搜索引擎由 engines.json 配置驱动（正则规则解析页面结果），Falcon 不内置任何第三方站点；勾选即时生效，添加新引擎直接编辑该文件。"),
+        this);
+    desc_label->setWordWrap(true);
+    desc_label->setObjectName("cardInfoLabel");
+    layout->addRow("", desc_label);
+
+    // 配置路径（文本可选中，方便复制编辑）
+    auto* path_label = new QLabel(
+        tr("配置文件: %1").arg(QString::fromStdString(config_path)), this);
+    path_label->setWordWrap(true);
+    path_label->setObjectName("cardInfoLabel");
+    path_label->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    layout->addRow("", path_label);
+
+    return group;
+}
+
 QWidget* SettingsPage::create_completion_action_section_widget()
 {
     auto* group = new QGroupBox(tr("下载完成后"), this);
@@ -669,6 +808,82 @@ QWidget* SettingsPage::create_notification_section_widget()
 
     sound_notification_checkbox_ = new QCheckBox(tr("提示音"), this);
     layout->addWidget(sound_notification_checkbox_);
+
+    return group;
+}
+
+QWidget* SettingsPage::create_about_section_widget()
+{
+    auto* group = new QGroupBox(tr("关于与更新"), this);
+
+    auto* layout = new QVBoxLayout(group);
+    layout->setSpacing(16);
+    layout->setContentsMargins(16, 8, 16, 16);
+
+    // 版本行：当前版本 + 检查按钮
+    auto* version_layout = new QHBoxLayout();
+    version_layout->setSpacing(12);
+
+    version_layout->addWidget(new QLabel(tr("当前版本:"), this));
+
+    auto* version_label = new QLabel(UpdateChecker::current_version(), this);
+    version_layout->addWidget(version_label);
+
+    version_layout->addStretch();
+
+    check_updates_button_ = new QPushButton(tr("检查更新"), this);
+    check_updates_button_->setCursor(Qt::PointingHandCursor);
+    check_updates_button_->setObjectName("toolButton");
+    version_layout->addWidget(check_updates_button_);
+
+    layout->addLayout(version_layout);
+
+    // 检查结果（链接跳 GitHub 发布页——无自更新，aria2 同姿态）
+    update_result_label_ = new QLabel(tr("尚未检查更新。"), this);
+    update_result_label_->setObjectName("cardInfoLabel");
+    update_result_label_->setWordWrap(true);
+    update_result_label_->setTextInteractionFlags(Qt::TextBrowserInteraction);
+    update_result_label_->setOpenExternalLinks(true);
+    layout->addWidget(update_result_label_);
+
+    check_updates_on_startup_checkbox_ = new QCheckBox(tr("启动时自动检查更新"), this);
+    check_updates_on_startup_checkbox_->setChecked(true);
+    layout->addWidget(check_updates_on_startup_checkbox_);
+
+    auto* desc_label = new QLabel(
+        tr("发现新版本时提供 GitHub 发布页链接，应用不会自动下载或安装更新。"), this);
+    desc_label->setObjectName("cardInfoLabel");
+    layout->addWidget(desc_label);
+
+    // 页面内自持一个检查器（MainWindow 另持一个做启动静默检查）
+    update_checker_ = new UpdateChecker(this);
+    connect(check_updates_button_, &QPushButton::clicked, this, [this]() {
+        if (update_checker_->checking()) {
+            return;
+        }
+        check_updates_button_->setEnabled(false);
+        check_updates_button_->setText(tr("正在检查…"));
+        update_result_label_->setText(tr("正在连接 GitHub Releases…"));
+        update_checker_->check_for_updates();
+    });
+    connect(update_checker_, &UpdateChecker::update_available, this,
+            [this](const QString& latest, const QString& url) {
+        check_updates_button_->setEnabled(true);
+        check_updates_button_->setText(tr("检查更新"));
+        update_result_label_->setText(
+            tr("发现新版本 %1，可<a href=\"%2\">前往发布页下载</a>。").arg(latest, url));
+    });
+    connect(update_checker_, &UpdateChecker::up_to_date, this, [this]() {
+        check_updates_button_->setEnabled(true);
+        check_updates_button_->setText(tr("检查更新"));
+        update_result_label_->setText(tr("当前已是最新版本。"));
+    });
+    connect(update_checker_, &UpdateChecker::check_failed, this,
+            [this](const QString& reason) {
+        check_updates_button_->setEnabled(true);
+        check_updates_button_->setText(tr("检查更新"));
+        update_result_label_->setText(tr("检查失败：%1").arg(reason));
+    });
 
     return group;
 }

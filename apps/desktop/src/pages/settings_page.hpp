@@ -19,6 +19,8 @@
 
 namespace falcon::desktop {
 
+class UpdateChecker;
+
 /**
  * @brief Settings page
  *
@@ -47,12 +49,14 @@ public:
     void set_global_speed_limit(int kb_per_sec);
     void set_seed_ratio(double ratio);
     void set_seed_time_minutes(int minutes);
+    void set_trash_retention_days(int days);
     void set_open_file_when_completed(bool enabled);
     void set_action_when_completed(int action);
     void set_theme_display(bool dark_mode);
     void set_daemon_mode_enabled(bool enabled);
     void set_daemon_rpc_url(const QString& url);
     void set_daemon_rpc_secret(const QString& secret);
+    void set_check_updates_on_startup_enabled(bool enabled);
 
     /**
      * @brief Get clipboard monitoring enabled state
@@ -113,6 +117,9 @@ public:
     /// 做种全局默认：时长上限（分钟；0 = 不限时）
     int get_seed_time_minutes() const;
 
+    /// 回收站自动清理保留天数（0 = 不自动清理）
+    int get_trash_retention_days() const;
+
     /**
      * @brief Get whether to open file when download completes
      * @return true if should open file
@@ -129,6 +136,9 @@ public:
     bool is_daemon_mode_enabled() const;
     QString get_daemon_rpc_url() const;
     QString get_daemon_rpc_secret() const;
+
+    /// 启动时静默检查更新（仅弹托盘通知，不打扰其余场景）
+    bool is_check_updates_on_startup_enabled() const;
 
 signals:
     /**
@@ -170,10 +180,13 @@ private:
     QWidget* create_download_section_widget();
     QWidget* create_speed_limit_section_widget();
     QWidget* create_seeding_section_widget();
+    QWidget* create_trash_section_widget();
+    QWidget* create_search_engines_section_widget();
     QWidget* create_completion_action_section_widget();
     QWidget* create_connection_section_widget();
     QWidget* create_notification_section_widget();
     QWidget* create_appearance_section_widget();
+    QWidget* create_about_section_widget();
     QLayout* create_action_buttons_layout();
 
     void on_theme_button_clicked();
@@ -204,6 +217,9 @@ private:
     QDoubleSpinBox* seed_ratio_spin_;
     QSpinBox* seed_time_spin_;
 
+    // Trash retention（回收站自动清理）
+    QSpinBox* trash_retention_spin_;
+
     // Completion action settings
     QComboBox* completion_action_combo_;
 
@@ -214,6 +230,12 @@ private:
     // Appearance settings
     QLabel* current_theme_label_;
     QPushButton* theme_toggle_button_;
+
+    // About & update settings
+    QPushButton* check_updates_button_;
+    QLabel* update_result_label_;
+    QCheckBox* check_updates_on_startup_checkbox_;
+    UpdateChecker* update_checker_;
 
     // Action buttons
     QPushButton* apply_button_;

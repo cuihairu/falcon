@@ -7,6 +7,8 @@
 
 #include "sidebar.hpp"
 
+#include "../utils/icon_utils.hpp"
+
 #include <QVBoxLayout>
 #include <QButtonGroup>
 #include <QFrame>
@@ -27,7 +29,8 @@ SideBar::SideBar(QWidget* parent)
     , completed_tab_(nullptr)
     , library_button_(nullptr)
     , third_party_button_(nullptr)
-    , recycle_bin_button_(nullptr)
+    , trash_button_(nullptr)
+    , settings_button_(nullptr)
 {
     nav_group_->setExclusive(true);
     setup_ui();
@@ -81,11 +84,13 @@ void SideBar::set_queue_count(int count)
     }
 }
 
-QPushButton* SideBar::create_nav_button(const QString& text)
+QPushButton* SideBar::create_nav_button(const QString& text, icons::Id icon)
 {
     auto* button = new QPushButton(text, this);
     button->setObjectName("navTab");
     button->setCheckable(true);
+    // 主题感知图标（TokenIconEngine 绘制时取当前主题 token，换肤自动换色）
+    button->setIcon(icons::themed(icon, icons::ColorRole::Text));
     nav_group_->addButton(button);
     return button;
 }
@@ -108,12 +113,12 @@ void SideBar::create_download_section()
     tabs_layout->setSpacing(kItemSpacing);
     main_layout_->addLayout(tabs_layout);
 
-    downloading_tab_ = create_nav_button(tr("下载中"));
+    downloading_tab_ = create_nav_button(tr("下载中"), icons::Id::Download);
     downloading_tab_->setChecked(true);
     tabs_layout->addWidget(downloading_tab_);
     connect(downloading_tab_, &QPushButton::clicked, this, &SideBar::downloadingTabClicked);
 
-    completed_tab_ = create_nav_button(tr("已完成"));
+    completed_tab_ = create_nav_button(tr("已完成"), icons::Id::CheckCircle);
     tabs_layout->addWidget(completed_tab_);
     connect(completed_tab_, &QPushButton::clicked, this, &SideBar::completedTabClicked);
 }
@@ -124,17 +129,21 @@ void SideBar::create_space_section()
     tools_layout->setSpacing(kItemSpacing);
     main_layout_->addLayout(tools_layout);
 
-    library_button_ = create_nav_button(tr("资源发现"));
+    library_button_ = create_nav_button(tr("资源发现"), icons::Id::Search);
     tools_layout->addWidget(library_button_);
     connect(library_button_, &QPushButton::clicked, this, &SideBar::discoveryClicked);
 
-    third_party_button_ = create_nav_button(tr("云盘空间"));
+    third_party_button_ = create_nav_button(tr("云盘空间"), icons::Id::Cloud);
     tools_layout->addWidget(third_party_button_);
     connect(third_party_button_, &QPushButton::clicked, this, &SideBar::cloudClicked);
 
-    recycle_bin_button_ = create_nav_button(tr("偏好设置"));
-    tools_layout->addWidget(recycle_bin_button_);
-    connect(recycle_bin_button_, &QPushButton::clicked, this, &SideBar::settingsClicked);
+    trash_button_ = create_nav_button(tr("回收站"), icons::Id::Trash);
+    tools_layout->addWidget(trash_button_);
+    connect(trash_button_, &QPushButton::clicked, this, &SideBar::trashClicked);
+
+    settings_button_ = create_nav_button(tr("偏好设置"), icons::Id::Settings);
+    tools_layout->addWidget(settings_button_);
+    connect(settings_button_, &QPushButton::clicked, this, &SideBar::settingsClicked);
 }
 
 } // namespace falcon::desktop

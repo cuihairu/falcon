@@ -6,6 +6,7 @@
  */
 
 #include "discovery_page.hpp"
+#include "../services/search_engine_catalog.hpp"
 #include "../services/search_service.hpp"
 #include "../utils/icon_utils.hpp"
 
@@ -29,6 +30,10 @@ DiscoveryPage::DiscoveryPage(QWidget* parent)
     , filter_bar_(nullptr)
     , search_service_(new SearchService(this)) {
     setup_ui();
+
+    // 首次使用生成全 disabled 的 engines.json 示例模板（已有配置绝不覆盖）；
+    // 失败静默——搜索时按无引擎路径收口
+    SearchEngineCatalog::ensure_default(SearchEngineCatalog::default_path());
 
     // 连接 SearchService 信号
     connect(search_service_.get(), &SearchService::search_started,
@@ -77,7 +82,7 @@ QWidget* DiscoveryPage::create_page_hero()
     title->setObjectName("heroTitle");
     layout->addWidget(title);
 
-    auto* desc = new QLabel(tr("搜索磁力、直链、FTP 与网盘资源，快速加入下载队列。"), hero);
+    auto* desc = new QLabel(tr("按关键词搜索 engines.json 中启用的资源站，一键加入下载队列。"), hero);
     desc->setObjectName("heroDescription");
     desc->setWordWrap(true);
     layout->addWidget(desc);
@@ -91,14 +96,6 @@ QWidget* DiscoveryPage::create_search_bar()
     auto* layout = new QHBoxLayout(search_bar);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(8);
-
-    // 搜索类型选择
-    search_type_combo_ = new QComboBox(search_bar);
-    search_type_combo_->addItem(tr("磁力"), "magnet");
-    search_type_combo_->addItem(tr("HTTP"), "http");
-    search_type_combo_->addItem(tr("网盘"), "cloud");
-    search_type_combo_->addItem(tr("FTP"), "ftp");
-    layout->addWidget(search_type_combo_);
 
     // 搜索输入框
     search_input_ = new QLineEdit(search_bar);
@@ -128,8 +125,6 @@ QWidget* DiscoveryPage::create_search_bar()
     connect(search_button_, &QPushButton::clicked, this, &DiscoveryPage::perform_search);
     connect(clear_button_, &QPushButton::clicked, this, &DiscoveryPage::clear_search);
     connect(search_input_, &QLineEdit::returnPressed, this, &DiscoveryPage::perform_search);
-    connect(search_type_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &DiscoveryPage::on_search_type_changed);
 
     return search_bar;
 }
@@ -140,18 +135,6 @@ QWidget* DiscoveryPage::create_filter_bar()
     auto* layout = new QHBoxLayout(filter_bar);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(8);
-
-    // 分类过滤
-    auto* category_label = new QLabel(tr("分类:"), filter_bar);
-    category_filter_ = new QComboBox(filter_bar);
-    category_filter_->addItem(tr("全部"), "all");
-    category_filter_->addItem(tr("视频"), "video");
-    category_filter_->addItem(tr("音频"), "audio");
-    category_filter_->addItem(tr("文档"), "document");
-    category_filter_->addItem(tr("软件"), "software");
-    category_filter_->addItem(tr("图片"), "image");
-    layout->addWidget(category_label);
-    layout->addWidget(category_filter_);
 
     // 大小过滤
     auto* size_label = new QLabel(tr("大小:"), filter_bar);
@@ -242,8 +225,18 @@ void DiscoveryPage::perform_search()
         return;
     }
 
-    settings_.search_type = search_type_combo_->currentData().toString();
-    settings_.category = category_filter_->currentData().toString();
+    // 无启用引擎直接在状态栏提示（不打断弹窗）；Service 内同门禁兜底
+    // 设置页切换与本页搜索的竞态窗口
+    SearchEngineCatalog catalog;
+    if (!catalog.load() || !catalog.has_enabled()) {
+        results_table_->setRowCount(0);
+        current_results_.clear();
+        status_label_->setText(
+            tr("未启用任何搜索引擎，请在设置页「资源搜索」组启用（engines.json）。"));
+        result_count_label_->clear();
+        return;
+    }
+
     settings_.sort_by = sort_combo_->currentData().toString();
 
     // 清空当前结果
@@ -254,9 +247,10 @@ void DiscoveryPage::perform_search()
 
     // 使用 SearchService 执行搜索
     SearchOptions options;
-    options.search_type = settings_.search_type;
-    options.category = settings_.category;
     options.sort_by = settings_.sort_by;
+    options.min_size = min_size_edit_->text().toDouble(); // 空/非法回落 0 = 不限
+    options.max_size = max_size_edit_->text().toDouble();
+    options.size_unit = size_filter_->currentData().toString();
 
     search_service_->search(keyword, options, [this](const QList<SearchResultItem>& results) {
         current_results_ = results;
@@ -370,22 +364,6 @@ void DiscoveryPage::open_link()
     int row = selected_rows.first().row();
     if (row < current_results_.size()) {
         QDesktopServices::openUrl(QUrl(current_results_[row].url));
-    }
-}
-
-void DiscoveryPage::on_search_type_changed(int index)
-{
-    // 根据搜索类型调整界面
-    QString type = search_type_combo_->itemData(index).toString();
-
-    if (type == "magnet") {
-        // 显示种子数相关列
-        results_table_->showColumn(4);
-        results_table_->showColumn(5);
-    } else {
-        // 隐藏种子数相关列
-        results_table_->hideColumn(4);
-        results_table_->hideColumn(5);
     }
 }
 

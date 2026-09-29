@@ -46,6 +46,7 @@ set(SOURCES
     src/pages/download_page.cpp
     src/pages/cloud_page.cpp
     src/pages/discovery_page.cpp
+    src/pages/trash_page.cpp
     src/pages/settings_page.cpp
     src/dialogs/add_download_dialog.cpp
     src/utils/url_detector.cpp
@@ -54,8 +55,11 @@ set(SOURCES
     src/utils/icon_utils.cpp
     src/services/storage_service.cpp
     src/services/search_service.cpp
+    src/services/search_engine_catalog.cpp
     src/services/download_backend.cpp
     src/services/download_service.cpp
+    src/services/trash_store.cpp
+    src/services/update_checker.cpp
     src/ipc/http_server.cpp
 )
 
@@ -68,6 +72,7 @@ set(HEADERS
     src/pages/download_page.hpp
     src/pages/cloud_page.hpp
     src/pages/discovery_page.hpp
+    src/pages/trash_page.hpp
     src/pages/settings_page.hpp
     src/dialogs/add_download_dialog.hpp
     src/utils/url_detector.hpp
@@ -77,8 +82,11 @@ set(HEADERS
     src/utils/icon_utils.hpp
     src/services/storage_service.hpp
     src/services/search_service.hpp
+    src/services/search_engine_catalog.hpp
     src/services/download_backend.hpp
     src/services/download_service.hpp
+    src/services/trash_store.hpp
+    src/services/update_checker.hpp
     src/ipc/http_server.hpp
 )
 
@@ -137,6 +145,7 @@ target_link_libraries(falcon-desktop PRIVATE
     Falcon::protocols
     Falcon::builtin_protocol_handlers
     Falcon::storage
+    Falcon::drives
 )
 
 # daemon RPC 后端（JSON-RPC 客户端 + aria2 快照转换）。
@@ -174,6 +183,7 @@ if(FALCON_BUILD_UI_SANDBOX)
       Falcon::core
       Falcon::protocols
       Falcon::storage
+      Falcon::drives
       falcon_daemon_rpc_client
   )
 endif()

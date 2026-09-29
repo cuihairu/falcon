@@ -28,11 +28,13 @@ class SideBar;
 class TopBar;
 class StatusBar;
 class DownloadPage;
+class TrashPage;
 class SettingsPage;
 class ClipboardMonitor;
 class HttpIpcServer;
 class ThemeManager;
 class DownloadService;
+class UpdateChecker;
 struct UrlInfo;
 struct IncomingDownloadRequest;
 
@@ -116,6 +118,9 @@ private:
     void save_settings() const;
     void apply_settings_to_runtime();
 
+    /** 启动静默检查更新（设置开启才检查；仅托盘通知，不打扰其余场景） */
+    void check_for_updates_on_startup();
+
     /** 命中窗口边缘 6px 缩放带时返回对应边(无边框窗口 resize 光标与拖拽判定) */
     Qt::Edges resize_edge_for(const QPoint& global_pos) const;
 
@@ -133,6 +138,7 @@ private:
 
     // 页面实例
     DownloadPage* download_page_;
+    TrashPage* trash_page_;
     SettingsPage* settings_page_;
 
     // 剪切板监听
@@ -151,6 +157,9 @@ private:
     // 下载服务（worker 线程 + 后端抽象）
     DownloadService* download_service_;
 
+    // 启动检查更新（设置页内的检查器归 SettingsPage 自持）
+    UpdateChecker* update_checker_;
+
     // 最近一轮任务快照的 URL 映射（错误通知里显示文件名用）
     QHash<qulonglong, QString> task_url_by_id_;
 
@@ -166,6 +175,7 @@ private:
         PAGE_DOWNLOAD = 0,
         PAGE_CLOUD,
         PAGE_DISCOVERY,
+        PAGE_TRASH,
         PAGE_SETTINGS,
         PAGE_COUNT
     };
