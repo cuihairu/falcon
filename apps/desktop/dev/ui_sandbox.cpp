@@ -10,7 +10,14 @@
  * 窗口不是 frameless(截图不需要拖动/缩放);组件、布局参数、样式表
  * 与生产完全一致。
  *
- * 用法:falcon-ui-sandbox [输出目录](默认 ./ui_shots)
+ * 用法:
+ *   falcon-ui-sandbox [输出目录]                 全矩阵截图(默认 ./ui_shots)
+ *   falcon-ui-sandbox --prototype [输出目录]     主视图设计原型两版(暗色 1200):
+ *     warm-console-dark.png  = 生产 warm console 暗色主题现状
+ *     cold-utility-dark.png  = 冷峻工具感变体(对标 Motrix:更深中性底/
+ *                              高对比文字/克制 accent)——token 值仅在本次
+ *                              沙盒会话内替换(QSS hex 替换 + QPalette 重建),
+ *                              生产 theme_tokens/QSS 零改动
  *
  * @author Falcon Team
  * @date 2026-09-17
@@ -20,6 +27,7 @@
 #include <QDir>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QPalette>
 #include <QPushButton>
 #include <QStackedWidget>
 #include <QVBoxLayout>
@@ -146,6 +154,100 @@ std::vector<falcon::desktop::TrashEntry> demo_trash_entries()
     };
 }
 
+// ---------------------------------------------------------------------------
+// 设计原型 B「cold utility」:冷峻工具感暗色变体(对标 Motrix)
+//
+// 机制:token 值仅在本次沙盒会话内替换——对 ThemeManager 的暗色 QSS 文本
+// 做 hex 热冷映射 + 整串替换 checkbox 内嵌 base64 SVG,再按冷 token 重建
+// QPalette。生产 theme_tokens.hpp / fluent_dark.qss 零改动。
+//
+// 色板(WCAG AA 实算):window #131519 / card #1b1e24 / text #f5f7fa(17.0:1,
+// 高于 warm 的 15.3)/ secondary #98a0ab(6.9:1)/ accent #5b9df5(6.6:1,
+// 上文字 #0d1a2b 6.3:1)/ divider #2b3038;danger 语义色两版不变。
+//
+// 已知边界:图标着色经 icon_utils 的 tokens_for() 解析(生产值),Text 角色
+// 暖白 #f2ede8 与冷白 #f5f7fa 在 16px 单色图标上不可辨;Accent 角色图标
+// 仅云盘连接钮一处(主视图不出现)——原型对比不受影响。
+// ---------------------------------------------------------------------------
+
+/// 暗色 QSS 全部可变 hex 的 热→冷 映射(danger 除外)
+struct ColdHexMap {
+    const char* warm;
+    const char* cold;
+    const char* note;
+};
+const ColdHexMap kColdHexMap[] = {
+    {"#1b1714", "#131519", "window"},
+    {"#262019", "#1b1e24", "card"},
+    {"#37302a", "#2b3038", "divider"},
+    {"#f2ede8", "#f5f7fa", "text"},
+    {"#b5aca3", "#98a0ab", "text_secondary"},
+    {"#6e665e", "#5a6169", "text_disabled"},
+    {"#312a24", "#22262d", "控件底(按钮/输入)"},
+    {"#4a423a", "#363c45", "控件描边"},
+    {"#3a322b", "#262b33", "分段钮 checked 底"},
+    {"#554b41", "#3d444e", "卡片 hover 描边"},
+    {"#ffa07a", "#5b9df5", "accent"},
+    {"#ffb28c", "#7ab1f8", "accent hover"},
+    {"#e0875e", "#4585e0", "accent pressed"},
+    {"#27140a", "#0d1a2b", "accent 上文字"},
+};
+
+/// QPalette 角色映射镜像 theme_manager.cpp 的 palette_for(token 冷值)
+QPalette cold_palette()
+{
+    QPalette pal;
+    const QColor window(0x13, 0x15, 0x19);
+    const QColor card(0x1b, 0x1e, 0x24);
+    const QColor text(0xf5, 0xf7, 0xfa);
+    const QColor text_secondary(0x98, 0xa0, 0xab);
+    const QColor text_disabled(0x5a, 0x61, 0x69);
+    const QColor accent(0x5b, 0x9d, 0xf5);
+    const QColor accent_text(0x0d, 0x1a, 0x2b);
+    const QColor divider(0x2b, 0x30, 0x38);
+    pal.setColor(QPalette::Window, window);
+    pal.setColor(QPalette::WindowText, text);
+    pal.setColor(QPalette::Base, card);
+    pal.setColor(QPalette::AlternateBase, window);
+    pal.setColor(QPalette::Text, text);
+    pal.setColor(QPalette::PlaceholderText, text_disabled);
+    pal.setColor(QPalette::Button, card);
+    pal.setColor(QPalette::ButtonText, text);
+    pal.setColor(QPalette::BrightText, text);
+    pal.setColor(QPalette::Highlight, accent);
+    pal.setColor(QPalette::HighlightedText, accent_text);
+    pal.setColor(QPalette::Link, accent);
+    pal.setColor(QPalette::ToolTipBase, card);
+    pal.setColor(QPalette::ToolTipText, text);
+    pal.setColor(QPalette::Light, card);
+    pal.setColor(QPalette::Midlight, divider);
+    pal.setColor(QPalette::Mid, divider);
+    pal.setColor(QPalette::Dark, divider);
+    pal.setColor(QPalette::Disabled, QPalette::Window, window);
+    pal.setColor(QPalette::Disabled, QPalette::WindowText, text_disabled);
+    pal.setColor(QPalette::Disabled, QPalette::Text, text_disabled);
+    pal.setColor(QPalette::Disabled, QPalette::ButtonText, text_disabled);
+    pal.setColor(QPalette::Disabled, QPalette::Base, window);
+    return pal;
+}
+
+/// 会话内应用冷色变体:暗色 QSS hex 替换 + checkbox base64 SVG 整串替换
+void apply_cold_dark_theme(const QString& dark_qss)
+{
+    QString qss = dark_qss;
+    for (const auto& m : kColdHexMap) {
+        qss.replace(QString::fromLatin1(m.warm), QString::fromLatin1(m.cold));
+    }
+    // checkbox 内嵌 base64 SVG 的 hex 藏在 base64 内,hex 替换够不到——整串换
+    // (warm/cold 串均由 tools 级 python 解码-替换-重编码生成,绝不手抄)
+    qss.replace(QStringLiteral("PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+PHJlY3QgeD0iMC41IiB5PSIwLjUiIHdpZHRoPSIxNSIgaGVpZ2h0PSIxNSIgcng9IjMiIGZpbGw9IiMyNjIwMTkiIHN0cm9rZT0iIzZlNjY1ZSIvPjwvc3ZnPg=="),
+                QStringLiteral("PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+PHJlY3QgeD0iMC41IiB5PSIwLjUiIHdpZHRoPSIxNSIgaGVpZ2h0PSIxNSIgcng9IjMiIGZpbGw9IiMxYjFlMjQiIHN0cm9rZT0iIzVhNjE2OSIvPjwvc3ZnPg=="));
+    qss.replace(QStringLiteral("PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+PHJlY3Qgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2IiByeD0iMyIgZmlsbD0iI2ZmYTA3YSIvPjxwYXRoIGQ9Ik00IDguNWwyLjggMi44TDEyIDUuNSIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMjcxNDBhIiBzdHJva2Utd2lkdGg9IjEuOCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+PC9zdmc+"),
+                QStringLiteral("PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+PHJlY3Qgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2IiByeD0iMyIgZmlsbD0iIzViOWRmNSIvPjxwYXRoIGQ9Ik00IDguNWwyLjggMi44TDEyIDUuNSIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMGQxYTJiIiBzdHJva2Utd2lkdGg9IjEuOCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+PC9zdmc+"));
+    qApp->setStyleSheet(qss);
+    qApp->setPalette(cold_palette());
+}
+
 Shell build_shell()
 {
     auto* central = new QWidget;
@@ -215,8 +317,16 @@ int main(int argc, char** argv)
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication app(argc, argv);
 
-    const QString out_dir = argc > 1 ? QString::fromLocal8Bit(argv[1])
-                                     : QStringLiteral("ui_shots");
+    // --prototype <目录>:主视图设计原型两版;否则全矩阵截图
+    bool prototype_mode = false;
+    QString out_dir = QStringLiteral("ui_shots");
+    if (argc > 1 && qstrcmp(argv[1], "--prototype") == 0) {
+        prototype_mode = true;
+        out_dir = argc > 2 ? QString::fromLocal8Bit(argv[2])
+                           : QStringLiteral("ui_prototypes");
+    } else if (argc > 1) {
+        out_dir = QString::fromLocal8Bit(argv[1]);
+    }
     if (!QDir().mkpath(out_dir)) {
         std::fprintf(stderr, "cannot create output dir: %s\n",
                      qPrintable(out_dir));
@@ -333,12 +443,24 @@ int main(int argc, char** argv)
         snap_add_dialog("add_dialog_" + suffix);
     };
 
-    for (const auto& sz : size_cases) {
-        shell.root->resize(sz.w, sz.h);
-        theme.set_theme(ThemeType::Light);
-        shoot_all(QString("light_") + sz.tag);
+    if (prototype_mode) {
+        // 主视图原型:暗色 1200×800,「下载中·表格」视图(应用落地第一屏,
+        // hero 摘要卡 + 七列任务表 + 侧栏/顶栏/状态栏全要素)
+        shell.root->resize(1200, 800);
         theme.set_theme(ThemeType::Dark);
-        shoot_all(QString("dark_") + sz.tag);
+        go(0);
+        snap(QStringLiteral("warm-console-dark"));
+        // 变体 B:会话内 token 替换,生产主题文件零触碰
+        apply_cold_dark_theme(theme.stylesheet(ThemeType::Dark));
+        snap(QStringLiteral("cold-utility-dark"));
+    } else {
+        for (const auto& sz : size_cases) {
+            shell.root->resize(sz.w, sz.h);
+            theme.set_theme(ThemeType::Light);
+            shoot_all(QString("light_") + sz.tag);
+            theme.set_theme(ThemeType::Dark);
+            shoot_all(QString("dark_") + sz.tag);
+        }
     }
 
     delete shell.root;

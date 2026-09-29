@@ -2,6 +2,12 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-29 - ui_sandbox 原型模式 + 设计资产入库（prototypes 两版 / ui-sandbox 52 张）
+- **`--prototype` 模式**：一次运行出主视图设计原型两版（暗色 1200×800，「下载中·表格」视图全要素）；`falcon-ui-sandbox --prototype <目录>`
+- **cold utility 变体（会话内换肤，生产零触碰）**：`kColdHexMap` 14 对 hex 热→冷映射 + checkbox base64 SVG 整串替换（python 生成绝不手抄）+ `cold_palette()` 重建 QPalette（镜像 palette_for 冷值）；色板/对比度/已知边界详见 `docs/design/prototypes/README.md`
+- **资产入库**：`docs/design/prototypes/`（warm-console-dark / cold-utility-dark + README——落地 B 只需把映射值写进生产 token/QSS）+ `docs/design/ui-sandbox/`（52 张矩阵 + README）；本机重新生成命令两处 README 均在位
+- **验证**：PIL 像素级双图核对（bg 精确命中、accent px 计数、鲑橙残留恰为 logo bbox）+ 视觉模型复核布局完整；生产 theme_tokens/fluent_dark.qss 零 diff（git status 实证）
+
 ### 2026-09-29 - UrlDetector 网盘识别迁移 drives 层（拆库 A3 收口，识别面 5 → 13 平台）
 - **架构对齐**（todo.md §4.1「UrlDetector 仍在 UI 层硬编码网盘规则」+ 决策 A3「URL 检测层不再把网盘规则散落在 UI 代码」）：网盘识别规则唯一事实源收敛到 drives 层 `CloudLinkDetector`——desktop 删除全部硬编码网盘正则与 parse_*_url 网盘方法，识别/文件名/展示名全部委托（detect_platform / extract_file_id / normalize_url / 新增 platform_display_name 目录）；UI 侧只保留 UrlProtocol↔CloudPlatform 双向映射与 parse_cloud_url 组装
 - **drives 层增量**：`CloudPlatform` 补 `TianyiCloud`（枚举 + kPatterns `/t/` 分享路径 + extract_file_id case——对齐 desktop 既有识别能力）；新增 `platform_display_name()` 13 平台英文名目录（"Baidu Pan"/"Tianyi Cloud"/…，Unknown→"Unknown"）；TianyiCloud 不加 ICloudStoragePlugin（识别元数据与插件矩阵解耦，12 默认插件断言不变）

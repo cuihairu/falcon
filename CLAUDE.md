@@ -2,6 +2,15 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-29 - 主视图设计原型两版（warm console 现状 vs cold utility 变体）入库 + ui_sandbox 52 张正式截图归档
+- **流程**（用户要求桌面端界面再设计：先出原型图过目再动生产代码）：ui_sandbox 新增 `--prototype` 模式——暗色 1200×800、「下载中·表格」视图（hero 摘要卡 + 七列任务表 + 侧栏/顶栏/状态栏全要素，demo 数据含 2 做种任务）一次运行出两图
+- **变体 B 实现边界（核心约束）**：token 替换只发生在 sandbox 会话内——暗色 QSS 文本 hex 热→冷映射（14 对）+ checkbox 内嵌 base64 SVG 整串替换 + 冷 token 重建 QPalette；**生产 theme_tokens.hpp / fluent_dark.qss 零改动**（若选 B 落地，把 `kColdHexMap` 映射值写入生产 token/QSS 即可）
+- **变体 B 色板**（对标 Motrix：更深中性底/高对比文字/克制 accent）：window #131519 / card #1b1e24 / text #f5f7fa / accent #5b9df5（hover #7ab1f8 / pressed #4585e0 / accent 上文字 #0d1a2b）；WCAG AA 实算 text 17.0:1（warm 15.3:1）、accent 于 window 6.6:1、accent 上文字 6.3:1、secondary 6.9:1
+- **已知边界（如实披露）**：① 顶栏 falcon logo 的鲑橙 #ffa07a 烧在品牌 SVG 资产里不走 token——冷版保留品牌锚点（152 px，有意非遗漏）；② 图标着色经 icon_utils tokens_for() 取生产值，Text 角色图标暖白 vs 冷白 16px 下不可辨、Accent 角色图标仅云盘连接钮（主视图不出现）；③ accent 色相选克制蓝，「冷中性底 + falcon 橙」组合只需改映射表 accent 三行重出图
+- **资产入库**：`docs/design/prototypes/`（warm-console-dark.png / cold-utility-dark.png + README）+ `docs/design/ui-sandbox/`（52 张 = 13 视图 × 亮暗 × 1200/960 + README）——设计验收资产首次进 repo（此前只在 /tmp 留档）；52 = 既有 28 + 回收站/设置特写/做种批次增量（CLAUDE.md 旧条目的 36 又过时了）
+- **验证**：PIL 像素级——warm bg #1b1714 + 8101 鲑橙 accent px + 0 蓝；cold bg #131519 + 7945 蓝 accent px + 152 鲑橙（恰为 logo bbox 24,20→40,34）；两图经视觉模型复核布局完整无破版；base64 替换串全部 python 解码-替换-重编码生成（手抄必错的既有教训本批再次主动规避）
+- 假设注明：非交互执行，变体 B accent 色相（Motrix 方向蓝）与 logo 保留品牌色为自行拍板，回报中已标注改法
+
 ### 2026-09-28 - 覆盖率批次：swarm_rpc_server 传输层收口（XML miss 96 → 22，21 新用例）+ socket/listen 注入点零消费更正
 - **台账选型**：`swarm_rpc_server.cpp` 为 swarmd 包最大可达矿（gcovr XML 口径 96 miss / 单对象 75 行）——批次 P 先例（daemon `json_rpc_server` raw-socket 68→15）证明传输层分支可裸 socket 直达
 - **21 新用例三套件**挂 `falcon_swarm_loopback_tests`（29 → 50；全量 ctest **2528/2528 过零失败** 721.4s，13 skip 设计内）：
