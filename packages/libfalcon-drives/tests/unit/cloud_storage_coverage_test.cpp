@@ -16,8 +16,10 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <sstream>
 #include <string>
+#include <vector>
 #include <thread>
 #include <vector>
 
@@ -385,6 +387,58 @@ TEST(CloudLinkCovTest, NormalizeUrlQueryAndSchemeCombined) {
     EXPECT_EQ("https://plain.host/path",
               CloudLinkDetector::normalize_url("plain.host/path"));
 }
+
+// ============================================================================
+// 平台元数据（天翼云盘补齐 + display_name 目录——desktop UrlDetector 迁移的
+// 数据源，识别规则与平台名在 drives 层唯一维护）
+// ============================================================================
+
+TEST(CloudLinkCovTest, DetectPlatformTianyiCloud) {
+    EXPECT_EQ(CloudPlatform::TianyiCloud,
+              CloudLinkDetector::detect_platform("https://cloud.189.cn/t/ab12cd"));
+    // 查询参数与无 scheme 裸域名（normalize_url 路径）
+    EXPECT_EQ(CloudPlatform::TianyiCloud,
+              CloudLinkDetector::detect_platform("https://cloud.189.cn/t/ab12cd?pwd=x"));
+    EXPECT_EQ(CloudPlatform::TianyiCloud,
+              CloudLinkDetector::detect_platform("cloud.189.cn/t/ab12cd"));
+    // 非分享路径不识别
+    EXPECT_EQ(CloudPlatform::Unknown,
+              CloudLinkDetector::detect_platform("https://cloud.189.cn/web/view"));
+}
+
+TEST(CloudLinkCovTest, ExtractFileIdTianyiCloud) {
+    EXPECT_EQ("ab12cd", CloudLinkDetector::extract_file_id(
+                            "https://cloud.189.cn/t/ab12cd", CloudPlatform::TianyiCloud));
+    EXPECT_EQ("", CloudLinkDetector::extract_file_id(
+                      "https://cloud.189.cn/other/path", CloudPlatform::TianyiCloud));
+}
+
+TEST(CloudLinkCovTest, PlatformDisplayNameCatalogComplete) {
+    const std::vector<CloudPlatform> platforms = {
+        CloudPlatform::BaiduNetdisk,  CloudPlatform::LanzouCloud,
+        CloudPlatform::AlibabaCloud,  CloudPlatform::TencentWeiyun,
+        CloudPlatform::Cloud115,      CloudPlatform::Quark,
+        CloudPlatform::TianyiCloud,   CloudPlatform::PikPak,
+        CloudPlatform::Mega,          CloudPlatform::GoogleDrive,
+        CloudPlatform::OneDrive,      CloudPlatform::Dropbox,
+        CloudPlatform::YandexDisk,
+    };
+
+    std::set<std::string> seen;
+    for (const CloudPlatform platform : platforms) {
+        const std::string name = CloudLinkDetector::platform_display_name(platform);
+        EXPECT_FALSE(name.empty()) << "platform has empty display name";
+        EXPECT_EQ(seen.end(), seen.find(name)) << "duplicate display name: " << name;
+        seen.insert(name);
+    }
+    // 13 平台目录无缺漏
+    EXPECT_EQ(size_t{13}, seen.size());
+    EXPECT_EQ("Unknown", CloudLinkDetector::platform_display_name(CloudPlatform::Unknown));
+    // 老消费方（desktop UrlDetector）锚定的名字不变
+    EXPECT_EQ("Baidu Pan", CloudLinkDetector::platform_display_name(CloudPlatform::BaiduNetdisk));
+    EXPECT_EQ("Tianyi Cloud", CloudLinkDetector::platform_display_name(CloudPlatform::TianyiCloud));
+}
+
 
 // ============================================================================
 // 本地回环 HTTP 服务器驱动的内置网盘插件覆盖

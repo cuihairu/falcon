@@ -2,6 +2,14 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-29 - UrlDetector 网盘识别迁移 drives 层（拆库 A3 收口，识别面 5 → 13 平台）
+- **架构对齐**（todo.md §4.1「UrlDetector 仍在 UI 层硬编码网盘规则」+ 决策 A3「URL 检测层不再把网盘规则散落在 UI 代码」）：网盘识别规则唯一事实源收敛到 drives 层 `CloudLinkDetector`——desktop 删除全部硬编码网盘正则与 parse_*_url 网盘方法，识别/文件名/展示名全部委托（detect_platform / extract_file_id / normalize_url / 新增 platform_display_name 目录）；UI 侧只保留 UrlProtocol↔CloudPlatform 双向映射与 parse_cloud_url 组装
+- **drives 层增量**：`CloudPlatform` 补 `TianyiCloud`（枚举 + kPatterns `/t/` 分享路径 + extract_file_id case——对齐 desktop 既有识别能力）；新增 `platform_display_name()` 13 平台英文名目录（"Baidu Pan"/"Tianyi Cloud"/…，Unknown→"Unknown"）；TianyiCloud 不加 ICloudStoragePlugin（识别元数据与插件矩阵解耦，12 默认插件断言不变）
+- **desktop 语义**：识别面 5 → 13 平台（微云/115/PikPak/MEGA/Google Drive/OneDrive/Dropbox/Yandex 随 drives 目录全量解锁）；网盘判定优先于 http/https/ftp（既有语义保持）；无 scheme 裸域名网盘链接经 drives normalize_url 补 `https://` 后识别（增强非破坏——旧 pattern 锚定 `^https?://` 不识别）；thunder/qqlink/flashget/magnet/ed2k 私有协议解析原样保留（legacy 行为零变化）
+- **测试**：新 target `falcon_desktop_url_tests`（url_detector_test.cpp，Qt6::Core + Falcon::drives）8 用例——legacy 五平台「平台名 (分享码)」文件名逐字迁移锚 / 8 新平台识别 / 网盘优先于 HTTPS / 裸域名 normalize 路径 / get_protocol_name 目录 / contains_url / 私有协议回归（magnet dn/xl + thunder base64 解码 + ed2k）；drives 侧 cloud_storage_coverage_test +3 用例（Tianyi detect 三形态 / extract / platform_display_name 13 平台目录完整性——非空互异集合断言）
+- **测量级教训**：手写 thunder 测试链接的 base64 期望值必须用工具生成不做心算——初版 "QUFBaHR0…" 解码为 "AAAhttp…"（base64 组 "QUFB"="AAA" 三字符），legacy 剥 2 字符 "AA" 后残留前导 'A' 断言红；Python 生成规范 `base64("AAhttp://example.com/a.zipZZ")` 替换后绿
+- **验证**：build-desktop 四 target 构建绿；falcon_desktop_url_tests 8/8（新）+ falcon_drives_tests 167/167（含 3 新）+ falcon_desktop_backend_tests 26/26 回归全绿
+
 ### 2026-09-28 - 做种 UI 全链路（做种列 + 双设置入口 + 手动停止 + 哨兵默认协议）
 - **下载页 7 列**：新增做种列（200px——170px 下「做种中 · 1.20 · 2时15分」mid-token 折行「2时15/分」；单行完整显示 `状态 · ratio · 时长`），数据来自 TaskSnapshot seed 扩展字段（ratio 分母 max(downloaded, total_size)）；**诚实性**：快照仅 seeding_active 布尔量，达标与手动停止不可区分 → 统一显「已停止」+ tooltip「做种已结束（达标或手动停止）」；非 BT 任务恒「—」
 - **操作面**：已完成视图操作列对做种任务显「停止做种」钮（→ `DownloadService::stop_seeding` → backend → RPC falcon.stopSeeding）；网格卡片复用速度槽位显做种摘要 + tooltip（Completed 任务速度恒「—」，槽位天然空闲）；做种结束托盘通知「做种已停止」（notifications 开关门控）
@@ -387,7 +395,9 @@ URL 检测器，支持：
 - 标准协议（HTTP/HTTPS/FTP）
 - 磁力链接（Magnet）
 - 私有协议（Thunder/Flashget/ED2K）
-- 云盘链接（百度/阿里云/夸克/天翼/蓝奏云）
+- 云盘链接（13 平台，识别/文件名/展示名全部委托 drives 层
+  `CloudLinkDetector`——UI 侧只保留 UrlProtocol↔CloudPlatform 映射，
+  识别规则唯一事实源在 drives）
 
 ### ClipboardMonitor
 

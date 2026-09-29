@@ -42,6 +42,7 @@ enum class CloudPlatform {
     TencentWeiyun,   // 腾讯微云
     Cloud115,        // 115网盘
     Quark,           // 夸克网盘
+    TianyiCloud,     // 天翼云盘
     PikPak,          // PikPak
     Mega,            // MEGA
     GoogleDrive,     // Google Drive
@@ -151,6 +152,12 @@ public:
      * @brief 识别网盘平台
      */
     static CloudPlatform detect_platform(const std::string& url);
+
+    /**
+     * @brief 平台显示名元数据（UI 层唯一事实源——展示名不得散落在应用侧）
+     * @return 平台名（如 "Baidu Pan"）；Unknown 返回 "Unknown"
+     */
+    static std::string platform_display_name(CloudPlatform platform);
 
     /**
      * @brief 提取文件ID或识别码

@@ -14,7 +14,7 @@
 namespace falcon::desktop {
 
 //==============================================================================
-// URL Pattern Definitions
+// URL Pattern Definitions（标准/私有协议——网盘规则在 drives 层，见 detect_protocol）
 //==============================================================================
 
 // HTTP/HTTPS pattern
@@ -59,36 +59,6 @@ const QRegularExpression ED2K_PATTERN(
     QRegularExpression::CaseInsensitiveOption
 );
 
-// Baidu Pan pattern (百度网盘)
-const QRegularExpression BAIDU_PATTERN(
-    R"(^https?://pan\.baidu\.com/s/[A-Za-z0-9_-]+)",
-    QRegularExpression::CaseInsensitiveOption
-);
-
-// Aliyun Drive pattern (阿里云盘)
-const QRegularExpression ALIYUN_PATTERN(
-    R"(^https?://([a-z0-9]+\.)?(alipan\.com|aliyundrive\.com)/s/[A-Za-z0-9]+)",
-    QRegularExpression::CaseInsensitiveOption
-);
-
-// Quark Drive pattern (夸克网盘)
-const QRegularExpression QUARK_PATTERN(
-    R"(^https?://pan\.quark\.cn/s/[A-Za-z0-9]+)",
-    QRegularExpression::CaseInsensitiveOption
-);
-
-// Tianyi Cloud pattern (天翼云盘)
-const QRegularExpression TIANYI_PATTERN(
-    R"(^https?://cloud\.189\.cn/t/[A-Za-z0-9]+)",
-    QRegularExpression::CaseInsensitiveOption
-);
-
-// Lanzou Cloud pattern (蓝奏云)
-const QRegularExpression LANZOU_PATTERN(
-    R"(^https?://([a-z0-9-]+\.)?lzpan\.com/[a-z0-9]+)",
-    QRegularExpression::CaseInsensitiveOption
-);
-
 //==============================================================================
 // Public Methods
 //==============================================================================
@@ -107,11 +77,11 @@ bool UrlDetector::contains_url(const QString& text)
     if (QQLINK_PATTERN.match(text).hasMatch()) return true;
     if (FLASHGET_PATTERN.match(text).hasMatch()) return true;
     if (ED2K_PATTERN.match(text).hasMatch()) return true;
-    if (BAIDU_PATTERN.match(text).hasMatch()) return true;
-    if (ALIYUN_PATTERN.match(text).hasMatch()) return true;
-    if (QUARK_PATTERN.match(text).hasMatch()) return true;
-    if (TIANYI_PATTERN.match(text).hasMatch()) return true;
-    if (LANZOU_PATTERN.match(text).hasMatch()) return true;
+
+    // 网盘分享链接：drives 层平台元数据判定
+    if (CloudLinkDetector::detect_platform(text.toStdString()) != CloudPlatform::Unknown) {
+        return true;
+    }
 
     return false;
 }
@@ -163,29 +133,16 @@ UrlInfo UrlDetector::parse_url(const QString& text)
             info = parse_ed2k_url(info.original_url);
             break;
 
-        case UrlProtocol::BAIDU:
-            info = parse_baidu_url(info.original_url);
+        default: {
+            // 网盘协议族：drives 层平台识别 + 元数据解析
+            const CloudPlatform platform = to_cloud_platform(info.protocol);
+            if (platform != CloudPlatform::Unknown) {
+                info = parse_cloud_url(info.original_url, platform);
+            } else {
+                info.is_valid = false;
+            }
             break;
-
-        case UrlProtocol::ALIYUN:
-            info = parse_aliyun_url(info.original_url);
-            break;
-
-        case UrlProtocol::QUARK:
-            info = parse_quark_url(info.original_url);
-            break;
-
-        case UrlProtocol::TIANYI:
-            info = parse_tianyi_url(info.original_url);
-            break;
-
-        case UrlProtocol::Lanzou:
-            info = parse_lanzou_url(info.original_url);
-            break;
-
-        default:
-            info.is_valid = false;
-            break;
+        }
     }
 
     return info;
@@ -202,13 +159,15 @@ QString UrlDetector::get_protocol_name(UrlProtocol protocol)
         case UrlProtocol::QQLINK:  return "QQDL";
         case UrlProtocol::FLASHGET: return "Flashget";
         case UrlProtocol::ED2K:    return "ED2K";
-        case UrlProtocol::BAIDU:   return "Baidu Pan";
-        case UrlProtocol::ALIYUN:  return "Aliyun Drive";
-        case UrlProtocol::QUARK:   return "Quark Drive";
-        case UrlProtocol::TIANYI:  return "Tianyi Cloud";
-        case UrlProtocol::Lanzou:  return "Lanzou Cloud";
-        default:                   return "Unknown";
+        default:                   break;
     }
+
+    // 网盘平台名：drives 层元数据（不在 UI 侧二次维护）
+    const CloudPlatform platform = to_cloud_platform(protocol);
+    if (platform != CloudPlatform::Unknown) {
+        return QString::fromStdString(CloudLinkDetector::platform_display_name(platform));
+    }
+    return "Unknown";
 }
 
 QString UrlDetector::extract_file_name(const QString& url)
@@ -252,17 +211,11 @@ UrlProtocol UrlDetector::detect_protocol(const QString& url)
         return UrlProtocol::ED2K;
     }
 
-    // Check for cloud drive URLs
-    if (BAIDU_PATTERN.match(url).hasMatch()) {
-        return UrlProtocol::BAIDU;
-    } else if (ALIYUN_PATTERN.match(url).hasMatch()) {
-        return UrlProtocol::ALIYUN;
-    } else if (QUARK_PATTERN.match(url).hasMatch()) {
-        return UrlProtocol::QUARK;
-    } else if (TIANYI_PATTERN.match(url).hasMatch()) {
-        return UrlProtocol::TIANYI;
-    } else if (LANZOU_PATTERN.match(url).hasMatch()) {
-        return UrlProtocol::Lanzou;
+    // 网盘分享链接：drives 层 CloudLinkDetector 唯一事实源
+    // （含 normalize_url——无 scheme 的裸域名网盘链接同样识别）
+    const CloudPlatform platform = CloudLinkDetector::detect_platform(url.toStdString());
+    if (platform != CloudPlatform::Unknown) {
+        return to_url_protocol(platform);
     }
 
     // Standard protocols
@@ -275,6 +228,68 @@ UrlProtocol UrlDetector::detect_protocol(const QString& url)
     }
 
     return UrlProtocol::UNKNOWN;
+}
+
+UrlProtocol UrlDetector::to_url_protocol(falcon::CloudPlatform platform)
+{
+    switch (platform) {
+        case CloudPlatform::BaiduNetdisk:  return UrlProtocol::BAIDU;
+        case CloudPlatform::LanzouCloud:   return UrlProtocol::LANZHOU;
+        case CloudPlatform::AlibabaCloud:  return UrlProtocol::ALIYUN;
+        case CloudPlatform::TencentWeiyun: return UrlProtocol::WEIYUN;
+        case CloudPlatform::Cloud115:      return UrlProtocol::CLOUD115;
+        case CloudPlatform::Quark:         return UrlProtocol::QUARK;
+        case CloudPlatform::TianyiCloud:   return UrlProtocol::TIANYI;
+        case CloudPlatform::PikPak:        return UrlProtocol::PIKPAK;
+        case CloudPlatform::Mega:          return UrlProtocol::MEGA;
+        case CloudPlatform::GoogleDrive:   return UrlProtocol::GDRIVE;
+        case CloudPlatform::OneDrive:      return UrlProtocol::ONEDRIVE;
+        case CloudPlatform::Dropbox:       return UrlProtocol::DROPBOX;
+        case CloudPlatform::YandexDisk:    return UrlProtocol::YANDEX;
+        default:                           return UrlProtocol::UNKNOWN;
+    }
+}
+
+falcon::CloudPlatform UrlDetector::to_cloud_platform(UrlProtocol protocol)
+{
+    switch (protocol) {
+        case UrlProtocol::BAIDU:    return CloudPlatform::BaiduNetdisk;
+        case UrlProtocol::LANZHOU:  return CloudPlatform::LanzouCloud;
+        case UrlProtocol::ALIYUN:   return CloudPlatform::AlibabaCloud;
+        case UrlProtocol::WEIYUN:   return CloudPlatform::TencentWeiyun;
+        case UrlProtocol::CLOUD115: return CloudPlatform::Cloud115;
+        case UrlProtocol::QUARK:    return CloudPlatform::Quark;
+        case UrlProtocol::TIANYI:   return CloudPlatform::TianyiCloud;
+        case UrlProtocol::PIKPAK:   return CloudPlatform::PikPak;
+        case UrlProtocol::MEGA:     return CloudPlatform::Mega;
+        case UrlProtocol::GDRIVE:   return CloudPlatform::GoogleDrive;
+        case UrlProtocol::ONEDRIVE: return CloudPlatform::OneDrive;
+        case UrlProtocol::DROPBOX:  return CloudPlatform::Dropbox;
+        case UrlProtocol::YANDEX:   return CloudPlatform::YandexDisk;
+        default:                    return CloudPlatform::Unknown;
+    }
+}
+
+UrlInfo UrlDetector::parse_cloud_url(const QString& url, falcon::CloudPlatform platform)
+{
+    UrlInfo info;
+    info.protocol = to_url_protocol(platform);
+    info.original_url = url;
+    info.decoded_url = url;
+    info.is_valid = true;
+
+    const QString display_name =
+        QString::fromStdString(CloudLinkDetector::platform_display_name(platform));
+    const QString share_code = QString::fromStdString(
+        CloudLinkDetector::extract_file_id(url.toStdString(), platform));
+
+    if (share_code.isEmpty()) {
+        info.file_name = display_name + " Share";
+    } else {
+        info.file_name = display_name + " (" + share_code + ")";
+    }
+
+    return info;
 }
 
 QString UrlDetector::parse_thunder_url(const QString& url)
@@ -386,105 +401,6 @@ QString UrlDetector::base64_decode(const QString& data)
 {
     QByteArray decoded_bytes = QByteArray::fromBase64(data.toUtf8());
     return QString::fromUtf8(decoded_bytes);
-}
-
-//==============================================================================
-// Cloud Drive URL Parsing
-//==============================================================================
-
-UrlInfo UrlDetector::parse_baidu_url(const QString& url)
-{
-    UrlInfo info;
-    info.protocol = UrlProtocol::BAIDU;
-    info.original_url = url;
-    info.decoded_url = url;
-    info.is_valid = true;
-    info.file_name = "Baidu Pan Share";
-
-    // 提取分享码 (格式: pan.baidu.com/s/XXXXXX)
-    QRegularExpression share_code_regex(R"(/s/([A-Za-z0-9_-]+))");
-    QRegularExpressionMatch match = share_code_regex.match(url);
-    if (match.hasMatch()) {
-        info.file_name = "Baidu Pan (" + match.captured(1) + ")";
-    }
-
-    return info;
-}
-
-UrlInfo UrlDetector::parse_aliyun_url(const QString& url)
-{
-    UrlInfo info;
-    info.protocol = UrlProtocol::ALIYUN;
-    info.original_url = url;
-    info.decoded_url = url;
-    info.is_valid = true;
-    info.file_name = "Aliyun Drive Share";
-
-    // 提取分享码 (格式: alipan.com/s/XXXXXX 或 aliyundrive.com/s/XXXXXX)
-    QRegularExpression share_code_regex(R"(/s/([A-Za-z0-9]+))");
-    QRegularExpressionMatch match = share_code_regex.match(url);
-    if (match.hasMatch()) {
-        info.file_name = "Aliyun Drive (" + match.captured(1) + ")";
-    }
-
-    return info;
-}
-
-UrlInfo UrlDetector::parse_quark_url(const QString& url)
-{
-    UrlInfo info;
-    info.protocol = UrlProtocol::QUARK;
-    info.original_url = url;
-    info.decoded_url = url;
-    info.is_valid = true;
-    info.file_name = "Quark Drive Share";
-
-    // 提取分享码 (格式: pan.quark.cn/s/XXXXXX)
-    QRegularExpression share_code_regex(R"(/s/([A-Za-z0-9]+))");
-    QRegularExpressionMatch match = share_code_regex.match(url);
-    if (match.hasMatch()) {
-        info.file_name = "Quark Drive (" + match.captured(1) + ")";
-    }
-
-    return info;
-}
-
-UrlInfo UrlDetector::parse_tianyi_url(const QString& url)
-{
-    UrlInfo info;
-    info.protocol = UrlProtocol::TIANYI;
-    info.original_url = url;
-    info.decoded_url = url;
-    info.is_valid = true;
-    info.file_name = "Tianyi Cloud Share";
-
-    // 提取分享码 (格式: cloud.189.cn/t/XXXXXX)
-    QRegularExpression share_code_regex(R"(/t/([A-Za-z0-9]+))");
-    QRegularExpressionMatch match = share_code_regex.match(url);
-    if (match.hasMatch()) {
-        info.file_name = "Tianyi Cloud (" + match.captured(1) + ")";
-    }
-
-    return info;
-}
-
-UrlInfo UrlDetector::parse_lanzou_url(const QString& url)
-{
-    UrlInfo info;
-    info.protocol = UrlProtocol::Lanzou;
-    info.original_url = url;
-    info.decoded_url = url;
-    info.is_valid = true;
-    info.file_name = "Lanzou Cloud Share";
-
-    // 提取分享码 (格式: xxx.lzpan.com/xxxxx)
-    QRegularExpression share_code_regex(R"(lzpan\.com/([a-z0-9]+))");
-    QRegularExpressionMatch match = share_code_regex.match(url);
-    if (match.hasMatch()) {
-        info.file_name = "Lanzou Cloud (" + match.captured(1) + ")";
-    }
-
-    return info;
 }
 
 } // namespace falcon::desktop

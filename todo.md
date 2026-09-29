@@ -279,7 +279,8 @@ packages/
 - `builtin_protocol_handlers.cpp` 当前只显式注册了 HTTP/FTP
 - `StorageService::create_browser()` 仍硬编码具体厂商实现
 - `CloudPage` 仍硬编码固定云存储类型下拉框
-- `UrlDetector` 仍在 UI 层维护网盘识别规则
+- ✅ `UrlDetector` 网盘识别规则已清理（2026-09-29 迁移到 drives 层
+  `CloudLinkDetector`，UI 侧只保留协议映射与委托调用）
 - `IResourceBrowser` 接口能力不足，尚不能完整表达上传/直链/能力描述
 - `ICloudStoragePlugin` 与 `IResourceBrowser` 并行存在，但缺统一 registry / plugin manager
 
@@ -291,7 +292,12 @@ packages/
 - `ProtocolRegistry` 已补充 `describe_builtin_protocols()`，可区分“已编译进来”与“已接入自动注册”
 - `register_builtin_protocol_handlers()` 目前实际只接入了 HTTP/FTP；BT、SFTP、Thunder、ED2K、HLS 等仍未统一迁移到 `IProtocolHandler`
 - `drives` 侧仍主要是 `ICloudStoragePlugin` / `CloudStorageManager` 旧抽象，`DriveResolverRegistry` 尚未落地
-- `UrlDetector` 仍在 Desktop UI 侧硬编码网盘规则，尚未迁移到 resolver / registry 元数据驱动
+- ✅ `UrlDetector` 网盘规则已迁移到 drives 层元数据驱动（2026-09-29）：
+  desktop 删除全部硬编码网盘正则与 parse_*_url 网盘方法，识别/文件名/展示名
+  全部委托 `CloudLinkDetector`（detect_platform / extract_file_id /
+  normalize_url / 新增 platform_display_name 目录）；识别面 5 → 13 平台
+  （drives 层补天翼云盘枚举与 pattern 对齐 desktop 既有能力）；UI 侧
+  网盘判定优先于 http/https/ftp 语义保持
 
 候选迁移模块：
 

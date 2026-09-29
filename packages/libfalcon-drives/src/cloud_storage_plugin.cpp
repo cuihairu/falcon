@@ -61,6 +61,7 @@ void CloudLinkDetector::init_patterns() {
         {CloudPlatform::Cloud115, R"(https?://anxia\.com/s/[a-zA-Z0-9]+)"},
         {CloudPlatform::Quark, R"(https?://pan\.quark\.cn/s/[a-zA-Z0-9]+)"},
         {CloudPlatform::Quark, R"(quark://[a-zA-Z0-9]+)"},
+        {CloudPlatform::TianyiCloud, R"(https?://cloud\.189\.cn/t/[a-zA-Z0-9]+)"},
         {CloudPlatform::PikPak, R"(https?://mypikpak\.com/s/[a-zA-Z0-9]+)"},
         {CloudPlatform::PikPak, R"(https?://share\.pikpak\.com/s/[a-zA-Z0-9]+)"},
         {CloudPlatform::Mega, R"(https?://mega\.co\.nz/#[a-zA-Z0-9_-]+)"},
@@ -98,6 +99,25 @@ CloudPlatform CloudLinkDetector::detect_platform(const std::string& url) {
     return CloudPlatform::Unknown;
 }
 
+std::string CloudLinkDetector::platform_display_name(CloudPlatform platform) {
+    switch (platform) {
+        case CloudPlatform::BaiduNetdisk:  return "Baidu Pan";
+        case CloudPlatform::LanzouCloud:   return "Lanzou Cloud";
+        case CloudPlatform::AlibabaCloud:  return "Aliyun Drive";
+        case CloudPlatform::TencentWeiyun: return "Tencent Weiyun";
+        case CloudPlatform::Cloud115:      return "115 Cloud";
+        case CloudPlatform::Quark:         return "Quark Drive";
+        case CloudPlatform::TianyiCloud:   return "Tianyi Cloud";
+        case CloudPlatform::PikPak:        return "PikPak";
+        case CloudPlatform::Mega:          return "MEGA";
+        case CloudPlatform::GoogleDrive:   return "Google Drive";
+        case CloudPlatform::OneDrive:      return "OneDrive";
+        case CloudPlatform::Dropbox:       return "Dropbox";
+        case CloudPlatform::YandexDisk:    return "Yandex Disk";
+        default:                           return "Unknown";
+    }
+}
+
 std::string CloudLinkDetector::extract_file_id(const std::string& url, CloudPlatform platform) {
     std::string id;
 
@@ -133,6 +153,15 @@ std::string CloudLinkDetector::extract_file_id(const std::string& url, CloudPlat
         case CloudPlatform::Quark:
         case CloudPlatform::PikPak: {
             std::regex pattern(R"(/s/([a-zA-Z0-9]+))");
+            std::smatch match;
+            if (std::regex_search(url, match, pattern)) {
+                id = match[1].str();
+            }
+            break;
+        }
+
+        case CloudPlatform::TianyiCloud: {
+            std::regex pattern(R"(/t/([a-zA-Z0-9]+))");
             std::smatch match;
             if (std::regex_search(url, match, pattern)) {
                 id = match[1].str();

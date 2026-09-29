@@ -11,10 +11,15 @@
 #include <QRegularExpression>
 #include <QStringList>
 
+#include <falcon/drives/cloud_storage_plugin.hpp>
+
 namespace falcon::desktop {
 
 /**
  * @brief Supported URL protocols
+ *
+ * 网盘协议的识别与显示名不在本层维护——全部委托 drives 层
+ * CloudLinkDetector 的平台元数据（本枚举只是 UI 侧的协议种类标记）。
  */
 enum class UrlProtocol {
     HTTP,
@@ -29,7 +34,15 @@ enum class UrlProtocol {
     ALIYUN,    // 阿里云盘
     QUARK,     // 夸克网盘
     TIANYI,    // 天翼云盘
-    Lanzou,    // 蓝奏云
+    LANZHOU,   // 蓝奏云
+    WEIYUN,    // 腾讯微云
+    CLOUD115,  // 115 网盘
+    PIKPAK,    // PikPak
+    MEGA,      // MEGA
+    GDRIVE,    // Google Drive
+    ONEDRIVE,  // OneDrive
+    DROPBOX,   // Dropbox
+    YANDEX,    // Yandex Disk
     UNKNOWN
 };
 
@@ -61,6 +74,9 @@ struct UrlInfo {
  * - QQDL (QQ旋风)
  * - Flashget (快车)
  * - ED2K (电驴)
+ * - 网盘分享链接（百度/阿里/夸克/天翼/蓝奏/微云/115/PikPak/MEGA/
+ *   Google Drive/OneDrive/Dropbox/Yandex——规则与平台名以 drives 层
+ *   CloudLinkDetector 为唯一事实源）
  */
 class UrlDetector
 {
@@ -109,6 +125,23 @@ private:
     static UrlProtocol detect_protocol(const QString& url);
 
     /**
+     * @brief Map drives-layer platform to UI protocol enum
+     */
+    static UrlProtocol to_url_protocol(falcon::CloudPlatform platform);
+
+    /**
+     * @brief Map UI protocol enum back to drives-layer platform
+     * (returns CloudPlatform::Unknown for non-cloud protocols)
+     */
+    static falcon::CloudPlatform to_cloud_platform(UrlProtocol protocol);
+
+    /**
+     * @brief Parse cloud drive share URL via drives-layer metadata
+     * (platform display name + extracted share code)
+     */
+    static UrlInfo parse_cloud_url(const QString& url, falcon::CloudPlatform platform);
+
+    /**
      * @brief Parse thunder:// URL
      * @param url Thunder URL
      * @return Decoded URL
@@ -142,41 +175,6 @@ private:
      * @return UrlInfo with ed2k details
      */
     static UrlInfo parse_ed2k_url(const QString& url);
-
-    /**
-     * @brief Parse Baidu Pan (百度网盘) link
-     * @param url Baidu Pan URL
-     * @return UrlInfo with details
-     */
-    static UrlInfo parse_baidu_url(const QString& url);
-
-    /**
-     * @brief Parse Aliyun Drive (阿里云盘) link
-     * @param url Aliyun Drive URL
-     * @return UrlInfo with details
-     */
-    static UrlInfo parse_aliyun_url(const QString& url);
-
-    /**
-     * @brief Parse Quark Drive (夸克网盘) link
-     * @param url Quark Drive URL
-     * @return UrlInfo with details
-     */
-    static UrlInfo parse_quark_url(const QString& url);
-
-    /**
-     * @brief Parse Tianyi Cloud (天翼云盘) link
-     * @param url Tianyi Cloud URL
-     * @return UrlInfo with details
-     */
-    static UrlInfo parse_tianyi_url(const QString& url);
-
-    /**
-     * @brief Parse Lanzou Cloud (蓝奏云) link
-     * @param url Lanzou Cloud URL
-     * @return UrlInfo with details
-     */
-    static UrlInfo parse_lanzou_url(const QString& url);
 
     /**
      * @brief Base64 decode
