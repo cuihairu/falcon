@@ -69,6 +69,7 @@ export default defineConfig({
             { text: "测试指南", link: "/developer/testing" },
             { text: "插件开发", link: "/developer/plugins" },
             { text: "桌面端重设计", link: "/developer/desktop-redesign" },
+            { text: "界面设计原型", link: "/developer/design-prototypes" },
             { text: "调试技巧", link: "/developer/debugging" },
             { text: "发布流程", link: "/developer/release" },
           ],

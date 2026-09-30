@@ -174,6 +174,27 @@ library API for integration.
 COS, Kodo, and Upyun — format-tree/table listings, path validation, and recursive
 operations. The desktop cloud storage page is built on it.
 
+## UI Prototypes 🎨
+
+The desktop main view ships in the "warm console" theme (variant A) and has a
+"cold utility" variant candidate (variant B). Both dark-theme prototypes below are
+rendered from the real Qt widget tree (offscreen sandbox) with demo task data:
+
+| Variant | Direction | Key tokens |
+|---|---|---|
+| A · warm console (current production theme) | warm dark neutral base + falcon salmon accent, shared with the docs site | window `#1b1714` / card `#262019` / text `#f2ede8` / accent `#ffa07a` |
+| B · cold utility (variant candidate) | Motrix-style: deeper neutral base, higher-contrast text, restrained blue accent | window `#131519` / card `#1b1e24` / text `#f5f7fa` / accent `#5b9df5` |
+
+<p align="center">
+  <img src="docs/design/prototypes/warm-console-dark.png" alt="Variant A · warm console (dark)" width="49%"/>
+  <img src="docs/design/prototypes/cold-utility-dark.png" alt="Variant B · cold utility (dark)" width="49%"/>
+</p>
+
+Source assets and regeneration instructions live in
+[`docs/design/prototypes/`](docs/design/prototypes/README.md);
+the interactive comparison page is on the
+[docs site](https://cuihairu.github.io/falcon/developer/design-prototypes).
+
 ## Architecture 🏗️
 
 Falcon follows a modular architecture with aria2-inspired event-driven design:

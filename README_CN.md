@@ -164,6 +164,25 @@ OSS、腾讯云 COS、七牛云 Kodo、又拍云：列举、树形视图、对�
 `libfalcon-storage` 实现 `ResourceBrowser` 接口，覆盖 FTP、SFTP、S3、OSS、COS、
 Kodo、又拍云——格式化树/表格列举、路径校验、递归操作。桌面云盘页面即基于它构建。
 
+## 界面原型 🎨
+
+桌面端主视图当前采用「warm console」主题（变体 A），另有一版「cold utility」
+变体候选（变体 B）。下方两张暗色主题原型均由真实 Qt 组件树离屏渲染（含 demo
+任务数据）：
+
+| 变体 | 方向 | 关键 token |
+|---|---|---|
+| A · warm console（现行生产主题） | 暖黑中性底 + falcon 鲑橙单强调，与文档站同源 | window `#1b1714` / card `#262019` / text `#f2ede8` / accent `#ffa07a` |
+| B · cold utility（变体候选） | 冷峻工具感（对标 Motrix）：更深中性底、高对比文字、克制蓝色 accent | window `#131519` / card `#1b1e24` / text `#f5f7fa` / accent `#5b9df5` |
+
+<p align="center">
+  <img src="docs/design/prototypes/warm-console-dark.png" alt="变体 A · warm console（暗色）" width="49%"/>
+  <img src="docs/design/prototypes/cold-utility-dark.png" alt="变体 B · cold utility（暗色）" width="49%"/>
+</p>
+
+源资产与再生成说明见 [`docs/design/prototypes/`](docs/design/prototypes/README.md)，
+对比页见[文档站](https://cuihairu.github.io/falcon/developer/design-prototypes)。
+
 ## 架构设计 🏗️
 
 Falcon 采用模块化架构，数据面为 aria2 风格的事件驱动设计：
