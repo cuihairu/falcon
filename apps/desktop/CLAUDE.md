@@ -2,6 +2,57 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-30 - QApplication 级测试基建首发 + clipboard_monitor/storage_service 首批单测（desktop 78 → 104 用例）
+- **基建（QApplication 级首例）**：clipboard 测试带 QApplication + 平台选择
+  main——环境已给平台（xvfb-run 的 xcb / 桌面会话）优先，无显示环境回落
+  `QT_QPA_PLATFORM=offscreen`；**QClipboard 在两平台均可用**（探针实证：
+  setText/文本往返 + changed 信号 offscreen 下同样触发），验证口径 =
+  xvfb-run（xcb）与 offscreen 双跑（本机补装 libxcb-cursor0/icccm/image/
+  keysyms/render-util0 五个 xcb 卫星包后 xcb 平台插件可加载）。此后所有
+  需要平台层（剪贴板/窗口系统）的桌面单测沿用此 main 模板
+- **新 target `falcon_desktop_clipboard_tests`（10 用例）**：检测语义双路径
+  钉住——生产主路径 QClipboard::changed 直连 check_clipboard（setText 同步
+  触发）、轮询 QTimer 是兜底；**去重与重启重检用 40ms 小间隔定时器路径
+  独立验证**（不依赖「同值 setText 是否再发 changed」的平台差异语义）；
+  null clipboard 构造/启停安全（守卫路径真实触发）；URL 检测（last_url
+  字段 is_valid/protocol/decoded_url/file_name 全断言）；非 URL 纯文本
+  忽略（**contains_url 对嵌入 URL 的文本会命中，必须用纯非 URL 文本**）；
+  stop 后剪贴板变化不再派发。**每用例唯一 URL**（序号后缀）排除剪贴板
+  单例跨用例残留对 dedup 观察的干扰
+- **新 target `falcon_desktop_storage_tests`（16 用例）**：配置持久化三件套
+  （跨实例 round-trip——save 后新实例 ctor load 回读 + is_connected 恒 false
+  不虚标 / 同名原位更新不追加 / remove 只删指定项）；连接管理五件
+  （webdav 未注册协议 → false + "Unsupported protocol" 错误、
+  **http://127.0.0.1:1 回环连接拒绝秒败**（不出网）、回环 MockHttpServer
+  连接成功——GET ?max-keys=1 探测请求真实到达断言 + connected 信号 +
+  connected_storages、disconnect 清态发信号、断开未知名字仍发信号（幂等
+  语义）、remove 已连接配置先断开再删）；无 browser 守卫四件（list 空
+  回调 + "Browser not connected" 错误、upload 排队失败回调、五资源操作
+  默认值返回）；request_download 协议 URL 表（s3/oss/cos/kodo/qiniu→
+  **kodo 归一**/upyun/webdav 兜底七行 + download_requested 信号断言）；
+  回环 mock 目录列举（Contents JSON 三项 → 隐藏过滤 + name 排序 + 字段
+  映射 + directory_loaded 信号 + **服务器侧 list-type=2 请求真实到达**）；
+  upload 本地文件打开失败 → "Failed to open local file"
+- **线程语义（本批基建经验）**：list_directory 回调在 QtConcurrent worker
+  线程直调（QMutex 编组共享状态收割）；upload_file 回调恒经
+  QueuedConnection 回主线程（plain 成员即可）；worker 线程 emit 的信号经
+  context-object connect 排队送达——spin_until（processEvents 驱动）统一
+  收割；**fixture 非 QObject 时 connect 必须 `QObject::` 限定**（静态成员
+  查找不到裸 connect）
+- **QSettings 隔离**：IniFormat UserScope setPath 重定向临时目录 +
+  setDefaultFormat + org/app 名（首个 QSettings 构造前）+ 每用例
+  SetUp clear()——持久化用例不污染真实用户配置；StorageService ctor 即
+  load_configs，隔离必须先于 fixture 构造
+- **网络红线**：成功路径全走回环 MockHttpServer（storage 包共享基建，
+  include storage tests/unit 目录）；失败路径 127.0.0.1:1——与 storage
+  包 browser mock 测试同口径，零外网
+- **验证**：两二进制 offscreen 与 xvfb-run（xcb）双跑全绿（clipboard
+  10 + storage 16）；事件驱动用例 10 轮压测零失败；既有 78 用例回归全绿
+  （backend 26 + url 8 + order 14 + update 7 + ipc 23）；build-cov 全量
+  ctest 全绿门禁 + 铁账复核（desktop 不进 build-cov 分母——本批零生产
+  改动，分母/miss 不变）；storage_service.cpp 存量 5 告警
+  （QtConcurrent::run nodiscard 等）经生产 target 复证实为既有非本批引入
+
 ### 2026-09-30 - 覆盖率补缺：IPC 服务器回环测试 + 检查更新版本比较测试（desktop 48 → 78 用例）
 - **选矿**（todo 勾选清零后的补缺轮；desktop 不进 build-cov 分母，按测试
   分布法盘点）：零测试桌面模块中挑两个收口——`ipc/http_server.cpp`（315 行，

@@ -164,3 +164,65 @@ target_compile_features(falcon_desktop_ipc_tests PRIVATE cxx_std_17)
 gtest_discover_tests(falcon_desktop_ipc_tests
     DISCOVERY_TIMEOUT 30
 )
+
+# ClipboardMonitor 测试（QApplication 级测试基建首发）：QClipboard 需要平台层
+# 支撑，验证以 xvfb-run（xcb）为准；无显示环境 main 内自动回落 offscreen
+# （进程内剪贴板往返 + changed 信号在 offscreen 均可用——探针实证）。
+# 自定义 main（QApplication + 平台选择，无 gtest_main）。
+add_executable(falcon_desktop_clipboard_tests
+    clipboard_monitor_test.cpp
+    ../src/utils/clipboard_monitor.cpp
+    ../src/utils/url_detector.cpp
+)
+
+target_link_libraries(falcon_desktop_clipboard_tests
+    PRIVATE
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Widgets
+        Falcon::drives
+        GTest::gtest
+        Threads::Threads
+)
+
+target_include_directories(falcon_desktop_clipboard_tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+)
+
+target_compile_features(falcon_desktop_clipboard_tests PRIVATE cxx_std_17)
+
+gtest_discover_tests(falcon_desktop_clipboard_tests
+    DISCOVERY_TIMEOUT 30
+)
+
+# StorageService 测试（QCoreApplication 级）：网络成功路径全走回环
+# MockHttpServer（storage 包共享基建），失败路径 127.0.0.1:1 回环连接拒绝
+# ——不出网。自定义 main（QSettings 隔离到临时目录 + QCoreApplication）。
+add_executable(falcon_desktop_storage_tests
+    storage_service_test.cpp
+    ../src/services/storage_service.cpp
+)
+
+target_link_libraries(falcon_desktop_storage_tests
+    PRIVATE
+        Qt6::Core
+        Qt6::Concurrent
+        Falcon::storage
+        GTest::gtest
+        Threads::Threads
+)
+
+target_include_directories(falcon_desktop_storage_tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../../packages/libfalcon-storage/tests/unit
+)
+
+target_compile_features(falcon_desktop_storage_tests PRIVATE cxx_std_17)
+
+gtest_discover_tests(falcon_desktop_storage_tests
+    DISCOVERY_TIMEOUT 30
+)
