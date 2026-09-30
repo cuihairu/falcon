@@ -42,6 +42,7 @@ set(SOURCES
     src/main_window.cpp
     src/widgets/top_bar.cpp
     src/widgets/status_bar.cpp
+    src/widgets/task_table_widget.cpp
     src/navigation/sidebar.cpp
     src/pages/download_page.cpp
     src/pages/cloud_page.cpp
@@ -58,6 +59,7 @@ set(SOURCES
     src/services/search_engine_catalog.cpp
     src/services/download_backend.cpp
     src/services/download_service.cpp
+    src/services/task_order.cpp
     src/services/trash_store.cpp
     src/services/update_checker.cpp
     src/ipc/http_server.cpp
@@ -68,6 +70,7 @@ set(HEADERS
     src/main_window.hpp
     src/widgets/top_bar.hpp
     src/widgets/status_bar.hpp
+    src/widgets/task_table_widget.hpp
     src/navigation/sidebar.hpp
     src/pages/download_page.hpp
     src/pages/cloud_page.hpp
@@ -85,6 +88,7 @@ set(HEADERS
     src/services/search_engine_catalog.hpp
     src/services/download_backend.hpp
     src/services/download_service.hpp
+    src/services/task_order.hpp
     src/services/trash_store.hpp
     src/services/update_checker.hpp
     src/ipc/http_server.hpp

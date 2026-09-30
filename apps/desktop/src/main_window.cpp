@@ -21,6 +21,7 @@
 #include "ipc/http_server.hpp"
 #include "services/download_service.hpp"
 #include "services/download_backend.hpp"
+#include "services/task_order.hpp"
 #include "services/update_checker.hpp"
 #include "utils/icon_utils.hpp"
 
@@ -504,6 +505,16 @@ void MainWindow::create_pages()
                     download_service_->stop_seeding(id);
                 }
             });
+    // 拖拽排序 → 立即落 QSettings（不等待 save_settings：排序是即时
+    // 动作，退出时机不可控，且 save_settings 是 const 只回写设置页字段）
+    connect(download_page_, &DownloadPage::task_order_changed,
+            this, [this](const QString& serialized) {
+                QSettings settings;
+                settings.beginGroup("desktop");
+                settings.setValue("task_order", serialized);
+                settings.endGroup();
+                settings.sync();
+            });
 
     // 云盘页面
     auto* cloud_page = new CloudPage(this);
@@ -619,8 +630,15 @@ void MainWindow::load_settings()
         settings.value("check_updates_on_startup", true).toBool());
     settings_page_->set_trash_retention_days(
         settings.value("trash_retention_days", 7).toInt());
+    // 手动排序（"3,1,2" 逗号串；无记录/全垃圾 → 空序 = id 升序默认行为）
+    const QString task_order_text = settings.value("task_order", QString()).toString();
 
     settings.endGroup();
+
+    if (download_page_) {
+        download_page_->set_task_order(
+            task_order::deserialize(task_order_text.toStdString()));
+    }
 }
 
 void MainWindow::save_settings() const

@@ -6,7 +6,9 @@
  */
 
 #include "download_page.hpp"
+#include "services/task_order.hpp"
 #include "utils/icon_utils.hpp"
+#include "widgets/task_table_widget.hpp"
 
 #include <QButtonGroup>
 #include <QHeaderView>
@@ -24,6 +26,7 @@
 #include <QStringList>
 #include <QToolButton>
 #include <algorithm>
+#include <limits>
 
 namespace falcon::desktop {
 
@@ -247,7 +250,7 @@ void DownloadPage::create_header_bar()
 
 void DownloadPage::create_task_table()
 {
-    task_table_ = new QTableWidget(this);
+    task_table_ = new TaskTableWidget(this);
     task_table_->setColumnCount(7);
     task_table_->setHorizontalHeaderLabels({
         tr("文件名"),
@@ -274,6 +277,12 @@ void DownloadPage::create_task_table()
     task_table_->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(task_table_, &QTableWidget::customContextMenuRequested,
             this, &DownloadPage::show_context_menu);
+
+    // 拖拽排序：落定换位 + 会话期间挂起快照刷新
+    connect(task_table_, &TaskTableWidget::reorderRequested,
+            this, &DownloadPage::on_table_reorder);
+    connect(task_table_, &TaskTableWidget::dragSessionChanged,
+            this, &DownloadPage::on_drag_session);
 
     // 列宽:文件名列弹性伸缩跟随窗口,其余列固定内容宽
     task_table_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
@@ -340,6 +349,14 @@ QString DownloadPage::filename_for(const falcon::daemon::rpc::TaskSnapshot& snap
 
 void DownloadPage::update_tasks(const std::vector<falcon::daemon::rpc::TaskSnapshot>& tasks)
 {
+    // 拖拽会话期间挂起刷新：行被重建会使落点行号失真，
+    // 会话结束（on_drag_session false）时补刷最后一份快照
+    if (drag_active_) {
+        pending_tasks_ = tasks;
+        has_pending_tasks_ = true;
+        return;
+    }
+
     // 重建记录表：不再存在的任务随之消失
     QHash<qulonglong, TaskRecord> fresh;
     fresh.reserve(static_cast<int>(tasks.size()) * 2);
@@ -383,6 +400,8 @@ void DownloadPage::update_tasks(const std::vector<falcon::daemon::rpc::TaskSnaps
 
 void DownloadPage::rerender()
 {
+    rebuild_display_positions();
+
     for (auto it = task_records_.begin(); it != task_records_.end(); ++it) {
         TaskRecord& record = it.value();
         const auto& snap = record.snapshot;
@@ -443,11 +462,18 @@ void DownloadPage::sync_task_row(const TaskRecord& record)
         return;  // 行已存在，动态列由 rerender 统一更新
     }
 
-    // 按 task id 升序定位插入点——task_records_ 是 QHash 无序遍历,
-    // 直接 append 会让行序随机(每次全量重建都可能变化)
+    // 按显示顺序定位插入点——task_records_ 是 QHash 无序遍历,
+    // 直接 append 会让行序随机(每次全量重建都可能变化)。
+    // 排序键 = (order 位置, id)：未入 order 的任务排最后,之间按 id 升序
+    const int kUnknownPos = std::numeric_limits<int>::max();
+    const int key_pos = display_pos_.value(key, kUnknownPos);
     int row = task_table_->rowCount();
     for (auto it = row_by_task_id_.cbegin(); it != row_by_task_id_.cend(); ++it) {
-        if (it.key() < key) {
+        const int other_pos = display_pos_.value(it.key(), kUnknownPos);
+        const bool other_above = (other_pos != key_pos)
+                                     ? (other_pos < key_pos)
+                                     : (it.key() < key);
+        if (other_above) {
             continue;
         }
         row = std::min(row, it.value());
@@ -588,6 +614,87 @@ void DownloadPage::remove_task_row(qulonglong key)
         if (it.value() > row) {
             it.value() -= 1;
         }
+    }
+}
+
+void DownloadPage::set_task_order(const std::vector<falcon::TaskId>& order)
+{
+    task_order_ = order;
+    // 启动时装载可能早于首份快照(此时无行可排),rerender 时自然生效
+    if (task_table_ && task_table_->rowCount() > 0) {
+        rebuild_table_rows();
+    }
+}
+
+void DownloadPage::rebuild_display_positions()
+{
+    display_pos_.clear();
+    std::vector<falcon::TaskId> id_list;
+    id_list.reserve(static_cast<std::size_t>(task_records_.size()));
+    for (auto it = task_records_.cbegin(); it != task_records_.cend(); ++it) {
+        id_list.push_back(static_cast<falcon::TaskId>(it.key()));
+    }
+    const std::vector<falcon::TaskId> sorted =
+        task_order::sort_ids(task_order_, id_list);
+    display_pos_.reserve(static_cast<int>(sorted.size()) * 2);
+    for (std::size_t i = 0; i < sorted.size(); ++i) {
+        display_pos_.insert(static_cast<qulonglong>(sorted[static_cast<int>(i)]),
+                            static_cast<int>(i));
+    }
+}
+
+void DownloadPage::rebuild_table_rows()
+{
+    // 全量重插(与 set_view_mode 同款模式)——就地移动行的方案对
+    // cellWidget(进度条/操作钮)搬迁过于侵入,收益不成比例
+    task_table_->setRowCount(0);
+    row_by_task_id_.clear();
+    rerender();
+}
+
+void DownloadPage::on_table_reorder(int from_row, int to_row)
+{
+    // 当前可见行(含过滤/视图模式)的 id 序列——表格外(被过滤或另一
+    // 视图)的任务保持各自位置不动,只有可见子集按新序重排
+    std::vector<falcon::TaskId> visible;
+    const int rows = task_table_->rowCount();
+    visible.reserve(static_cast<std::size_t>(rows));
+    for (int r = 0; r < rows; ++r) {
+        if (const auto* item = task_table_->item(r, 0)) {
+            visible.push_back(static_cast<falcon::TaskId>(
+                item->data(Qt::UserRole).toULongLong()));
+        }
+    }
+
+    const std::vector<falcon::TaskId> moved = task_order::move_to(
+        visible, static_cast<std::size_t>(from_row), static_cast<std::size_t>(to_row));
+    task_order_ = task_order::apply_drag(task_order_, moved);
+
+    // 剪掉已消失任务的 id:防 QSettings 无限增长 + 限制陈旧 id 影响面
+    std::vector<falcon::TaskId> pruned;
+    pruned.reserve(task_order_.size());
+    for (const falcon::TaskId id : task_order_) {
+        if (task_records_.contains(static_cast<qulonglong>(id))) {
+            pruned.push_back(id);
+        }
+    }
+    task_order_ = std::move(pruned);
+
+    rebuild_table_rows();
+    emit task_order_changed(
+        QString::fromStdString(task_order::serialize(task_order_)));
+}
+
+void DownloadPage::on_drag_session(bool active)
+{
+    if (drag_active_ == active) {
+        return;
+    }
+    drag_active_ = active;
+    // 会话结束:补刷挂起的最后一份快照(期间可能有多份,只留最新即可)
+    if (!active && has_pending_tasks_) {
+        has_pending_tasks_ = false;
+        update_tasks(pending_tasks_);
     }
 }
 
@@ -1167,12 +1274,17 @@ void DownloadPage::sync_task_grid()
     int row = 0;
     constexpr int kColumns = 3;  // 每行显示3个卡片
 
-    // QHash 迭代无序——按任务 id 排序保证卡片顺序稳定(与表格视图一致)
-    QList<qulonglong> ids = task_records_.keys();
-    std::sort(ids.begin(), ids.end());
+    // QHash 迭代无序——按手动排序（order 位置, id）保证卡片顺序稳定，
+    // 与表格视图共用同一 task_order_（空序退化为 id 升序）
+    std::vector<falcon::TaskId> id_list;
+    id_list.reserve(static_cast<std::size_t>(task_records_.size()));
+    for (auto it = task_records_.cbegin(); it != task_records_.cend(); ++it) {
+        id_list.push_back(static_cast<falcon::TaskId>(it.key()));
+    }
+    const std::vector<falcon::TaskId> sorted_ids = task_order::sort_ids(task_order_, id_list);
 
-    for (qulonglong id : ids) {
-        const TaskRecord& record = task_records_[id];
+    for (const falcon::TaskId id : sorted_ids) {
+        const TaskRecord& record = task_records_[static_cast<qulonglong>(id)];
         if (!should_show(record.snapshot)) {
             continue;
         }

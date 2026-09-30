@@ -2,6 +2,25 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-30 - 桌面任务拖拽排序（待办清单第 1 项收口：表格手动换位 + QSettings 持久化 + 48/48 测试绿）
+- **纯 C++ 算法层**（`services/task_order.{hpp,cpp}` 无 Qt）：`sort_ids`
+  排序键 (order 位置, id)、order 外任务排尾按 id；**空序退化 = id 升序 =
+  改动前行为零变化**；`apply_drag` 可见子集按新序回填成员位（被过滤/另一
+  视图任务冻结）；deserialize 先验 token 纯数字再 stoull（"-3" 回绕坑）
+- **`TaskTableWidget`**（QTableWidget 子类）：dropEvent 覆写不调 base——
+  InternalMove 的落点是 cell-paste 语义非行换位，accept 后自发
+  `reorderRequested(from,to)`；startDrag 前后 `dragSessionChanged` 包夹
+  （QDrag::exec 同步阻塞，落定/取消/拖出窗外全覆盖）
+- **DownloadPage**：拖拽会话挂起快照刷新（行重建会失真落点行号），结束补刷；
+  reorder → move_to → apply_drag → 剪已消失 id → 全量重插 →
+  `task_order_changed` 串；网格卡片同走 sort_ids（网格不拖，如实取舍）；
+  MainWindow 即写 QSettings `desktop/task_order`（不等 save_settings），
+  启动读回（value 必须在 endGroup 前读——endGroup 后读的是根节点）
+- **测试**：新 target `falcon_desktop_order_tests` 14 用例（sort/move/
+  apply_drag/序列化全语义 + 垃圾容错）；desktop 全部 48/48 绿（order 14 +
+  url 8 + backend/trash/catalog 26 回归）；GUI 拖拽机制经编译与沙盒构建
+  验证（Qt DnD 无自动化测试基建）；apps/desktop/CLAUDE.md 清单勾选
+
 ### 2026-09-29 - 主视图设计原型两版（warm console 现状 vs cold utility 变体）入库 + ui_sandbox 52 张正式截图归档
 - **流程**（用户要求桌面端界面再设计：先出原型图过目再动生产代码）：ui_sandbox 新增 `--prototype` 模式——暗色 1200×800、「下载中·表格」视图（hero 摘要卡 + 七列任务表 + 侧栏/顶栏/状态栏全要素，demo 数据含 2 做种任务）一次运行出两图
 - **变体 B 实现边界（核心约束）**：token 替换只发生在 sandbox 会话内——暗色 QSS 文本 hex 热→冷映射（14 对）+ checkbox 内嵌 base64 SVG 整串替换 + 冷 token 重建 QPalette；**生产 theme_tokens.hpp / fluent_dark.qss 零改动**（若选 B 落地，把 `kColdHexMap` 映射值写入生产 token/QSS 即可）

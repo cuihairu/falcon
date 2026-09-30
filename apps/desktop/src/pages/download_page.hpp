@@ -23,6 +23,8 @@
 
 namespace falcon::desktop {
 
+class TaskTableWidget;
+
 /**
  * @brief 当前视图模式
  */
@@ -66,6 +68,9 @@ public:
     void set_text_filter(const QString& text);
     /// 顶栏视图切换 → 表格/网格互切（与页内按钮共用同一状态）
     void toggle_display_style();
+    /// 恢复持久化的手动排序（启动时从 QSettings 装载；表格/网格共用，
+    /// 空序 = 从未拖拽，保持 id 升序默认行为）
+    void set_task_order(const std::vector<falcon::TaskId>& order);
 
 signals:
     void new_task_requested();
@@ -76,6 +81,8 @@ signals:
     void resume_requested(falcon::TaskId id);
     /// 停止做种（BitTorrent；仅对 seeding_active 任务出现菜单项）
     void stop_seeding_requested(falcon::TaskId id);
+    /// 拖拽排序变化 → 序列化串（"3,1,2"），MainWindow 落 QSettings
+    void task_order_changed(const QString& serialized);
 
 private slots:
     void on_new_task_clicked();
@@ -114,6 +121,12 @@ private:
     void sync_task_row(const TaskRecord& record);   // 按视图过滤增/删行
     void update_row_texts(int row, const TaskRecord& record);
     QWidget* create_task_card(const TaskRecord& record);  // 创建任务卡片
+    void rebuild_display_positions();  // 由 task_order_+task_records_ 重建排序位置表
+    void rebuild_table_rows();         // 清空表格行并按当前排序全量重插
+    // 表格拖拽落定：可见子集换位 → 全局 order 重建 → 重排 → 持久化信号
+    void on_table_reorder(int from_row, int to_row);
+    // 拖拽会话开始/结束（结束时补刷会话期间挂起的快照）
+    void on_drag_session(bool active);
 
     const TaskRecord* record_by_id(qulonglong key) const;
     const TaskRecord* record_from_sender() const;
@@ -157,12 +170,23 @@ private:
     QLabel* empty_state_title_ = nullptr;
     QLabel* empty_state_body_ = nullptr;
 
-    // 任务表格
-    QTableWidget* task_table_;
+    // 任务表格（支持行拖拽排序）
+    TaskTableWidget* task_table_;
 
     // 任务数据（DownloadService 推送的快照副本）
     QHash<qulonglong, int> row_by_task_id_;
     QHash<qulonglong, TaskRecord> task_records_;
+
+    // 手动排序（拖拽持久化）：任务 id 序列；显示排序键 = (order 位置, id)，
+    // 空序退化为 id 升序（算法见 services/task_order.hpp）
+    std::vector<falcon::TaskId> task_order_;
+    // id → 显示排序位置（rerender 前由 rebuild_display_positions 重建）
+    QHash<qulonglong, int> display_pos_;
+
+    // 拖拽会话期间挂起 500ms 快照刷新（行被重建会使落点行号失真）
+    bool drag_active_ = false;
+    bool has_pending_tasks_ = false;
+    std::vector<falcon::daemon::rpc::TaskSnapshot> pending_tasks_;
 
     // 显示样式
     TaskDisplayStyle display_style_;

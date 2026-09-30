@@ -2,6 +2,40 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-30 - 任务拖拽排序（表格 InternalMove 手动换位 + QSettings 持久化 + 过滤/视图模式共存）
+- **纯 C++ 排序算法层**（`services/task_order.{hpp,cpp}`，无 Qt 依赖，单测
+  钉死全语义）：`sort_ids(order, ids)`——排序键 (order 位置, id)，order 外
+  任务排尾按 id 升序，**空序退化 = 纯 id 升序 = 改动前行为零变化**（旧表格
+  插入循环与旧网格 std::sort 都是 id 升序）；`move_to`（行号换位，同位/
+  越界原样返回）；`apply_drag`（可见子集按新序回填 order 成员位，非成员
+  冻结——被过滤/另一视图的任务位置不动）；`serialize/deserialize`（逗号串
+  "3,1,2"；**stoull 对 "-3" 回绕接受的坑**——解析前先验 token 纯数字，
+  负号/空白/垃圾全跳过）
+- **`TaskTableWidget`**（`widgets/`，QTableWidget 子类）：DragEnabled +
+  AcceptDrops + InternalMove + DropIndicatorShown；**dropEvent 覆写不调
+  base**——QTableWidget 的 InternalMove 落点是 cell-paste 语义（把单元格
+  内容搬到目标格），不是行换位，必须 accept 后自己发
+  `reorderRequested(from_row, to_row)`；`startDrag` 前后发
+  `dragSessionChanged(true/false)` 包夹（QDrag::exec 同步阻塞在 startDrag
+  内，落定/取消/拖出窗外三种收尾全覆盖）
+- **DownloadPage 接线**：`update_tasks` 在拖拽会话期间挂起快照（行被重建
+  会使落点行号失真），会话结束补刷最后一份；`on_table_reorder` 收集可见
+  行 id 序列 → move_to → apply_drag → **剪掉已消失任务 id**（防 QSettings
+  无限增长）→ 全量重插（rebuild_table_rows，与 set_view_mode 同款——就地
+  搬 cellWidget 的进度条/操作钮过于侵入）→ 发 `task_order_changed` 串；
+  网格视图 `sync_task_grid` 同走 sort_ids（卡片顺序跟随手动序，网格本身
+  不支持拖拽——如实披露的取舍）
+- **持久化**：MainWindow 拖拽即写 QSettings `desktop/task_order`（不等
+  save_settings——排序是即时动作且退出时机不可控）；启动 load_settings
+  读回（**value 必须在 endGroup 之前读**——endGroup 后读的是根节点）→
+  `set_task_order` → 有行则立即重排，无行等首份快照 rerender 自然生效
+- **测试**：新 target `falcon_desktop_order_tests` 14 用例（sort 空序/
+  成员优先/未知排尾/重复取首现；move 双向/同位/越界；apply_drag 回填/
+  空序种子/追加尾/防御；序列化往返 + 垃圾容错）——纯逻辑层全语义钉住，
+  GUI 拖拽机制本身经编译与沙盒构建验证（Qt DnD 无自动化测试基建）；
+  回归：desktop 全部测试 48/48（order 14 + url 8 + backend/trash/
+  catalog 26）
+
 ### 2026-09-29 - ui_sandbox 原型模式 + 设计资产入库（prototypes 两版 / ui-sandbox 52 张）
 - **`--prototype` 模式**：一次运行出主视图设计原型两版（暗色 1200×800，「下载中·表格」视图全要素）；`falcon-ui-sandbox --prototype <目录>`
 - **cold utility 变体（会话内换肤，生产零触碰）**：`kColdHexMap` 14 对 hex 热→冷映射 + checkbox base64 SVG 整串替换（python 生成绝不手抄）+ `cold_palette()` 重建 QPalette（镜像 palette_for 冷值）；色板/对比度/已知边界详见 `docs/design/prototypes/README.md`
@@ -525,7 +559,7 @@ private:
 
 ## 未来计划
 
-- [ ] 任务拖拽排序
+- [x] 任务拖拽排序
 - [ ] 下载队列管理
 - [ ] 下载速度限制
 - [ ] 计划任务（定时下载）

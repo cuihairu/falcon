@@ -79,3 +79,30 @@ target_compile_features(falcon_desktop_url_tests PRIVATE cxx_std_17)
 gtest_discover_tests(falcon_desktop_url_tests
     DISCOVERY_TIMEOUT 30
 )
+
+# 任务手动排序算法测试（纯 C++，无 Qt 依赖）：拖拽排序的核心语义
+# （可见子集换位/未知任务排尾/序列化容错）全部在这层钉住。
+add_executable(falcon_desktop_order_tests
+    task_order_test.cpp
+    ../src/services/task_order.cpp
+)
+
+target_link_libraries(falcon_desktop_order_tests
+    PRIVATE
+        Falcon::core
+        GTest::gtest
+        GTest::gtest_main
+        Threads::Threads
+)
+
+target_include_directories(falcon_desktop_order_tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+)
+
+target_compile_features(falcon_desktop_order_tests PRIVATE cxx_std_17)
+
+gtest_discover_tests(falcon_desktop_order_tests
+    DISCOVERY_TIMEOUT 30
+)
