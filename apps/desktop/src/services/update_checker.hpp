@@ -38,6 +38,13 @@ public:
     /** 编译期版本号（<falcon/version.hpp> 单一事实源） */
     static QString current_version();
 
+    /**
+     * tag（"v1.2.3"）与当前版本比较，仅当严格更新时为真。
+     * 公开静态纯函数（无网络依赖）：版本比较语义是检查更新唯一的
+     * 可离线测试面，公开供单测直调（request_refresh 提升同先例）。
+     */
+    static bool is_newer_tag_version(const QString& tag);
+
 signals:
     /** 有更新：latest_version 已剥 v 前缀 */
     void update_available(const QString& latest_version, const QString& release_url);
@@ -45,9 +52,6 @@ signals:
     void check_failed(const QString& reason);
 
 private:
-    /** tag（"v1.2.3"）与当前版本比较，仅当严格更新时为真 */
-    static bool is_newer_tag_version(const QString& tag);
-
     QNetworkAccessManager* nam_;
     bool checking_;
 };

@@ -2,6 +2,47 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-30 - 覆盖率补缺：IPC 服务器回环测试 + 检查更新版本比较测试（desktop 48 → 78 用例）
+- **选矿**（todo 勾选清零后的补缺轮；desktop 不进 build-cov 分母，按测试
+  分布法盘点）：零测试桌面模块中挑两个收口——`ipc/http_server.cpp`（315 行，
+  此前仅离屏 + curl 手工冒烟）与 `services/update_checker.cpp`（d9f471a
+  新增即零测试）。其余零测试模块如实披露不在本批：clipboard_monitor /
+  storage_service / search_service / download_service（UI 胶水层，需
+  QApplication 级基建）；GUI 拖拽排序纯逻辑层复核确认已有 14 用例钉住
+- **新 target `falcon_desktop_ipc_tests`（23 用例，真实 QTcpServer/
+  QTcpSocket 回环全链）**：自动化 09-19 批次的手工冒烟（health 静态 JSON /
+  tasks/stats 无 provider 503 + provider 透传 200 / OPTIONS CORS 三件套 /
+  404 / 405 / 小写方法分发）+ POST /v1/add 全语义（202 + download_requested
+  字段级断言——url/filename trim、referrer/user_agent/cookies 原样；非
+  object JSON / 缺 url / 纯空白 url / 错路径 400×3+404）+ 解析边界（半截
+  头挂起无应答补终结行后应答、垃圾请求行、Content-Length 非数字/负数、
+  body 短传补齐后 202、300KB 无换行垃圾 413——尺寸检查先于解析不需要
+  合法结构）+ 生命周期（stop 置零端口重启可用、**同端口二次 bind 失败**——
+  QTcpServer 默认不设 SO_REUSEADDR，bind 语义实证）+ **回归钉子
+  `PostAddRespondsBeforeDispatchingSignal`**：download_requested 处理器内
+  嵌套 processEvents 自旋等 202 到达（模态对话框 exec 的精确事件循环形
+  态——嵌套 processEvents 合法），「先应答再派发」修复从此有自动化防线
+- **新 target `falcon_desktop_update_tests`（7 用例，静态纯函数零网络）**：
+  `is_newer_tag_version` 全语义（三段 bump 全真 / 相等无论 v/V 前缀空白
+  包裹全假 / 更旧假 / 两段式 tag "v0.2" 按 0.2.0 比较 / 8 种垃圾 tag 全假
+  绝不误报）+ `current_version` 与 FALCON_VERSION_STRING 单一事实源钉死；
+  **当前版本动态推导不硬编码——升版后本文件零改动**；check_for_updates()
+  本体访问真实 GitHub API（外网红线），与 Kodo 官方域名用例同姿态不覆盖
+- **可测性接缝**：`UpdateChecker::is_newer_tag_version` private → public
+  static（行为零变化；版本比较是检查更新唯一可离线测试面，request_refresh
+  提升 / detail 提升重构同先例）
+- **事件循环纪律（本批核心基建经验）**：QTcpSocket::waitForReadyRead 不
+  处理事件——同线程的 QTcpServer/readyRead 处理器永不触发，回环测试必然
+  死锁；所有等待必须 processEvents 驱动（`spin_until`：processEvents
+  (AllEvents, 50) + msleep(10) + QElapsedTimer 预算）；服务器每应答即
+  disconnectFromHost（一连接一请求，helper 每请求开新连接）
+- **验证**：desktop 78/78（backend 26 + url 8 + order 14 + update 7 +
+  ipc 23）；ipc 套件 10 轮压测零失败；build-cov 全量 ctest 全绿（desktop
+  不在该树分母，纯全绿门禁）；AUTOMOC 继承（父目录 set(CMAKE_AUTOMOC ON)
+  子作用域生效）使 Q_OBJECT 生产源直接编进测试 target 零额外设置
+
+
+
 ### 2026-09-30 - 任务拖拽排序（表格 InternalMove 手动换位 + QSettings 持久化 + 过滤/视图模式共存）
 - **纯 C++ 排序算法层**（`services/task_order.{hpp,cpp}`，无 Qt 依赖，单测
   钉死全语义）：`sort_ids(order, ids)`——排序键 (order 位置, id)，order 外

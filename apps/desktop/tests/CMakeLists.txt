@@ -106,3 +106,61 @@ target_compile_features(falcon_desktop_order_tests PRIVATE cxx_std_17)
 gtest_discover_tests(falcon_desktop_order_tests
     DISCOVERY_TIMEOUT 30
 )
+
+# 检查更新版本比较测试（静态纯函数，零网络）：check_for_updates() 本体
+# 访问真实 GitHub API（外网红线），本 target 只钉可离线测试面
+# is_newer_tag_version 全语义 + current_version 单一事实源。
+add_executable(falcon_desktop_update_tests
+    update_checker_test.cpp
+    ../src/services/update_checker.cpp
+)
+
+target_link_libraries(falcon_desktop_update_tests
+    PRIVATE
+        Qt6::Core
+        Qt6::Network
+        Falcon::core
+        GTest::gtest
+        GTest::gtest_main
+        Threads::Threads
+)
+
+target_include_directories(falcon_desktop_update_tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+)
+
+target_compile_features(falcon_desktop_update_tests PRIVATE cxx_std_17)
+
+gtest_discover_tests(falcon_desktop_update_tests
+    DISCOVERY_TIMEOUT 30
+)
+
+# IPC 服务器回环测试（真实 QTcpServer/QTcpSocket 全链）：自动化 09-19 批次
+# 的离屏 + curl 手工冒烟，并把「/v1/add 先应答再派发」修复钉成回归用例。
+# 自定义 main（QCoreApplication 事件循环驱动，无 gtest_main）。
+add_executable(falcon_desktop_ipc_tests
+    ipc_server_test.cpp
+    ../src/ipc/http_server.cpp
+)
+
+target_link_libraries(falcon_desktop_ipc_tests
+    PRIVATE
+        Qt6::Core
+        Qt6::Network
+        GTest::gtest
+        Threads::Threads
+)
+
+target_include_directories(falcon_desktop_ipc_tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+)
+
+target_compile_features(falcon_desktop_ipc_tests PRIVATE cxx_std_17)
+
+gtest_discover_tests(falcon_desktop_ipc_tests
+    DISCOVERY_TIMEOUT 30
+)
