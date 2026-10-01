@@ -7,6 +7,7 @@
 
 #include "download_page.hpp"
 #include "services/task_order.hpp"
+#include "services/task_visibility.hpp"
 #include "utils/icon_utils.hpp"
 #include "widgets/task_table_widget.hpp"
 
@@ -85,17 +86,26 @@ void DownloadPage::setup_ui()
     main_layout->addLayout(header_layout_);
 
     create_empty_state();
-    main_layout->addWidget(empty_state_widget_);
-
-    // 创建表格视图
     create_task_table();
-    main_layout->addWidget(task_table_, 1);
-
-    // 创建网格视图（初始隐藏）；与表格互斥显示，同占剩余空间——
-    // 无 stretch 时 QScrollArea 初始 sizeHint 近 0，网格视口被压扁卡片裁剪
     create_task_grid();
-    main_layout->addWidget(grid_container_, 1);
-    grid_container_->hide();
+
+    // 内容区三页栈（空态/表格/网格）：三态恒占同一 stretch=1 区域，
+    // 有无任务页面占用体积一致——旧布局空态卡片自然高度直挂、表格
+    // stretch=1，任务出现/清空时内容区高度跳变（用户实测「有任务和
+    // 没有任务占的体积不一样、窗口跳来跳去」）。空态页卡片垂直居中。
+    // 表格/网格页必须由 stack 全高承载：无 stretch 时 QScrollArea
+    // 初始 sizeHint 近 0，网格视口被压扁卡片裁剪（2026-09-17 教训）
+    content_stack_ = new QStackedWidget(this);
+    empty_page_ = new QWidget(content_stack_);
+    auto* empty_layout = new QVBoxLayout(empty_page_);
+    empty_layout->setContentsMargins(0, 0, 0, 0);
+    empty_layout->addStretch(1);
+    empty_layout->addWidget(empty_state_widget_);
+    empty_layout->addStretch(1);
+    content_stack_->addWidget(empty_page_);
+    content_stack_->addWidget(task_table_);
+    content_stack_->addWidget(grid_container_);
+    main_layout->addWidget(content_stack_, 1);
 
     update_empty_state();
 }
@@ -438,12 +448,11 @@ bool DownloadPage::should_show(const falcon::daemon::rpc::TaskSnapshot& snapshot
 
     switch (view_mode_) {
         case DownloadViewMode::Downloading:
-            return snapshot.status == falcon::TaskStatus::Downloading ||
-                   snapshot.status == falcon::TaskStatus::Preparing ||
-                   snapshot.status == falcon::TaskStatus::Paused ||
-                   snapshot.status == falcon::TaskStatus::Pending;
+            // Failed 归入下载中视图（语义见 services/task_visibility.hpp）：
+            // 失败任务可「继续」重试，两个视图都不可见 = 凭空消失
+            return task_visibility::visible_in_downloading(snapshot.status);
         case DownloadViewMode::Completed:
-            return snapshot.status == falcon::TaskStatus::Completed;
+            return task_visibility::visible_in_completed(snapshot.status);
     }
     return false;
 }
@@ -783,15 +792,17 @@ void DownloadPage::update_summary_cards()
 
 void DownloadPage::update_empty_state()
 {
+    // 三页栈互斥切换（页由 setup_ui 构建完成后才可达——构造早期防御）
+    if (!content_stack_) {
+        return;
+    }
     const bool has_rows = task_table_ && task_table_->rowCount() > 0;
-    if (empty_state_widget_) {
-        empty_state_widget_->setVisible(!has_rows);
-    }
-    if (task_table_) {
-        task_table_->setVisible(has_rows && display_style_ == TaskDisplayStyle::Table);
-    }
-    if (grid_container_) {
-        grid_container_->setVisible(has_rows && display_style_ == TaskDisplayStyle::Grid);
+    if (!has_rows) {
+        content_stack_->setCurrentWidget(empty_page_);
+    } else if (display_style_ == TaskDisplayStyle::Grid) {
+        content_stack_->setCurrentWidget(grid_container_);
+    } else {
+        content_stack_->setCurrentWidget(task_table_);
     }
 }
 

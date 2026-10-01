@@ -107,6 +107,32 @@ gtest_discover_tests(falcon_desktop_order_tests
     DISCOVERY_TIMEOUT 30
 )
 
+# 任务两视图可见性判定测试（纯 C++ 头文件内联函数，无 Qt 依赖）：
+# Failed 归入下载中视图的语义（失败任务可重试，不得凭空消失）在这层钉住。
+add_executable(falcon_desktop_visibility_tests
+    task_visibility_test.cpp
+)
+
+target_link_libraries(falcon_desktop_visibility_tests
+    PRIVATE
+        Falcon::core
+        GTest::gtest
+        GTest::gtest_main
+        Threads::Threads
+)
+
+target_include_directories(falcon_desktop_visibility_tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+)
+
+target_compile_features(falcon_desktop_visibility_tests PRIVATE cxx_std_17)
+
+gtest_discover_tests(falcon_desktop_visibility_tests
+    DISCOVERY_TIMEOUT 30
+)
+
 # 检查更新版本比较测试（静态纯函数，零网络）：check_for_updates() 本体
 # 访问真实 GitHub API（外网红线），本 target 只钉可离线测试面
 # is_newer_tag_version 全语义 + current_version 单一事实源。

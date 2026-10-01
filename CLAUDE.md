@@ -2,6 +2,13 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-01 - P0 第二层收口：SegmentDownloader 30s 硬帽移除 + 段级实时进度接线 + 桌面两可用性修复（三页栈/Failed 可见）
+- **SegmentDownloader 30s 硬帽移除（P0 续层，用户实测「完成后不在已完成列表」的根因）**：`start()` 的 worker 汇合等待原为 `cv_.wait_for(30s)` 超时兜底——超时即置 cancelled_+failed_（任务 Failed）。它比 curl 层超时深一层：前批 P0 修完 CURLOPT_TIMEOUT 后这一层成为新绑定约束，**一切总时长超 30s 的健康分段下载被强制取消**（慢网络/大文件批量全灭）。改为无限期 `cv_.wait`：worker 必然有界终止（每次段尝试受 curl 停滞看门狗（LOW_SPEED，timeout_seconds 默认 30）+ CONNECTTIMEOUT 10s + 重试次数有界约束），pause/cancel 经 cancelled_ 原子 + notify_all 唤醒；真死锁由有界性排除，不再牺牲正确性换兜底
+- **段级实时进度接线（此前段路径传输中进度冻结）**：`SegmentDownloadFunc` 签名增 `std::atomic<Bytes>& live_progress`（= SegmentDownloader 的 `segment->downloaded`）；http_handler `segment_progress_callback` 每回调 `store(baseline + dlnow)`（baseline = 起始时段文件尺寸；dlnow 是 curl 记账不受 ofstream streambuf 落盘时滞影响——显示层需要的进度源）；失败路径既有磁盘真相覆写保持（live store 只影响显示不影响续传语义）；监控线程速度计算补无符号下溢回落保护（live 进度非严格单调——200 截回/超尺寸段删除归零会瞬间低于上次采样，直接相减会算出巨大速度）
+- **桌面修复 ①（三页栈）**：下载页内容区改 QStackedWidget 三页（空态/表格/网格）恒占同一 stretch=1 区域——旧布局空态卡片自然高度直挂 + 表格 stretch=1，「有任务和没任务任务占的体积不一样、窗口跳来跳去」（用户实测）。空态页卡片垂直居中；表格/网格页由 stack 全高承载（无 stretch 时 QScrollArea sizeHint 近 0 的 2026-09-17 教训保持）
+- **桌面修复 ②（Failed 可见）**：`task_visibility.hpp` 纯 C++ 判定层（无 Qt 可独立编译测试）——下载中视图 = Pending/Preparing/Downloading/Paused/**+Failed**（失败任务可「继续」重试，两视图都不可见 = 用户眼里凭空消失）；已完成视图 = 仅 Completed；Cancelled 终态保持隐藏（回收站承载）。download_page::should_show 两分支改走判定层
+- **测试**：新 target `falcon_desktop_visibility_tests` 6 用例（四态可见/Failed 回归钉子/终态隐藏/Completed 视图独占 + 全枚举巡检：两视图互斥且并集恰覆盖全枚举——Cancelled 唯一合法藏匿态）；segment_downloader_test 18 处 mock/lambda 签名适配（新参数消费方语义零变化）；HttpHandlerEdges 36/36 + SegmentDownloader 44/44 + build-desktop 全量 2518 过
+
 ### 2026-09-30 - P0 收口：timeout_seconds 语义修正（停滞看门狗，非总时长硬帽）+ 桌面设置项接入下载选项
 - **P0 根因（用户实测「多链接批量下载无一成功——HEAD 识别大小正常，等待后弹窗失败」）**：`download_segment_curl` 与 `download_single` 两站点把 `timeout_seconds` 映射 **CURLOPT_TIMEOUT（整传输硬上限）**——默认 30s 会杀死一切慢而健康的真实下载（速度 < 总量/30s 的都死），HEAD 探测快故大小正常、GET 一到 30s 即 CURLE_OPERATION_TIMEDOUT 弹窗失败
 - **修复（aria2 --timeout 同语义 = 停滞看门狗）**：两站点改 `CURLOPT_LOW_SPEED_LIMIT=1 + CURLOPT_LOW_SPEED_TIME=timeout_seconds`——低于 1 B/s 持续该秒数才中止，慢而健康的传输不受总时长惩罚；`timeout_seconds==0` 不设 LOW_SPEED 对（关看门狗，契约见 download_options.hpp 文档注释同步重写：V1 curl LOW_SPEED / V2 命令等待超时，非总时长帽）；HEAD 探测保持 CURLOPT_TIMEOUT（探测应秒级完成，总帽语义正确）

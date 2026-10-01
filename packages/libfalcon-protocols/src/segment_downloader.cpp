@@ -295,22 +295,21 @@ bool SegmentDownloader::start(SegmentDownloadFunc download_func) {
     }
 
     // Wait for all workers to complete or cancellation/failure
+    //
+    // 无限期等待（不加 30s 硬帽）：worker 必然有界终止——每次段尝试受
+    // curl 停滞看门狗约束（LOW_SPEED，timeout_seconds 默认 30 = 低于
+    // 1 B/s 持续 30s 才中止）+ CONNECTTIMEOUT 10s + 重试次数有界；
+    // pause/cancel 经 cancelled_ 原子 + cv_.notify_all() 唤醒此处。
+    // 旧的 30s wait_for 超时兜底会把一切总时长超过 30s 的健康分段
+    // 下载强制取消（cancelled_+failed_ 置位 = 任务 Failed）——慢网络
+    // /大文件批量下载「完成后不在已完成列表」的根因：它比 curl 层
+    // 的超时语义深一层，P0 修完 CURLOPT_TIMEOUT 后这一层成为新的
+    // 绑定约束。真死锁由上述有界性排除，不再需要牺牲正确性的兜底
     {
         std::unique_lock<std::mutex> lock(workers_mutex_);
-
-        // Add timeout to prevent real deadlock
-        bool wait_result = cv_.wait_for(lock, std::chrono::seconds(30), [this]() {
+        cv_.wait(lock, [this]() {
             return active_workers_.load() == 0 || cancelled_.load() || failed_.load();
         });
-
-        if (!wait_result) {
-            // Timeout - this indicates a real bug
-            std::cerr << "ERROR: Timeout waiting for workers! active_workers="
-                     << active_workers_.load() << ", cancelled=" << cancelled_.load()
-                     << ", failed=" << failed_.load() << std::endl;
-            cancelled_.store(true);
-            failed_.store(true);
-        }
     }
 
     running_.store(false);
@@ -426,13 +425,15 @@ void SegmentDownloader::download_segment(
         const std::string& download_path = segment_path;
 
         try {
-            // Call the download function
+            // Call the download function（live_progress = 段级 downloaded
+            // 原子：实现方传输过程中实时上报，监控线程据此算速度/进度）
             bool success = download_func(
                 url_,
                 segment->start + existing_downloaded,  // Resume position
                 segment->end,
                 download_path,
-                cancelled_
+                cancelled_,
+                segment->downloaded
             );
 
             if (success && !cancelled_.load()) {
@@ -631,7 +632,13 @@ void SegmentDownloader::monitor_connections() {
             now - stats_.last_update).count();
 
         if (elapsed > 0) {
-            Bytes diff = downloaded - stats_.last_downloaded;
+            // 回落保护：live 进度非严格单调——失败路径可能把段 downloaded
+            // 重置回磁盘真相（200 截回、超尺寸段删除归零），瞬间低于上一
+            // 次采样时按 0 增量计（无符号下溢会把巨大值算成速度）
+            const Bytes diff =
+                downloaded > stats_.last_downloaded
+                    ? downloaded - stats_.last_downloaded
+                    : 0;
             BytesPerSecond speed = (diff * 1000) / static_cast<Bytes>(elapsed);
             current_speed_.store(speed);
             stats_.last_downloaded = downloaded;

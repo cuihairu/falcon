@@ -139,12 +139,21 @@ struct SegmentConfig {
 class SegmentDownloader {
 public:
     /// Callback function type for downloading a single segment
+    ///
+    /// live_progress：段内实时进度接收器（display/speed 专用）。实现方应在
+    /// 传输过程中把「本次尝试的绝对段进度」（= 起始时已有段文件尺寸 +
+    /// 本次已传字节）relaxed store 进去——SegmentDownloader 的监控线程按
+    /// 1s tick 汇总该值计算任务级速度与进度。失败路径随后会以段文件
+    /// 磁盘真相覆写该原子（best-effort read），Range 起点始终由磁盘推导，
+    /// live store 只影响显示不影响续传语义；瞬时越界值由消费方
+    /// min(downloaded, size) 钳制
     using SegmentDownloadFunc = std::function<bool(
         const std::string& url,
         Bytes start,
         Bytes end,
         const std::string& output_path,
-        std::atomic<bool>& cancelled
+        std::atomic<bool>& cancelled,
+        std::atomic<Bytes>& live_progress
     )>;
 
     /// Create a segment downloader

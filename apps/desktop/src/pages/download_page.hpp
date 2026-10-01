@@ -15,6 +15,7 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QScrollArea>
+#include <QStackedWidget>
 #include <QFrame>
 
 #include <rpc/aria2_snapshots.hpp>
@@ -169,6 +170,12 @@ private:
     QWidget* empty_state_widget_ = nullptr;
     QLabel* empty_state_title_ = nullptr;
     QLabel* empty_state_body_ = nullptr;
+
+    // 内容区三页栈（空态/表格/网格互斥页）：三态恒占同一 stretch 区域，
+    // 有无任务页面占用体积一致——空态直挂布局时自然高度 vs 表格
+    // stretch=1 会随任务出现/清空跳动
+    QStackedWidget* content_stack_ = nullptr;
+    QWidget* empty_page_ = nullptr;  // 空态页（卡片垂直居中）
 
     // 任务表格（支持行拖拽排序）
     TaskTableWidget* task_table_;

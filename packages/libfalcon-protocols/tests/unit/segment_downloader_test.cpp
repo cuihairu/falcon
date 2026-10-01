@@ -55,7 +55,8 @@ static bool mock_segment_download(
     Bytes start,
     Bytes end,
     const std::string& output_path,
-    std::atomic<bool>& cancelled) {
+    std::atomic<bool>& cancelled,
+    std::atomic<Bytes>& /*live_progress*/) {
 
     // Minimal delay for testing
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -221,7 +222,8 @@ TEST(SegmentDownloaderTest, Cancellation) {
     std::thread download_thread([&]() {
         started = true;
         downloader.start([](const std::string&, Bytes, Bytes, const std::string&,
-                            std::atomic<bool>& cancelled) {
+                            std::atomic<bool>& cancelled,
+                            std::atomic<Bytes>& /*live_progress*/) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             return !cancelled.load();
         });
@@ -295,7 +297,8 @@ TEST(SegmentDownloaderTest, PauseAndResume) {
     auto gate_mock = [&gate_started, &gate_open](
                          const std::string& url, Bytes start, Bytes end,
                          const std::string& mock_output_path,
-                         std::atomic<bool>& cancelled) -> bool {
+                         std::atomic<bool>& cancelled,
+                         std::atomic<Bytes>& /*live_progress*/) -> bool {
         (void)url;
         std::ofstream file(mock_output_path, std::ios::binary | std::ios::app);
         if (!file.is_open()) {
@@ -568,7 +571,7 @@ TEST(SegmentDownloaderError, DownloadFunctionFailure) {
 
     // Download function that always fails
     auto failing_download = [](const std::string&, Bytes, Bytes, const std::string&,
-                                std::atomic<bool>&) -> bool {
+                                std::atomic<bool>&, std::atomic<Bytes>&) -> bool {
         return false;
     };
 
@@ -595,7 +598,8 @@ TEST(SegmentDownloaderError, RetryExhaustion) {
 
     int attempt_count = 0;
     auto retrying_download = [&attempt_count](const std::string&, Bytes, Bytes,
-                                               const std::string&, std::atomic<bool>&) -> bool {
+                                               const std::string&, std::atomic<bool>&,
+                                               std::atomic<Bytes>&) -> bool {
         attempt_count++;
         return false;  // Always fail
     };
@@ -877,7 +881,8 @@ TEST(SegmentDownloaderIntegrity, CorruptAppendIsDetectedAndHealed) {
     // 超尺寸（512 + 10240），精确尺寸校验必须拦下
     auto liar_download = [](const std::string&, Bytes /*start*/, Bytes end,
                             const std::string& path,
-                            std::atomic<bool>& cancelled) -> bool {
+                            std::atomic<bool>& cancelled,
+                            std::atomic<Bytes>& /*live_progress*/) -> bool {
         if (cancelled.load()) return false;
         const Bytes full_length = end + 1;
         std::ofstream file(path, std::ios::binary | std::ios::app);
@@ -922,7 +927,8 @@ TEST(SegmentDownloaderIntegrity, ShortTransferIsRejected) {
 
     auto half_download = [](const std::string&, Bytes start, Bytes end,
                             const std::string& path,
-                            std::atomic<bool>& cancelled) -> bool {
+                            std::atomic<bool>& cancelled,
+                            std::atomic<Bytes>& /*live_progress*/) -> bool {
         if (cancelled.load()) return false;
         const Bytes size = (end - start + 1) / 2;
         if (size == 0) return false;
@@ -1114,12 +1120,13 @@ TEST(SegmentDownloaderEdges, StartRejectedWhileRunning) {
 
     auto gated_download = [&](const std::string& url, Bytes start, Bytes end,
                               const std::string& path,
-                              std::atomic<bool>& cancelled) -> bool {
+                              std::atomic<bool>& cancelled,
+                                  std::atomic<Bytes>& live_progress) -> bool {
         if (gate_future.wait_for(std::chrono::seconds(5)) !=
             std::future_status::ready) {
             return false;
         }
-        return mock_segment_download(url, start, end, path, cancelled);
+        return mock_segment_download(url, start, end, path, cancelled, live_progress);
     };
 
     std::thread download_thread(
@@ -1158,11 +1165,12 @@ TEST(SegmentDownloaderEdges, ThrowingDownloadFuncRetriedThenSucceeds) {
     std::atomic<int> calls{0};
     auto throwing_then_ok = [&](const std::string& url, Bytes start, Bytes end,
                                 const std::string& path,
-                                std::atomic<bool>& cancelled) -> bool {
+                                std::atomic<bool>& cancelled,
+                                    std::atomic<Bytes>& live_progress) -> bool {
         if (calls.fetch_add(1) < 2) {
             throw std::runtime_error("transient seg explode");
         }
-        return mock_segment_download(url, start, end, path, cancelled);
+        return mock_segment_download(url, start, end, path, cancelled, live_progress);
     };
 
     EXPECT_TRUE(downloader.start(throwing_then_ok));
@@ -1203,9 +1211,10 @@ TEST(SegmentDownloaderEdges, CreateDirectoryFailureFailsFast) {
     std::atomic<int> calls{0};
     auto counting_download = [&](const std::string& url, Bytes start, Bytes end,
                                  const std::string& path,
-                                 std::atomic<bool>& cancelled) -> bool {
+                                 std::atomic<bool>& cancelled,
+                                     std::atomic<Bytes>& live_progress) -> bool {
         ++calls;
-        return mock_segment_download(url, start, end, path, cancelled);
+        return mock_segment_download(url, start, end, path, cancelled, live_progress);
     };
 
     EXPECT_FALSE(downloader.start(counting_download));
@@ -1310,7 +1319,7 @@ TEST(SegmentDownloaderEdges, ResumeAllCompleteSkipsDownload) {
 
     EXPECT_TRUE(downloader.start([&](const std::string&, Bytes, Bytes,
                                      const std::string&,
-                                     std::atomic<bool>&) {
+                                     std::atomic<bool>&, std::atomic<Bytes>&) {
         invoked = true;
         return false;
     }));
@@ -1351,8 +1360,9 @@ TEST(SegmentDownloaderEdges, PauseBlocksWorkerAndMonitorLoops) {
 
     auto pause_on_first = [&](const std::string& url, Bytes start, Bytes end,
                               const std::string& path,
-                              std::atomic<bool>& cancelled) -> bool {
-        const bool ok = mock_segment_download(url, start, end, path, cancelled);
+                              std::atomic<bool>& cancelled,
+                                  std::atomic<Bytes>& live_progress) -> bool {
+        const bool ok = mock_segment_download(url, start, end, path, cancelled, live_progress);
         if (ok && !paused_flag.exchange(true)) {
             downloader.pause();  // seg0 完成后暂停：worker 循环停在暂停分支
         }
@@ -1404,7 +1414,8 @@ TEST(SegmentDownloaderEdges, PauseBlocksSegmentRetryLoop) {
 
     auto fail_then_pause = [&](const std::string& url, Bytes start, Bytes end,
                                const std::string& path,
-                               std::atomic<bool>& cancelled) -> bool {
+                               std::atomic<bool>& cancelled,
+                                   std::atomic<Bytes>& live_progress) -> bool {
         if (calls++ == 0) {
             // 首次：半量写入后失败，并把下载置入暂停
             std::ofstream f(path, std::ios::binary | std::ios::app);
@@ -1417,7 +1428,7 @@ TEST(SegmentDownloaderEdges, PauseBlocksSegmentRetryLoop) {
             paused_flag = true;
             return false;
         }
-        return mock_segment_download(url, start, end, path, cancelled);
+        return mock_segment_download(url, start, end, path, cancelled, live_progress);
     };
 
     std::thread download_thread(
@@ -1458,7 +1469,8 @@ TEST(SegmentDownloaderEdges, FalseReturnWithExactSizeCompletes) {
     // 数据齐全但返回 false：精确尺寸记账必须判定完成并跳出重试
     auto complete_but_false = [](const std::string&, Bytes start, Bytes end,
                                  const std::string& path,
-                                 std::atomic<bool>& cancelled) -> bool {
+                                 std::atomic<bool>& cancelled,
+                                 std::atomic<Bytes>& /*live_progress*/) -> bool {
         if (cancelled.load()) return false;
         std::ofstream f(path, std::ios::binary | std::ios::app);
         if (!f.is_open()) return false;
@@ -1496,7 +1508,8 @@ TEST(SegmentDownloaderEdges, MergeGateRejectsDriftedSegment) {
     // 不会再有重试自愈）后实施篡改——merge 闸门必须拦下
     auto corrupt_after_seg0_complete = [&](const std::string& url, Bytes start,
                                            Bytes end, const std::string& path,
-                                           std::atomic<bool>& cancelled) -> bool {
+                                           std::atomic<bool>& cancelled,
+                                               std::atomic<Bytes>& live_progress) -> bool {
         const std::string seg0_path = output_path + ".falcon.tmp.seg0";
         if (path != seg0_path) {
             const auto deadline =
@@ -1519,7 +1532,7 @@ TEST(SegmentDownloaderEdges, MergeGateRejectsDriftedSegment) {
             f.write(drift.data(), static_cast<std::streamsize>(drift.size()));
             f.close();
         }
-        return mock_segment_download(url, start, end, path, cancelled);
+        return mock_segment_download(url, start, end, path, cancelled, live_progress);
     };
 
     EXPECT_FALSE(downloader.start(corrupt_after_seg0_complete));
@@ -1583,14 +1596,15 @@ TEST(SegmentDownloaderEdges, CancelMidFlightJoinsLiveMonitor) {
 
     auto cancellable_gated = [&](const std::string& url, Bytes start, Bytes end,
                                  const std::string& path,
-                                 std::atomic<bool>& cancelled) -> bool {
+                                 std::atomic<bool>& cancelled,
+                                     std::atomic<Bytes>& live_progress) -> bool {
         while (gate_future.wait_for(std::chrono::milliseconds(20)) !=
                std::future_status::ready) {
             if (cancelled.load()) {
                 return false;
             }
         }
-        return mock_segment_download(url, start, end, path, cancelled);
+        return mock_segment_download(url, start, end, path, cancelled, live_progress);
     };
 
     std::thread download_thread(
@@ -1639,7 +1653,8 @@ TEST(SegmentDownloaderBoundary, MergeTempOccupiedByDirectoryThrows) {
         SegmentDownloader downloader(task, url, output_path, make_config());
         EXPECT_FALSE(downloader.start(
             [](const std::string&, Bytes start, Bytes end,
-               const std::string& seg_path, std::atomic<bool>&) {
+               const std::string& seg_path, std::atomic<bool>&,
+               std::atomic<Bytes>&) {
                 if (start != 0) return false;  // 段 1 失败
                 std::ofstream f(seg_path, std::ios::binary);
                 const Bytes n = end - start + 1;
@@ -1701,7 +1716,8 @@ TEST(SegmentDownloaderBoundary, RetryBoundaryRespectsSiblingCancellation) {
     // 段 1(start=32)延迟失败:mock 返回后的 cancelled 检查(450-451)
     // 命中 → 立即 break,绝不空转重试
     EXPECT_FALSE(downloader.start([](const std::string&, Bytes start, Bytes,
-                                     const std::string&, std::atomic<bool>&) {
+                                     const std::string&, std::atomic<bool>&,
+                                     std::atomic<Bytes>&) {
         if (start == 0) return false;  // 即时失败
         std::this_thread::sleep_for(std::chrono::milliseconds(150));
         return false;  // 段 0 记账后才返回,兄弟段取消即时生效

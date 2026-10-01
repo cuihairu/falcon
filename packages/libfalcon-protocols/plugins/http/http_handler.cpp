@@ -273,16 +273,28 @@ static void apply_common_curl_options(CURL* curl,
 
 struct SegmentProgressData {
     std::atomic<bool>* cancelled = nullptr;
+    // 段内实时进度接收器（SegmentDownloader 的 segment->downloaded）：
+    // 每个进度回调把「起始时已有段文件尺寸 + 本次已传字节」relaxed
+    // store 进去——监控线程 1s tick 汇总算任务级速度与进度。dlnow 是
+    // curl 自己的记账（本次 easy handle 已收字节），不受 ofstream
+    // streambuf 落盘时滞影响，正是显示层需要的进度源
+    std::atomic<Bytes>* live_progress = nullptr;
+    Bytes baseline = 0;
 };
 
 static int segment_progress_callback(void* clientp,
                                      curl_off_t /*dltotal*/,
-                                     curl_off_t /*dlnow*/,
+                                     curl_off_t dlnow,
                                      curl_off_t /*ultotal*/,
                                      curl_off_t /*ulnow*/) {
     auto* data = static_cast<SegmentProgressData*>(clientp);
     if (data && data->cancelled && data->cancelled->load()) {
         return 1;
+    }
+    if (data && data->live_progress) {
+        data->live_progress->store(
+            data->baseline + static_cast<Bytes>(dlnow),
+            std::memory_order_relaxed);
     }
     return 0;
 }
@@ -294,7 +306,8 @@ static bool download_segment_curl(
     Bytes end,
     const std::string& output_path,
     const DownloadOptions& options,
-    std::atomic<bool>& cancelled) {
+    std::atomic<bool>& cancelled,
+    std::atomic<Bytes>& live_progress) {
 
     CURL* curl = curl_easy_init();
     if (!curl) {
@@ -351,6 +364,8 @@ static bool download_segment_curl(
 
     SegmentProgressData progress_data;
     progress_data.cancelled = &cancelled;
+    progress_data.live_progress = &live_progress;
+    progress_data.baseline = static_cast<Bytes>(existing_size);
     curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, segment_progress_callback);
     curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &progress_data);
     curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
@@ -747,8 +762,10 @@ public:
                                              Bytes start,
                                              Bytes end,
                                              const std::string& output_path,
-                                             std::atomic<bool>& cancelled) -> bool {
-            return download_segment_curl(url, start, end, output_path, seg_options, cancelled);
+                                             std::atomic<bool>& cancelled,
+                                             std::atomic<Bytes>& live_progress) -> bool {
+            return download_segment_curl(url, start, end, output_path, seg_options,
+                                         cancelled, live_progress);
         });
 
         if (task->status() == TaskStatus::Paused || task->status() == TaskStatus::Cancelled) {
@@ -756,9 +773,10 @@ public:
         }
 
         if (success) {
-            // 终态进度记账（同 download_single：段路径的段级回调不汇入
-            // 任务级 update_progress，成品尺寸是唯一可信的完成进度；
-            // 未知总长跳过——total 未报告过就不发明一个）
+            // 终态进度记账（同 download_single：传输中的段级进度经
+            // live_progress 汇入监控线程的周期 update_progress，但 1s
+            // tick 粒度下最后一窗可能落在终态分支——成品尺寸补记消
+            // 除尾差；未知总长跳过——total 未报告过就不发明一个）
             std::error_code size_ec;
             const auto final_size =
                 std::filesystem::file_size(task->output_path(), size_ec);
