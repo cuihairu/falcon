@@ -176,6 +176,63 @@ TEST_F(TaskStorageListenerTest, ProgressThrottledPerTask) {
     EXPECT_EQ(record->downloaded_bytes, 100);
 }
 
+TEST_F(TaskStorageListenerTest, CompletedFlushesThrottleSwallowedFinalProgress) {
+    // 真实走查曝光的缺陷（2026-10-01）：1s 节流吞掉 final_update 后，
+    // Completed 行保留陈旧字节计数——重启后已完成记录显示 131072/192KB。
+    // 修复契约：终态转换无条件补写内存里缓存的最新进度。
+    auto id = storage_->create_task(make_record(111));
+    ASSERT_NE(id, falcon::INVALID_TASK_ID);
+
+    listener_->on_progress(make_progress(id, 131072, 0.66f));  // 首次，立即落库
+    // 终态事件携带真实总长（此前 update_progress 不落 total_bytes，
+    // 重启后 tellStatus totalLength 恒 0）
+    ProgressInfo final_info = make_progress(id, 196608, 1.0f);
+    final_info.total_bytes = 196608;
+    listener_->on_progress(final_info);                        // 节流窗内，被吞
+
+    listener_->on_status_changed(id, TaskStatus::Downloading, TaskStatus::Completed);
+
+    auto record = storage_->get_task(id);
+    ASSERT_TRUE(record.has_value());
+    EXPECT_EQ(record->status, TaskStatus::Completed);
+    // 被节流吞掉的最终字节计数必须出现在库里
+    EXPECT_EQ(record->downloaded_bytes, 196608);
+    // 总长同步落库（MAX 只升不降：0 = 未知不覆盖已知值）
+    EXPECT_EQ(record->total_bytes, 196608);
+}
+
+TEST_F(TaskStorageListenerTest, PausedFlushesLatestProgress) {
+    auto id = storage_->create_task(make_record(112));
+    ASSERT_NE(id, falcon::INVALID_TASK_ID);
+
+    listener_->on_progress(make_progress(id, 100, 0.1f));  // 立即落库
+    listener_->on_progress(make_progress(id, 900, 0.9f));  // 被节流吞掉
+
+    listener_->on_status_changed(id, TaskStatus::Downloading, TaskStatus::Paused);
+
+    auto record = storage_->get_task(id);
+    ASSERT_TRUE(record.has_value());
+    EXPECT_EQ(record->status, TaskStatus::Paused);
+    // 暂停是停机恢复的落点——行内字节必须是最新的
+    EXPECT_EQ(record->downloaded_bytes, 900);
+}
+
+TEST_F(TaskStorageListenerTest, FailedFlushesPartialProgress) {
+    auto id = storage_->create_task(make_record(113));
+    ASSERT_NE(id, falcon::INVALID_TASK_ID);
+
+    listener_->on_progress(make_progress(id, 400, 0.4f));  // 立即落库
+    listener_->on_progress(make_progress(id, 600, 0.6f));  // 被节流吞掉
+
+    listener_->on_status_changed(id, TaskStatus::Downloading, TaskStatus::Failed);
+
+    auto record = storage_->get_task(id);
+    ASSERT_TRUE(record.has_value());
+    EXPECT_EQ(record->status, TaskStatus::Failed);
+    // 失败时已下载的部分字节同样真实
+    EXPECT_EQ(record->downloaded_bytes, 600);
+}
+
 TEST_F(TaskStorageListenerTest, ProgressUnthrottledWithZeroInterval) {
     TaskStorageListener fast_listener(storage_.get(), std::chrono::milliseconds(0));
 

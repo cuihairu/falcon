@@ -25,7 +25,10 @@ class TaskStorage;
  * - Status changes are written immediately (Completed/Failed go through
  *   mark_completed()/mark_failed() so terminal timestamps are recorded).
  * - Progress updates are throttled per task to avoid hammering SQLite with
- *   the high-frequency progress events.
+ *   the high-frequency progress events. The freshest progress of each task
+ *   is kept in memory and flushed unconditionally on status transitions, so
+ *   a Completed/Failed/Paused row always carries the bytes reported by the
+ *   final (throttle-piercing) progress event, never a stale throttled value.
  * - Error messages reported via on_error() are cached per task and consumed
  *   as the error description when the task enters Failed.
  *
@@ -76,8 +79,14 @@ private:
     bool stopped_ = false;  ///< Set by shutdown(); guarded by mutex_
     /// Last progress flush time per task; guarded by mutex_
     std::map<TaskId, std::chrono::steady_clock::time_point> last_flush_;
+    /// Freshest progress per task (unthrottled, memory only); guarded by mutex_
+    std::map<TaskId, ProgressInfo> last_progress_;
     /// Cached error message per task; guarded by mutex_
     std::map<TaskId, std::string> last_error_;
+
+    /// Write the cached progress of a task to storage (if any) and drop the
+    /// cache entry. Caller must hold mutex_; storage_ must be non-null.
+    void flush_progress_locked(TaskId task_id);
 };
 
 }  // namespace falcon::daemon

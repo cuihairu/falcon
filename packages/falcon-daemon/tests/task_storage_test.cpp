@@ -267,6 +267,31 @@ TEST_F(TaskStorageTest, UpdateProgress) {
     EXPECT_EQ(1024 * 1024, retrieved->speed);
 }
 
+TEST_F(TaskStorageTest, UpdateProgressPersistsTotalBytesMonotonic) {
+    auto record = create_test_record();
+    record.total_bytes = 0;  // 建档时总长未知（addUri 真实形态）
+    TaskId id = storage_->create_task(record);
+
+    // 总长随进度事件首次已知时落库
+    EXPECT_TRUE(storage_->update_progress(id, 100, 0.1, 1024, 1000));
+    auto retrieved = storage_->get_task(id);
+    ASSERT_TRUE(retrieved.has_value());
+    EXPECT_EQ(1000, retrieved->total_bytes);
+
+    // 未知总长（0）不覆盖已知值
+    EXPECT_TRUE(storage_->update_progress(id, 200, 0.2, 1024, 0));
+    retrieved = storage_->get_task(id);
+    ASSERT_TRUE(retrieved.has_value());
+    EXPECT_EQ(1000, retrieved->total_bytes);
+    EXPECT_EQ(200, retrieved->downloaded_bytes);
+
+    // 只升不降：更小的 total 不缩水
+    EXPECT_TRUE(storage_->update_progress(id, 300, 0.3, 1024, 500));
+    retrieved = storage_->get_task(id);
+    ASSERT_TRUE(retrieved.has_value());
+    EXPECT_EQ(1000, retrieved->total_bytes);
+}
+
 TEST_F(TaskStorageTest, UpdateStatus) {
     auto record = create_test_record();
     TaskId id = storage_->create_task(record);

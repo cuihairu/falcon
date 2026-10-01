@@ -438,7 +438,8 @@ public:
         return max_id;
     }
 
-    bool update_progress(TaskId id, Bytes downloaded_bytes, double progress, BytesPerSecond speed) {
+    bool update_progress(TaskId id, Bytes downloaded_bytes, double progress,
+                         BytesPerSecond speed, Bytes total_bytes) {
         std::lock_guard<std::mutex> lock(mutex_);
 
         if (!db_) return false;
@@ -447,7 +448,8 @@ public:
             std::chrono::system_clock::now().time_since_epoch()).count();
 
         const char* sql = R"sql(
-            UPDATE tasks SET downloaded_bytes = ?, progress = ?, speed = ?, updated_at = ?
+            UPDATE tasks SET downloaded_bytes = ?, progress = ?, speed = ?,
+                total_bytes = MAX(total_bytes, ?), updated_at = ?
             WHERE id = ?;
         )sql";
 
@@ -461,8 +463,9 @@ public:
         sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(downloaded_bytes));
         sqlite3_bind_double(stmt, 2, progress);
         sqlite3_bind_int64(stmt, 3, static_cast<sqlite3_int64>(speed));
-        sqlite3_bind_int64(stmt, 4, now);
-        sqlite3_bind_int64(stmt, 5, static_cast<sqlite3_int64>(id));
+        sqlite3_bind_int64(stmt, 4, static_cast<sqlite3_int64>(total_bytes));
+        sqlite3_bind_int64(stmt, 5, now);
+        sqlite3_bind_int64(stmt, 6, static_cast<sqlite3_int64>(id));
 
         rc = sqlite3_step(stmt);
         sqlite3_finalize(stmt);
@@ -799,8 +802,9 @@ std::optional<TaskId> TaskStorage::get_max_task_id() const {
     return impl_->get_max_task_id();
 }
 
-bool TaskStorage::update_progress(TaskId id, Bytes downloaded_bytes, double progress, BytesPerSecond speed) {
-    return impl_->update_progress(id, downloaded_bytes, progress, speed);
+bool TaskStorage::update_progress(TaskId id, Bytes downloaded_bytes, double progress,
+                                  BytesPerSecond speed, Bytes total_bytes) {
+    return impl_->update_progress(id, downloaded_bytes, progress, speed, total_bytes);
 }
 
 bool TaskStorage::update_status(TaskId id, TaskStatus status, const std::string& error_message) {

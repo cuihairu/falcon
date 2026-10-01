@@ -190,9 +190,12 @@ public:
      * @param downloaded_bytes Downloaded bytes
      * @param progress Progress percentage
      * @param speed Current speed
+     * @param total_bytes Total size as currently known; only raises the
+     *        stored value (0 = unknown, keeps the existing total)
      * @return true on success
      */
-    bool update_progress(TaskId id, Bytes downloaded_bytes, double progress, BytesPerSecond speed);
+    bool update_progress(TaskId id, Bytes downloaded_bytes, double progress,
+                         BytesPerSecond speed, Bytes total_bytes = 0);
 
     /**
      * @brief Update task status
