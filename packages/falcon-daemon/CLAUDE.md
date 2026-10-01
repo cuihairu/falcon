@@ -6,6 +6,11 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-01 - 任务进度持久化两处精度缺陷修复（98d1cf5）
+- **终态字节回退**：TaskStorageListener 落库进度按 1s 节流，任务在两次节流窗之间完成时库里最后一条记录缺最终字节——完成路径补终态字节写入（downloaded/total 以引擎终态值为准）
+- **totalLength 恒 0**：tellStatus/落库的 totalLength 字段在未知总长（chunked 等）路径恒 0——区分「未知」与「零」语义，落库改存引擎实际值
+- 测试：task_storage_test 3 处扩展（终态字节落库断言 + totalLength 语义）
+
 ### 2026-09-28 - 做种计量 RPC 面（tellStatus 扩展字段 + falcon.stopSeeding + addUri seed 选项）
 - **tellStatus Falcon 扩展字段**：`seedUploadedBytes/seedDownloadedBytes/seedTotalSize`（aria2 字符串风格）+ `seededSeconds`（数值）+ `seedingActive`（布尔）——读 `DownloadTask::get_seed_info()`（core 新 SeedInfo 快照），非 BT 任务恒零值；`TaskSnapshot`（daemon 包）增同名五字段 + `seed_ratio()` 访问器（分母 = max(downloaded, total_size)，分母 0 返 0，与 seed_policy 同式）
 - **新方法 `falcon.stopSeeding`**（p=[gid]）：置粘性标志 `request_stop_seeding()`，BT 监控循环下一 tick 与策略达标同一收口路径；错误码 1 = 任务非做种态（get_seed_info().seeding_active == false）/ 2 = gid 不存在；成功回 gid；已注册进 system.listMethods

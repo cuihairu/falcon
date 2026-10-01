@@ -8,6 +8,11 @@ P2SP 共享网络的 **Rendezvous Service**（会合/发现服务，俗称 track
 
 ## 变更记录 (Changelog)
 
+### 2026-10-01 - main.cpp 边界收口（c45d44a）：parse_size 上界缺陷修复 + 15 单元 + 5 二进制 e2e
+- **parse_size 上界缺陷修复**：CLI 尺寸参数解析此前对超上界输入回绕/截断——补上界校验后非法值确定性报错退出
+- **15 单元用例**（参数解析纯函数矩阵：合法值/边界/垃圾输入全变体）+ **5 二进制 e2e**（fork+execv 真 falcon-swarmd 进程：参数路径逐条走查）
+- 验证：falcon_swarm_loopback_tests 全绿 + e2e 全绿
+
 ### 2026-09-28 - 传输层边界收口（swarm_rpc_server miss 96 → 22，21 新用例）+ 注入点零消费更正
 - **21 新用例三套件**挂 `falcon_swarm_loopback_tests`（29 → 50，全量 ctest 绿）：
   - **SwarmRpcTransport 10**（裸 socket `raw_exchange`，drop 剧本必须半关写端 `SHUT_WR`/`SD_SEND`——否则与服务器 recv 互等只能靠 SO_RCVTIMEO 兜底）：HTTP 解析失败族（缺 CL → -32700 / 头区超限 / 半截头 / 垃圾请求行 / body 超限 / 短 body 全部静默断连 + 头值 trim 无语义）/ Bearer 边界（"Bearer" 恰等前缀长、Basic 非 Bearer scheme → 401）/ 信封非 object → -32600
