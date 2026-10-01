@@ -285,11 +285,20 @@ bool SegmentDownloader::start(SegmentDownloadFunc download_func) {
                     download_segment(std::move(segment), download_func);
                 }
 
-                if (active_workers_.fetch_sub(1) == 1) {
-                    cv_.notify_all();
-                } else {
-                    cv_.notify_all();
+                // 递减必须在 workers_mutex_ 下完成（丢失唤醒收口）：主
+                // 等待线程从谓词检查到 cv 内部原子「释锁+阻塞」全程持有
+                // 该锁；若此处无锁递减+notify，最后一个 worker 的通知可
+                // 能恰好落在「谓词已查过（active>0）、尚未入睡」的间隙
+                // 被丢弃 → 主线程 sleeps forever（下方无限期等待移除 30s
+                // 兜底后，该竞速从 30s 有界失败变成挂死，CI Coverage
+                // ResumeMarksFullSegmentComplete 120s Timeout 即此形态）。
+                // 取锁后递减要么先于主线程谓词检查（谓词直接为真），要
+                // 么等主线程阻塞释锁后才拿到锁、notify 必然唤醒。
+                {
+                    std::lock_guard<std::mutex> lock(workers_mutex_);
+                    active_workers_.fetch_sub(1);
                 }
+                cv_.notify_all();
             });
         }
     }
@@ -508,8 +517,12 @@ void SegmentDownloader::download_segment(
                     }
                 }
             }
-            failed_.store(true);
-            cancelled_.store(true);
+            // 与 worker 退出路径同一丢失唤醒纪律：谓词相关状态变更持锁
+            {
+                std::lock_guard<std::mutex> lock(workers_mutex_);
+                failed_.store(true);
+                cancelled_.store(true);
+            }
             cv_.notify_all();
             break;
         }
@@ -588,7 +601,11 @@ void SegmentDownloader::resume() {
 }
 
 void SegmentDownloader::cancel() {
-    cancelled_.store(true);
+    // 谓词相关状态变更持锁（同 worker 退出路径的丢失唤醒纪律）
+    {
+        std::lock_guard<std::mutex> lock(workers_mutex_);
+        cancelled_.store(true);
+    }
     running_.store(false);
     cv_.notify_all();
 
