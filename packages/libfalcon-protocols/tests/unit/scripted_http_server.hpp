@@ -24,8 +24,21 @@ using ssize_t = std::ptrdiff_t;
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <cerrno>
 #define CLOSE_SOCKET(fd) close(fd)
 #endif
+
+namespace falcon::testscripts {
+// 最近一次 socket 系统调用的错误码（Windows WSAGetLastError / POSIX
+// errno）——连接事件取证用（红面诊断轮：无条件记录判别事实）
+inline int sock_last_error() {
+#ifdef _WIN32
+    return WSAGetLastError();
+#else
+    return errno;
+#endif
+}
+}  // namespace falcon::testscripts
 
 #include <algorithm>
 #include <atomic>
@@ -77,6 +90,18 @@ struct FakeResponse {
     std::string partial_prefix = "HTTP/1.1 200 OK\r\n";
 };
 
+// 连接级事件（红面取证用）：accept / 请求读取 recv 终止 / defer 路径
+// recv 返回值与错误码 / 关闭。Windows 确定性 ~140ms abort 诊断轮的
+// 判别事实源——服务器侧唯一主动关闭点在 defer 路径，该路径 recv 的
+// 返回值（0=对端 FIN / >0=对端来数据 / <0=错误码）直接指认关闭链
+struct ConnEvent {
+    std::string what;  // accept / reqrecv_close / defer_recv / defer_close / conn_close
+    long long ms = 0;  // 距 start() 的毫秒
+    int conn = 0;      // 连接序号（accept 顺序）
+    long long n = 0;   // recv 返回值
+    int err = 0;       // sock_last_error() 快照
+};
+
 class ScriptedHttpServer {
 public:
     ScriptedHttpServer() = default;
@@ -107,7 +132,14 @@ public:
         ::getsockname(listen_fd_, reinterpret_cast<sockaddr*>(&bound), &len);
         port_ = ntohs(bound.sin_port);
         running_ = true;
+        started_ = std::chrono::steady_clock::now();
         accept_thread_ = std::thread([this] { accept_loop(); });
+    }
+
+    /// 连接事件快照（红面诊断读取；拷贝出避免锁内遍历）
+    std::vector<ConnEvent> conn_events() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return conn_events_;
     }
 
     /// dual-stack 监听（AF_INET6 + IPV6_V6ONLY=0）：同一端口同时接受
@@ -263,14 +295,26 @@ private:
                 continue;
             }
             connections_.fetch_add(1, std::memory_order_relaxed);
+            const int conn = conn_seq_.fetch_add(1);
+            trace("accept", conn, 0, 0);
             timeval tv{15, 0};
             ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO,
                          reinterpret_cast<const char*>(&tv), sizeof(tv));
-            std::thread([this, fd] { handle_connection(fd); }).detach();
+            std::thread([this, fd, conn] { handle_connection(fd, conn); }).detach();
         }
     }
 
-    void handle_connection(int fd) {
+    void trace(const char* what, int conn, long long n, int err) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        conn_events_.push_back(
+            {what,
+             std::chrono::duration_cast<std::chrono::milliseconds>(
+                 std::chrono::steady_clock::now() - started_)
+                 .count(),
+             conn, n, err});
+    }
+
+    void handle_connection(int fd, int conn) {
         std::string buffer;
         for (;;) {
             // 读一个请求（到空行；GET 无 body）
@@ -279,6 +323,8 @@ private:
                 char chunk[4096];
                 ssize_t n = ::recv(fd, chunk, sizeof(chunk), 0);
                 if (n <= 0) {
+                    trace("reqrecv_close", conn, static_cast<long long>(n),
+                          sock_last_error());
                     CLOSE_SOCKET(fd);
                     return;
                 }
@@ -468,7 +514,10 @@ private:
                     std::chrono::milliseconds(resp.defer_partial_ms));
                 (void)send_all(fd, resp.partial_prefix);
                 char drain[256];
-                (void)::recv(fd, drain, sizeof(drain), 0);
+                const ssize_t dn = ::recv(fd, drain, sizeof(drain), 0);
+                trace("defer_recv", conn, static_cast<long long>(dn),
+                      sock_last_error());
+                trace("defer_close", conn, 0, 0);
                 CLOSE_SOCKET(fd);
                 break;
             }
@@ -514,6 +563,7 @@ private:
                 }
             }
         }
+        trace("conn_close", conn, 0, 0);
         CLOSE_SOCKET(fd);
     }
 
@@ -523,7 +573,6 @@ private:
         long range_start;  // -1 = 所有请求
     };
 
-    std::mutex mutex_;
     std::vector<RecordedRequest> requests_;
     std::unordered_map<std::string, FakeResponse> responses_;
     std::unordered_map<std::string, std::vector<FakeResponse>> scripts_;
@@ -536,6 +585,11 @@ private:
 
     std::atomic<bool> running_{false};
     std::atomic<int> connections_{0};
+    std::atomic<int> conn_seq_{0};
+    std::chrono::steady_clock::time_point started_{
+        std::chrono::steady_clock::now()};
+    mutable std::mutex mutex_;
+    std::vector<ConnEvent> conn_events_;
     int listen_fd_ = -1;
     int port_ = 0;
     std::thread accept_thread_;

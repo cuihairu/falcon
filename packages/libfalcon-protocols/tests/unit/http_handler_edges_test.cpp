@@ -1172,6 +1172,11 @@ TEST_F(HttpHandlerEdgesTest, StalledTransferAbortsAtTimeoutSeconds) {
         std::cerr << "{" << req.method << " " << req.path << " range=\""
                   << req.range << "\"}";
     }
+    std::cerr << "] events=[";
+    for (const auto& ev : server().conn_events()) {
+        std::cerr << "{" << ev.what << " conn=" << ev.conn << " ms=" << ev.ms
+                  << " n=" << ev.n << " err=" << ev.err << "}";
+    }
     std::cerr << "]\n";
 
     EXPECT_TRUE(threw_network);
