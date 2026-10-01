@@ -919,11 +919,32 @@ TEST_F(HttpHandlerEdgesTest, StalledTransferAbortsAtTimeoutSeconds) {
     const auto task = makeTask(225, server().url("/stall.bin"), out, options);
 
     const auto t0 = std::chrono::steady_clock::now();
-    EXPECT_THROW(handler()->download(task, nullptr), NetworkException);
+    bool threw_network = false;
+    std::string diag_what;
+    try {
+        handler()->download(task, nullptr);
+    } catch (const NetworkException& e) {
+        threw_network = true;
+        diag_what = e.what();
+    }
     const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                                  std::chrono::steady_clock::now() - t0)
                                  .count();
 
+    // NAIL-DIAG Windows 确定性 ~140ms 红面取证(两个 CI 回合 138/143ms
+    // 同断言同形态;LOW_SPEED 看门狗 >=1s 数学上不可能在此收口,abort
+    // 来源待定)。打印 curl 错误消息与服务器观测请求序(GET 是否到达/
+    // 是否带 Range)后照常断言——用例红时日志自动携带决定性证据。
+    std::cerr << "[stall-diag] elapsed_ms=" << elapsed_ms
+              << " network_exception=" << threw_network
+              << " what=\"" << diag_what << "\" requests=[";
+    for (const auto& req : server().requests()) {
+        std::cerr << "{" << req.method << " " << req.path << " range=\""
+                  << req.range << "\"}";
+    }
+    std::cerr << "]\n";
+
+    EXPECT_TRUE(threw_network);
     // 看门狗确实在 timeout_seconds 量级收口(既非立即失败=连接层问题,
     // 也非重试退避拖长——max_retries=0 至多一次尝试)
     EXPECT_GE(elapsed_ms, 900);
