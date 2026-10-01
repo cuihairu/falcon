@@ -59,6 +59,13 @@ struct FakeResponse {
     std::vector<std::pair<std::string, std::string>> headers;
     std::string body;
     bool support_range = false;  // 请求带 Range 时自动 206 + 切片
+    // 非空：Range 请求必须携带匹配的 If-Range 才切片（206），否则 200
+    // 全量——模拟「续传间隙资源已变更」的服务器（If-Range 门禁测试）
+    std::string if_range_guard;
+    // true：Range 请求携带任意 If-Range 即接受（切片）——HTTP-date 形
+    // 态验证器的值依赖被续传文件的 mtime，测试无法预知精确值，用本
+    // 模式钉住「date 形态 If-Range 被服务器接受 → 206 正常续传」
+    bool require_if_range = false;
     bool fail_nonzero_range = false;  // 起始 >0 的 Range 请求一律 500（段失败收口）
     bool no_length = false;  // 不发 Content-Length，body 以连接关闭为界（未知总长）
     bool single_write = false;  // 头与 body 拼成一次 send（构造"首包即含
@@ -393,9 +400,11 @@ private:
                 abort_after = 0;
                 abort_match = false;
                 auto a = abort_.find(route);
-                if (a != abort_.end() &&
+                if (a != abort_.end() && rec.method != "HEAD" &&
                     (a->second.range_start < 0 ||
                      a->second.range_start == request_range_start)) {
+                    // HEAD 不消费：abort 是「发部分 body 后断连」语义，
+                    // HEAD 无 body（一次性条目留给首个 GET）
                     abort_after = a->second.chunk;  // 复用 chunk 存字节数
                     abort_match = true;
                     abort_.erase(a);  // 一次性
@@ -417,7 +426,17 @@ private:
                     body.clear();
                 }
             }
-            if (resp.support_range && !rec.range.empty() &&
+            // If-Range 门禁：守卫非空且请求的 If-Range 不匹配 → 视为
+            // 资源已变更，跳过切片回 200 全量（不追加 Content-Range）；
+            // require_if_range 模式（守卫为空时）：携带任意 If-Range 即
+            // 接受（date 形态的值依赖文件 mtime，测试无法预知）
+            const bool if_range_present = rec.headers.count("if-range") != 0;
+            const bool if_range_ok =
+                !resp.if_range_guard.empty()
+                    ? (if_range_present &&
+                       rec.headers.at("if-range") == resp.if_range_guard)
+                    : (resp.require_if_range ? if_range_present : true);
+            if (resp.support_range && if_range_ok && !rec.range.empty() &&
                 rec.range.rfind("bytes=", 0) == 0 && status == 200) {
                 const std::string spec = rec.range.substr(6);
                 const size_t dash = spec.find('-');

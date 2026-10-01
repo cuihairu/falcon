@@ -11,6 +11,8 @@
 #include <falcon/exceptions.hpp>
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
+#include <ctime>
 #include <iostream>
 #include <atomic>
 #include <chrono>
@@ -56,9 +58,61 @@ static size_t write_callback(void* ptr, size_t size, size_t nmemb,
 struct HeaderData {
     std::string content_type;
     std::string filename;
+    std::string etag;
+    std::string last_modified;
     Bytes content_length = 0;
     bool accept_ranges = false;
 };
+
+// 剥掉头值两侧的空白与尾部 CR/LF（Content-Type 解析同款语义，双侧版）
+static void trim_header_value(std::string& value) {
+    const auto first = value.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) {
+        value.clear();
+        return;
+    }
+    const auto last = value.find_last_not_of(" \t\r\n");
+    value = value.substr(first, last - first + 1);
+}
+
+/// 文件 mtime → RFC 7231 IMF-fixdate（"Wed, 21 Oct 2015 07:28:00 GMT"）。
+/// 续传 If-Range 的 HTTP-date 形态验证器：临时/段文件是"之前落盘的旧
+/// 内容"，其 mtime 就是旧内容的天然时间戳——跨会话恢复时 HEAD 探测
+/// 到的是当前（新）内容的验证器，与临时数据不属同一代际（发给服务
+/// 器必然匹配，防护失效），必须用这个 date 让服务器按 Last-Modified
+/// 判代际。读取失败返回空串。实现镜像 request_group.cpp 的
+/// conditional-get 同名 helper（C++17 无 clock_cast，同款换算与固定
+/// 英文名表——strftime 依赖 locale 不可用）
+static std::string http_date_from_last_write_time(const std::string& path) {
+    std::error_code ec;
+    const auto tp = std::filesystem::last_write_time(path, ec);
+    if (ec) {
+        return {};
+    }
+    namespace chrono = std::chrono;
+    // duration_cast 显式转换：libc++(Apple) 的 system_clock::duration
+    // 是 microseconds 而 file_clock 差值是 nanoseconds，隐式转换不成立
+    const auto sys_tp = chrono::system_clock::now() +
+                        chrono::duration_cast<chrono::system_clock::duration>(
+                            tp - std::filesystem::file_time_type::clock::now());
+    const std::time_t t = chrono::system_clock::to_time_t(sys_tp);
+    std::tm tm_buf{};
+#ifdef _WIN32
+    gmtime_s(&tm_buf, &t);
+#else
+    gmtime_r(&t, &tm_buf);
+#endif
+    static const char* const kWday[] = {"Sun", "Mon", "Tue",
+                                        "Wed", "Thu", "Fri", "Sat"};
+    static const char* const kMon[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                       "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%s, %02d %s %04d %02d:%02d:%02d GMT",
+                  kWday[tm_buf.tm_wday], tm_buf.tm_mday, kMon[tm_buf.tm_mon],
+                  tm_buf.tm_year + 1900, tm_buf.tm_hour, tm_buf.tm_min,
+                  tm_buf.tm_sec);
+    return buf;
+}
 
 static size_t header_callback(char* buffer, size_t size, size_t nitems,
                                void* userdata) {
@@ -97,6 +151,23 @@ static size_t header_callback(char* buffer, size_t size, size_t nitems,
         header.find("accept-ranges:") == 0) {
         if (header.find("bytes") != std::string::npos) {
             data->accept_ranges = true;
+        }
+    }
+
+    // Parse ETag / Last-Modified（续传 If-Range 验证器，见 download_single）
+    if (header.find("ETag:") == 0 || header.find("etag:") == 0) {
+        auto pos = header.find(':');
+        if (pos != std::string::npos) {
+            data->etag = header.substr(pos + 1);
+            trim_header_value(data->etag);
+        }
+    }
+    if (header.find("Last-Modified:") == 0 ||
+        header.find("last-modified:") == 0) {
+        auto pos = header.find(':');
+        if (pos != std::string::npos) {
+            data->last_modified = header.substr(pos + 1);
+            trim_header_value(data->last_modified);
         }
     }
 
@@ -306,6 +377,7 @@ static bool download_segment_curl(
     Bytes end,
     const std::string& output_path,
     const DownloadOptions& options,
+    const std::string& if_range,
     std::atomic<bool>& cancelled,
     std::atomic<Bytes>& live_progress) {
 
@@ -361,6 +433,27 @@ static bool download_segment_curl(
     CurlHeaderList header_list;
     CurlAuthStrings auth_strings;
     apply_common_curl_options(curl, options, /*enable_cookie_jar=*/false, header_list, auth_strings);
+
+    // If-Range：段请求同样附加强验证器（全部段请求——新段与续传段
+    // 都必须属于同一内容代际；不匹配时服务器回 200 全量，由下方
+    // 206-required 门禁拒绝，段失败进入重试/换源逻辑，绝不把变更后
+    // 的内容拼接进旧代际的段文件）。验证器按代际选择：续传段（段
+    // 文件已有落盘进度，数据属于之前的会话）用段文件 mtime 的
+    // HTTP-date——HEAD 探测到的是当前（新）内容的验证器，与旧段
+    // 数据不属同一代际；新段（本会话创建）用 HEAD 验证器（ETag 优
+    // 先，上层已拼好回退链）
+    std::string validator = if_range;
+    if (existing_size > 0) {
+        validator = http_date_from_last_write_time(output_path);
+    }
+    if (!validator.empty()) {
+        const std::string if_range_header = "If-Range: " + validator;
+        header_list.list =
+            curl_slist_append(header_list.list, if_range_header.c_str());
+        if (header_list.list) {
+            curl_easy_setopt(curl, CURLOPT_HTTPHEADER, header_list.list);
+        }
+    }
 
     SegmentProgressData progress_data;
     progress_data.cancelled = &cancelled;
@@ -475,6 +568,8 @@ public:
         info.content_type = header_data.content_type;
         info.supports_resume = header_data.accept_ranges;
         info.filename = header_data.filename;
+        info.etag = header_data.etag;
+        info.last_modified_header = header_data.last_modified;
 
         // Extract filename from URL if not in headers
         if (info.filename.empty()) {
@@ -539,7 +634,7 @@ public:
 #endif
     }
 
-    void download_single(DownloadTask::Ptr task, IEventListener* listener, const FileInfo& /*info*/) {
+    void download_single(DownloadTask::Ptr task, IEventListener* listener, const FileInfo& info) {
 #ifdef FALCON_USE_CURL
         const auto& options = task->options();
         std::string temp_path = task->output_path() + ".falcon.tmp";
@@ -610,9 +705,40 @@ public:
             apply_common_curl_options(curl, options, /*enable_cookie_jar=*/true, header_list, auth_strings);
 
             // Resume support
+            bool sent_if_range = false;
             if (start_offset > 0) {
                 curl_easy_setopt(curl, CURLOPT_RESUME_FROM_LARGE,
                                  static_cast<curl_off_t>(start_offset));
+                // If-Range（RFC 7233 §3.2）：带断点续传时附加强验证器，
+                // 资源在传输间隙被变更时服务器应回 200 全量而非 206——
+                // 客户端据此重启而非把新内容拼接在旧前缀上（静默污染）。
+                // 验证器按代际选择：attempt 0 的临时文件是之前会话写
+                // 的旧内容，而本次 HEAD 探测到的是当前（新）内容的验
+                // 证器——发它必然匹配，防护失效（走查 W3 实锤形态）；
+                // 必须用临时文件 mtime 的 HTTP-date（旧内容落盘时刻）
+                // 让服务器按 Last-Modified 判代际。attempt ≥ 1 的会话
+                // 内重试窗口恰是 HEAD 保护的对象——ETag 优先（强验证
+                // 器），缺失回落 Last-Modified，再回落 mtime date
+                std::string validator;
+                if (attempt == 0) {
+                    validator = http_date_from_last_write_time(temp_path);
+                } else if (!info.etag.empty()) {
+                    validator = info.etag;
+                } else if (!info.last_modified_header.empty()) {
+                    validator = info.last_modified_header;
+                } else {
+                    validator = http_date_from_last_write_time(temp_path);
+                }
+                if (!validator.empty()) {
+                    const std::string if_range = "If-Range: " + validator;
+                    header_list.list = curl_slist_append(header_list.list,
+                                                         if_range.c_str());
+                    if (header_list.list) {
+                        curl_easy_setopt(curl, CURLOPT_HTTPHEADER,
+                                         header_list.list);
+                        sent_if_range = true;
+                    }
+                }
             }
 
             // Speed limit：listener 查询优先（综合引擎全局/任务限速），
@@ -639,6 +765,14 @@ public:
 
             if (res != CURLE_OK) {
                 last_error = curl_easy_strerror(res);
+                // If-Range 已附带且 curl 报 RANGE_ERROR：续传被拒的
+                // 典型形态是资源已变更（If-Range 不匹配 → 200 全量 +
+                // RESUME_FROM 冲突）。断点数据属于旧内容，绝不接续
+                // ——清空临时文件，下次尝试走全新下载（成品 = 新资源）
+                if (res == CURLE_RANGE_ERROR && sent_if_range) {
+                    std::error_code resize_ec;
+                    std::filesystem::resize_file(temp_path, 0, resize_ec);
+                }
                 curl_easy_cleanup(curl);
             } else {
                 long response_code = 0;
@@ -703,7 +837,7 @@ public:
 #endif  // FALCON_USE_CURL
     }
 
-    void download_segmented(DownloadTask::Ptr task, IEventListener* listener, const FileInfo& /*info*/) {
+    void download_segmented(DownloadTask::Ptr task, IEventListener* listener, const FileInfo& info) {
 #ifdef FALCON_USE_CURL
         const auto& options = task->options();
 
@@ -758,6 +892,14 @@ public:
         } erase_guard{&downloads_mutex_, &active_segmented_downloads_, task->id()};
 
         // Start segmented download
+        // If-Range 验证器捕获（ETag 优先，缺失回落 Last-Modified）：
+        // 段下载的多条连接可能跨越传输间隙，全部段请求绑定同一内容
+        // 代际（见 download_segment_curl 的 206-required 门禁）；续传
+        // 段在 download_segment_curl 内改用段文件 mtime 的 HTTP-date
+        // （旧段数据属于之前的会话，HEAD 验证器是当前内容——代际错
+        // 配，发它必然匹配等于无防护）
+        const std::string& if_range_validator =
+            !info.etag.empty() ? info.etag : info.last_modified_header;
         bool success = downloader->start([&](const std::string& url,
                                              Bytes start,
                                              Bytes end,
@@ -765,7 +907,8 @@ public:
                                              std::atomic<bool>& cancelled,
                                              std::atomic<Bytes>& live_progress) -> bool {
             return download_segment_curl(url, start, end, output_path, seg_options,
-                                         cancelled, live_progress);
+                                         if_range_validator, cancelled,
+                                         live_progress);
         });
 
         if (task->status() == TaskStatus::Paused || task->status() == TaskStatus::Cancelled) {

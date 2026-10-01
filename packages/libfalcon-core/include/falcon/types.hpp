@@ -45,6 +45,10 @@ struct FileInfo {
     Bytes total_size = 0;
     bool supports_resume = false;
     TimePoint last_modified{};
+    /// ETag（HTTP-date 之外的强验证器，续传 If-Range 首选）
+    std::string etag;
+    /// Last-Modified 原始头值（IMF-fixdate，续传 If-Range 的 etag 缺席回落）
+    std::string last_modified_header;
 };
 
 /// Progress information

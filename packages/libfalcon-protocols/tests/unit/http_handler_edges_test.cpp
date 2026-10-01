@@ -388,6 +388,12 @@ TEST_F(HttpHandlerEdgesTest, DownloadResumeSendsRangeAndAppends) {
 }
 
 TEST_F(HttpHandlerEdgesTest, DownloadRangeLyingServerNeverProducesCorruptOutput) {
+    // 终局不变式（与 range_integrity_test 同源）：撒谎服务器把 200 全量
+    // 回给续传请求时，绝不把全量 body 追加进断点产出损坏成品。If-Range
+    // 接线后续传 GET 携带 mtime date 形态验证器，sent_if_range 置位——
+    // 200 + RESUME_FROM 冲突 = CURLE_RANGE_ERROR → 清空临时文件干净重启
+    // → 全新下载拿到完整当前内容（aria2 restart-from-scratch 同语义；
+    // 降级重下成功是 range_integrity 注释里明示的合法分支）
     FakeResponse resp;
     resp.body = "AABBCCDD";  // 无 Accept-Ranges：Range 被无视回 200 全量
     server().set_response("/liar.bin", resp);
@@ -401,11 +407,235 @@ TEST_F(HttpHandlerEdgesTest, DownloadRangeLyingServerNeverProducesCorruptOutput)
     writeFile(out + ".falcon.tmp", "AA");  // 断点 2 字节
 
     const auto task = makeTask(207, server().url("/liar.bin"), out, options);
-    // 现代 curl 自带 resume 守卫：续传请求被以 200 应答即 CURLE_RANGE_ERROR，
-    // 重试耗尽后按失败收口——绝不把 200 全量追加进断点产出损坏成品
-    // （handler 内另有 resize 清空的纵深防御分支，本 curl 下守卫先拒）
-    EXPECT_THROW(handler()->download(task, nullptr), NetworkException);
-    EXPECT_FALSE(fs::exists(out));  // 成品从未发布
+    handler()->download(task, nullptr);
+
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    // 损坏形态是 "AA" + "AABBCCDD" = 10 字节；正确成品恰为完整 8 字节
+    EXPECT_EQ(readFile(out), "AABBCCDD");
+    EXPECT_FALSE(fs::exists(out + ".falcon.tmp"));
+
+    // 请求序铁证：首个 GET 带断点 Range + date 形态 If-Range（被 200
+    // 拒）→ 干净重启的 GET 无 Range 无 If-Range
+    const auto reqs = server().requests();
+    std::vector<const RecordedRequest*> gets;
+    for (const auto& r : reqs) {
+        if (r.method == "GET") gets.push_back(&r);
+    }
+    ASSERT_EQ(gets.size(), 2u);
+    EXPECT_EQ(gets[0]->range, "bytes=2-");
+    ASSERT_TRUE(gets[0]->headers.count("if-range"));
+    const std::string sent = gets[0]->headers.at("if-range");
+    ASSERT_GE(sent.size(), 4u);
+    EXPECT_EQ(sent.substr(sent.size() - 4), " GMT");  // date 形态
+    EXPECT_EQ(gets[1]->range, "");
+    EXPECT_FALSE(gets[1]->headers.count("if-range"));
+}
+
+TEST_F(HttpHandlerEdgesTest, DownloadResumeAttachesIfRangeValidator) {
+    // If-Range（RFC 7233 §3.2）跨会话形态：临时文件属于之前的会话
+    // （旧内容），本次 download() 的 HEAD 探测到的是当前（新）内容的
+    // ETag——发它必然匹配、防护失效（同尺寸替换的污染形态）；续传
+    // GET 必须携带临时文件 mtime 的 HTTP-date（旧内容落盘时刻），让
+    // 服务器按 Last-Modified 判代际。require_if_range 模式 = 服务器
+    // 接受合法 date → 206 照常切片续传
+    FakeResponse head;
+    head.headers = {{"Accept-Ranges", "bytes"}, {"ETag", "\"v1\""}};
+    head.body = "AABBCCDD";
+    server().set_head_response("/ifrange.bin", head);
+
+    FakeResponse resp;
+    resp.support_range = true;
+    resp.require_if_range = true;  // 带 If-Range（date）即接受
+    resp.headers = {{"Accept-Ranges", "bytes"}};
+    resp.body = "AABBCCDD";
+    server().set_response("/ifrange.bin", resp);
+
+    TempDir dir;
+    const std::string out = dir.file("ifrange.bin");
+    writeFile(out + ".falcon.tmp", "AA");  // 已落盘 2 字节
+
+    const auto task = makeTask(223, server().url("/ifrange.bin"), out);
+    handler()->download(task, nullptr);
+
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(readFile(out), "AABBCCDD");
+    const auto reqs = server().requests();
+    ASSERT_GE(reqs.size(), 1u);
+    EXPECT_EQ(reqs.back().range, "bytes=2-");
+    // date 形态（IMF-fixdate 以 GMT 结尾），且绝非 HEAD 探测到的当前
+    // ETag——跨会话的代际错配正是修复点
+    ASSERT_TRUE(reqs.back().headers.count("if-range"));
+    EXPECT_NE(reqs.back().headers.at("if-range"), "\"v1\"");
+    const std::string sent = reqs.back().headers.at("if-range");
+    ASSERT_GE(sent.size(), 4u);
+    EXPECT_EQ(sent.substr(sent.size() - 4), " GMT");
+}
+
+TEST_F(HttpHandlerEdgesTest, DownloadIfRangeMismatchRestartsCleanWithNewContent) {
+    // 资源在传输间隙被同尺寸替换（尺寸校验不可辨的污染形态）：
+    // 临时文件属于旧会话 → 续传 GET 带 mtime HTTP-date 形态 If-Range →
+    // 服务器守卫的当前 ETag 是 "new"（date 恒不匹配）→ 200 全量 +
+    // RESUME_FROM 冲突 = CURLE_RANGE_ERROR → 断点属于旧内容绝不接续：
+    // 清空临时文件干净重启，成品 = 新资源（修复前：重试耗尽 FAILED，
+    // 或无 If-Range 时代 206 拼接出旧前缀 + 新后缀的静默污染成品）
+    FakeResponse head;
+    head.headers = {{"Accept-Ranges", "bytes"}, {"ETag", "\"old\""}};
+    head.body = std::string(8, 'x');  // Content-Length 与旧内容一致
+    server().set_head_response("/changed.bin", head);
+
+    FakeResponse resp;  // 当前资源已变更为新内容
+    resp.support_range = true;
+    resp.if_range_guard = "\"new\"";
+    resp.body = "NEW-CONTENT";
+    server().set_response("/changed.bin", resp);
+
+    DownloadOptions options;
+    options.max_retries = 1;
+    options.retry_delay_seconds = 0;
+
+    TempDir dir;
+    const std::string out = dir.file("changed.bin");
+    writeFile(out + ".falcon.tmp", "OL");  // 旧内容断点
+
+    const auto task = makeTask(224, server().url("/changed.bin"), out, options);
+    handler()->download(task, nullptr);
+
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(readFile(out), "NEW-CONTENT");  // 干净重启后成品 = 新内容
+    EXPECT_FALSE(fs::exists(out + ".falcon.tmp"));
+
+    // 请求序铁证：首个 GET 带断点 Range + If-Range（date 形态，被 200
+    // 拒），重启后的 GET 无 Range 无 If-Range（全新下载）
+    const auto reqs = server().requests();
+    std::vector<const RecordedRequest*> gets;
+    for (const auto& r : reqs) {
+        if (r.method == "GET") gets.push_back(&r);
+    }
+    ASSERT_EQ(gets.size(), 2u);
+    EXPECT_EQ(gets[0]->range, "bytes=2-");
+    ASSERT_TRUE(gets[0]->headers.count("if-range"));
+    EXPECT_NE(gets[0]->headers.at("if-range"), "\"old\"");
+    EXPECT_NE(gets[0]->headers.at("if-range"), "\"new\"");
+    EXPECT_EQ(gets[1]->range, "");
+    EXPECT_FALSE(gets[1]->headers.count("if-range"));
+}
+
+TEST_F(HttpHandlerEdgesTest, DownloadInSessionRetryUsesHeadEtag) {
+    // If-Range 会话内形态：attempt 0 全新 GET 中途断连 → attempt 1 续
+    // 传窗口恰是 HEAD 探测保护的对象——用 HEAD 的强验证器 ETag（优先
+    // 于 date）：守卫匹配 → 206 照常切片续传，第二个 GET 带 Range +
+    // If-Range "v1" 精确到达
+    const std::string content = "0123456789ABCDEF";
+    FakeResponse head;
+    head.headers = {{"Accept-Ranges", "bytes"}, {"ETag", "\"v1\""}};
+    head.body = content;
+    server().set_head_response("/retry.bin", head);
+
+    FakeResponse resp;
+    resp.support_range = true;
+    resp.if_range_guard = "\"v1\"";  // 会话内 ETag 匹配 → 206 续传
+    resp.body = content;
+    server().set_response("/retry.bin", resp);
+    server().set_abort_after("/retry.bin", 8, /*range_start=*/-1);  // 一次性：拦 attempt 0
+
+    DownloadOptions options;
+    options.max_retries = 2;
+    options.retry_delay_seconds = 0;
+
+    TempDir dir;
+    const std::string out = dir.file("retry.bin");
+    const auto task = makeTask(227, server().url("/retry.bin"), out, options);
+    handler()->download(task, nullptr);
+
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(readFile(out), content);  // 8 字节断点 + 续传 8 字节
+
+    const auto reqs = server().requests();
+    std::vector<const RecordedRequest*> gets;
+    for (const auto& r : reqs) {
+        if (r.method == "GET") gets.push_back(&r);
+    }
+    ASSERT_EQ(gets.size(), 2u);
+    EXPECT_EQ(gets[0]->range, "");  // attempt 0 全新 GET（被一次性中断）
+    EXPECT_EQ(gets[1]->range, "bytes=8-");
+    ASSERT_TRUE(gets[1]->headers.count("if-range"));
+    EXPECT_EQ(gets[1]->headers.at("if-range"), "\"v1\"");  // 会话内 = HEAD ETag
+}
+
+TEST_F(HttpHandlerEdgesTest, SegmentedDownloadSlicesWithMatchingIfRange) {
+    // 段请求同样绑定内容代际：If-Range 匹配时照常 206 切片（回归钉子
+    // ——If-Range 附带绝不破坏正常分段下载）
+    const std::string content(64 * 1024, 'b');
+    FakeResponse resp;
+    resp.headers = {{"Accept-Ranges", "bytes"}, {"ETag", "\"gen1\""}};
+    resp.body = content;
+    resp.support_range = true;
+    resp.if_range_guard = "\"gen1\"";  // 匹配 → 照常切片
+    server().set_response("/segmatch.bin", resp);
+
+    DownloadOptions options;
+    options.max_connections = 4;
+    options.min_segment_size = 16 * 1024;
+    options.retry_delay_seconds = 0;
+
+    TempDir dir;
+    const std::string out = dir.file("segmatch.bin");
+    const auto task = makeTask(225, server().url("/segmatch.bin"), out, options);
+    handler()->download(task, nullptr);
+
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(readFile(out), content);
+    bool seen_range_with_if_range = false;
+    for (const auto& r : server().requests()) {
+        if (r.method == "GET" && !r.range.empty()) {
+            ASSERT_TRUE(r.headers.count("if-range"));
+            EXPECT_EQ(r.headers.at("if-range"), "\"gen1\"");
+            seen_range_with_if_range = true;
+        }
+    }
+    EXPECT_TRUE(seen_range_with_if_range);
+}
+
+TEST_F(HttpHandlerEdgesTest, SegmentedDownloadFailsCleanOnIfRangeMismatch) {
+    // 段请求的 If-Range 不匹配（资源已变更）→ 服务器 200 全量 →
+    // start>0 段的 206-required 门禁拒绝 + 段 0 精确尺寸校验拒绝 →
+    // 重试耗尽按失败收口：绝不把新代际内容拼接进旧代际段文件，成品
+    // 不发布（修复前：段请求零 If-Range，同尺寸变更的 206 拼接静默
+    // 污染成品）
+    const std::string content(64 * 1024, 'n');
+    FakeResponse head;
+    head.headers = {{"Accept-Ranges", "bytes"}, {"ETag", "\"old\""}};
+    head.body = std::string(64 * 1024, 'o');
+    server().set_head_response("/segchg.bin", head);
+
+    FakeResponse resp;  // 当前资源已变更为新内容
+    resp.support_range = true;
+    resp.if_range_guard = "\"new\"";
+    resp.body = content;
+    server().set_response("/segchg.bin", resp);
+
+    DownloadOptions options;
+    options.max_connections = 4;
+    options.min_segment_size = 16 * 1024;
+    options.max_retries = 1;
+    options.retry_delay_seconds = 0;
+
+    TempDir dir;
+    const std::string out = dir.file("segchg.bin");
+    const auto task = makeTask(226, server().url("/segchg.bin"), out, options);
+    EXPECT_THROW(handler()->download(task, nullptr), FileIOException);
+    EXPECT_FALSE(fs::exists(out));  // 污染成品从未发布
+
+    // 门禁命中的前提：至少一个段请求真的携带了 If-Range "old"
+    bool seen = false;
+    for (const auto& r : server().requests()) {
+        if (r.method == "GET" && !r.range.empty() &&
+            r.headers.count("if-range") &&
+            r.headers.at("if-range") == "\"old\"") {
+            seen = true;
+        }
+    }
+    EXPECT_TRUE(seen);
 }
 
 TEST_F(HttpHandlerEdgesTest, DownloadHttpErrorRetrySemantics) {
