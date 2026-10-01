@@ -2,6 +2,14 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-30 - P0 收口：timeout_seconds 语义修正（停滞看门狗，非总时长硬帽）+ 桌面设置项接入下载选项
+- **P0 根因（用户实测「多链接批量下载无一成功——HEAD 识别大小正常，等待后弹窗失败」）**：`download_segment_curl` 与 `download_single` 两站点把 `timeout_seconds` 映射 **CURLOPT_TIMEOUT（整传输硬上限）**——默认 30s 会杀死一切慢而健康的真实下载（速度 < 总量/30s 的都死），HEAD 探测快故大小正常、GET 一到 30s 即 CURLE_OPERATION_TIMEDOUT 弹窗失败
+- **修复（aria2 --timeout 同语义 = 停滞看门狗）**：两站点改 `CURLOPT_LOW_SPEED_LIMIT=1 + CURLOPT_LOW_SPEED_TIME=timeout_seconds`——低于 1 B/s 持续该秒数才中止，慢而健康的传输不受总时长惩罚；`timeout_seconds==0` 不设 LOW_SPEED 对（关看门狗，契约见 download_options.hpp 文档注释同步重写：V1 curl LOW_SPEED / V2 命令等待超时，非总时长帽）；HEAD 探测保持 CURLOPT_TIMEOUT（探测应秒级完成，总帽语义正确）
+- **回归钉子 3 用例**（http_handler_edges_test，HttpHandlerEdges 33 → 36）：`SlowHealthyTransferSurvivesTimeoutSeconds`（单连接 4096B@16B/10ms ≈ 2.56s 总时长 > timeout 2s 照常 Completed——旧映射下必红的 P0 钉子）/ `StalledTransferAbortsAtTimeoutSeconds`（GET 零字节挂死恰在 timeout 量级 NetworkException，partial_prefix 置空刻意——默认前缀自带 17B 状态行会推迟低速采样；HEAD 全速应答先行通过）/ `SlowSegmentedTransferSurvivesTimeoutSeconds`（段路径 2 段各自慢发 > timeout 照常完成——SegmentDownloader 不消费 timeout_seconds，段连接 curl 选项是唯一观测点）
+- **桌面设置项接线（此前保存却从不消费）**：`show_add_download_dialog`/`add_download_task` 两站点把设置页 `connection_timeout`（QSettings `connection_timeout_seconds`，默认 30）/`retry_count`（`retry_count`，默认 3）写入 DownloadOptions（save 侧既有，load 侧补 set_connection_timeout/set_retry_count）；GUI 路径此前恒用引擎默认——用户在设置页改超时/重试对桌面下载零生效
+- **如实披露**：① 桌面设置接线仅编译验证 + build-desktop 110/110（无 settings_page GUI 自动化测试，QSpinBox getter/setter 纯转发）；② ftp_plugin 存量同型映射（CURLOPT_TIMEOUT）未在本批——FTP 路径同缺陷后续批次收口；③ daemon RPC 的 aria2 `timeout` per-download 选项键未解析（timeout 走引擎级配置）
+- **验证**：falcon_http_tests 全量绿（新用例单跑 + 全套件）；build-cov 全量 ctest 全绿门禁；build-desktop 增量编译零新告警
+
 ### 2026-09-30 - 桌面任务拖拽排序（待办清单第 1 项收口：表格手动换位 + QSettings 持久化 + 48/48 测试绿）
 - **纯 C++ 算法层**（`services/task_order.{hpp,cpp}` 无 Qt）：`sort_ids`
   排序键 (order 位置, id)、order 外任务排尾按 id；**空序退化 = id 升序 =

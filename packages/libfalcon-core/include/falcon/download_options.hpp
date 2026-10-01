@@ -11,7 +11,11 @@ struct DownloadOptions {
     /// Maximum number of concurrent connections for segmented download
     std::size_t max_connections = 4;
 
-    /// Connection timeout in seconds
+    /// Timeout in seconds, aria2 --timeout semantics: transfer-abort
+    /// window when the connection stalls (V1: curl LOW_SPEED 1 B/s for
+    /// this many seconds; V2: command wait timeout). NOT a cap on total
+    /// transfer duration — slow-but-healthy downloads never time out.
+    /// 0 disables the stall watchdog.
     std::size_t timeout_seconds = 30;
 
     /// Maximum retry attempts on failure

@@ -681,10 +681,14 @@ TEST_F(HttpHandlerEdgesTest, SegmentedResumeAfterPauseCompletesFromSegmentFiles)
     head.body = content;
     head.support_range = true;
     server().set_response("/segresume.bin", head);
-    // 2 连接 → 段 0 [0,32K) 全速、段 1 [32K,...) 慢发：暂停时段 0 已
-    // 完成落盘（ofstream 关闭才可见 file_size，进行中段的缓冲数据
-    // 观测不到——断点数据必须来自已完成段）
-    server().set_slow_body("/segresume.bin", 10'000, 32, 32 * 1024);
+    // 全部 GET 慢发(32B/10ms ≈ 3.2KB/s):64KB/2 连接/min 16KB 的自适应
+    // 分段是 [0,16K)+[16K,64K),600ms 暂停时每段仅 ~1.9KB——任何调度次序
+    // 下两段都未完成,暂停必然落在传输中。旧剧本按 range_start=32768
+    // 挑段慢发,但自适应分段下 32768 不是任何段起点(两段起点是 0 和
+    // 16384),慢发从未生效:全速传输在 600ms 前即可完成,通过与失败
+    // 取决于监控线程先睡 1s 还是 main 先完成收尾的线程调度竞速(~4%
+    // 偶发红)。HEAD 不受慢发影响(服务器对 HEAD 恒全速),探测先通过
+    server().set_slow_body("/segresume.bin", 10'000, 32);
 
     DownloadOptions options;
     options.max_connections = 2;
@@ -697,7 +701,7 @@ TEST_F(HttpHandlerEdgesTest, SegmentedResumeAfterPauseCompletesFromSegmentFiles)
     std::thread pauser([this, &task] {
         std::this_thread::sleep_for(std::chrono::milliseconds(600));
         task->set_status(TaskStatus::Paused);
-        handler()->pause(task);  // 转发取消慢发的段 1
+        handler()->pause(task);  // 转发取消进行中的段连接
     });
     handler()->download(task, nullptr);
     pauser.join();
@@ -851,6 +855,119 @@ TEST_F(HttpHandlerEdgesTest, SegmentFileOccupiedByDirectoryFailsCleanly) {
     // 占位目录必须原样保留(不得被任何"清段/删段"路径吞掉),成品不发布
     EXPECT_TRUE(fs::is_directory(seg0));
     EXPECT_FALSE(fs::exists(out));
+}
+
+// timeout_seconds 是停滞看门狗而非总时长硬上限(aria2 --timeout 同语义):
+// 慢而健康的传输(1.6KB/s >> 1B/s 低速阈值)在总时长超过 timeout_seconds
+// 时照常完成。旧实现把它映射 CURLOPT_TIMEOUT(整传输硬上限)时本用例
+// 必红(2s 硬帽处 CURLE_OPERATION_TIMEDOUT -> NetworkException)——即
+// 「HEAD 识别大小正常,30s 后必然失败」P0 的回归钉子(单连接路径)
+TEST_F(HttpHandlerEdgesTest, SlowHealthyTransferSurvivesTimeoutSeconds) {
+    const std::string content(4096, 's');
+    FakeResponse resp;  // 无 Accept-Ranges -> supports_resume=false -> 单连接路径
+    resp.body = content;
+    server().set_response("/slowok.bin", resp);
+    // 4096B / 16B 每 10ms ≈ 2.56s > timeout 2s(HEAD 不受慢发影响,服务器
+    // 对 HEAD 恒全速应答,探测先快速通过)
+    server().set_slow_body("/slowok.bin", 10'000, 16);
+
+    DownloadOptions options;
+    options.timeout_seconds = 2;
+    options.max_retries = 0;
+    options.retry_delay_seconds = 0;
+
+    TempDir dir;
+    const std::string out = dir.file("slowok.bin");
+    const auto task = makeTask(224, server().url("/slowok.bin"), out, options);
+
+    const auto t0 = std::chrono::steady_clock::now();
+    handler()->download(task, nullptr);
+    const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::steady_clock::now() - t0)
+                                 .count();
+
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(readFile(out), content);
+    // 传输总时长确已越过 timeout_seconds——区分新旧语义的决定性观测
+    EXPECT_GE(elapsed_ms, 2000);
+}
+
+// 停滞中止面:连接建立、请求发出后服务器零字节挂死——LOW_SPEED 1B/s
+// 看门狗恰在 timeout_seconds 处中止(CURLE_OPERATION_TIMEDOUT ->
+// NetworkException)。partial_prefix 置空是刻意的:默认前缀自带 17 字节
+// 状态行(17B/s > 1B/s),curl 速度采样下中止会被推迟,零字节才能确定性
+// 触发。HEAD 走 set_head_response 全速应答先行通过(黑名单/立即失败等
+// 剧本与方法无关会先杀掉 HEAD 探测,不可用于本用例)
+TEST_F(HttpHandlerEdgesTest, StalledTransferAbortsAtTimeoutSeconds) {
+    FakeResponse ok_head;  // HEAD 探测必须先通过(全速 200 + Content-Length)
+    ok_head.body = std::string(4096, 't');
+    server().set_head_response("/stall.bin", ok_head);
+
+    FakeResponse stalled;  // GET:延迟 100ms 后零字节挂死(recv 阻塞到客户端断开)
+    stalled.body = std::string(4096, 't');
+    stalled.defer_partial_ms = 100;
+    stalled.partial_prefix = "";
+    server().set_response("/stall.bin", stalled);
+
+    DownloadOptions options;
+    options.timeout_seconds = 1;
+    options.max_retries = 0;
+    options.retry_delay_seconds = 0;
+
+    TempDir dir;
+    const std::string out = dir.file("stall.bin");
+    const auto task = makeTask(225, server().url("/stall.bin"), out, options);
+
+    const auto t0 = std::chrono::steady_clock::now();
+    EXPECT_THROW(handler()->download(task, nullptr), NetworkException);
+    const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::steady_clock::now() - t0)
+                                 .count();
+
+    // 看门狗确实在 timeout_seconds 量级收口(既非立即失败=连接层问题,
+    // 也非重试退避拖长——max_retries=0 至多一次尝试)
+    EXPECT_GE(elapsed_ms, 900);
+    EXPECT_LT(elapsed_ms, 10'000);
+    // 半成品绝不顶着最终名发布
+    EXPECT_FALSE(fs::exists(out));
+}
+
+// 段路径同语义钉死(download_segment_curl 站点):分段连接各自的慢而健康
+// 传输不受 timeout_seconds 总时长惩罚。旧 CURLOPT_TIMEOUT 映射下每段恰
+// 在 2s 硬帽处被杀 -> 段下载失败 -> FileIOException;SegmentDownloader
+// 自身不消费 timeout_seconds(仅 download_segment_curl 的 curl 选项),
+// 本用例唯一观测点就是段连接的 curl 超时语义
+TEST_F(HttpHandlerEdgesTest, SlowSegmentedTransferSurvivesTimeoutSeconds) {
+    const std::string content(8192, 'g');
+    FakeResponse head;
+    head.headers = {{"Accept-Ranges", "bytes"}};
+    head.body = content;
+    head.support_range = true;
+    server().set_response("/segslow.bin", head);
+    // 2 段 x 4096B / 16B 每 10ms ≈ 每段 2.56s > timeout 2s(段连接各自
+    // 慢发,总墙钟 ≈ 最慢段)
+    server().set_slow_body("/segslow.bin", 10'000, 16);
+
+    DownloadOptions options;
+    options.max_connections = 2;
+    options.min_segment_size = 1024;  // 8192B 文件分 2 段
+    options.timeout_seconds = 2;
+    options.max_retries = 0;
+    options.retry_delay_seconds = 0;
+
+    TempDir dir;
+    const std::string out = dir.file("segslow.bin");
+    const auto task = makeTask(226, server().url("/segslow.bin"), out, options);
+
+    const auto t0 = std::chrono::steady_clock::now();
+    handler()->download(task, nullptr);
+    const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::steady_clock::now() - t0)
+                                 .count();
+
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(readFile(out), content);
+    EXPECT_GE(elapsed_ms, 2000);
 }
 
 #if defined(FALCON_FAILURE_INJECTION)

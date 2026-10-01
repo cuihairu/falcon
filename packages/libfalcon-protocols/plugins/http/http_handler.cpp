@@ -330,7 +330,15 @@ static bool download_segment_curl(
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &file);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, static_cast<long>(options.timeout_seconds));
+    // timeout_seconds 是停滞超时（aria2 --timeout 同语义）：低于
+    // 1 B/s 持续该秒数才中止——绝不能映射 CURLOPT_TIMEOUT（整传输
+    // 硬上限，默认 30s 会杀死一切慢而健康的真实下载，用户实测
+    // 「HEAD 识别大小正常，30s 后必然失败」的 P0 根因）
+    if (options.timeout_seconds > 0) {  // 0 = 关停滞看门狗（契约见 download_options.hpp）
+        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L);
+        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME,
+                         static_cast<long>(options.timeout_seconds));
+    }
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
 
     // Set Range header for segmented download
@@ -571,8 +579,12 @@ public:
             curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
             curl_easy_setopt(curl, CURLOPT_WRITEDATA, &file);
             curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-            curl_easy_setopt(curl, CURLOPT_TIMEOUT,
-                             static_cast<long>(options.timeout_seconds));
+            // 停滞超时（同上）：慢而健康的传输不受总时长惩罚
+            if (options.timeout_seconds > 0) {
+                curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L);
+                curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME,
+                                 static_cast<long>(options.timeout_seconds));
+            }
             curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
             curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress_callback);
             curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &progress_data);

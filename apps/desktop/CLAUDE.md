@@ -2,6 +2,16 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-30 - 设置项接入下载选项（connection_timeout/retry_count 保存却不消费的收口）
+- `show_add_download_dialog`/`add_download_task` 两站点把设置页
+  连接超时（QSettings `connection_timeout_seconds` 默认 30）与重试
+  次数（`retry_count` 默认 3）写入 DownloadOptions——GUI 路径此前恒
+  用引擎默认，用户设置零生效；save 侧既有，load 侧补
+  `set_connection_timeout`/`set_retry_count`（QSpinBox 纯转发）
+- 超时语义随引擎 P0 修正为停滞看门狗（见根 CLAUDE.md 同日条目）；
+  本接线仅编译验证 + build-desktop 110/110（无 settings_page GUI
+  自动化测试）
+
 ### 2026-09-30 - QApplication 级测试基建首发 + clipboard_monitor/storage_service 首批单测（desktop 78 → 104 用例）
 - **基建（QApplication 级首例）**：clipboard 测试带 QApplication + 平台选择
   main——环境已给平台（xvfb-run 的 xcb / 桌面会话）优先，无显示环境回落

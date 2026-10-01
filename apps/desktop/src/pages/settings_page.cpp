@@ -205,6 +205,16 @@ int SettingsPage::get_retry_count() const
     return retry_count_spin_->value();
 }
 
+void SettingsPage::set_connection_timeout(int seconds)
+{
+    connection_timeout_spin_->setValue(seconds);
+}
+
+void SettingsPage::set_retry_count(int count)
+{
+    retry_count_spin_->setValue(count);
+}
+
 bool SettingsPage::is_notifications_enabled() const
 {
     return notifications_checkbox_->isChecked();

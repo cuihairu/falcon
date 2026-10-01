@@ -6,6 +6,20 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-09-30 - P0：timeout_seconds 改停滞看门狗（LOW_SPEED 映射，aria2 --timeout 同语义）
+- **缺陷**：`download_segment_curl`/`download_single` 两站点把
+  `timeout_seconds` 映射 CURLOPT_TIMEOUT（整传输硬上限）——默认
+  30s 杀死一切慢而健康的下载（用户实测批量下载无一成功的 P0）
+- **修复**：两站点改 `LOW_SPEED_LIMIT=1 + LOW_SPEED_TIME=
+  timeout_seconds`（<1 B/s 持续 N 秒才中止）；`timeout_seconds==0`
+  不设 LOW_SPEED 对（关看门狗）；HEAD 探测保持 CURLOPT_TIMEOUT
+  （探测秒级完成，总帽语义正确）
+- **钉子 3 用例**（edges 33 → 36）：单连接慢而健康传输总时长越
+  timeout 照常 Completed（旧映射必红）/ GET 零字节挂死恰在
+  timeout 量级 NetworkException（partial_prefix 置空——默认前缀
+  17B 状态行 > 1B/s 会推迟采样）/ 段路径同语义（SegmentDownloader
+  不消费该字段，段连接 curl 选项是唯一观测点）
+
 ### 2026-09-14 - 覆盖率批次 G：V1 curl 数据面回环测试 + 空指针缺陷修复
 - **修复 pause/resume/cancel 空指针崩溃**：`pause(nullptr)` 直接
   解引用（FtpHandler 同位置有防御，跨插件不一致）——三外层入口
@@ -24,6 +38,10 @@
   结构不可达、行归属伪影、毫秒竞态窗口）
 
 ### 关键语义（测试与排障须知）
+- **`timeout_seconds` 是停滞看门狗不是总时长帽**（aria2 --timeout
+  同语义）：GET/段连接 = `LOW_SPEED_LIMIT 1B/s + LOW_SPEED_TIME
+  N s`（慢而健康的传输永不超时）；HEAD 探测 = CURLOPT_TIMEOUT
+  总帽（探测应秒级完成）；0 = 关看门狗
 - `download()` 顶部先 `get_file_info`（HEAD 探测）再分叉 V1/V2
   （`v2_http_enabled()` 默认 false → V1 curl 路径）——HEAD 失败
   即整体失败，单连接 GET 层的 4xx/5xx 语义在 HEAD 通过后才生效

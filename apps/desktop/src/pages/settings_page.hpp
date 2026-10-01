@@ -43,6 +43,8 @@ public:
     void set_default_download_dir(const QString& path);
     void set_max_concurrent_downloads(int count);
     void set_default_connections(int count);
+    void set_connection_timeout(int seconds);
+    void set_retry_count(int count);
     void set_notifications_enabled(bool enabled);
     void set_sound_notifications_enabled(bool enabled);
     void set_task_speed_limit(int kb_per_sec);

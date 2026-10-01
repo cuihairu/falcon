@@ -385,10 +385,15 @@ void MainWindow::show_add_download_dialog(UrlInfo url_info, const IncomingDownlo
     options.seed_ratio = dialog.get_seed_ratio();
     options.seed_time_minutes = dialog.get_seed_time_minutes();
 
-    // 应用任务速度限制（KB/s -> bytes/s）
+    // 应用任务速度限制（KB/s -> bytes/s）+ 连接超时（停滞超时，aria2
+    // --timeout 同语义）与重试次数——设置项此前保存却从不消费
     if (settings_page_) {
         const int task_limit_kb = settings_page_->get_task_speed_limit();
         options.speed_limit = static_cast<std::size_t>(task_limit_kb * 1024);
+        options.timeout_seconds =
+            static_cast<std::size_t>(settings_page_->get_connection_timeout());
+        options.max_retries =
+            static_cast<std::size_t>(settings_page_->get_retry_count());
     }
 
     const QString cookies = dialog.get_cookies();
@@ -412,9 +417,13 @@ bool MainWindow::add_download_task(const QString& url, bool start_immediately)
     if (settings_page_) {
         options.max_connections = static_cast<std::size_t>(settings_page_->get_default_connections());
         options.output_directory = settings_page_->get_default_download_dir().toStdString();
-        // 应用任务速度限制（KB/s -> bytes/s）
+        // 应用任务速度限制（KB/s -> bytes/s）+ 连接超时与重试次数
         const int task_limit_kb = settings_page_->get_task_speed_limit();
         options.speed_limit = static_cast<std::size_t>(task_limit_kb * 1024);
+        options.timeout_seconds =
+            static_cast<std::size_t>(settings_page_->get_connection_timeout());
+        options.max_retries =
+            static_cast<std::size_t>(settings_page_->get_retry_count());
     }
 
     // 异步提交；被拒绝时经 task_add_failed 信号提示
@@ -606,6 +615,10 @@ void MainWindow::load_settings()
         settings.value("max_concurrent_downloads", 3).toInt());
     settings_page_->set_default_connections(
         settings.value("default_connections", 4).toInt());
+    settings_page_->set_connection_timeout(
+        settings.value("connection_timeout_seconds", 30).toInt());
+    settings_page_->set_retry_count(
+        settings.value("retry_count", 3).toInt());
     settings_page_->set_task_speed_limit(
         settings.value("task_speed_limit_kb", 0).toInt());
     settings_page_->set_global_speed_limit(
