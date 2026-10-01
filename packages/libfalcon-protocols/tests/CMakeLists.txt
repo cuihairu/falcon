@@ -238,6 +238,26 @@ if(FALCON_ENABLE_FTP)
 endif()
 
 # ============================================================================
+# SFTP plugin tests (conditional)
+# ============================================================================
+if(FALCON_ENABLE_SFTP)
+    add_executable(falcon_sftp_tests
+        unit/sftp_handler_test.cpp
+    )
+
+    target_link_libraries(falcon_sftp_tests
+        PRIVATE
+            falcon_protocols
+            falcon_core
+            GTest::gtest_main
+    )
+
+    add_test_compile_options(falcon_sftp_tests)
+    add_test_includes(falcon_sftp_tests)
+    target_compile_definitions(falcon_sftp_tests PRIVATE FALCON_ENABLE_SFTP_PLUGIN)
+endif()
+
+# ============================================================================
 # Integration tests
 # ============================================================================
 add_executable(falcon_integration_tests
@@ -283,6 +303,10 @@ gtest_discover_tests(falcon_http_tests)
 
 if(TARGET falcon_ftp_tests)
     gtest_discover_tests(falcon_ftp_tests)
+endif()
+
+if(TARGET falcon_sftp_tests)
+    gtest_discover_tests(falcon_sftp_tests)
 endif()
 
 gtest_discover_tests(falcon_integration_tests)

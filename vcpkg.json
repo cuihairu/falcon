@@ -21,6 +21,7 @@
     },
     "miniupnpc",
     "libnatpmp",
+    "libssh2",
     {
       "name": "expat",
       "default-features": false

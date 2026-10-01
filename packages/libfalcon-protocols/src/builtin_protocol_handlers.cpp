@@ -9,6 +9,9 @@
 #ifdef FALCON_ENABLE_BT_PLUGIN
 #include "../plugins/bittorrent/bittorrent_plugin.hpp"
 #endif
+#ifdef FALCON_ENABLE_SFTP_PLUGIN
+#include "../plugins/sftp/sftp_handler.hpp"
+#endif
 #ifdef FALCON_ENABLE_ED2K_PLUGIN
 #include "../plugins/ed2k/ed2k_plugin.hpp"
 #endif
@@ -52,7 +55,7 @@ std::vector<BuiltinProtocolInfo> describe_builtin_protocols() {
 #endif
 
 #ifdef FALCON_ENABLE_SFTP_PLUGIN
-    protocols.push_back({"sftp", "SFTP", {"sftp"}, true, false});
+    protocols.push_back({"sftp", "SFTP", {"sftp"}, true, true});
 #else
     protocols.push_back({"sftp", "SFTP", {"sftp"}, false, false});
 #endif
@@ -107,6 +110,10 @@ void register_builtin_protocol_handlers([[maybe_unused]] ProtocolRegistry& regis
 
 #ifdef FALCON_ENABLE_BT_PLUGIN
     registry.register_handler(protocols::create_bittorrent_handler());
+#endif
+
+#ifdef FALCON_ENABLE_SFTP_PLUGIN
+    registry.register_handler(protocols::create_sftp_handler());
 #endif
 
 #ifdef FALCON_ENABLE_ED2K_PLUGIN

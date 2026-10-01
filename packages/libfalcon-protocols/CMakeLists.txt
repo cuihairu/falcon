@@ -123,13 +123,27 @@ elseif(FALCON_ENABLE_BITTORRENT)
     set(FALCON_ENABLE_BITTORRENT OFF CACHE BOOL "Enable BitTorrent plugin" FORCE)
 endif()
 
-# SFTP plugin
-if(FALCON_ENABLE_SFTP AND LIBSSH_FOUND)
+# SFTP plugin（libssh2：vcpkg port 存在且轻量；libssh 不在 vcpkg 稳定面）
+# CONFIG 查找命中 vcpkg 安装；pkg-config 兜底覆盖发行版自装形态
+find_package(libssh2 CONFIG QUIET)
+if(NOT TARGET Libssh2::libssh2)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(LIBSSH2 QUIET IMPORTED_TARGET libssh2)
+    endif()
+endif()
+if(TARGET Libssh2::libssh2)
+    set(LIBSSH2_TARGET Libssh2::libssh2)
+elseif(TARGET PkgConfig::LIBSSH2)
+    set(LIBSSH2_TARGET PkgConfig::LIBSSH2)
+endif()
+
+if(FALCON_ENABLE_SFTP AND LIBSSH2_TARGET)
     add_subdirectory(plugins/sftp)
     target_link_libraries(falcon_protocols PRIVATE falcon_plugin_sftp)
     target_compile_definitions(falcon_protocols PRIVATE FALCON_ENABLE_SFTP_PLUGIN)
 elseif(FALCON_ENABLE_SFTP)
-    message(WARNING "SFTP plugin requires libssh; disabling FALCON_ENABLE_SFTP")
+    message(WARNING "SFTP plugin requires libssh2; disabling FALCON_ENABLE_SFTP")
     set(FALCON_ENABLE_SFTP OFF CACHE BOOL "Enable SFTP plugin" FORCE)
 endif()
 

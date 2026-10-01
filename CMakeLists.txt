@@ -48,7 +48,7 @@ option(FALCON_BUILD_DESKTOP "Build desktop GUI application" ON)
 option(FALCON_ENABLE_HTTP "Enable HTTP/HTTPS plugin" ON)
 option(FALCON_ENABLE_FTP "Enable FTP plugin" ON)
 option(FALCON_ENABLE_BITTORRENT "Enable BitTorrent plugin" ON)
-option(FALCON_ENABLE_SFTP "Enable SFTP plugin" OFF)
+option(FALCON_ENABLE_SFTP "Enable SFTP plugin" ON)
 option(FALCON_ENABLE_METALINK "Enable Metalink plugin" ON)
 option(FALCON_ENABLE_NAT "Enable NAT port mapping (UPnP IGD + NAT-PMP)" ON)
 
