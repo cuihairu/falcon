@@ -71,11 +71,30 @@ public:
         ::close(listen_fd_);
         if (accept_thread_.joinable()) accept_thread_.join();
 
-        std::lock_guard<std::mutex> lock(data_mutex_);
+        std::unique_lock<std::mutex> lock(data_mutex_);
         if (data_listen_fd_ >= 0) {
             ::shutdown(data_listen_fd_, SHUT_RDWR);
             ::close(data_listen_fd_);
             data_listen_fd_ = -1;
+        }
+        lock.unlock();  // 收尾等待阶段不再持有 data_mutex_
+
+        // detached 控制连接线程收尾等待（RawWsServer 先例）：join 后
+        // 不再有新连接线程；shutdown 存量连接 fd 唤醒阻塞 recv，轮询
+        // 活跃计数归零——线程体最后一次 this 访问是计数递减（此前
+        // 迟到线程可在测试函数返回、栈帧复用后锁到垃圾 mutex 进程级
+        // 崩溃）。控制线程各带 SO_RCVTIMEO=5s，5s 兜底有界
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::seconds(5);
+        while (active_conns_.load(std::memory_order_relaxed) != 0) {
+            std::vector<int> pending;
+            {
+                std::lock_guard<std::mutex> lock2(mutex_);
+                pending.assign(conn_fds_.begin(), conn_fds_.end());
+            }
+            for (int fd : pending) ::shutdown(fd, SHUT_RDWR);
+            if (std::chrono::steady_clock::now() >= deadline) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
     }
 
@@ -193,7 +212,21 @@ private:
             // 控制连接读超时：对端异常消失时线程可自行退出
             timeval tv{5, 0};
             ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-            std::thread([this, fd] { handle_control(fd); }).detach();
+            // detached 连接线程预登记（RawWsServer 先例）：spawn 与登
+            // 记间无窗口；线程体最后一次 this 访问是计数递减
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                conn_fds_.insert(fd);
+            }
+            active_conns_.fetch_add(1, std::memory_order_relaxed);
+            std::thread([this, fd] {
+                handle_control(fd);
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    conn_fds_.erase(fd);
+                }
+                active_conns_.fetch_sub(1, std::memory_order_relaxed);
+            }).detach();
         }
     }
 
@@ -364,6 +397,10 @@ private:
     int data_listen_fd_ = -1;
 
     std::atomic<bool> running_{false};
+    // 存活控制连接线程数与连接 fd 台账（mutex_ 守护台账）——stop()
+    // 收尾等待的依据，见 stop() 注释
+    std::atomic<int> active_conns_{0};
+    std::set<int> conn_fds_;
     int listen_fd_ = -1;
     int port_ = 0;
     std::thread accept_thread_;

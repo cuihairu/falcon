@@ -177,9 +177,9 @@ TEST_F(MetalinkHandlerTest, RegistryRoutesMeta4ToMetalinkHandler) {
 
 TEST_F(MetalinkHandlerTest, LocalMeta4EndToEndEventSequence) {
     server().set_response("/m1.bin",
-                          FakeResponse{200, "OK", {}, kMirror1Body, true});
+                          FakeResponse{200, "OK", {}, kMirror1Body, true, {}, false, false, false, false, 0, {}});
     server().set_response("/m2.bin",
-                          FakeResponse{200, "OK", {}, "junk", true});
+                          FakeResponse{200, "OK", {}, "junk", true, {}, false, false, false, false, 0, {}});
     // 镜像 2 排在前面但内容与哈希不符;镜像 1 兜底成功
     const std::string doc = local_meta4(
         "<file name=\"out.bin\">"
@@ -220,7 +220,7 @@ TEST_F(MetalinkHandlerTest, LocalMeta4EndToEndEventSequence) {
 
 TEST_F(MetalinkHandlerTest, OutputFilenameOptionOverridesDocName) {
     server().set_response("/m1.bin",
-                          FakeResponse{200, "OK", {}, kMirror1Body, true});
+                          FakeResponse{200, "OK", {}, kMirror1Body, true, {}, false, false, false, false, 0, {}});
     const std::string doc = local_meta4(
         "<file name=\"doc-name.bin\">"
         "<url>" + server().url("/m1.bin") + "</url>"
@@ -242,9 +242,9 @@ TEST_F(MetalinkHandlerTest, OutputFilenameOptionOverridesDocName) {
 TEST_F(MetalinkHandlerTest, BadHashFallsToNextMirror) {
     // 镜像 1 可下载但内容与哈希不符 → 校验失败删 part → 镜像 2 成功
     server().set_response("/bad.bin",
-                          FakeResponse{200, "OK", {}, "corrupted!", true});
+                          FakeResponse{200, "OK", {}, "corrupted!", true, {}, false, false, false, false, 0, {}});
     server().set_response("/good.bin",
-                          FakeResponse{200, "OK", {}, kMirror1Body, true});
+                          FakeResponse{200, "OK", {}, kMirror1Body, true, {}, false, false, false, false, 0, {}});
     const std::string doc = local_meta4(
         "<file name=\"out.bin\">"
         "<hash type=\"sha-256\">" + std::string(kMirror1Sha256) + "</hash>"
@@ -270,7 +270,7 @@ TEST_F(MetalinkHandlerTest, BadHashFallsToNextMirror) {
 TEST_F(MetalinkHandlerTest, BadHashAllMirrorsFail) {
     // 唯一镜像内容与哈希不符 → 全灭 FAILED,part 不残留,成品不出现
     server().set_response("/liar.bin",
-                          FakeResponse{200, "OK", {}, kMirror2Body, true});
+                          FakeResponse{200, "OK", {}, kMirror2Body, true, {}, false, false, false, false, 0, {}});
     const std::string doc = local_meta4(
         "<file name=\"out.bin\">"
         "<hash type=\"sha-256\">" + std::string(kMirror1Sha256) + "</hash>"
@@ -313,7 +313,7 @@ TEST_F(MetalinkHandlerTest, AllMirrorsUnreachableFailsWithDetail) {
 TEST_F(MetalinkHandlerTest, RemoteMeta4FullChain) {
     // meta4 文档本身从服务器抓取 → 解析 → 委托镜像 → 校验 → 完成
     server().set_response("/m1.bin",
-                          FakeResponse{200, "OK", {}, kMirror1Body, true});
+                          FakeResponse{200, "OK", {}, kMirror1Body, true, {}, false, false, false, false, 0, {}});
     const std::string xml =
         "<?xml version=\"1.0\"?><metalink xmlns=\"urn:ietf:params:xml:ns:metalink\">"
         "<file name=\"remote.bin\">"
@@ -321,7 +321,8 @@ TEST_F(MetalinkHandlerTest, RemoteMeta4FullChain) {
         "<hash type=\"md5\">" + std::string(kMirror1Md5) + "</hash>"
         "<url>" + server().url("/m1.bin") + "</url>"
         "</file></metalink>";
-    server().set_response("/doc.meta4", FakeResponse{200, "OK", {}, xml});
+    server().set_response("/doc.meta4",
+                          FakeResponse{200, "OK", {}, xml, false, {}, false, false, false, false, 0, {}});
 
     DownloadOptions options;
     options.output_directory = dir_.string();
@@ -342,7 +343,7 @@ TEST_F(MetalinkHandlerTest, PauseDuringSlowMirror) {
     // 慢发镜像给出暂停窗口;pause 后 download 正常返回,状态保持
     // Paused,part 清理,最终名不出现
     server().set_response("/slow.bin",
-                          FakeResponse{200, "OK", {}, kMirror1Body, true});
+                          FakeResponse{200, "OK", {}, kMirror1Body, true, {}, false, false, false, false, 0, {}});
     server().set_slow_body("/slow.bin", 200000, 4);
     const std::string doc = local_meta4(
         "<file name=\"out.bin\">"
@@ -453,7 +454,7 @@ TEST_F(MetalinkHandlerTest, PauseDuringRemoteFetchStaysPaused) {
         "<?xml version=\"1.0\"?><metalink xmlns=\"urn:ietf:params:xml:ns:metalink\"><file name=\"x.bin\">"
         "<url>http://192.0.2.10/x.bin</url></file></metalink>";
     server().set_response("/remote.meta4",
-                          FakeResponse{200, "OK", {}, xml, false});
+                          FakeResponse{200, "OK", {}, xml, false, {}, false, false, false, false, 0, {}});
     server().set_slow_body("/remote.meta4", 100000, 2);  // 2B/100ms 慢发
 
     DownloadOptions options;
@@ -477,7 +478,7 @@ TEST_F(MetalinkHandlerTest, PauseDuringRemoteFetchStaysPaused) {
 /// 文档含多个 file:告警并只取第一个,其余条目不产生任何下载
 TEST_F(MetalinkHandlerTest, MultiFileDocTakesFirstOnly) {
     server().set_response("/first.bin",
-                          FakeResponse{200, "OK", {}, kMirror1Body, true});
+                          FakeResponse{200, "OK", {}, kMirror1Body, true, {}, false, false, false, false, 0, {}});
     const std::string doc = local_meta4(
         "<file name=\"first.bin\">"
         "<url>" + server().url("/first.bin") + "</url>"
@@ -525,7 +526,7 @@ TEST_F(MetalinkHandlerTest, FileWithoutUrlsRejectedAtParse) {
 /// 视为无可用协议处理器,该镜像不计入可委托列表
 TEST_F(MetalinkHandlerTest, MirrorRoutedToSelfTreatedUnavailable) {
     server().set_response("/loop.meta4",
-                          FakeResponse{200, "OK", {}, kMirror1Body, true});
+                          FakeResponse{200, "OK", {}, kMirror1Body, true, {}, false, false, false, false, 0, {}});
     // 自注册:metalink 必须在册,.meta4 后缀镜像才被路由特判截获
     auto own_registry = std::make_unique<ProtocolRegistry>();
     own_registry->register_handler(std::make_unique<HttpHandler>());
@@ -559,7 +560,7 @@ TEST_F(MetalinkHandlerTest, MirrorRoutedToSelfTreatedUnavailable) {
 /// 处理器"(513 的 else 分支),异常消息携带逐镜像原因
 TEST_F(MetalinkHandlerTest, NoRegistryTreatedUnavailable) {
     server().set_response("/nr.bin",
-                          FakeResponse{200, "OK", {}, kMirror1Body, true});
+                          FakeResponse{200, "OK", {}, kMirror1Body, true, {}, false, false, false, false, 0, {}});
     const std::string doc = local_meta4(
         "<file name=\"nrout.bin\">"
         "<url>" + server().url("/nr.bin") + "</url>"
@@ -587,7 +588,7 @@ TEST_F(MetalinkHandlerTest, NoRegistryTreatedUnavailable) {
 /// ActiveContext 转发影子任务的目标 handler(832),parent 置 Cancelled
 TEST_F(MetalinkHandlerTest, CancelDuringSlowMirror) {
     server().set_response("/cslow.bin",
-                          FakeResponse{200, "OK", {}, kMirror1Body, true});
+                          FakeResponse{200, "OK", {}, kMirror1Body, true, {}, false, false, false, false, 0, {}});
     server().set_slow_body("/cslow.bin", 200000, 4);
     const std::string doc = local_meta4(
         "<file name=\"cout.bin\">"
@@ -1189,7 +1190,7 @@ TEST_F(MetalinkV2BridgeTest, V2ConflictingActiveGroupFallsBackToSerial) {
     fs::remove("/tmp/falcon-conflict.bin.falcon.ctrl", stale_ec);
     const std::string foreign_body(4096, 'z');
     server().set_response("/foreign.bin",
-                          FakeResponse{200, "OK", {}, foreign_body, false});
+                          FakeResponse{200, "OK", {}, foreign_body, false, {}, false, false, false, false, 0, {}});
     server().set_slow_body("/foreign.bin", 100000, 2);
     auto engine = V2EngineHost::instance().engine();  // 提前启动引擎
     DownloadTask::Ptr conflict =
@@ -1226,7 +1227,7 @@ TEST_F(MetalinkV2BridgeTest, V2ConflictingActiveGroupFallsBackToSerial) {
 /// 单镜像(V2 开):门禁 http 镜像 ≥2 不过 → 阶段1 串行,行为不变
 TEST_F(MetalinkV2BridgeTest, V2OnSingleMirrorUsesStage1) {
     server().set_response("/single.bin",
-                          FakeResponse{200, "OK", {}, kMirror1Body, true});
+                          FakeResponse{200, "OK", {}, kMirror1Body, true, {}, false, false, false, false, 0, {}});
     const std::string doc = local_meta4(
         "<file name=\"out4.bin\">"
         "<url>" + server().url("/single.bin") + "</url>"
@@ -1252,9 +1253,9 @@ TEST_F(MetalinkV2BridgeTest, V2OnSingleMirrorUsesStage1) {
 /// 无整文件哈希(V2 开):门禁拒绝无校验混源 → 阶段1 首镜像成功即止
 TEST_F(MetalinkV2BridgeTest, V2OnNoHashFallsBack) {
     server().set_response("/nh1.bin",
-                          FakeResponse{200, "OK", {}, kMirror1Body, true});
+                          FakeResponse{200, "OK", {}, kMirror1Body, true, {}, false, false, false, false, 0, {}});
     server().set_response("/nh2.bin",
-                          FakeResponse{200, "OK", {}, kMirror2Body, true});
+                          FakeResponse{200, "OK", {}, kMirror2Body, true, {}, false, false, false, false, 0, {}});
     const std::string doc = local_meta4(
         "<file name=\"out5.bin\">"
         "<url priority=\"1\">" + server().url("/nh1.bin") + "</url>"
@@ -1279,9 +1280,9 @@ TEST_F(MetalinkV2BridgeTest, V2OnNoHashFallsBack) {
 /// 回退阶段1 串行,引擎全程未被拉起(try_engine 恒空)
 TEST_F(MetalinkV2BridgeTest, V2GateRejectsCurlSpecificOptions) {
     server().set_response("/gt1.bin",
-                          FakeResponse{200, "OK", {}, kMirror1Body, true});
+                          FakeResponse{200, "OK", {}, kMirror1Body, true, {}, false, false, false, false, 0, {}});
     server().set_response("/gt2.bin",
-                          FakeResponse{200, "OK", {}, kMirror2Body, true});
+                          FakeResponse{200, "OK", {}, kMirror2Body, true, {}, false, false, false, false, 0, {}});
 
     // 文档无需哈希:能力门禁在镜像/哈希检查之前返回
     auto make_doc = [&](const char* fname) {

@@ -200,7 +200,13 @@ private:
                 if (stopping_.load()) break;
                 continue;
             }
-            std::thread(&ScriptHttpServer::handle_conn, this, fd).detach();
+            // detached 连接线程预登记（RawWsServer 先例）：spawn 与
+            // 登记间无窗口；线程体最后一次 this 访问是计数递减
+            active_conns_.fetch_add(1, std::memory_order_seq_cst);
+            std::thread([this, fd] {
+                handle_conn(fd);
+                active_conns_.fetch_sub(1, std::memory_order_seq_cst);
+            }).detach();
         }
     }
 
@@ -287,12 +293,23 @@ private:
             listen_fd_ = -1;
         }
         if (accept_thread_.joinable()) accept_thread_.join();
+        // detached 连接线程收尾等待（RawWsServer 先例）：join 后不再
+        // 有新连接线程；连接处理有界（drain 循环 SO_RCVTIMEO 200ms），
+        // 轮询计数归零即可——归零后线程再不触碰本对象，last_body_
+        // 的最终写入也被先行同步（5s 兜底有界）
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::seconds(5);
+        while (active_conns_.load(std::memory_order_seq_cst) != 0) {
+            if (std::chrono::steady_clock::now() >= deadline) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
     }
 
     std::string response_;
     int listen_fd_{-1};
     int port_{0};
     std::atomic<bool> stopping_{false};
+    std::atomic<int> active_conns_{0};  // 存活连接线程数（stop() 收尾等待依据）
     std::thread accept_thread_;
     mutable std::mutex body_mutex_;
     std::string last_body_;

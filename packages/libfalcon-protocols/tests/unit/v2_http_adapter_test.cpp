@@ -111,32 +111,46 @@ bool wait_for(Pred&& pred, int timeout_ms) {
     return pred();
 }
 
-/// 简单事件记录器（回调全部来自 downloader 线程，join 后读取）
+/// 简单事件记录器（join 后读取）。事件必须加锁收集：多段路径下
+/// SegmentDownloader 的多个 worker 线程并发调 on_progress
+///（complete_segment → update_progress），裸 vector 并发 push_back
+/// 在扩容窗口互相释放旧 buffer = glibc "double free or corruption"，
+/// CI gcc job（每用例独立进程、curl 全局态冷启动）低概率命中的
+/// 红面根因（ASan 本机 200 轮复现实证 heap-use-after-free）
 class RecordingListener : public IEventListener {
 public:
     void on_status_changed(TaskId, TaskStatus old_status,
                            TaskStatus new_status) override {
+        std::lock_guard<std::mutex> lock(mutex_);
         events_.push_back(std::string("status:") + to_string(old_status) +
                           "->" + to_string(new_status));
     }
     void on_progress(const ProgressInfo& info) override {
         (void)info;
+        std::lock_guard<std::mutex> lock(mutex_);
         events_.push_back("progress");
     }
     void on_error(TaskId, const std::string& message) override {
+        std::lock_guard<std::mutex> lock(mutex_);
         events_.push_back("error:" + message);
     }
     void on_completed(TaskId, const std::string&) override {
+        std::lock_guard<std::mutex> lock(mutex_);
         events_.push_back("completed");
     }
     void on_file_info(TaskId, const FileInfo&) override {
+        std::lock_guard<std::mutex> lock(mutex_);
         events_.push_back("file_info");
     }
 
-    const std::vector<std::string>& events() const { return events_; }
+    std::vector<std::string> events() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return events_;
+    }
 
 private:
     std::vector<std::string> events_;
+    mutable std::mutex mutex_;
 };
 
 /// 忠实复刻 TaskManager worker 的 download 收口（task_manager.cpp:834）
@@ -489,7 +503,7 @@ TEST_P(V2HttpAdapterEquivalence, DownloadCompletesWithEventOrder) {
     EXPECT_EQ(task->status(), TaskStatus::Completed);
     EXPECT_EQ(read_file_content(out_path), body);
 
-    const auto& events = listener.events();
+    const auto events = listener.events();  // 带锁拷贝（多 worker 并发写）
     const auto first_progress =
         std::find(events.begin(), events.end(), std::string("progress"));
     const auto first_fi = std::find(events.begin(), events.end(),

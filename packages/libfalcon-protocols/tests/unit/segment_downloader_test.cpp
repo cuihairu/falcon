@@ -1504,8 +1504,13 @@ TEST(SegmentDownloaderEdges, MergeGateRejectsDriftedSegment) {
     SegmentDownloader downloader(task, "http://test.example.com/file.bin",
                                  output_path, config);
 
-    // 确定性时序：等 seg0 完整落盘（5120 = 段全长，此时它已完成、
-    // 不会再有重试自愈）后实施篡改——merge 闸门必须拦下
+    // 确定性时序：等 seg0「完成记账」（completed_segments 原子计数）
+    // 后实施篡改——用完成计数而非段文件尺寸：macOS CI 红面根因是
+    // 篡改落在「mock 写完（尺寸可见）→ download_segment 尺寸校验读」
+    // 的微秒窗，校验得 100≠5120 触发重试、重试从断点续传恰好补齐
+    // 5120，篡改被自愈、merge 闸门合法通过（start true + 成品存在，
+    // 与红面 Actual true/Expected false 完全吻合）。完成记账后段不
+    // 再进入任何重试路径，篡改严格后置无自愈窗口
     auto corrupt_after_seg0_complete = [&](const std::string& url, Bytes start,
                                            Bytes end, const std::string& path,
                                            std::atomic<bool>& cancelled,
@@ -1514,12 +1519,7 @@ TEST(SegmentDownloaderEdges, MergeGateRejectsDriftedSegment) {
         if (path != seg0_path) {
             const auto deadline =
                 std::chrono::steady_clock::now() + std::chrono::seconds(5);
-            for (;;) {
-                std::error_code sz_ec;
-                const auto sz = std::filesystem::file_size(seg0_path, sz_ec);
-                if (!sz_ec && sz == 5120) {
-                    break;
-                }
+            while (downloader.completed_segments() < 1) {
                 if (std::chrono::steady_clock::now() > deadline ||
                     cancelled.load()) {
                     return false;

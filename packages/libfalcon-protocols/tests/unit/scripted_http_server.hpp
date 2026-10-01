@@ -49,6 +49,7 @@ inline int sock_last_error() {
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -185,6 +186,28 @@ public:
         ::shutdown(listen_fd_, SHUT_RDWR);  // Linux close() 不唤醒 accept
         CLOSE_SOCKET(listen_fd_);
         if (accept_thread_.joinable()) accept_thread_.join();
+
+        // detached 连接线程收尾等待（RawWsServer 先例）：accept 线程
+        // join 后不再产生新连接线程；对存量连接 fd shutdown 唤醒阻塞
+        // 在 recv 的线程，再轮询活跃计数归零——线程体最后一次 this
+        // 访问是计数递减，归零即再无线程触碰本对象。此前连接线程可
+        // 在测试函数返回、栈帧被后续测试复用后仍锁本对象的 mutex_
+        //（栈复用后 kind 字段是垃圾）→ glibc tpp/ESRCH 断言或
+        // std::system_error 进程级崩溃（全量 falcon_protocols_tests
+        // #622 崩溃根因）。超时兜底有界：宁可放走一个迟到线程（各
+        // 连接自带 SO_RCVTIMEO）也不让析构后的触碰成为无界 UB
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::seconds(5);
+        while (active_conns_.load(std::memory_order_relaxed) != 0) {
+            std::vector<int> pending;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                pending.assign(conn_fds_.begin(), conn_fds_.end());
+            }
+            for (int fd : pending) ::shutdown(fd, SHUT_RDWR);
+            if (std::chrono::steady_clock::now() >= deadline) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
     }
 
     int port() const { return port_; }
@@ -287,6 +310,24 @@ private:
         return true;
     }
 
+    // Winsock 的 SO_RCVTIMEO 取 DWORD 毫秒而非 timeval（传 timeval
+    // 会被按前 4 字节解读为 N 毫秒：timeval{15,0} 的原始字节 = 15ms
+    // 超时——Windows 红面根因：defer 分支的阻塞 recv 在 ~15ms 被
+    // WSAETIMEDOUT 抢醒、服务器抢先 close，客户端 LOW_SPEED 看门狗
+    // 收口前就吃到 CURLE_GOT_NOTHING）。AdapterTestServer 的
+    // set_socket_timeout 同款范式
+    static void set_recv_timeout(int fd, int seconds) {
+#ifdef _WIN32
+        const DWORD ms = static_cast<DWORD>(seconds) * 1000u;
+        (void)setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO,
+                         reinterpret_cast<const char*>(&ms), sizeof(ms));
+#else
+        timeval tv{};
+        tv.tv_sec = seconds;
+        (void)setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+#endif
+    }
+
     void accept_loop() {
         while (running_) {
             int fd = ::accept(listen_fd_, nullptr, nullptr);
@@ -297,10 +338,23 @@ private:
             connections_.fetch_add(1, std::memory_order_relaxed);
             const int conn = conn_seq_.fetch_add(1);
             trace("accept", conn, 0, 0);
-            timeval tv{15, 0};
-            ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO,
-                         reinterpret_cast<const char*>(&tv), sizeof(tv));
-            std::thread([this, fd, conn] { handle_connection(fd, conn); }).detach();
+            set_recv_timeout(fd, 15);
+            // detached 连接线程预登记（RawWsServer 先例）：spawn 与登
+            // 记间无窗口；线程体最后一次 this 访问是计数递减，stop()
+            // 等计数归零后才允许对象析构
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                conn_fds_.insert(fd);
+            }
+            active_conns_.fetch_add(1, std::memory_order_relaxed);
+            std::thread([this, fd, conn] {
+                handle_connection(fd, conn);
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    conn_fds_.erase(fd);
+                }
+                active_conns_.fetch_sub(1, std::memory_order_relaxed);
+            }).detach();
         }
     }
 
@@ -433,7 +487,8 @@ private:
                     }
                 } else {
                     auto it = responses_.find(route);
-                    resp = it != responses_.end() ? it->second : FakeResponse{404, "Not Found", {}, "missing", false};
+                    resp = it != responses_.end() ? it->second
+                                                  : FakeResponse{404, "Not Found", {}, "missing", false, {}, false, false, false, false, 0, {}};
                 }
                 auto d = slow_.find(route);
                 if (d != slow_.end() &&
@@ -518,8 +573,9 @@ private:
                 trace("defer_recv", conn, static_cast<long long>(dn),
                       sock_last_error());
                 trace("defer_close", conn, 0, 0);
-                CLOSE_SOCKET(fd);
-                break;
+                break;  // 尾部统一 conn_close + CLOSE_SOCKET（此前此处
+                        // 先关一次、尾部再关——双重 close，编号被复用
+                        // 时可能误关不属于自己的 socket）
             }
 
             std::string out = "HTTP/1.1 " + std::to_string(status) + " " + status_text + "\r\n";
@@ -586,6 +642,10 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<int> connections_{0};
     std::atomic<int> conn_seq_{0};
+    // 存活连接线程数与连接 fd 台账（mutex_ 守护台账）——stop() 收尾
+    // 等待的依据，见 stop() 注释
+    std::atomic<int> active_conns_{0};
+    std::set<int> conn_fds_;
     std::chrono::steady_clock::time_point started_{
         std::chrono::steady_clock::now()};
     mutable std::mutex mutex_;

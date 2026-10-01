@@ -236,6 +236,14 @@ public:
 
     bool start(Mode mode) {
         mode_ = mode;
+#ifndef _WIN32
+        // 进程级 SIGPIPE 免疫：macOS XNU 对 socket 写产生的 SIGPIPE
+        // 做进程级投递（psignal），accept 线程的 pthread_sigmask 不
+        // 隔离——未屏蔽的 gtest 主线程照样被杀（1f44064/02671e7 先
+        // 例：每个做 OpenSSL/裸 socket 写的服务器都要进程级 SIG_IGN，
+        // 写失败以 EPIPE 返回值出现）。线程级屏蔽保留作纵深
+        signal(SIGPIPE, SIG_IGN);
+#endif
 #ifdef _WIN32
         ensure_winsock_for_proxy_test();
 #endif
