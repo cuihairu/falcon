@@ -17,11 +17,15 @@
 #include "common/swarm_protocol.hpp"
 #include "rdv/swarm_rate_limiter.hpp"
 #include "rdv/swarm_rdv_state.hpp"
+#include "rdv/swarm_rpc_handlers.hpp"
 #include "swarm_rdv_harness.hpp"
+
+#include <falcon/detail/injection.hpp>
 
 #include <chrono>
 #include <cstdint>
 #include <ctime>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -573,6 +577,278 @@ TEST(SwarmRendezvousState, ReregisterRotatesSessionWithoutPeerJoinedReplay) {
     EXPECT_FALSE(state.has_session(first.session));  // 旧会话失效
     EXPECT_TRUE(state.has_session(second.session));
     EXPECT_EQ(state.peer_count(), 1u);
+}
+
+TEST(SwarmRendezvousState, AdvertiseCarriedIntoPeerJoined) {
+    // advertise（addr/direct）从 step1 快照解析并透传进 onPeerJoined 通知
+    SwarmRendezvousState state(state_config());
+    SwarmTestNode node;
+    const auto t0 = SwarmRendezvousState::Clock::now();
+    const std::string nonce = "0011223344556677";
+    const nlohmann::json adv{{kFieldAddr, "203.0.113.7:4500"},
+                             {kFieldDirect, true}};
+    const nlohmann::json step1 =
+        node.step1_params(nonce, "falcon-test", &adv);
+    const std::string canonical = canonical_json(step1);
+    ASSERT_TRUE(state
+                    .start_register(node.node_id(), node.pubkey_hex(), nonce,
+                                    {}, canonical, t0)
+                    .ok());
+    const std::string sig = node.sign_register(nonce, canonical);
+    auto reply =
+        state.complete_register(node.node_id(), canonical, sig, t0);
+    ASSERT_TRUE(reply.ok()) << reply.error_message;
+    ASSERT_EQ(reply.notifications.size(), 1u);
+    ASSERT_TRUE(reply.notifications[0].params.contains(kFieldAdvertise));
+    const auto& got = reply.notifications[0].params.at(kFieldAdvertise);
+    EXPECT_EQ(got.at(kFieldAddr).get<std::string>(), "203.0.113.7:4500");
+    EXPECT_TRUE(got.at(kFieldDirect).get<bool>());
+}
+
+TEST(SwarmRendezvousState, QueryExpiredButUnsweptSessionRejected) {
+    // 与 HeartbeatRenewsAndExpiredSessionRejected 互补：query 侧自己的
+    // 过期守卫（记录已过期但未被 sweep 摘除的窗口内即按无效收口）
+    SwarmRendezvousState state(state_config());
+    SwarmTestNode node;
+    const auto t0 = SwarmRendezvousState::Clock::now();
+    auto reg = register_via_state(state, node, "0011223344556677", t0);
+    ASSERT_TRUE(reg.ok) << reg.reply.error_message;
+
+    // timeout=60s：t+61 查询（不先 sweep）→ -32003
+    auto out =
+        state.query(reg.session, std::string(64, 'a'),
+                    t0 + std::chrono::seconds(61));
+    EXPECT_FALSE(out.ok());
+    EXPECT_EQ(out.error_code, kErrUnknownSession);
+}
+
+TEST(SwarmRendezvousState, SweepPurgesExpiredChallenges) {
+    // sweep 对过期挑战的静默清除（挑战表先于会话/资源表）——可观测判据：
+    // 清除后再 complete_register 命中「无 pending challenge」语义分支
+    // （与 ChallengeExpiredRejected 的「挑战过期」分支互补），且节点
+    // 重新走两步注册照常成功
+    SwarmRendezvousState state(state_config());
+    SwarmTestNode node;
+    const auto t0 = SwarmRendezvousState::Clock::now();
+    const std::string nonce = "0011223344556677";
+    const nlohmann::json step1 = node.step1_params(nonce);
+    const std::string canonical = canonical_json(step1);
+    ASSERT_TRUE(state
+                    .start_register(node.node_id(), node.pubkey_hex(), nonce,
+                                    {}, canonical, t0)
+                    .ok());
+
+    // 挑战 TTL=60s：到期清扫（无过期会话 → 无通知，纯挑战清除）
+    const auto swept = state.sweep(t0 + std::chrono::seconds(61));
+    EXPECT_TRUE(swept.empty());
+
+    const std::string sig = node.sign_register(nonce, canonical);
+    auto late = state.complete_register(node.node_id(), canonical, sig,
+                                        t0 + std::chrono::seconds(61));
+    EXPECT_FALSE(late.ok());
+    EXPECT_EQ(late.error_code, kErrSignature);
+
+    // 同节点全新挑战照常下发
+    auto again = register_via_state(state, node, "8899aabbccddeeff",
+                                    t0 + std::chrono::seconds(62));
+    EXPECT_TRUE(again.ok) << again.reply.error_message;
+}
+
+// ===========================================================================
+// SwarmCryptoEdge：防御分支直调（nullptr/尺寸门/注入点/垃圾输入）
+//
+// 覆盖率定性登记（swarm_crypto.cpp 不可达集合，证据：EVP 调用链的失败
+// 只能源于进程级 OOM/资源枯竭或 OpenSSL 内部错误——本机与 CI 均无注入
+// 点以外的确定性构造手段）：
+//   - generate_keypair 的 EVP 链（EVP_PKEY_new/RawPublic/Peer...失败分支
+//     47/51-52/60-61/66-68/74-76/81-84）：无对应注入点
+//   - sha256_hex 的 EVP_Digest 失败（128）：同上
+//   - sign 的 EVP_PKEY_new_raw_private_key 失败（147）：合法 32 字节
+//     种子恒成功，无注入点
+//   - random_bytes 的 RAND_bytes 失败（235）：无注入点
+// ===========================================================================
+
+TEST(SwarmCryptoEdge, BytesToHexNullptrYieldsEmpty) {
+    EXPECT_TRUE(SwarmCrypto::bytes_to_hex(nullptr, 8).empty());
+}
+
+TEST(SwarmCryptoEdge, Sha256NullptrGuardOnlyWhenDataExpected) {
+    // nullptr+正长度 → 空；nullptr+0 = 空消息 → RFC 6234 空向量（对照）
+    EXPECT_TRUE(SwarmCrypto::sha256_hex(nullptr, 1).empty());
+    EXPECT_EQ(SwarmCrypto::sha256_hex(nullptr, 0),
+              "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+}
+
+TEST(SwarmCryptoEdge, SignSeedSizeGateYieldsEmpty) {
+    std::vector<uint8_t> seed(31, 0x5a);
+    EXPECT_TRUE(SwarmCrypto::sign(seed, "payload").empty());
+}
+
+TEST(SwarmCryptoEdge, SignCtxNewInjectionYieldsEmpty) {
+    const auto seed =
+        SwarmCrypto::hex_to_bytes(kRfc8032Test1Seed);
+    ASSERT_EQ(seed.size(), 32u);
+    const detail::ScopedInjection inj{
+        falcon::detail::InjectPoint::SwarmSignCtxNew};
+    EXPECT_TRUE(SwarmCrypto::sign(seed, "payload").empty());
+}
+
+TEST(SwarmCryptoEdge, VerifyEmptyDerYieldsFalse) {
+    const auto seed = SwarmCrypto::hex_to_bytes(kRfc8032Test1Seed);
+    const std::string sig = SwarmCrypto::sign(seed, "payload");
+    EXPECT_FALSE(SwarmCrypto::verify({}, "payload", sig));
+}
+
+TEST(SwarmCryptoEdge, VerifyGarbageDerYieldsFalse) {
+    // 恰 44 字节但非 DER(SPKI)（d2i_PUBKEY 解析失败分支）
+    const auto der = std::vector<uint8_t>(44, 0xab);
+    const auto seed = SwarmCrypto::hex_to_bytes(kRfc8032Test1Seed);
+    const std::string sig = SwarmCrypto::sign(seed, "payload");
+    EXPECT_FALSE(SwarmCrypto::verify(der, "payload", sig));
+}
+
+TEST(SwarmCryptoEdge, VerifyCtxNewInjectionYieldsFalse) {
+    // 合法 DER 先过解析（注入点在 d2i_PUBKEY 之后）再命中 ctx 创建失败
+    const auto der = spki_der_from_raw_hex(kRfc8032Test1Pub);
+    const auto seed = SwarmCrypto::hex_to_bytes(kRfc8032Test1Seed);
+    const std::string sig = SwarmCrypto::sign(seed, "payload");
+    ASSERT_TRUE(SwarmCrypto::verify(der, "payload", sig));  // 基线先绿
+
+    const detail::ScopedInjection inj{
+        falcon::detail::InjectPoint::SwarmVerifyCtxNew};
+    EXPECT_FALSE(SwarmCrypto::verify(der, "payload", sig));
+}
+
+TEST(SwarmCryptoEdge, RandomBytesOverflowGuardYieldsEmpty) {
+    // n > INT_MAX 在分配前即拒（否则 vector 构造本身可能抛 bad_alloc）
+    const auto out = SwarmCrypto::random_bytes(
+        static_cast<std::size_t>(std::numeric_limits<int>::max()) + 1);
+    EXPECT_TRUE(out.empty());
+}
+
+// ===========================================================================
+// SwarmDispatch：handlers 层 JSON 形状门（-32602 族）直调分派
+//
+// 传输层（回环 50 用例）已覆盖成功路径与语义错误；本组钉「非法形状」
+// 的精确错误消息——HTTP/WS 传输层对非 object params 先拒 -32600，故
+// 「params 非 object → -32602」的 dispatch 顶层门只能经直调分派到达
+// （既有 ParamsNotObjectYields32600Not32602 钉的是传输层语义）。
+// 门序（源码序）：node_id/pubkey/nonce → group_token → agent →
+// advertise(object→addr→direct) → challenge_sig。
+// ===========================================================================
+
+namespace {
+
+// 合法 step1 身份参数基底（每用例单点破坏一个字段）
+nlohmann::json valid_register_params(const SwarmTestNode& node) {
+    return node.step1_params("0011223344556677");
+}
+
+void expect_shape_error(const SwarmReply& reply, const std::string& message) {
+    EXPECT_FALSE(reply.ok());
+    EXPECT_EQ(reply.error_code, -32602);  // JSON-RPC invalid params
+    EXPECT_EQ(reply.error_message, message);
+}
+
+}  // namespace
+
+TEST(SwarmDispatch, NonObjectParamsYields32602) {
+    SwarmRendezvousState state(state_config());
+    const auto now = SwarmRendezvousState::Clock::now();
+    const auto reply = dispatch_swarm_method(
+        state, kMethodRegister, nlohmann::json::array({"x"}), now);
+    expect_shape_error(reply, "params must be an object");
+}
+
+TEST(SwarmDispatch, RegisterOptionalFieldShapeGates) {
+    SwarmRendezvousState state(state_config());
+    const auto now = SwarmRendezvousState::Clock::now();
+    SwarmTestNode node;
+
+    {  // group_token 非字符串
+        auto params = valid_register_params(node);
+        params[kFieldGroupToken] = 123;
+        expect_shape_error(
+            dispatch_swarm_method(state, kMethodRegister, params, now),
+            "group_token must be a string");
+    }
+    {  // agent 非字符串
+        auto params = valid_register_params(node);
+        params[kFieldAgent] = 123;
+        expect_shape_error(
+            dispatch_swarm_method(state, kMethodRegister, params, now),
+            "agent must be a string");
+    }
+    {  // advertise 非对象
+        auto params = valid_register_params(node);
+        params[kFieldAdvertise] = "not-an-object";
+        expect_shape_error(
+            dispatch_swarm_method(state, kMethodRegister, params, now),
+            "advertise must be an object");
+    }
+    {  // advertise.addr 非字符串
+        auto params = valid_register_params(node);
+        params[kFieldAdvertise] = {{kFieldAddr, 5}, {kFieldDirect, true}};
+        expect_shape_error(
+            dispatch_swarm_method(state, kMethodRegister, params, now),
+            "advertise.addr must be a string");
+    }
+    {  // advertise.direct 非布尔
+        auto params = valid_register_params(node);
+        params[kFieldAdvertise] = {{kFieldAddr, "203.0.113.7:4500"},
+                                   {kFieldDirect, "yes"}};
+        expect_shape_error(
+            dispatch_swarm_method(state, kMethodRegister, params, now),
+            "advertise.direct must be a boolean");
+    }
+    {  // advertise 在场但缺 addr → addr 必需（direct 才是可选项）
+        auto params = valid_register_params(node);
+        params[kFieldAdvertise] = nlohmann::json::object();
+        expect_shape_error(
+            dispatch_swarm_method(state, kMethodRegister, params, now),
+            "advertise.addr must be a string");
+    }
+    {  // challenge_sig 形态不合法（合法身份 + 空 advertise 之外的形态）
+        auto params = valid_register_params(node);
+        params["challenge_sig"] = "zz";
+        expect_shape_error(
+            dispatch_swarm_method(state, kMethodRegister, params, now),
+            "challenge_sig must be 128 lowercase hex chars");
+    }
+}
+
+TEST(SwarmDispatch, HeartbeatQueryUnsubscribeSessionShapeGates) {
+    SwarmRendezvousState state(state_config());
+    const auto now = SwarmRendezvousState::Clock::now();
+
+    {  // heartbeat：session 非字符串
+        expect_shape_error(
+            dispatch_swarm_method(
+                state, kMethodHeartbeat, {{kFieldSession, 5}}, now),
+            "session must be a string");
+    }
+    {  // query：session 合法但缺 sha256 → sha256 门
+        expect_shape_error(
+            dispatch_swarm_method(
+                state, kMethodQuery, {{kFieldSession, "s-x"}}, now),
+            "sha256 must be 64 lowercase hex chars");
+    }
+    {  // unsubscribe：session 非字符串
+        expect_shape_error(
+            dispatch_swarm_method(
+                state, kMethodUnsubscribe, {{kFieldSession, nlohmann::json::array()}}, now),
+            "session must be a string");
+    }
+}
+
+TEST(SwarmDispatch, AnnounceNotImplementedYields32601) {
+    // 方法常量已定义、阶段 0 无服务端实现 → 分派回 -32601（设计内）
+    SwarmRendezvousState state(state_config());
+    const auto now = SwarmRendezvousState::Clock::now();
+    const auto reply = dispatch_swarm_method(
+        state, kMethodAnnounce, nlohmann::json::object(), now);
+    EXPECT_FALSE(reply.ok());
+    EXPECT_EQ(reply.error_code, -32601);  // JSON-RPC method not found
 }
 
 }  // namespace falcon::swarm

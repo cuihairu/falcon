@@ -77,12 +77,14 @@ bool parse_positive_int(const std::string& name, const std::string& value,
 }
 
 /// 非负整数 CLI 参数解析（rate 两个语义：0 = 不限）
+/// 上界由 stoll 自身的范围检查承载：非负 long long 恒可安全落入 size_t
+/// （LP64 下 SIZE_MAX > LLONG_MAX；显式比较需把 SIZE_MAX 转回 long long，
+/// 该转换实现定义回绕成 -1，会让一切合法值被误拒——旧实现即此缺陷）
 bool parse_size(const std::string& name, const std::string& value,
                 std::size_t& target) {
     try {
         const long long parsed = std::stoll(value);
-        if (parsed < 0 || parsed > static_cast<long long>(
-                                         std::numeric_limits<std::size_t>::max())) {
+        if (parsed < 0) {
             throw std::out_of_range("range");
         }
         target = static_cast<std::size_t>(parsed);
