@@ -34,6 +34,9 @@ namespace falcon::desktop {
 namespace {
 constexpr int kRowHeight = 56;
 constexpr int kSummaryCardWidth = 168;
+// 紧凑横条标准（用户 bug 反馈）：hero 与统计卡固定高度，纵向空白不随窗口拉伸
+constexpr int kHeroHeight = 78;
+constexpr int kSummaryCardHeight = 72;
 
 // 快照状态 → 界面中文文案（引擎状态名不外露）
 QString status_display_text(falcon::TaskStatus status)
@@ -114,9 +117,11 @@ void DownloadPage::create_hero_section()
 {
     auto* hero_container = new QWidget(this);
     hero_container->setObjectName("downloadHero");
+    // 紧凑横条：固定高度，禁止被布局纵向拉伸（用户 bug 反馈）
+    hero_container->setFixedHeight(kHeroHeight);
 
     auto* hero_layout = new QHBoxLayout(hero_container);
-    hero_layout->setContentsMargins(20, 18, 20, 18);
+    hero_layout->setContentsMargins(20, 12, 20, 12);
     hero_layout->setSpacing(16);
 
     auto* text_layout = new QVBoxLayout();
@@ -153,9 +158,11 @@ void DownloadPage::create_summary_cards()
         auto* card = new QWidget(this);
         card->setObjectName("summaryCard");
         card->setFixedWidth(kSummaryCardWidth);
+        // 紧凑数值卡：固定高度，禁止被布局纵向拉伸（用户 bug 反馈）
+        card->setFixedHeight(kSummaryCardHeight);
 
         auto* card_layout = new QVBoxLayout(card);
-        card_layout->setContentsMargins(16, 14, 16, 14);
+        card_layout->setContentsMargins(16, 10, 16, 10);
         card_layout->setSpacing(2);
 
         auto* value = new QLabel("0", card);
