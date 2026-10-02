@@ -572,6 +572,12 @@ void MainWindow::create_pages()
         if (clipboard_monitor_) {
             clipboard_monitor_->set_enabled(enabled);
         }
+        // 即时落盘（沿悬浮窗位置范式）：开关是即时动作，不等「应用」按钮
+        // 与退出兜底——用户勾选后直接关机也不丢
+        QSettings settings;
+        settings.beginGroup("desktop");
+        settings.setValue("clipboard_monitoring_enabled", enabled);
+        settings.endGroup();
     });
     connect(settings_page_, &SettingsPage::settings_changed, this, [this]() {
         save_settings();

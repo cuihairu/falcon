@@ -498,6 +498,10 @@ QWidget* SettingsPage::create_clipboard_section_widget()
 
     // Enable monitoring checkbox
     clipboard_monitoring_checkbox_ = new QCheckBox(tr("自动检测剪切板链接"), this);
+    // 勾选即时生效（沿搜索引擎复选框范式）：不经「应用」按钮立即启停监听；
+    // 持久化由 MainWindow 的 toggled 处理器即时落盘（悬浮窗位置同款范式）
+    connect(clipboard_monitoring_checkbox_, &QCheckBox::toggled, this,
+            [this](bool checked) { emit clipboard_monitoring_toggled(checked); });
 
     auto* desc_label = new QLabel(
         tr("自动从剪切板检测下载链接（HTTP、FTP、磁力链等）。"),
