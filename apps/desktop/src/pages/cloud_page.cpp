@@ -9,6 +9,7 @@
 #include "../services/storage_service.hpp"
 #include "../utils/icon_utils.hpp"
 #include <falcon/storage/resource_browser.hpp>
+#include <falcon/storage/storage_presets.hpp>
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -120,6 +121,29 @@ void CloudPage::create_storage_selector()
     title_label->setObjectName("sectionTitle");
     layout->addWidget(title_label);
 
+    // 连接预设（厂商模板一键回填；首项为自定义）
+    auto* preset_layout = new QHBoxLayout();
+    auto* preset_label = new QLabel(tr("预设:"), left_panel_);
+    preset_combo_ = new QComboBox(left_panel_);
+    preset_combo_->addItem(tr("自定义（手填全部字段）"), QString());
+    QString last_category;
+    for (const auto& preset : falcon::storage_presets()) {
+        const QString category =
+            preset.category == "s3" ? tr("对象存储") : tr("网盘");
+        if (category != last_category) {
+            preset_combo_->insertSeparator(preset_combo_->count());
+            last_category = category;
+        }
+        preset_combo_->addItem(QString("%1 · %2").arg(category,
+                                  QString::fromStdString(preset.display_name)),
+                               QString::fromStdString(preset.id));
+    }
+    connect(preset_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &CloudPage::apply_preset);
+    preset_layout->addWidget(preset_label);
+    preset_layout->addWidget(preset_combo_);
+    layout->addLayout(preset_layout);
+
     // 存储类型选择
     auto* type_layout = new QHBoxLayout();
     auto* type_label = new QLabel(tr("类型:"), left_panel_);
@@ -141,6 +165,12 @@ void CloudPage::create_storage_selector()
     endpoint_layout->addWidget(endpoint_label);
     endpoint_layout->addWidget(endpoint_edit_);
     layout->addLayout(endpoint_layout);
+
+    // 预设说明（所选厂商的鉴权形态/边界一句话）
+    preset_hint_label_ = new QLabel(left_panel_);
+    preset_hint_label_->setWordWrap(true);
+    preset_hint_label_->setObjectName("heroDescription");
+    layout->addWidget(preset_hint_label_);
 
     // 访问密钥
     auto* access_key_layout = new QHBoxLayout();
@@ -204,6 +234,59 @@ void CloudPage::create_storage_selector()
     // 连接状态
     connection_status_label_ = new QLabel(tr("未连接"), left_panel_);
     layout->addWidget(connection_status_label_);
+}
+
+void CloudPage::apply_preset(int index)
+{
+    const QString preset_id = preset_combo_->itemData(index).toString();
+    if (preset_id.isEmpty()) {
+        // 自定义：恢复 S3 默认占位与通用提示
+        endpoint_edit_->setPlaceholderText("s3.amazonaws.com");
+        region_edit_->setPlaceholderText("us-east-1");
+        access_key_edit_->setPlaceholderText(QString());
+        secret_key_edit_->setPlaceholderText(QString());
+        preset_hint_label_->setText(
+            tr("手动填写端点、密钥与区域；类型决定底层协议客户端。"));
+        return;
+    }
+
+    const auto* preset =
+        falcon::find_storage_preset(preset_id.toStdString());
+    if (!preset) {
+        return;
+    }
+
+    // 类型跟随预设（工厂协议键）
+    const QString protocol =
+        QString::fromStdString(preset->browser_protocol);
+    const int type_index = storage_type_combo_->findData(protocol);
+    if (type_index >= 0) {
+        storage_type_combo_->setCurrentIndex(type_index);
+    }
+
+    // 端点/区域模板回填（<...> 占位段由用户替换）
+    endpoint_edit_->setText(
+        QString::fromStdString(preset->endpoint_template));
+    endpoint_edit_->setPlaceholderText(
+        preset->endpoint_template.empty()
+            ? tr("自定义端点，如 http://nas:9000")
+            : QString::fromStdString(preset->endpoint_template));
+    region_edit_->setText(
+        QString::fromStdString(preset->region_default));
+
+    // 凭据字段占位按预设提示（S3：Access/Secret；网盘：用户名/密码）
+    if (preset->category == "webdav") {
+        access_key_edit_->setPlaceholderText(
+            QString::fromStdString(preset->username_hint));
+        secret_key_edit_->setPlaceholderText(tr("密码 / 应用密码"));
+    } else {
+        access_key_edit_->setPlaceholderText(
+            QString::fromStdString(preset->username_hint));
+        secret_key_edit_->setPlaceholderText(tr("Secret Access Key"));
+    }
+
+    preset_hint_label_->setText(
+        QString::fromStdString(preset->description));
 }
 
 void CloudPage::create_file_browser()

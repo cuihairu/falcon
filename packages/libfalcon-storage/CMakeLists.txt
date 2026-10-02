@@ -13,6 +13,7 @@ project(libfalcon-storage
 add_library(falcon_storage
     src/resource_browser.cpp
     src/resource_browser_utils.cpp
+    src/storage_presets.cpp
 )
 
 add_library(Falcon::storage ALIAS falcon_storage)
@@ -54,6 +55,7 @@ if(FALCON_ENABLE_RESOURCE_BROWSER)
         target_sources(falcon_storage PRIVATE
             plugins/ftp_browser.cpp
             plugins/s3/s3_browser.cpp
+            plugins/webdav/webdav_browser.cpp
         )
         target_link_libraries(falcon_storage PUBLIC CURL::libcurl nlohmann_json::nlohmann_json)
         target_compile_definitions(falcon_storage PRIVATE FALCON_ENABLE_RESOURCE_BROWSER)

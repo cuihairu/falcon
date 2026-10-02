@@ -112,6 +112,9 @@ private:
     // 格式化文件大小
     QString format_size(uint64_t bytes) const;
 
+    // 预设选中：回填类型/端点/区域与占位提示
+    void apply_preset(int index);
+
     // 控件
     QSplitter* splitter_;
     QWidget* empty_state_widget_;  // 空状态视图
@@ -119,7 +122,9 @@ private:
 
     // 左侧面板 - 存储选择器
     QWidget* left_panel_;
+    QComboBox* preset_combo_;
     QComboBox* storage_type_combo_;
+    QLabel* preset_hint_label_;
     QLineEdit* endpoint_edit_;
     QLineEdit* access_key_edit_;
     QLineEdit* secret_key_edit_;

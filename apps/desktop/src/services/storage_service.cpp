@@ -63,10 +63,25 @@ RemoteResourceInfo to_qt_resource_info(const falcon::RemoteResource& resource) {
 }
 
 /**
+ * @brief 判断是否为 WebDAV 族协议（WebDavBrowser 承接的网盘/端点）
+ */
+bool is_webdav_protocol(const QString& protocol) {
+    return protocol == "webdav" || protocol == "dav" ||
+           protocol == "davs" || protocol == "webdavs";
+}
+
+/**
  * @brief 将 Qt::CloudStorageConfig 转换为 libfalcon 连接选项
  */
 std::map<std::string, std::string> to_connection_options(const CloudStorageConfig& config) {
     std::map<std::string, std::string> options;
+
+    if (is_webdav_protocol(config.protocol)) {
+        // WebDAV/网盘：Access Key 字段复用为用户名，Secret Key 为密码
+        options["username"] = config.access_key.toStdString();
+        options["password"] = config.secret_key.toStdString();
+        return options;
+    }
 
     options["access_key_id"] = config.access_key.toStdString();
     options["secret_access_key"] = config.secret_key.toStdString();
@@ -126,6 +141,26 @@ struct StorageService::Impl {
             return "kodo://" + config.bucket.toStdString();
         } else if (proto == "upyun") {
             return "upyun://" + config.bucket.toStdString();
+        }
+
+        // WebDAV 族：endpoint 即完整端点（预设模板/http(s):// 均可），
+        // 统一改写为 dav/davs scheme 供 WebDavUrlParser 解析
+        if (is_webdav_protocol(config.protocol)) {
+            std::string ep = config.endpoint.toStdString();
+            if (ep.empty()) {
+                return "";
+            }
+            if (ep.rfind("webdavs://", 0) == 0 || ep.rfind("davs://", 0) == 0 ||
+                ep.rfind("webdav://", 0) == 0 || ep.rfind("dav://", 0) == 0) {
+                return ep;
+            }
+            if (ep.rfind("https://", 0) == 0) {
+                return "davs://" + ep.substr(8);
+            }
+            if (ep.rfind("http://", 0) == 0) {
+                return "dav://" + ep.substr(7);
+            }
+            return "dav://" + ep;
         }
 
         return "";
@@ -542,6 +577,10 @@ void StorageService::request_download(const QString& config_name, const QString&
         url = QString("kodo://%1%2").arg(config.bucket, remote_path);
     } else if (config.protocol == "upyun") {
         url = QString("upyun://%1%2").arg(config.bucket, remote_path);
+    } else if (is_webdav_protocol(config.protocol)) {
+        // WebDAV/网盘：端点 + 远端路径（dav(s):// scheme 由数据面插件承接）
+        url = QString::fromStdString(p_impl_->build_connection_url(config)) +
+              remote_path;
     } else {
         url = QString("%1://%2%3").arg(config.protocol, config.bucket, remote_path);
     }

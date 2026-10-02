@@ -10,6 +10,8 @@
 #include <falcon/storage/cloud_url_protocols.hpp>
 #include <falcon/logger.hpp>
 
+#include "s3_list_xml.hpp"
+
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
 #include <cctype>
@@ -270,9 +272,12 @@ public:
             curl_easy_setopt(curl_, CURLOPT_HTTPHEADER, header_list);
         }
 
-        // 设置请求体（handle 复用：空 body 请求清除先前残留）
+        // 设置请求体（handle 复用：空 body 请求传合法空串指针——置
+        // nullptr 会让 curl 退回 read-callback 传输，GET 请求也被套上
+        // Transfer-Encoding: chunked + Expect: 100-continue（线上抓包
+        // 实证），签名校验型服务端（RustFS/MinIO）直接 403 拒收）
         curl_easy_setopt(curl_, CURLOPT_POSTFIELDS,
-                         body.empty() ? nullptr : body.c_str());
+                         body.empty() ? "" : body.c_str());
 
         std::string response;
         curl_easy_setopt(curl_, CURLOPT_WRITEFUNCTION, WriteCallback);
@@ -554,6 +559,14 @@ std::vector<RemoteResource> S3Browser::list_directory(
         }
     }
 
+    // 非递归带 delimiter：只回本层 Contents + CommonPrefixes（目录条目）。
+    // 不带 delimiter 时真 S3/MinIO/RustFS 会平铺返回全部嵌套对象——
+    // RustFS 实测根列表把 docs/hello.txt 当根级文件吐出（目录不可见）。
+    // 递归不带 delimiter：服务端一次返回全部层级的对象，无需逐前缀下钻。
+    if (!options.recursive) {
+        list_url += "&delimiter=/";
+    }
+
     list_url += "&max-keys=" + std::to_string(options.include_metadata ? 1000 : 100);
 
     // 发送请求
@@ -564,7 +577,54 @@ std::vector<RemoteResource> S3Browser::list_directory(
         return resources;
     }
 
-    // 解析响应
+    // 解析响应：ListObjectsV2 真 S3/MinIO/R2/B2/Wasabi/GCS 一律应答 XML
+    // ——此前仅有的 JSON 解析只对早期测试 mock 的 {"Contents":[...]} 通，
+    // 与真实协议面不符（MinIO 实测 list_directory 恒空）。XML 优先；JSON
+    // 形态保留为兼容路径（早期 mock/自定义网关）。
+    std::vector<detail::S3ListEntry> entries;
+    if (detail::parse_s3_list_bucket_result(response, &entries)) {
+        for (auto& entry : entries) {
+            if (entry.is_prefix && options.recursive) {
+                continue;  // 递归模式下前缀只用于下钻，不再重复入列
+            }
+            RemoteResource res;
+            res.name = entry.key.substr(entry.key.find_last_of('/') + 1);
+            res.path = entry.key;
+            if (entry.is_prefix) {
+                res.type = ResourceType::Directory;
+            } else {
+                res.type = ResourceType::File;
+                res.size = entry.size;
+                res.modified_time = std::move(entry.last_modified);
+                res.etag = std::move(entry.etag);
+                if (!entry.storage_class.empty()) {
+                    res.metadata["storage_class"] = std::move(entry.storage_class);
+                }
+            }
+            if (p_impl_->apply_filter(res, options)) {
+                resources.push_back(std::move(res));
+            }
+        }
+
+        // 处理CommonPrefixes（子目录）：递归模式只用于下钻（与前缀本身
+        // 不重复出现在结果里，保持既有递归语义）；非递归模式前缀作为
+        // 目录条目返回（此前目录条目在任何模式下都不可见）
+        if (options.recursive) {
+            for (const auto& entry : entries) {
+                if (!entry.is_prefix) {
+                    continue;
+                }
+                std::vector<RemoteResource> sub_resources =
+                    list_directory(entry.key, options);
+                resources.insert(resources.end(),
+                                 std::make_move_iterator(sub_resources.begin()),
+                                 std::make_move_iterator(sub_resources.end()));
+            }
+        }
+        p_impl_->sort_resources(resources, options);
+        return resources;
+    }
+
 #ifndef FALCON_BROWSER_NO_JSON
     try {
         json json_response = json::parse(response);
@@ -694,11 +754,18 @@ bool S3Browser::remove(const std::string& path, bool recursive) {
         }
     }
 
-    // 删除指定路径
+    // 删除指定路径。目录标记对象是尾斜杠 key：无斜杠 DELETE 命不中
+    // 标记（S3 对不存在 key 也回 2xx，静默漏删），两种形态一并清理
     bool ok = false;
     p_impl_->perform_s3_request("DELETE", url, {}, "", nullptr, &ok);
+    bool marker_ok = true;
+    if (!path.empty() && path.back() != '/') {
+        marker_ok = false;
+        p_impl_->perform_s3_request("DELETE", url + "/", {}, "", nullptr,
+                                    &marker_ok);
+    }
 
-    return ok;
+    return ok && marker_ok;
 }
 
 bool S3Browser::rename(const std::string& old_path, const std::string& new_path) {
@@ -710,17 +777,35 @@ bool S3Browser::rename(const std::string& old_path, const std::string& new_path)
 }
 
 bool S3Browser::copy(const std::string& source_path, const std::string& dest_path) {
-    // 使用S3复制API
-    std::string source_url = p_impl_->build_s3_url(p_impl_->s3_url_.bucket, source_path);
+    // 使用S3复制API。目录在 S3 中是尾斜杠的 0 字节标记对象：源按原样
+    // 复制 404（NoSuchKey）时回退尝试尾斜杠形态（RustFS 实测），
+    // 目标同步补斜杠保持目录语义
     std::string dest_url = p_impl_->build_s3_url(p_impl_->s3_url_.bucket, dest_path);
 
-    std::map<std::string, std::string> headers;
-    headers["x-amz-copy-source"] = "/" + p_impl_->s3_url_.bucket + "/" + source_path;
+    for (const bool with_slash : {false, true}) {
+        const std::string source = with_slash
+                                       ? std::string(source_path).append("/")
+                                       : source_path;
+        const std::string dest = with_slash
+                                     ? std::string(dest_path).append("/")
+                                     : dest_path;
+        std::string dest_url_slashed = dest_url;
+        if (with_slash) {
+            dest_url_slashed = p_impl_->build_s3_url(p_impl_->s3_url_.bucket, dest);
+        }
 
-    bool ok = false;
-    p_impl_->perform_s3_request("PUT", dest_url, headers, "", nullptr, &ok);
+        std::map<std::string, std::string> headers;
+        headers["x-amz-copy-source"] =
+            "/" + p_impl_->s3_url_.bucket + "/" + source;
 
-    return ok;
+        bool ok = false;
+        p_impl_->perform_s3_request("PUT", dest_url_slashed, headers, "",
+                                    nullptr, &ok);
+        if (ok) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool S3Browser::exists(const std::string& path) {

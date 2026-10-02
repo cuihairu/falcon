@@ -7,6 +7,7 @@
 
 #include <falcon/storage/resource_browser.hpp>
 #include <falcon/storage/s3_browser.hpp>
+#include <falcon/storage/webdav_browser.hpp>
 #ifdef FALCON_ENABLE_CRYPTO_STORAGE_BROWSERS
 #include <falcon/storage/oss_browser.hpp>
 #include <falcon/storage/cos_browser.hpp>
@@ -49,6 +50,20 @@ void register_default_browsers() {
         BrowserFactory::register_browser(
             {"s3", "Amazon S3", "Amazon Simple Storage Service"},
             [] { return std::make_unique<S3Browser>(); });
+        BrowserFactory::register_browser(
+            {"webdav", "WebDAV / Alist",
+             "WebDAV endpoints and Alist aggregates (坚果云/OneDrive/"
+             "Google Drive 等)"},
+            [] { return std::make_unique<WebDavBrowser>(); });
+        BrowserFactory::register_browser(
+            {"dav", "WebDAV", "Alias for WebDAV (dav scheme)"},
+            [] { return std::make_unique<WebDavBrowser>(); });
+        BrowserFactory::register_browser(
+            {"davs", "WebDAV (HTTPS)", "Alias for WebDAV (davs scheme)"},
+            [] { return std::make_unique<WebDavBrowser>(); });
+        BrowserFactory::register_browser(
+            {"webdavs", "WebDAV (HTTPS)", "Alias for WebDAV (webdavs scheme)"},
+            [] { return std::make_unique<WebDavBrowser>(); });
 #ifdef FALCON_ENABLE_CRYPTO_STORAGE_BROWSERS
         BrowserFactory::register_browser(
             {"oss", "Alibaba OSS", "Alibaba Cloud Object Storage Service"},

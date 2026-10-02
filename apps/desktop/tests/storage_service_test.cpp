@@ -218,8 +218,9 @@ TEST_F(StorageServiceTest, FreshServiceHasNoConnections)
 
 TEST_F(StorageServiceTest, ConnectUnsupportedProtocolFailsWithError)
 {
-    // webdav 不在 BrowserFactory 注册表内：create_browser 空指针收口
-    const bool ok = service->connect_storage(make_config("dav", "webdav"));
+    // 未注册协议不在 BrowserFactory 注册表内：create_browser 空指针收口
+    // （webdav/dav/davs/webdavs 已注册为 WebDAV 浏览器，不再当未知协议）
+    const bool ok = service->connect_storage(make_config("dav", "no-such-cloud"));
     EXPECT_FALSE(ok);
     EXPECT_FALSE(service->is_connected("dav"));
     EXPECT_TRUE(service->connected_storages().isEmpty());
@@ -379,7 +380,7 @@ TEST_F(StorageServiceTest, RequestDownloadBuildsProtocolUrls)
         {"kodo", "kodo://media/data/a.bin"},
         {"qiniu", "kodo://media/data/a.bin"}, // qiniu 归一到 kodo scheme
         {"upyun", "upyun://media/data/a.bin"},
-        {"webdav", "webdav://media/data/a.bin"}, // 未知协议按 scheme 直拼
+        {"foobar", "foobar://media/data/a.bin"}, // 未知协议按 scheme 直拼
     };
     for (const Row& row : rows) {
         service->save_config(make_config(QString("cfg-") + row.protocol, row.protocol, "media"));
@@ -389,6 +390,14 @@ TEST_F(StorageServiceTest, RequestDownloadBuildsProtocolUrls)
         EXPECT_EQ(last_download_local.toStdString(), "/tmp/out.bin");
         download_requested_count = 0;
     }
+
+    // WebDAV 族：endpoint 改写 dav(s):// 后拼远端路径（WebDavUrlParser 数据面）
+    service->save_config(
+        make_config("cfg-webdav-ep", "webdav", "testbucket", "http://media:5005/dav"));
+    service->request_download("cfg-webdav-ep", "/data/a.bin", "/tmp/out.bin");
+    ASSERT_EQ(download_requested_count, 1);
+    EXPECT_EQ(last_download_url.toStdString(), "dav://media:5005/dav/data/a.bin");
+    EXPECT_EQ(last_download_local.toStdString(), "/tmp/out.bin");
 }
 
 // ---------- 回环 mock 上的目录列举 ----------

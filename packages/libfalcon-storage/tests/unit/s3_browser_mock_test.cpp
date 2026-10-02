@@ -36,16 +36,38 @@ MockS3Server::Response defaultReply(const std::string&, const std::string&) {
     return {200, "{}"};
 }
 
-std::string contentsJson(const std::string& keysJson) {
-    return "{\"Contents\": [" + keysJson + "]}";
+/// ListBucketResult XML 包装（ListObjectsV2 协议面：真 S3/MinIO/R2/B2/
+/// Wasabi/GCS 一律应答 XML——历史 mock 的 {"Contents":[...]} JSON 形态
+/// 与真实协议不符，已于 S3 XML list 收口批次替换）
+std::string listResultXml(const std::string& inner = "") {
+    return "<ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">"
+           + inner + "</ListBucketResult>";
 }
 
-/// JSON 内容允许换行空白，raw string 便于阅读
-const char* kTwoObjects =
-    R"({"Key":"docs/img.png","Size":200,"ETag":"\"e2\""},)"
-    R"({"Key":"docs/readme.md","Size":100,)"
-    R"("LastModified":"2026-01-01T00:00:00Z","ETag":"\"e1\"",)"
-    R"("StorageClass":"STANDARD"})";
+/// <Contents> 条目构造（字段按需携带，模拟实现侧字段裁剪）
+std::string objXml(const std::string& key, uint64_t size = 0,
+                   const std::string& last_modified = "",
+                   const std::string& etag = "",
+                   const std::string& storage_class = "") {
+    std::string s = "<Contents><Key>" + key + "</Key><Size>"
+                    + std::to_string(size) + "</Size>";
+    if (!last_modified.empty()) {
+        s += "<LastModified>" + last_modified + "</LastModified>";
+    }
+    if (!etag.empty()) {
+        s += "<ETag>" + etag + "</ETag>";
+    }
+    if (!storage_class.empty()) {
+        s += "<StorageClass>" + storage_class + "</StorageClass>";
+    }
+    s += "</Contents>";
+    return s;
+}
+
+/// 顶层两个对象（img.png / readme.md）
+const std::string kTwoObjects =
+    objXml("docs/img.png", 200) +
+    objXml("docs/readme.md", 100, "2026-01-01T00:00:00Z", "", "STANDARD");
 
 } // namespace
 
@@ -144,11 +166,11 @@ TEST_F(S3BrowserMockTest, ConnectFailsWhenServerUnreachable) {
     EXPECT_FALSE(browser.connect("s3://" + std::string(kBucket), options));
 }
 
-TEST_F(S3BrowserMockTest, ListDirectoryParsesJsonContents) {
+TEST_F(S3BrowserMockTest, ListDirectoryParsesXmlContents) {
     server_ = std::make_unique<MockS3Server>(
         [](const std::string&, const std::string& path) {
             if (path.find("list-type=2") != std::string::npos) {
-                return MockS3Server::Response{200, contentsJson(kTwoObjects)};
+                return MockS3Server::Response{200, listResultXml(kTwoObjects)};
             }
             return defaultReply("", path);
         });
@@ -187,10 +209,8 @@ TEST_F(S3BrowserMockTest, ListDirectoryFiltersHiddenAndSortsByName) {
     server_ = std::make_unique<MockS3Server>(
         [](const std::string&, const std::string& path) {
             if (path.find("list-type=2") != std::string::npos) {
-                return MockS3Server::Response{200, contentsJson(
-                    R"({"Key":"b.txt","Size":1},)"
-                    R"({"Key":".hidden","Size":2},)"
-                    R"({"Key":"a.txt","Size":3})")};
+                return MockS3Server::Response{200, listResultXml(
+                    objXml("b.txt") + objXml(".hidden", 2) + objXml("a.txt", 3))};
             }
             return defaultReply("", path);
         });
@@ -223,12 +243,12 @@ TEST_F(S3BrowserMockTest, ListDirectoryRecursiveDescendsCommonPrefixes) {
             if (path.find("prefix=docs/") == std::string::npos &&
                 path.find("list-type=2") != std::string::npos) {
                 // 顶层：仅一个子目录前缀
-                return MockS3Server::Response{200,
-                    R"({"CommonPrefixes": [{"Prefix":"docs/"}]})"};
+                return MockS3Server::Response{200, listResultXml(
+                    "<CommonPrefixes><Prefix>docs/</Prefix></CommonPrefixes>")};
             }
             if (path.find("list-type=2") != std::string::npos) {
-                return MockS3Server::Response{200, contentsJson(
-                    R"({"Key":"docs/deep.bin","Size":9})")};
+                return MockS3Server::Response{200,
+                    listResultXml(objXml("docs/deep.bin", 9))};
             }
             return defaultReply("", path);
         });
@@ -246,6 +266,138 @@ TEST_F(S3BrowserMockTest, ListDirectoryRecursiveDescendsCommonPrefixes) {
 
     // 两次列表请求：顶层 + 子前缀
     EXPECT_GE(server_->requests().size(), size_t{3});  // connect + 2 次 list
+}
+
+TEST_F(S3BrowserMockTest, ListDirectoryNonRecursiveShowsPrefixesAsDirectories) {
+    // 非递归模式：CommonPrefixes 作为目录条目可见（此前目录条目在任何
+    // 模式下都不出现，文件浏览器视角根目录恒空）
+    server_ = std::make_unique<MockS3Server>(
+        [](const std::string&, const std::string& path) {
+            if (path.find("list-type=2") != std::string::npos) {
+                return MockS3Server::Response{200, listResultXml(
+                    objXml("root.txt", 1) +
+                    "<CommonPrefixes><Prefix>docs/</Prefix></CommonPrefixes>" +
+                    "<CommonPrefixes><Prefix>img/</Prefix></CommonPrefixes>")};
+            }
+            return defaultReply("", path);
+        });
+    ASSERT_TRUE(server_->start());
+
+    S3Browser browser;
+    ASSERT_TRUE(connectBrowser(browser));
+
+    ListOptions options;  // recursive 默认 false
+    auto resources = browser.list_directory("", options);
+
+    ASSERT_EQ(resources.size(), size_t{3});
+    EXPECT_EQ(resources[0].name, "docs");
+    EXPECT_EQ(resources[0].type, ResourceType::Directory);
+    EXPECT_EQ(resources[0].path, "docs");
+    EXPECT_EQ(resources[1].name, "img");
+    EXPECT_EQ(resources[1].type, ResourceType::Directory);
+    EXPECT_EQ(resources[2].name, "root.txt");
+    EXPECT_EQ(resources[2].type, ResourceType::File);
+}
+
+TEST_F(S3BrowserMockTest, ListRequestsDelimiterOnlyInNonRecursiveMode) {
+    // delimiter 语义：非递归必须带 delimiter=/ 才能拿到 CommonPrefixes，
+    // 否则真 S3/RustFS 平铺全部嵌套对象、目录不可见（RustFS 真面走查
+    // 实证）；递归不带 delimiter，服务端一次返回全层级
+    std::vector<std::string> list_queries;  // 仅记录顶层列表请求
+    server_ = std::make_unique<MockS3Server>(
+        [&](const std::string&, const std::string& path) {
+            if (path.find("list-type=2") != std::string::npos) {
+                if (path.find("prefix=") == std::string::npos) {
+                    list_queries.push_back(path);
+                    return MockS3Server::Response{200, listResultXml(
+                        "<CommonPrefixes><Prefix>docs/</Prefix></CommonPrefixes>")};
+                }
+                return MockS3Server::Response{200,
+                    listResultXml(objXml("docs/deep.bin", 3))};
+            }
+            return defaultReply("", path);
+        });
+    ASSERT_TRUE(server_->start());
+
+    S3Browser browser;
+    ASSERT_TRUE(connectBrowser(browser));
+
+    ListOptions non_recursive;  // recursive 默认 false
+    browser.list_directory("", non_recursive);
+
+    ListOptions recursive;
+    recursive.recursive = true;
+    browser.list_directory("", recursive);
+
+    ASSERT_EQ(list_queries.size(), size_t{2});
+    EXPECT_NE(list_queries[0].find("delimiter=/"), std::string::npos);
+    EXPECT_EQ(list_queries[1].find("delimiter="), std::string::npos);
+}
+
+TEST_F(S3BrowserMockTest, ListDirectoryDecodesXmlEntitiesInKeys) {
+    // key 中的 XML 实体必须还原（&amp; 是 S3 对 '&' 的强制转义）
+    server_ = std::make_unique<MockS3Server>(
+        [](const std::string&, const std::string& path) {
+            if (path.find("list-type=2") != std::string::npos) {
+                return MockS3Server::Response{200,
+                    listResultXml(objXml("docs/a&amp;b.txt", 5))};
+            }
+            return defaultReply("", path);
+        });
+    ASSERT_TRUE(server_->start());
+
+    S3Browser browser;
+    ASSERT_TRUE(connectBrowser(browser));
+
+    ListOptions options;
+    auto resources = browser.list_directory("docs", options);
+    ASSERT_EQ(resources.size(), size_t{1});
+    EXPECT_EQ(resources[0].path, "docs/a&b.txt");
+    EXPECT_EQ(resources[0].name, "a&b.txt");
+}
+
+TEST_F(S3BrowserMockTest, ListDirectoryToleratesNamespacedTags) {
+    // 防御性：带命名空间前缀的标签按局部名匹配（部分 S3 兼容实现会加前缀）
+    server_ = std::make_unique<MockS3Server>(
+        [](const std::string&, const std::string& path) {
+            if (path.find("list-type=2") != std::string::npos) {
+                return MockS3Server::Response{200,
+                    "<ns:ListBucketResult>"
+                    "<ns:Contents><ns:Key>ns.txt</ns:Key>"
+                    "<ns:Size>7</ns:Size></ns:Contents>"
+                    "</ns:ListBucketResult>"};
+            }
+            return defaultReply("", path);
+        });
+    ASSERT_TRUE(server_->start());
+
+    S3Browser browser;
+    ASSERT_TRUE(connectBrowser(browser));
+
+    ListOptions options;
+    auto resources = browser.list_directory("", options);
+    ASSERT_EQ(resources.size(), size_t{1});
+    EXPECT_EQ(resources[0].path, "ns.txt");
+    EXPECT_EQ(resources[0].size, uint64_t{7});
+}
+
+TEST_F(S3BrowserMockTest, ListDirectoryEmptyBucketXmlYieldsEmptyWithoutJsonFallback) {
+    // 真实空桶：ListBucketResult 无 Contents/CommonPrefixes —— 零条目成功，
+    // 不得落入 JSON 兼容路径报解析错误
+    server_ = std::make_unique<MockS3Server>(
+        [](const std::string&, const std::string& path) {
+            if (path.find("list-type=2") != std::string::npos) {
+                return MockS3Server::Response{200, listResultXml()};
+            }
+            return defaultReply("", path);
+        });
+    ASSERT_TRUE(server_->start());
+
+    S3Browser browser;
+    ASSERT_TRUE(connectBrowser(browser));
+
+    ListOptions options;
+    EXPECT_TRUE(browser.list_directory("", options).empty());
 }
 
 TEST_F(S3BrowserMockTest, ListDirectoryEmptyOnMalformedResponse) {
@@ -373,8 +525,8 @@ TEST_F(S3BrowserMockTest, RemoveRecursiveDeletesChildrenThenTarget) {
     server_ = std::make_unique<MockS3Server>(
         [](const std::string& method, const std::string& path) {
             if (method == "GET" && path.find("list-type=2") != std::string::npos) {
-                return MockS3Server::Response{200, contentsJson(
-                    R"({"Key":"dir/aa.txt"},{"Key":"dir/bb.txt"})")};
+                return MockS3Server::Response{200,
+                    listResultXml(objXml("dir/aa.txt") + objXml("dir/bb.txt"))};
             }
             return defaultReply(method, path);  // DELETE 一律成功
         });
@@ -391,11 +543,47 @@ TEST_F(S3BrowserMockTest, RemoveRecursiveDeletesChildrenThenTarget) {
             deleted.push_back(path);
         }
     }
-    // 子对象按路径降序（最深优先）+ 目标目录本身
-    ASSERT_EQ(deleted.size(), size_t{3});
+    // 子对象按路径降序（最深优先）+ 目标目录本身 + 尾斜杠标记兜底删除
+    // （S3 对不存在 key 的 DELETE 也回 2xx，目录标记必须显式补发——
+    // RustFS 真面走查实证：只删无斜杠 key 时标记静默残留）
+    ASSERT_EQ(deleted.size(), size_t{4});
     EXPECT_NE(deleted[0].find("dir/bb.txt"), std::string::npos);
     EXPECT_NE(deleted[1].find("dir/aa.txt"), std::string::npos);
     EXPECT_NE(deleted[2].find("/" + std::string(kBucket) + "/dir"), std::string::npos);
+    EXPECT_EQ(deleted[3].back(), '/');
+}
+
+TEST_F(S3BrowserMockTest, CopyDirectoryMarkerFallsBackToTrailingSlash) {
+    // S3 目录 = 尾斜杠 0 字节标记对象：对无斜杠目标 PUT 复制回 404
+    // （NoSuchKey），须回退带尾斜杠重试（RustFS 真面走查实证）
+    server_ = std::make_unique<MockS3Server>(
+        [](const std::string& method, const std::string& path) {
+            if (method == "PUT" &&
+                path.find("/" + std::string(kBucket) + "/dst") != std::string::npos &&
+                path.back() != '/') {
+                return MockS3Server::Response{404,
+                    "<Error><Code>NoSuchKey</Code></Error>"};
+            }
+            return defaultReply(method, path);
+        });
+    ASSERT_TRUE(server_->start());
+
+    S3Browser browser;
+    ASSERT_TRUE(connectBrowser(browser));
+
+    EXPECT_TRUE(browser.copy("src", "dst"));
+
+    std::vector<std::string> put_paths;
+    for (auto& [method, path] : server_->requests()) {
+        if (method == "PUT") {
+            put_paths.push_back(path);
+        }
+    }
+    // 首试无斜杠 404 → 回退尾斜杠 200
+    ASSERT_EQ(put_paths.size(), size_t{2});
+    EXPECT_NE(put_paths[0].find("/" + std::string(kBucket) + "/dst"),
+              std::string::npos);
+    EXPECT_EQ(put_paths[1].back(), '/');
 }
 
 TEST_F(S3BrowserMockTest, RenameCopiesThenDeletes) {
@@ -467,10 +655,9 @@ TEST_F(S3BrowserMockTest, ListSortsBySizeAscendingAndDescending) {
     server_ = std::make_unique<MockS3Server>(
         [](const std::string&, const std::string& path) {
             if (path.find("list-type=2") != std::string::npos) {
-                return MockS3Server::Response{200, contentsJson(
-                    R"({"Key":"c.bin","Size":300},)"
-                    R"({"Key":"a.bin","Size":100},)"
-                    R"({"Key":"b.bin","Size":200})")};
+                return MockS3Server::Response{200, listResultXml(
+                    objXml("c.bin", 300) + objXml("a.bin", 100) +
+                    objXml("b.bin", 200))};
             }
             return defaultReply("", path);
         });
@@ -499,9 +686,9 @@ TEST_F(S3BrowserMockTest, ListSortsByModifiedTime) {
     server_ = std::make_unique<MockS3Server>(
         [](const std::string&, const std::string& path) {
             if (path.find("list-type=2") != std::string::npos) {
-                return MockS3Server::Response{200, contentsJson(
-                    R"({"Key":"new.txt","Size":1,"LastModified":"2026-05-01T00:00:00Z"},)"
-                    R"({"Key":"old.txt","Size":1,"LastModified":"2026-01-01T00:00:00Z"})")};
+                return MockS3Server::Response{200, listResultXml(
+                    objXml("new.txt", 1, "2026-05-01T00:00:00Z") +
+                    objXml("old.txt", 1, "2026-01-01T00:00:00Z"))};
             }
             return defaultReply("", path);
         });
@@ -528,11 +715,9 @@ TEST_F(S3BrowserMockTest, ListFilterWildcardPrefixSuffixExactAndStar) {
     server_ = std::make_unique<MockS3Server>(
         [](const std::string&, const std::string& path) {
             if (path.find("list-type=2") != std::string::npos) {
-                return MockS3Server::Response{200, contentsJson(
-                    R"({"Key":"a.txt","Size":1},)"
-                    R"({"Key":"pre_x.txt","Size":1},)"
-                    R"({"Key":"exact.log","Size":1},)"
-                    R"({"Key":"other.bin","Size":1})")};
+                return MockS3Server::Response{200, listResultXml(
+                    objXml("a.txt") + objXml("pre_x.txt") +
+                    objXml("exact.log") + objXml("other.bin"))};
             }
             return defaultReply("", path);
         });
