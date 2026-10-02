@@ -55,6 +55,12 @@ public:
     void set_open_file_when_completed(bool enabled);
     void set_action_when_completed(int action);
     void set_theme_display(bool dark_mode);
+    void set_float_widget_enabled(bool enabled);
+    void set_float_show_active_tasks(bool show);
+    void set_float_show_total_progress(bool show);
+    void set_float_size_preset(int preset);
+    void set_float_opacity_percent(int percent);
+    void set_float_click_through(bool enable);
     void set_daemon_mode_enabled(bool enabled);
     void set_daemon_rpc_url(const QString& url);
     void set_daemon_rpc_secret(const QString& secret);
@@ -142,6 +148,14 @@ public:
     /// 启动时静默检查更新（仅弹托盘通知，不打扰其余场景）
     bool is_check_updates_on_startup_enabled() const;
 
+    /// 悬浮速度窗（开关/显示内容/大小档 0小1中2大/透明度 %/鼠标穿透）
+    bool is_float_widget_enabled() const;
+    bool is_float_show_active_tasks() const;
+    bool is_float_show_total_progress() const;
+    int get_float_size_preset() const;
+    int get_float_opacity_percent() const;
+    bool is_float_click_through() const;
+
 signals:
     /**
      * @brief Signal emitted when settings are changed
@@ -187,6 +201,7 @@ private:
     QWidget* create_completion_action_section_widget();
     QWidget* create_connection_section_widget();
     QWidget* create_notification_section_widget();
+    QWidget* create_float_widget_section_widget();
     QWidget* create_appearance_section_widget();
     QWidget* create_about_section_widget();
     QLayout* create_action_buttons_layout();
@@ -228,6 +243,14 @@ private:
     // Notification settings
     QCheckBox* notifications_checkbox_;
     QCheckBox* sound_notification_checkbox_;
+
+    // Floating speed widget（悬浮速度窗）
+    QCheckBox* float_enabled_checkbox_;
+    QCheckBox* float_show_active_checkbox_;
+    QCheckBox* float_show_progress_checkbox_;
+    QComboBox* float_size_combo_;
+    QSpinBox* float_opacity_spin_;
+    QCheckBox* float_click_through_checkbox_;
 
     // Appearance settings
     QLabel* current_theme_label_;

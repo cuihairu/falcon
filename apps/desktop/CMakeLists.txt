@@ -42,6 +42,7 @@ set(SOURCES
     src/main_window.cpp
     src/widgets/top_bar.cpp
     src/widgets/status_bar.cpp
+    src/widgets/speed_float_widget.cpp
     src/widgets/task_table_widget.cpp
     src/navigation/sidebar.cpp
     src/pages/download_page.cpp
@@ -70,6 +71,7 @@ set(HEADERS
     src/main_window.hpp
     src/widgets/top_bar.hpp
     src/widgets/status_bar.hpp
+    src/widgets/speed_float_widget.hpp
     src/widgets/task_table_widget.hpp
     src/navigation/sidebar.hpp
     src/pages/download_page.hpp

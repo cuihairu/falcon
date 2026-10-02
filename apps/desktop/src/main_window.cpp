@@ -8,6 +8,7 @@
 #include "main_window.hpp"
 #include "widgets/top_bar.hpp"
 #include "widgets/status_bar.hpp"
+#include "widgets/speed_float_widget.hpp"
 #include "navigation/sidebar.hpp"
 #include "pages/download_page.hpp"
 #include "pages/cloud_page.hpp"
@@ -36,6 +37,7 @@
 #include <QFileInfo>
 #include <QMessageBox>
 #include <QSettings>
+#include <QScreen>
 #include <QAction>
 #include <QMenu>
 #include <QUrl>
@@ -143,6 +145,7 @@ MainWindow::MainWindow(QWidget* parent)
     , system_tray_(nullptr)
     , tray_menu_(nullptr)
     , theme_manager_(nullptr)
+    , speed_float_(nullptr)
     , download_service_(nullptr)
     , update_checker_(nullptr)
 {
@@ -156,6 +159,7 @@ MainWindow::MainWindow(QWidget* parent)
     theme_manager_->set_theme(theme_str == "dark" ? ThemeType::Dark : ThemeType::Light);
 
     setup_ui();
+    setup_speed_float();
     setup_clipboard_monitor();
     setup_system_tray();
     load_settings();
@@ -596,6 +600,39 @@ void MainWindow::setup_clipboard_monitor()
     // clipboard_monitor_->start();
 }
 
+void MainWindow::setup_speed_float()
+{
+    speed_float_ = new SpeedFloatWidget(nullptr); // 独立顶层悬浮窗
+    speed_float_->apply_theme(theme_manager_->current_theme());
+
+    // 拖动结束即持久化位置（不等设置页"应用"——位置是即时的空间状态）
+    connect(speed_float_, &SpeedFloatWidget::position_changed, this,
+            [this](const QPoint& pos) {
+                QSettings settings;
+                settings.beginGroup("desktop");
+                settings.setValue("float_pos_x", pos.x());
+                settings.setValue("float_pos_y", pos.y());
+                settings.endGroup();
+            });
+
+    connect(theme_manager_, &ThemeManager::theme_changed, speed_float_,
+            &SpeedFloatWidget::apply_theme);
+
+    // 恢复上次位置；无记录默认停靠主屏右下角
+    QSettings settings;
+    settings.beginGroup("desktop");
+    const int x = settings.value("float_pos_x", -1).toInt();
+    const int y = settings.value("float_pos_y", -1).toInt();
+    settings.endGroup();
+    if (x >= 0 && y >= 0) {
+        speed_float_->move(x, y);
+    } else if (const QScreen* screen = QGuiApplication::primaryScreen()) {
+        const QRect available = screen->availableGeometry();
+        speed_float_->move(available.right() - speed_float_->width() - 24,
+                           available.bottom() - speed_float_->height() - 48);
+    }
+}
+
 void MainWindow::load_settings()
 {
     if (!settings_page_) {
@@ -643,6 +680,18 @@ void MainWindow::load_settings()
         settings.value("check_updates_on_startup", true).toBool());
     settings_page_->set_trash_retention_days(
         settings.value("trash_retention_days", 7).toInt());
+    settings_page_->set_float_widget_enabled(
+        settings.value("float_widget_enabled", true).toBool());
+    settings_page_->set_float_show_active_tasks(
+        settings.value("float_show_active_tasks", true).toBool());
+    settings_page_->set_float_show_total_progress(
+        settings.value("float_show_total_progress", true).toBool());
+    settings_page_->set_float_size_preset(
+        settings.value("float_size_preset", 1).toInt());
+    settings_page_->set_float_opacity_percent(
+        settings.value("float_opacity_percent", 90).toInt());
+    settings_page_->set_float_click_through(
+        settings.value("float_click_through", false).toBool());
     // 手动排序（"3,1,2" 逗号串；无记录/全垃圾 → 空序 = id 升序默认行为）
     const QString task_order_text = settings.value("task_order", QString()).toString();
 
@@ -683,6 +732,18 @@ void MainWindow::save_settings() const
                       settings_page_->is_check_updates_on_startup_enabled());
     settings.setValue("trash_retention_days",
                       settings_page_->get_trash_retention_days());
+    settings.setValue("float_widget_enabled",
+                      settings_page_->is_float_widget_enabled());
+    settings.setValue("float_show_active_tasks",
+                      settings_page_->is_float_show_active_tasks());
+    settings.setValue("float_show_total_progress",
+                      settings_page_->is_float_show_total_progress());
+    settings.setValue("float_size_preset",
+                      settings_page_->get_float_size_preset());
+    settings.setValue("float_opacity_percent",
+                      settings_page_->get_float_opacity_percent());
+    settings.setValue("float_click_through",
+                      settings_page_->is_float_click_through());
     settings.endGroup();
     settings.sync();
 }
@@ -731,6 +792,21 @@ void MainWindow::apply_settings_to_runtime()
             static_cast<std::size_t>(settings_page_->get_seed_time_minutes()));
         download_service_->set_trash_retention_days(
             settings_page_->get_trash_retention_days());
+    }
+
+    if (speed_float_) {
+        speed_float_->setVisible(settings_page_->is_float_widget_enabled());
+        speed_float_->set_show_active_tasks(
+            settings_page_->is_float_show_active_tasks());
+        speed_float_->set_show_total_progress(
+            settings_page_->is_float_show_total_progress());
+        speed_float_->set_size_preset(
+            static_cast<SpeedFloatWidget::SizePreset>(
+                settings_page_->get_float_size_preset()));
+        speed_float_->set_opacity_percent(
+            settings_page_->get_float_opacity_percent());
+        speed_float_->set_click_through(
+            settings_page_->is_float_click_through());
     }
 }
 
@@ -1034,6 +1110,26 @@ void MainWindow::on_stats_refreshed(falcon::daemon::rpc::GlobalStats stats)
     // 侧栏底部统计卡:真实活跃任务数(替代此前的硬编码假数据)
     if (side_bar_) {
         side_bar_->set_queue_count(static_cast<int>(stats.active_tasks));
+    }
+
+    // 悬浮速度窗:速度/活跃任务数取自统计快照;总进度 = 活跃任务平均进度
+    // (来自最近一轮任务快照,同一刷新周期内最多滞后半拍)
+    if (speed_float_) {
+        SpeedFloatWidget::Stats fs;
+        fs.download_speed = static_cast<std::uint64_t>(stats.download_speed);
+        fs.active_tasks = static_cast<int>(stats.active_tasks);
+        int downloading = 0;
+        double progress_sum = 0.0;
+        for (const auto& snap : latest_task_snapshots_) {
+            if (snap.status == falcon::TaskStatus::Downloading) {
+                ++downloading;
+                progress_sum += snap.progress;
+            }
+        }
+        if (downloading > 0) {
+            fs.overall_progress = progress_sum / downloading;
+        }
+        speed_float_->update_stats(fs);
     }
 }
 

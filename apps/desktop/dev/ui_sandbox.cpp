@@ -18,6 +18,9 @@
  *                              高对比文字/克制 accent)——token 值仅在本次
  *                              沙盒会话内替换(QSS hex 替换 + QPalette 重建),
  *                              生产 theme_tokens/QSS 零改动
+ *   falcon-ui-sandbox --speed-float [输出目录]   悬浮速度水波纹窗走查:
+ *     亮暗双主题 × 速度三档(0 / 2MB/s / 15MB/s),每档在动画推进后连拍
+ *     两帧(a/b)——对照可验证水位高度差与波纹相位在动
  *
  * @author Falcon Team
  * @date 2026-09-17
@@ -30,6 +33,7 @@
 #include <QPalette>
 #include <QPushButton>
 #include <QStackedWidget>
+#include <QThread>
 #include <QVBoxLayout>
 #include <QVector>
 #include <cstdio>
@@ -43,6 +47,7 @@
 #include "pages/trash_page.hpp"
 #include "services/trash_store.hpp"
 #include "utils/theme_manager.hpp"
+#include "widgets/speed_float_widget.hpp"
 #include "widgets/status_bar.hpp"
 #include "widgets/top_bar.hpp"
 
@@ -319,11 +324,16 @@ int main(int argc, char** argv)
 
     // --prototype <目录>:主视图设计原型两版;否则全矩阵截图
     bool prototype_mode = false;
+    bool speed_float_mode = false;
     QString out_dir = QStringLiteral("ui_shots");
     if (argc > 1 && qstrcmp(argv[1], "--prototype") == 0) {
         prototype_mode = true;
         out_dir = argc > 2 ? QString::fromLocal8Bit(argv[2])
                            : QStringLiteral("ui_prototypes");
+    } else if (argc > 1 && qstrcmp(argv[1], "--speed-float") == 0) {
+        speed_float_mode = true;
+        out_dir = argc > 2 ? QString::fromLocal8Bit(argv[2])
+                           : QStringLiteral("speed_float_shots");
     } else if (argc > 1) {
         out_dir = QString::fromLocal8Bit(argv[1]);
     }
@@ -331,6 +341,52 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "cannot create output dir: %s\n",
                      qPrintable(out_dir));
         return 1;
+    }
+
+    if (speed_float_mode) {
+        // 悬浮速度水波纹窗走查:B12 验收面。水位/波纹是 33ms 定时器动画,
+        // processEvents + msleep 推进;每档速度在水位收敛后连拍两帧,
+        // a/b 帧对照 = 波形确实在动的证据。
+        struct SpeedCase { const char* tag; std::uint64_t speed; int tasks; };
+        const SpeedCase speed_cases[] = {
+            {"idle", 0, 0},
+            {"mid", 2ULL * 1024 * 1024, 3},
+            {"fast", 15ULL * 1024 * 1024, 5},
+        };
+        const ThemeType themes[] = {ThemeType::Light, ThemeType::Dark};
+        // 帧推进(~0.5s):既让指数逼近收敛,又留相位差给 a/b 对照
+        const auto pump = [&app](int frames) {
+            for (int i = 0; i < frames; ++i) {
+                app.processEvents();
+                QThread::msleep(16);
+            }
+        };
+        for (const ThemeType theme_type : themes) {
+            SpeedFloatWidget float_widget;
+            float_widget.apply_theme(theme_type);
+            float_widget.set_show_active_tasks(true);
+            float_widget.set_show_total_progress(true);
+            float_widget.move(40, 40);
+            float_widget.show();
+            pump(6);
+            for (const auto& speed_case : speed_cases) {
+                SpeedFloatWidget::Stats st;
+                st.download_speed = speed_case.speed;
+                st.active_tasks = speed_case.tasks;
+                st.overall_progress = speed_case.speed > 0 ? 0.42 : -1.0;
+                float_widget.update_stats(st);
+                pump(48); // 水位指数逼近 0.12/帧 → ~48 帧收敛到目标 99.8%
+                const QString prefix = out_dir + "/"
+                    + (theme_type == ThemeType::Light ? "light" : "dark")
+                    + "_" + speed_case.tag;
+                float_widget.grab().save(prefix + "_a.png");
+                std::printf("saved %s_a.png\n", qPrintable(prefix));
+                pump(30);
+                float_widget.grab().save(prefix + "_b.png");
+                std::printf("saved %s_b.png\n", qPrintable(prefix));
+            }
+        }
+        return 0;
     }
 
     ThemeManager theme;

@@ -33,6 +33,7 @@ class SettingsPage;
 class ClipboardMonitor;
 class HttpIpcServer;
 class ThemeManager;
+class SpeedFloatWidget;
 class DownloadService;
 class UpdateChecker;
 struct UrlInfo;
@@ -111,6 +112,7 @@ private:
     void setup_clipboard_monitor();
     void setup_ipc_server();
     void setup_system_tray();
+    void setup_speed_float();
     void ensure_download_service();
     void show_add_download_dialog(UrlInfo url_info, const IncomingDownloadRequest* request_context);
     bool add_download_task(const QString& url, bool start_immediately);
@@ -153,6 +155,9 @@ private:
 
     // 主题管理
     ThemeManager* theme_manager_;
+
+    // 悬浮速度窗（水波纹水位计，置顶可拖动；位置自持久化、外观走设置页）
+    SpeedFloatWidget* speed_float_;
 
     // 下载服务（worker 线程 + 后端抽象）
     DownloadService* download_service_;

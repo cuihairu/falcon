@@ -44,6 +44,12 @@ SettingsPage::SettingsPage(QWidget* parent)
     , completion_action_combo_(nullptr)
     , notifications_checkbox_(nullptr)
     , sound_notification_checkbox_(nullptr)
+    , float_enabled_checkbox_(nullptr)
+    , float_show_active_checkbox_(nullptr)
+    , float_show_progress_checkbox_(nullptr)
+    , float_size_combo_(nullptr)
+    , float_opacity_spin_(nullptr)
+    , float_click_through_checkbox_(nullptr)
     , current_theme_label_(nullptr)
     , theme_toggle_button_(nullptr)
     , check_updates_button_(nullptr)
@@ -93,6 +99,36 @@ void SettingsPage::set_notifications_enabled(bool enabled)
 void SettingsPage::set_sound_notifications_enabled(bool enabled)
 {
     sound_notification_checkbox_->setChecked(enabled);
+}
+
+void SettingsPage::set_float_widget_enabled(bool enabled)
+{
+    float_enabled_checkbox_->setChecked(enabled);
+}
+
+void SettingsPage::set_float_show_active_tasks(bool show)
+{
+    float_show_active_checkbox_->setChecked(show);
+}
+
+void SettingsPage::set_float_show_total_progress(bool show)
+{
+    float_show_progress_checkbox_->setChecked(show);
+}
+
+void SettingsPage::set_float_size_preset(int preset)
+{
+    float_size_combo_->setCurrentIndex(qBound(0, preset, 2));
+}
+
+void SettingsPage::set_float_opacity_percent(int percent)
+{
+    float_opacity_spin_->setValue(qBound(30, percent, 100));
+}
+
+void SettingsPage::set_float_click_through(bool enable)
+{
+    float_click_through_checkbox_->setChecked(enable);
 }
 
 void SettingsPage::set_task_speed_limit(int kb_per_sec)
@@ -225,6 +261,36 @@ bool SettingsPage::is_sound_notifications_enabled() const
     return sound_notification_checkbox_->isChecked();
 }
 
+bool SettingsPage::is_float_widget_enabled() const
+{
+    return float_enabled_checkbox_->isChecked();
+}
+
+bool SettingsPage::is_float_show_active_tasks() const
+{
+    return float_show_active_checkbox_->isChecked();
+}
+
+bool SettingsPage::is_float_show_total_progress() const
+{
+    return float_show_progress_checkbox_->isChecked();
+}
+
+int SettingsPage::get_float_size_preset() const
+{
+    return float_size_combo_->currentIndex();
+}
+
+int SettingsPage::get_float_opacity_percent() const
+{
+    return float_opacity_spin_->value();
+}
+
+bool SettingsPage::is_float_click_through() const
+{
+    return float_click_through_checkbox_->isChecked();
+}
+
 int SettingsPage::get_task_speed_limit() const
 {
     return task_speed_limit_spin_->value();
@@ -339,6 +405,14 @@ void SettingsPage::reset_to_defaults()
     notifications_checkbox_->setChecked(true);
     sound_notification_checkbox_->setChecked(false);
 
+    // Floating speed widget defaults（悬浮速度窗：开/全显示/中/90%/不穿透）
+    float_enabled_checkbox_->setChecked(true);
+    float_show_active_checkbox_->setChecked(true);
+    float_show_progress_checkbox_->setChecked(true);
+    float_size_combo_->setCurrentIndex(1);
+    float_opacity_spin_->setValue(90);
+    float_click_through_checkbox_->setChecked(false);
+
     // About & update settings
     check_updates_on_startup_checkbox_->setChecked(true);
 }
@@ -381,6 +455,7 @@ void SettingsPage::setup_ui()
     scroll_layout->addWidget(create_completion_action_section_widget());
     scroll_layout->addWidget(create_connection_section_widget());
     scroll_layout->addWidget(create_notification_section_widget());
+    scroll_layout->addWidget(create_float_widget_section_widget());
     scroll_layout->addWidget(create_about_section_widget());
 
     scroll_layout->addStretch();
@@ -818,6 +893,55 @@ QWidget* SettingsPage::create_notification_section_widget()
 
     sound_notification_checkbox_ = new QCheckBox(tr("提示音"), this);
     layout->addWidget(sound_notification_checkbox_);
+
+    return group;
+}
+
+QWidget* SettingsPage::create_float_widget_section_widget()
+{
+    auto* group = new QGroupBox(tr("悬浮速度窗"), this);
+
+    auto* layout = new QVBoxLayout(group);
+    layout->setSpacing(16);
+    layout->setContentsMargins(16, 8, 16, 16);
+
+    float_enabled_checkbox_ = new QCheckBox(
+        tr("显示悬浮速度窗（始终置顶，可拖动到任意位置）"), this);
+    float_enabled_checkbox_->setChecked(true);
+    layout->addWidget(float_enabled_checkbox_);
+
+    float_show_active_checkbox_ = new QCheckBox(tr("显示活跃任务数"), this);
+    float_show_active_checkbox_->setChecked(true);
+    layout->addWidget(float_show_active_checkbox_);
+
+    float_show_progress_checkbox_ = new QCheckBox(tr("显示总进度"), this);
+    float_show_progress_checkbox_->setChecked(true);
+    layout->addWidget(float_show_progress_checkbox_);
+
+    auto* size_row = new QHBoxLayout();
+    size_row->addWidget(new QLabel(tr("大小:"), this));
+    float_size_combo_ = new QComboBox(this);
+    float_size_combo_->addItem(tr("小"));
+    float_size_combo_->addItem(tr("中"));
+    float_size_combo_->addItem(tr("大"));
+    float_size_combo_->setCurrentIndex(1);
+    size_row->addWidget(float_size_combo_);
+    size_row->addStretch();
+    layout->addLayout(size_row);
+
+    auto* opacity_row = new QHBoxLayout();
+    opacity_row->addWidget(new QLabel(tr("透明度:"), this));
+    float_opacity_spin_ = new QSpinBox(this);
+    float_opacity_spin_->setRange(30, 100);
+    float_opacity_spin_->setSuffix(tr(" %"));
+    float_opacity_spin_->setValue(90);
+    opacity_row->addWidget(float_opacity_spin_);
+    opacity_row->addStretch();
+    layout->addLayout(opacity_row);
+
+    float_click_through_checkbox_ = new QCheckBox(
+        tr("鼠标穿透（开启后点击会穿过悬浮窗，需回到此处关闭）"), this);
+    layout->addWidget(float_click_through_checkbox_);
 
     return group;
 }
