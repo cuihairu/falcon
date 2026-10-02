@@ -33,6 +33,27 @@ features:
 
 ## 快速预览
 
+### 界面预览
+
+**主视图设计原型**（2026-09-29 入库的两版方案）
+
+| 「warm console」——暖石中性底 + falcon 橙单强调（现行桌面配色方向） | 「cold utility」——冷中性底 + 克制蓝强调（备选变体） |
+|---|---|
+| ![warm console 原型](./screenshots/warm-console-dark.png) | ![cold utility 原型](./screenshots/cold-utility-dark.png) |
+
+**桌面端实况截图**（暗色主题，1200px）
+
+| 下载页 · 任务表格视图 | 已完成任务 · 网格视图 |
+|---|---|
+| ![下载页表格视图](./screenshots/download_table_dark_1200.png) | ![已完成网格视图](./screenshots/download_completed_grid_dark_1200.png) |
+
+| 添加下载对话框（Fluent 风格） | 云存储浏览（S3/OSS/COS/Kodo/Upyun 等） |
+|---|---|
+| ![添加下载对话框](./screenshots/add_dialog_dark_1200.png) | ![云存储浏览](./screenshots/cloud_dark_1200.png) |
+
+> 更多界面截图（52 张：13 视图 × 亮暗 × 两种窗口宽度）见仓库
+> [docs/design/ui-sandbox/](https://github.com/cuihairu/falcon/tree/main/docs/design/ui-sandbox)。
+
 ### 安装
 
 ```bash
