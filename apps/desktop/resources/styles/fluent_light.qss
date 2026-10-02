@@ -631,15 +631,15 @@ QScrollArea#gridScrollArea > QWidget > QWidget {
 
 #emptyStateTitle {
     background: transparent;
-    color: #57534e;
-    font-size: 16px;
+    color: #292524;
+    font-size: 20px;
     font-weight: 600;
 }
 
 #emptyStateBody {
     background: transparent;
-    color: #a8a29e;
-    font-size: 12px;
+    color: #57534e;
+    font-size: 13px;
 }
 
 /* ---------- 10. 节标题(卡片内小节) ---------- */

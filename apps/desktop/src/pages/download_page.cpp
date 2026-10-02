@@ -37,6 +37,8 @@ constexpr int kSummaryCardWidth = 168;
 // 紧凑横条标准（用户 bug 反馈）：hero 与统计卡固定高度，纵向空白不随窗口拉伸
 constexpr int kHeroHeight = 78;
 constexpr int kSummaryCardHeight = 72;
+// 空态卡最小展示高度（用户 bug 反馈：自然高度 ~90px 塌缩挤压，给足 ≥200px）
+constexpr int kEmptyStateMinHeight = 232;
 
 // 快照状态 → 界面中文文案（引擎状态名不外露）
 QString status_display_text(falcon::TaskStatus status)
@@ -192,11 +194,17 @@ void DownloadPage::create_empty_state()
 {
     empty_state_widget_ = new QWidget(this);
     empty_state_widget_->setObjectName("summaryCard");
+    // 空态卡给足展示高度（≥200px）：此前自然高度 ~90px 塌缩、标题正文挤
+    // 成一行（用户 bug 反馈）。宽度由 empty_layout 撑满列表区，卡片在本页
+    // 内垂直居中悬浮（两 stretch 包夹）
+    empty_state_widget_->setMinimumHeight(kEmptyStateMinHeight);
 
     auto* layout = new QVBoxLayout(empty_state_widget_);
-    layout->setContentsMargins(20, 28, 20, 28);
-    layout->setSpacing(8);
-    layout->setAlignment(Qt::AlignCenter);
+    layout->setContentsMargins(24, 36, 24, 36);
+    layout->setSpacing(12);
+    // 不在 layout 层设 AlignCenter：会给标签按 sizeHint 紧凑宽度分配，
+    // 开了 wordWrap 的正文立即缩成窄列三行折行。标签各自内部居中 +
+    // layout 默认横向撑满，正文按卡片全宽折行（正常单行）
 
     empty_state_title_ = new QLabel(tr("还没有任务"), empty_state_widget_);
     empty_state_title_->setObjectName("emptyStateTitle");
@@ -799,6 +807,18 @@ void DownloadPage::update_summary_cards()
 
 void DownloadPage::update_empty_state()
 {
+    // 空态文案按视图区分（用户 bug 反馈：两个 tab 共用「还没有任务」）。
+    // 构造早期 empty_state_title_ 尚未建立，title/body 指针判空兜底。
+    if (empty_state_title_) {
+        if (view_mode_ == DownloadViewMode::Completed) {
+            empty_state_title_->setText(tr("还没有已完成的任务"));
+            empty_state_body_->setText(tr("完成的下载会出现在这里，可重新下载或打开文件目录。"));
+        } else {
+            empty_state_title_->setText(tr("还没有任务"));
+            empty_state_body_->setText(tr("点击“新建下载”，或在顶部直接粘贴链接开始。"));
+        }
+    }
+
     // 三页栈互斥切换（页由 setup_ui 构建完成后才可达——构造早期防御）
     if (!content_stack_) {
         return;
