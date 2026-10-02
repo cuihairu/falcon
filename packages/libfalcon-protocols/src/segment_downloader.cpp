@@ -28,7 +28,16 @@ SegmentDownloader::SegmentDownloader(DownloadTask::Ptr task,
 
 SegmentDownloader::~SegmentDownloader() {
     cancel();
-    cleanup_segment_files();
+    // 暂停路径（cancel_preserve_segments）保留段断点文件供 resume
+    // 续传，析构跳过清理；终局清理由任务取消/删除路径负责。B11 根
+    // 因：此前析构无条件清理——pause() 栈帧持有 downloader 的
+    // shared_ptr 跨越 cancel() 的 worker join 窗口，resume 建新
+    // downloader 复用同路径段文件后，旧 downloader 迟到的析构把新
+    // 尝试正在写的段文件删掉（unlink-while-open），第二次尝试全线
+    // 失败 →「暂停后点继续无法恢复下载」
+    if (!preserve_segments_.load()) {
+        cleanup_segment_files();
+    }
 }
 
 std::size_t SegmentDownloader::calculate_optimal_segments(
@@ -631,6 +640,13 @@ void SegmentDownloader::cancel() {
             monitor_to_join.join();
         }
     }
+}
+
+void SegmentDownloader::cancel_preserve_segments() {
+    // 标志必须先于 cancel() 置位：析构可能紧随 join 返回发生，
+    // preserve 读到旧值 false 会把断点文件当失败残渣清掉
+    preserve_segments_.store(true);
+    cancel();
 }
 
 void SegmentDownloader::monitor_connections() {

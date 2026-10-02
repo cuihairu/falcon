@@ -185,6 +185,24 @@ public:
     /// Cancel the download
     void cancel();
 
+    /// Cancel the download but preserve segment breakpoint files
+    /**
+     * 暂停语义：在途段连接经 cancelled 原子中止（与 cancel 相同的
+     * 唤醒与 join 收口），但段断点文件原样保留——下一次 start() 的
+     * 恢复检测从断点续传（暂停→继续进度接着走）。析构按该标志跳过
+     * 段文件清理；终局清理由任务取消/删除路径负责
+     */
+    void cancel_preserve_segments();
+
+    /// 失败收口查询：start() 返回 false 时区分「段失败」（重试耗尽/
+    /// 异常，failed_ 置位）与「用户停止」（pause/cancel——含 resume
+    /// 抢跑竞态下旧实例的退出）。任务状态不可作为归类依据：resume
+    /// 会并发把任务置回 Downloading，旧实例退出时按任务状态归类会
+    /// 把正常停止误判为失败（B11「点继续后任务立即 Failed」根因）
+    [[nodiscard]] bool was_failed() const noexcept {
+        return failed_.load(std::memory_order_acquire);
+    }
+
     /// Check if download is active
     [[nodiscard]] bool is_active() const noexcept;
 
@@ -277,6 +295,9 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<bool> paused_{false};
     std::atomic<bool> cancelled_{false};
+    /// 暂停保留断点标志：置位后析构跳过段文件清理（段断点留待
+    /// resume 续传；任务取消/删除时由 handler 终局清扫）
+    std::atomic<bool> preserve_segments_{false};
 
     std::mutex segments_mutex_;
     std::mutex workers_mutex_;

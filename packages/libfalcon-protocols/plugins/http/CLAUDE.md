@@ -47,11 +47,20 @@
   即整体失败，单连接 GET 层的 4xx/5xx 语义在 HEAD 通过后才生效
 - **分段路径的段不查 task 状态**：`segment_progress_callback` 只
   看 downloader 的 cancelled 原子标志——暂停/取消必须经
-  `pause()/cancel()` 命中 `active_segmented_downloads_` 转发
-  `downloader->cancel()`，仅 `task->set_status()` 无法中止在传段
-- **SegmentDownloader 析构即清理段文件**：handler 层暂停后
-  downloader 随 download() 返回析构，段断点不保留；resume 重新
-  全量分段下载
+  `pause()/cancel()` 命中 `active_segmented_downloads_` 转发，
+  仅 `task->set_status()` 无法中止在传段
+- **暂停保留段断点（B11 修复）**：`pause()` 转发
+  `downloader->cancel_preserve_segments()`（preserve 标志先置位
+  再 cancel），析构按标志跳过段文件清理——resume 的恢复检测从
+  断点续传，进度从暂停点接着走。退出归类以 `was_failed()` 为
+  失败权威（任务状态不可作归类依据：resume 抢跑竞态下旧实例
+  退出时任务已被置回 Downloading，按状态归类会误报 Failed）。
+  取消/删除路径 `cancel()` + `sweep_orphan_segment_files()`
+  终局清扫（暂停后 map 条目已擦、无 downloader 持有者，孤儿段
+  文件必须补刀；只删 `.falcon.tmp.seg` 前缀普通文件，目录绝不
+  触碰——SegmentFileOccupied 红线）。注册侧：同 id 旧实例
+  stale-wait（5s 上限）+ 指针比较 EraseGuard（迟到旧 attempt
+  不得抹掉新条目）+ start 前终态复查（孤儿 attempt 防御）
 - 现代 libcurl 自带 resume 守卫：续传请求被 200 应答即
   CURLE_RANGE_ERROR 先拒——handler 内的 200-check 清空重下分支
   是老 curl 纵深防御，新 curl 下不可达

@@ -497,6 +497,42 @@ static bool download_segment_curl(
 
 #endif  // FALCON_USE_CURL
 
+namespace {
+
+/// 终局清扫孤儿段文件（任务取消/删除路径）
+/**
+ * 暂停路径保留段断点（SegmentDownloader::cancel_preserve_segments），
+ * 暂停后 download() 返回、map 条目被擦除——此时取消/删除任务没有任何
+ * downloader 持有者，断点文件必须在这里补刀清扫，否则永久滞留。
+ *
+ * 只删 <output>.falcon.tmp.seg 前缀的普通文件：单连接续传文件
+ * <output>.falcon.tmp 不匹配前缀（活跃单连接无 map 条目，误删即
+ * 断点丢失）；目录绝不触碰——fs::remove 对空目录 = rmdir 语义，
+ * 把占位目录当段文件删掉是 SegmentFileOccupied 教训的红线
+ */
+void sweep_orphan_segment_files(const std::string& output_path) {
+    if (output_path.empty()) return;
+    const std::filesystem::path out(output_path);
+    const std::string prefix = out.filename().string() + ".falcon.tmp.seg";
+    std::filesystem::path dir = out.parent_path();
+    if (dir.empty()) dir = ".";
+
+    std::error_code dir_ec;
+    std::filesystem::directory_iterator it(dir, dir_ec);
+    if (dir_ec) return;
+    for (const auto& entry : it) {
+        const std::string name = entry.path().filename().string();
+        if (name.rfind(prefix, 0) != 0) continue;  // 非段文件前缀
+        std::error_code type_ec;
+        if (entry.is_regular_file(type_ec)) {
+            std::error_code rm_ec;
+            std::filesystem::remove(entry.path(), rm_ec);
+        }
+    }
+}
+
+}  // namespace
+
 class HttpHandler::Impl {
 public:
     Impl() {
@@ -641,7 +677,18 @@ public:
 
         std::string last_error;
         for (std::size_t attempt = 0; attempt <= options.max_retries; ++attempt) {
-            if (task->status() == TaskStatus::Paused || task->status() == TaskStatus::Cancelled) {
+            // Paused/Cancelled：既有静默收口语义（resume 不复位状态，
+            // Paused 下直调 download 静默返回——恢复前置位 Downloading
+            // 是 TaskManager 职责）。Completed/Failed：孤儿 attempt
+            // 守卫——快速 pause→resume 会排队多个 worker，首个完成的
+            // attempt 出成品后其余迟到 worker 若继续跑会整文件重下并
+            // 把终态改写。TaskManager::start_task 对终态任务入口拒绝，
+            // 故终态下到达这里只可能是孤儿（与分段路径同形状收口）
+            const auto attempt_status = task->status();
+            if (attempt_status == TaskStatus::Paused ||
+                attempt_status == TaskStatus::Cancelled ||
+                attempt_status == TaskStatus::Completed ||
+                attempt_status == TaskStatus::Failed) {
                 return;
             }
 
@@ -876,20 +923,69 @@ public:
         downloader->set_event_listener(listener);
 
         // Register for external cancellation (pause/cancel)
+        //
+        // 注册前有界等待同 id 旧实例退出：pause→resume 抢跑竞态下，
+        // 旧 attempt 的 worker 尚未 join 完成时新 attempt 已启动——
+        // 两者会并行写同一段文件（同 offset 同内容，损坏风险低但
+        // 并存）。以表内条目消失为旧实例收口信号，5s 上限（旧实例
+        // 的 abort 汇合是亚秒级，超限放行——宁可少量并存也不阻塞）
         {
-            std::lock_guard<std::mutex> lock(downloads_mutex_);
-            active_segmented_downloads_[task->id()] = downloader;
+            int stale_wait_ms = 0;
+            for (;;) {
+                std::shared_ptr<SegmentDownloader> stale;
+                {
+                    std::lock_guard<std::mutex> lock(downloads_mutex_);
+                    auto it = active_segmented_downloads_.find(task->id());
+                    if (it == active_segmented_downloads_.end()) {
+                        active_segmented_downloads_[task->id()] = downloader;
+                        break;
+                    }
+                    stale = it->second;
+                }
+                if (++stale_wait_ms > 500) {  // 500 × 10ms = 5s 上限
+                    std::lock_guard<std::mutex> lock(downloads_mutex_);
+                    active_segmented_downloads_[task->id()] = downloader;
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                (void)stale;
+            }
         }
+        // 只擦自己注册的条目（指针比较）：pause 后本尝试返回、resume
+        // 建立的新 attempt 已按同 id 重登记，迟到的旧 attempt 无条件
+        // erase(id) 会把新条目抹掉——之后的 pause/cancel 找不到
+        // downloader，段连接失去中止通道。owned 引用同时把 downloader
+        // 析构推迟到 guard 成员析构（erase 的锁已释放）
         struct EraseGuard {
             std::mutex* m;
             std::unordered_map<TaskId, std::shared_ptr<SegmentDownloader>>* map;
             TaskId id;
+            std::shared_ptr<SegmentDownloader> owned;
             ~EraseGuard() {
                 if (!m || !map) return;
                 std::lock_guard<std::mutex> lock(*m);
-                map->erase(id);
+                auto it = map->find(id);
+                if (it != map->end() && it->second == owned) {
+                    map->erase(it);
+                }
             }
-        } erase_guard{&downloads_mutex_, &active_segmented_downloads_, task->id()};
+        } erase_guard{&downloads_mutex_, &active_segmented_downloads_, task->id(), downloader};
+
+        // 等待旧实例退出期间任务可能已被再次暂停/取消（彼时表内无本
+        // 实例条目，pause/cancel 转发不到），也可能已由其他 attempt
+        // 完成——快速 pause→resume 会排队多个 worker，首个完成的
+        // attempt 出成品后其余 attempt 是孤儿，继续跑会整文件重下并
+        // 把已完成任务改写成 Failed。start 前复查终态：孤儿 attempt
+        // 见到的任务必然已终态（TaskManager::start_task 对活动/终态
+        // 任务拒绝入队，Pending/Preparing/Downloading 均不可能是孤
+        // 儿形态；直调 handler 的测试路径任务恒 Pending，同放行）
+        {
+            const auto st = task->status();
+            if (st == TaskStatus::Paused || st == TaskStatus::Cancelled ||
+                st == TaskStatus::Completed || st == TaskStatus::Failed) {
+                return;
+            }
+        }
 
         // Start segmented download
         // If-Range 验证器捕获（ETag 优先，缺失回落 Last-Modified）：
@@ -911,10 +1007,10 @@ public:
                                          live_progress);
         });
 
-        if (task->status() == TaskStatus::Paused || task->status() == TaskStatus::Cancelled) {
-            return;
-        }
-
+        // 退出归类以 SegmentDownloader 自身的 failed_ 标志为失败权
+        // 威——任务状态不可作归类依据：resume 抢跑竞态下旧实例退出
+        // 时任务已被并发置回 Downloading（B11「点继续后任务立即
+        // Failed」根因：按任务状态归类把正常暂停退出误判为失败）
         if (success) {
             // 终态进度记账（同 download_single：传输中的段级进度经
             // live_progress 汇入监控线程的周期 update_progress，但 1s
@@ -927,8 +1023,12 @@ public:
                 task->update_progress(final_size, task->total_bytes(), 0);
             }
             task->set_status(TaskStatus::Completed);
-        } else {
+        } else if (downloader->was_failed()) {
             throw FileIOException("Segmented download failed");
+        } else {
+            // 用户停止（pause/cancel）的正常收口，非失败语义——任务
+            // 状态归 pause/resume 调用方所有，此处不触碰
+            return;
         }
 #endif  // FALCON_USE_CURL
     }
@@ -945,7 +1045,12 @@ public:
             }
         }
         if (downloader) {
-            downloader->cancel();
+            // 暂停 = 中止在途连接但保留段断点：preserve 标志先置位，
+            // 析构跳过段文件清理，resume 的恢复检测从断点续传（进度
+            // 从暂停点接着走）。此前走 cancel()（析构清段文件），
+            // resume 只能从 0 重下，且旧 attempt 迟到析构会删掉新
+            // attempt 正在写的段文件 → 后续尝试全线失败
+            downloader->cancel_preserve_segments();
         }
     }
 
@@ -966,8 +1071,15 @@ public:
             }
         }
         if (downloader) {
+            // 先停在途写（join 返回后段文件不再被写），再清扫
             downloader->cancel();
         }
+        // 终局清扫孤儿段文件：暂停后 download() 已返回、EraseGuard
+        // 擦掉了 map 条目（preserve=true 的析构又跳过清理）——取消/
+        // 删除暂停态任务必须在这里补刀，否则断点文件永久滞留。
+        // 条目不存在 ⇒ 该任务没有活跃段下载者，扫描无误删风险
+        // （单连接 <output>.falcon.tmp 不匹配段前缀，不在此列）
+        sweep_orphan_segment_files(task->output_path());
     }
 
 private:

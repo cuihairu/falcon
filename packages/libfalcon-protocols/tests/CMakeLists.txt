@@ -172,6 +172,7 @@ add_executable(falcon_http_tests
     unit/http_handler_test.cpp
     unit/http_handler_edges_test.cpp
     unit/global_speed_limit_test.cpp
+    unit/pause_resume_e2e_test.cpp
     unit/range_integrity_test.cpp
     unit/v2_http_adapter_test.cpp
 )
