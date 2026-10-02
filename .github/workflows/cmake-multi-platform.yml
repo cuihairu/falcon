@@ -9,7 +9,10 @@ on:
 jobs:
   build:
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # vcpkg manifest（vcpkg.json）新增依赖（libtorrent 等）后，Windows 首
+    # 轮要从源码构建整套包（缓存 key 含 manifest 哈希必 miss）——步骤预算
+    # 见 Configure CMake (Windows)；job 帽同步放宽，否则步骤预算改了也白改
+    timeout-minutes: 210
 
     strategy:
       fail-fast: false
@@ -112,7 +115,10 @@ jobs:
 
       - name: Configure CMake (Windows)
         if: matrix.os == 'windows-latest'
-        timeout-minutes: 20
+        # manifest 变更后首轮 vcpkg 全套源码构建（libtorrent MSVC 单包
+        # 30-60 分钟级）；本轮跑完 actions/cache 才会保存新 key，预算必须
+        # 一步到位（A10 a13a3c3 同族：缓存保存只在成功时发生，超时 = 永循环）
+        timeout-minutes: 120
         run: >
           cmake -B ${{ steps.strings.outputs.build-output-dir }}
           -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
@@ -132,7 +138,9 @@ jobs:
           -S ${{ github.workspace }}
 
       - name: Build
-        timeout-minutes: 15
+        # Windows 侧 BT 插件 TU 吞 libtorrent 重头（session.hpp 级），编译
+        # 时间上探；Unix 侧走系统包不受影响（抬高只是放帽，不改变实际时长）
+        timeout-minutes: 40
         run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ matrix.build_type }} --parallel
 
       - name: Test
@@ -145,7 +153,10 @@ jobs:
   coverage:
     name: Coverage (Ubuntu)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # 本 job 无 vcpkg 缓存，历来每轮全量源码构建；manifest 新增 libtorrent
+    # （default-features: bittorrent）后构建时长上探——job 帽与 Install 步骤
+    # 预算同步放宽
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v7
         with:
@@ -157,7 +168,9 @@ jobs:
           ./vcpkg/bootstrap-vcpkg.sh
 
       - name: Install dependencies (Ubuntu)
-        timeout-minutes: 10
+        # 旧包集全量源码构建 ~8 分钟贴帽通过；libtorrent dbg+rel 加入后
+        # 10 分钟必爆（run 36940552198 实证：Building x64-linux-rel 中被杀）
+        timeout-minutes: 45
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build
