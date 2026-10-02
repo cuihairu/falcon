@@ -483,6 +483,72 @@ jobs:
           }
           Get-ChildItem -Filter "falcon-desktop-windows-*.zip" | Select-Object Name, FullName
 
+      - name: Build installer (Inno Setup)
+        if: matrix.os == 'windows-latest'
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          # windows-latest 镜像预装 Inno Setup 6；缺失时明确报错不静默跳过
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            Write-Error "ISCC.exe not found: $iscc（runner 镜像缺 Inno Setup 6）"
+            exit 1
+          }
+          $stageDir = Join-Path $PWD 'build-desktop\bin\Release\falcon-desktop'
+          if (-not (Test-Path (Join-Path $stageDir 'falcon-desktop.exe'))) {
+            Write-Error "staging dir missing falcon-desktop.exe: $stageDir"
+            exit 1
+          }
+          # 载荷 = Package 步骤暂存的完整运行时；产物名匹配 release 通配
+          # falcon-desktop-*nightly*（falcon-desktop-setup-nightly.exe）
+          & $iscc `
+            "/DAppVersion=${{ steps.version.outputs.version }}" `
+            "/DStageDir=$stageDir" `
+            "/O$PWD" `
+            'packaging\windows\setup.iss'
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "ISCC failed with exit $LASTEXITCODE"
+            exit 1
+          }
+          Get-ChildItem -Filter 'falcon-desktop-setup-*.exe' | Select-Object Name, Length
+
+      - name: Smoke test installer (install / start / uninstall)
+        if: matrix.os == 'windows-latest'
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          # 安装-启动-卸载 round trip 走查（真 Windows、真 Program Files）
+          $setup = "falcon-desktop-setup-${{ steps.version.outputs.version }}.exe"
+          if (-not (Test-Path $setup)) { Write-Error "installer not found: $setup"; exit 1 }
+          $appDir = Join-Path $env:ProgramFiles 'Falcon'
+
+          # ① 静默安装到 Program Files（管理员 runner，无 UAC）
+          $p = Start-Process -FilePath $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Write-Error "installer exit $($p.ExitCode)"; exit 1 }
+          $exe = Join-Path $appDir 'falcon-desktop.exe'
+          if (-not (Test-Path $exe)) { Write-Error "not installed: $exe"; exit 1 }
+          Write-Host "installed: $exe"
+
+          # ② 启动走查：3 秒后进程仍存活（未崩溃），随后结束
+          $proc = Start-Process -FilePath $exe -WorkingDirectory $appDir -PassThru
+          Start-Sleep -Seconds 3
+          if ($proc.HasExited) { Write-Error "falcon-desktop.exe exited early (code $($proc.ExitCode))"; exit 1 }
+          Stop-Process -Id $proc.Id -Force
+          Write-Host "GUI started and stayed alive (pid $($proc.Id))"
+
+          # ③ 卸载入口：注册表卸载键 + unins000.exe（开始菜单项由 [Icons] 提供）
+          $uninst = Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
+                    Where-Object { $_.DisplayName -like 'Falcon*' }
+          if (-not $uninst) { Write-Error "uninstall registry entry missing"; exit 1 }
+          $unins = Join-Path $appDir 'unins000.exe'
+          if (-not (Test-Path $unins)) { Write-Error "unins000.exe missing"; exit 1 }
+
+          # ④ 静默卸载 → 程序文件必须清空
+          $u = Start-Process -FilePath $unins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru
+          if ($u.ExitCode -ne 0) { Write-Error "uninstaller exit $($u.ExitCode)"; exit 1 }
+          if (Test-Path $exe) { Write-Error "uninstall left behind: $exe"; exit 1 }
+          Write-Host "install/start/uninstall round trip OK"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         timeout-minutes: 5
@@ -548,6 +614,7 @@ jobs:
             |------|------|------|
             | Linux | `falcon-desktop-linux-*.AppImage` | 通用 AppImage，双击运行 |
             | macOS | `falcon-desktop-macos-*.dmg` | 拖拽安装到 Applications |
+            | Windows | `falcon-desktop-setup-*.exe` | 运行安装到 Program Files，开始菜单启动，自带卸载 |
             | Windows | `falcon-desktop-windows-*.zip` | 解压后运行 falcon-desktop.exe |
 
             ### ⚠️ 注意事项
