@@ -16,22 +16,9 @@
 
 </div>
 
-## Screenshots 🖼️
-
-| Main view prototype · "warm console" (current desktop palette) | Main view prototype · "cold utility" (alternate variant) |
-|---|---|
-| ![warm console prototype](docs/design/prototypes/warm-console-dark.png) | ![cold utility prototype](docs/design/prototypes/cold-utility-dark.png) |
-
-| Downloads · table view (dark) | Completed · grid view (dark) |
-|---|---|
-| ![downloads table](docs/design/ui-sandbox/download_table_dark_1200.png) | ![completed grid](docs/design/ui-sandbox/download_completed_grid_dark_1200.png) |
-
-| Add download dialog | Cloud storage browser |
-|---|---|
-| ![add dialog](docs/design/ui-sandbox/add_dialog_dark_1200.png) | ![cloud storage](docs/design/ui-sandbox/cloud_dark_1200.png) |
-
-> More screenshots (52 shots: 13 views × light/dark × two window widths) live in
-> [docs/design/ui-sandbox/](docs/design/ui-sandbox/README.md).
+Screenshots and design prototypes are showcased on the
+[docs site](https://cuihairu.github.io/falcon/); the full gallery (52 shots)
+lives in [docs/design/ui-sandbox/](docs/design/ui-sandbox/README.md).
 
 ## Features 🚀
 

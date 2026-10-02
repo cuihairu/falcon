@@ -16,22 +16,8 @@
 
 </div>
 
-## 界面预览 🖼️
-
-| 主视图原型 ·「warm console」（现行桌面配色方向） | 主视图原型 ·「cold utility」（备选变体） |
-|---|---|
-| ![warm console 原型](docs/design/prototypes/warm-console-dark.png) | ![cold utility 原型](docs/design/prototypes/cold-utility-dark.png) |
-
-| 下载页 · 表格视图（暗色） | 已完成 · 网格视图（暗色） |
-|---|---|
-| ![下载页表格](docs/design/ui-sandbox/download_table_dark_1200.png) | ![已完成网格](docs/design/ui-sandbox/download_completed_grid_dark_1200.png) |
-
-| 添加下载对话框 | 云存储浏览 |
-|---|---|
-| ![添加对话框](docs/design/ui-sandbox/add_dialog_dark_1200.png) | ![云存储](docs/design/ui-sandbox/cloud_dark_1200.png) |
-
-> 更多界面截图（52 张：13 视图 × 亮暗 × 两种窗口宽度）见
-> [docs/design/ui-sandbox/](docs/design/ui-sandbox/README.md)。
+界面截图与设计原型统一在[文档站](https://cuihairu.github.io/falcon/)首页展示；
+完整图库（52 张）见 [docs/design/ui-sandbox/](docs/design/ui-sandbox/README.md)。
 
 ## 特性 🚀
 
