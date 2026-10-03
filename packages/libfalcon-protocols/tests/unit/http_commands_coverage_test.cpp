@@ -1455,6 +1455,15 @@ TEST_F(HttpCommandsCoverageTest, EndToEndMultiSegmentDownload) {
     EXPECT_EQ(group->status(), RequestGroupStatus::COMPLETED);
     EXPECT_EQ(group->downloaded_bytes(), body.size());
     // 所有 4 个连接都被使用（1 个初始 + 3 个分段连接）
+    // 服务器侧 served_ 在连接 teardown（shutdown 写端 + drain 对端关闭）之后才
+    // fetch_add——客户端读满 body 即可判定组完成，早于服务器记账落定；直接
+    // EXPECT 撞上该窗口会假红（macOS CI run 37094222067 实证 3 vs 4）。
+    // 4 条连接均已应答（日志 1×200 + 3×206），计数必然收敛到 4，有界等待后断言。
+    const auto served_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (server.connections_served() < 4 &&
+           std::chrono::steady_clock::now() < served_deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
     EXPECT_EQ(server.connections_served(), 4);
     // 文件内容完整且按偏移正确拼装
     EXPECT_EQ(read_file_content(out_path), body);
