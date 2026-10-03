@@ -19,6 +19,9 @@ jobs:
     # vcpkg 从源码构建 qtbase（Windows 可达 1.5h+）：job 级超时必须
     # 覆盖 manifest 安装，否则 Configure 阶段被掐死（此前 45min 恒挂）
     timeout-minutes: 180
+    # experimental leg（linux-aarch64）失败不拦截 release 发布：
+    # arm runner 为新接入平台，首产前的抖动不应阻塞 x86_64/mac/win
+    continue-on-error: ${{ matrix.experimental || false }}
 
     strategy:
       fail-fast: false
@@ -32,6 +35,16 @@ jobs:
             binary-name: 'falcon-desktop'
             binary-path: 'build-desktop/bin'
             package-extension: '.tar.gz'
+            experimental: false
+          - os: ubuntu-24.04-arm
+            os_name: linux-arm64
+            vcpkg-triplet: 'arm64-linux'
+            cmake-generator: 'Unix Makefiles'
+            artifact-name: 'falcon-desktop-linux-arm64'
+            binary-name: 'falcon-desktop'
+            binary-path: 'build-desktop/bin'
+            package-extension: '.tar.gz'
+            experimental: true
           - os: macos-15
             os_name: macos
             vcpkg-triplet: 'arm64-osx'
@@ -54,7 +67,9 @@ jobs:
           fetch-depth: 0  # 获取完整历史用于版本信息
 
       - name: Install dependencies (Ubuntu)
-        if: matrix.os == 'ubuntu-latest'
+        # arm64 leg（ubuntu-24.04-arm）与 x86_64 共用同一 apt 清单：
+        # 系统包按 runner 架构自动取对应架构
+        if: runner.os == 'Linux'
         timeout-minutes: 15
         run: |
           sudo apt-get update
@@ -77,15 +92,16 @@ jobs:
             patchelf \
             wget
 
-          # 安装 linuxdeploy
-          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-          chmod +x linuxdeploy-x86_64.AppImage
-          sudo mv linuxdeploy-x86_64.AppImage /usr/local/bin/
+          # 安装 linuxdeploy（按 runner 架构取对应官方 AppImage：
+          # linuxdeploy-x86_64 / linuxdeploy-aarch64 均有 continuous 发布）
+          wget -q "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-$(uname -m).AppImage"
+          chmod +x "linuxdeploy-$(uname -m).AppImage"
+          sudo mv "linuxdeploy-$(uname -m).AppImage" /usr/local/bin/
 
           # 安装 linuxdeploy-plugin-qt
-          wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
-          chmod +x linuxdeploy-plugin-qt-x86_64.AppImage
-          sudo mv linuxdeploy-plugin-qt-x86_64.AppImage /usr/local/bin/
+          wget -q "https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-$(uname -m).AppImage"
+          chmod +x "linuxdeploy-plugin-qt-$(uname -m).AppImage"
+          sudo mv "linuxdeploy-plugin-qt-$(uname -m).AppImage" /usr/local/bin/
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
@@ -184,7 +200,7 @@ jobs:
         run: cmake --build build-desktop --config Release --parallel
 
       - name: Package (Linux)
-        if: matrix.os == 'ubuntu-latest'
+        if: runner.os == 'Linux'
         timeout-minutes: 5
         run: |
           cd build-desktop/bin
@@ -260,16 +276,21 @@ jobs:
           export EXTRA_QT_MODULES="core;gui;widgets;network;concurrent;svg"
 
           # 使用 linuxdeploy 打包（qt 插件与 appimage 输出同一调用，官方
-          # 推荐用法；拆成两次调用会把 qt 部署孤立在输出轮次之外）
-          /usr/local/bin/linuxdeploy-x86_64.AppImage \
+          # 推荐用法；拆成两次调用会把 qt 部署孤立在输出轮次之外）。
+          # APPIMAGE_EXTRACT_AND_RUN=1：arm runner 可能无 FUSE，运行时层
+          # 解包执行——环境变量形式经 linuxdeploy 传递给其拉起的 plugin-qt
+          # 子进程（plugin-qt 同为 AppImage，命令行 flag 传不到子进程）。
+          # linuxdeploy 按架构取名（x86_64 / aarch64 两 arch 均有官方发布）
+          APPIMAGE_EXTRACT_AND_RUN=1 /usr/local/bin/linuxdeploy-$(uname -m).AppImage \
             --appdir FalconDesktop/AppDir \
             --executable FalconDesktop/AppDir/usr/bin/falcon-desktop \
             --plugin qt \
             --output appimage
 
-          # 查找并移动生成的 AppImage
+          # 查找并移动生成的 AppImage（改名用 matrix.artifact-name：
+          # x86_64 输出名逐字节不变，arm64 为 falcon-desktop-linux-arm64-*）
           ls -la *.AppImage 2>/dev/null || ls -la FalconDesktop*.AppImage 2>/dev/null || true
-          mv *.AppImage ../../falcon-desktop-linux-${{ steps.version.outputs.version }}.AppImage || mv FalconDesktop*.AppImage ../../falcon-desktop-linux-${{ steps.version.outputs.version }}.AppImage || true
+          mv *.AppImage ../../${{ matrix.artifact-name }}-${{ steps.version.outputs.version }}.AppImage || mv FalconDesktop*.AppImage ../../${{ matrix.artifact-name }}-${{ steps.version.outputs.version }}.AppImage || true
 
       - name: Package (macOS)
         if: startsWith(matrix.os, 'macos-')

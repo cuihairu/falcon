@@ -259,6 +259,26 @@ if(FALCON_ENABLE_SFTP)
 endif()
 
 # ============================================================================
+# WebDAV plugin tests (conditional)
+# ============================================================================
+if(FALCON_ENABLE_WEBDAV)
+    add_executable(falcon_webdav_tests
+        unit/webdav_handler_test.cpp
+    )
+
+    target_link_libraries(falcon_webdav_tests
+        PRIVATE
+            falcon_protocols
+            falcon_core
+            GTest::gtest_main
+    )
+
+    add_test_compile_options(falcon_webdav_tests)
+    add_test_includes(falcon_webdav_tests)
+    target_compile_definitions(falcon_webdav_tests PRIVATE FALCON_ENABLE_WEBDAV_PLUGIN)
+endif()
+
+# ============================================================================
 # Integration tests
 # ============================================================================
 add_executable(falcon_integration_tests
@@ -308,6 +328,10 @@ endif()
 
 if(TARGET falcon_sftp_tests)
     gtest_discover_tests(falcon_sftp_tests)
+endif()
+
+if(TARGET falcon_webdav_tests)
+    gtest_discover_tests(falcon_webdav_tests)
 endif()
 
 gtest_discover_tests(falcon_integration_tests)

@@ -12,6 +12,9 @@
 #ifdef FALCON_ENABLE_SFTP_PLUGIN
 #include "../plugins/sftp/sftp_handler.hpp"
 #endif
+#ifdef FALCON_ENABLE_WEBDAV_PLUGIN
+#include "../plugins/webdav/webdav_handler.hpp"
+#endif
 #ifdef FALCON_ENABLE_ED2K_PLUGIN
 #include "../plugins/ed2k/ed2k_plugin.hpp"
 #endif
@@ -58,6 +61,12 @@ std::vector<BuiltinProtocolInfo> describe_builtin_protocols() {
     protocols.push_back({"sftp", "SFTP", {"sftp"}, true, true});
 #else
     protocols.push_back({"sftp", "SFTP", {"sftp"}, false, false});
+#endif
+
+#ifdef FALCON_ENABLE_WEBDAV_PLUGIN
+    protocols.push_back({"webdav", "WebDAV", {"dav", "davs"}, true, true});
+#else
+    protocols.push_back({"webdav", "WebDAV", {"dav", "davs"}, false, false});
 #endif
 
 #ifdef FALCON_ENABLE_THUNDER_PLUGIN
@@ -114,6 +123,10 @@ void register_builtin_protocol_handlers([[maybe_unused]] ProtocolRegistry& regis
 
 #ifdef FALCON_ENABLE_SFTP_PLUGIN
     registry.register_handler(protocols::create_sftp_handler());
+#endif
+
+#ifdef FALCON_ENABLE_WEBDAV_PLUGIN
+    registry.register_handler(protocols::create_webdav_handler());
 #endif
 
 #ifdef FALCON_ENABLE_ED2K_PLUGIN

@@ -27,7 +27,7 @@
     I/O(epoll/kqueue/poll/WSAPoll)、命令模式与连接复用、`.falcon.ctrl` 控制文件
     持久化断点(If-Range 内容变更防护)、多镜像多源分段下载(P2SP)、全局/任务级
     限速、连接级重试、任务超时清理、chunked 传输编码、覆盖保护、临时文件原子发布
-- **多协议支持**: HTTP/HTTPS、FTP、Metalink、BitTorrent、磁力链接、私有协议
+- **多协议支持**: HTTP/HTTPS、FTP、SFTP、WebDAV、Metalink、BitTorrent、磁力链接、私有协议
   - 迅雷 (Thunder)、腾讯旋风 (QQDL)、快车 (FlashGet)、电驴 (ED2K)、HLS/DASH 流媒体
 - **Metalink**:RFC 5854 `.meta4` / Metalink3 `.metalink` 镜像列表,经 V2 引擎多镜像
   P2SP 分段下载,发布前整文件哈希校验
@@ -56,7 +56,29 @@
 
 ## 快速开始 ⚡
 
-### 安装
+### 一键安装（每日构建）
+
+一条命令从每日构建安装桌面版（匿名下载，幂等——重跑即升级）：
+
+```bash
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/cuihairu/falcon/main/scripts/install.sh | bash
+```
+
+```powershell
+# Windows（PowerShell 5.1+）
+irm https://raw.githubusercontent.com/cuihairu/falcon/main/scripts/install.ps1 | iex
+```
+
+| 平台 | 产物 | 说明 |
+|------|------|------|
+| Linux x86_64 | `falcon-desktop-linux-nightly.AppImage` | 装到 `~/.local/bin/falcon-desktop` |
+| Linux aarch64 | `falcon-desktop-linux-arm64-nightly.AppImage` | 首次 arm64 nightly 构建完成后可用 |
+| macOS Apple Silicon | `falcon-desktop-macos-arm64-nightly.dmg` | 装到 `/Applications`；ad-hoc 签名未公证，首次打开请右键 →「打开」 |
+| Windows x64 | `falcon-desktop-setup-nightly.exe` | Inno Setup 安装器，静默装到 `Program Files`；用户 PATH（注册表）+ 开始菜单快捷方式；旧版 `%LOCALAPPDATA%\Falcon` zip 布局自动清理 |
+| macOS Intel | — | 暂未构建，请用下方源码构建 |
+
+### 源码构建
 
 ```bash
 # 克隆仓库
@@ -68,8 +90,8 @@ cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
 
-CI 每日构建的三平台产物(Windows zip / Linux AppImage / macOS)附在
-[Releases](https://github.com/cuihairu/falcon/releases) 页面。当前文档以源码构建为准。
+CI 全部 nightly 构建产物附在
+[Releases](https://github.com/cuihairu/falcon/releases) 页面（滚动 `nightly` 标签）。
 
 ### 基本使用
 
@@ -131,8 +153,9 @@ falcon-cli -d /tmp/downloads -o custom_name.zip https://example.com/file.zip
 | HTTP/HTTPS | 已启用 | 标准 Web 协议，支持断点续传 |
 | FTP/FTPS | 已启用 | 文件传输协议，支持被动模式 |
 | Metalink | 已启用 | RFC 5854 `.meta4` / Metalink3 `.metalink` 镜像列表，整文件哈希校验 |
-| SFTP | 可选插件 | 仓库内已实现，默认构建关闭 |
-| BitTorrent | 可选插件 | 仓库内已实现，默认构建关闭 |
+| SFTP | 已启用 | libssh2 数据面，known_hosts 校验 + 断点续传 |
+| WebDAV | 已启用 | `dav://` / `davs://`，libcurl 数据面，Basic/Digest 认证 + 断点续传 |
+| BitTorrent | 已启用 | libtorrent 数据面（缺库时回落内置纯 C++ 模式） |
 | 迅雷 | 可选插件 | 仓库内已实现，默认构建关闭 |
 | 腾讯旋风 | 可选插件 | 仓库内已实现，默认构建关闭 |
 | 快车 | 可选插件 | 仓库内已实现，默认构建关闭 |
@@ -240,6 +263,7 @@ cmake -B build -S . \
   -DFALCON_ENABLE_METALINK=ON \
   -DFALCON_ENABLE_BITTORRENT=ON \
   -DFALCON_ENABLE_SFTP=ON \
+  -DFALCON_ENABLE_WEBDAV=ON \
   -DFALCON_ENABLE_THUNDER=ON \
   -DFALCON_ENABLE_QQDL=ON \
   -DFALCON_ENABLE_FLASHGET=ON \
@@ -251,8 +275,8 @@ cmake -B build -S . \
   -DFALCON_ENABLE_CONFIG_MANAGER=ON
 ```
 
-HTTP、FTP、Metalink、云存储、资源浏览/搜索与配置管理器默认开启；BitTorrent、
-SFTP 与私有协议插件默认关闭。
+HTTP、FTP、BitTorrent、SFTP、WebDAV、Metalink、云存储、资源浏览/搜索与
+配置管理器默认开启；私有协议插件（迅雷/旋风/快车/电驴/HLS）默认关闭。
 
 ## 贡献指南 🤝
 
@@ -287,6 +311,7 @@ SFTP 与私有协议插件默认关闭。
 - [x] Daemon：aria2 兼容 JSON-RPC（HTTP + WebSocket 事件流）、SQLite 持久化、SIGHUP 热重载
 - [x] 桌面应用（Qt6，Fluent 设计、亮暗主题、云盘浏览）
 - [x] 私有协议支持（迅雷、QQDL、FlashGet、ED2K）
+- [x] SFTP、WebDAV 协议（libssh2 / libcurl 数据面）
 - [x] 云存储浏览（S3、阿里云OSS、腾讯云COS、七牛云、又拍云）
 - [x] 资源搜索、加密配置管理
 
@@ -295,7 +320,7 @@ SFTP 与私有协议插件默认关闭。
 - [ ] 更多私有协议与网盘直链解析
 
 ### 计划中 📅
-- [ ] WebDAV / SFTP 协议增强
+- [ ] 更多私有协议与网盘直链解析增强
 - [ ] 移动端支持
 
 ---

@@ -147,6 +147,17 @@ elseif(FALCON_ENABLE_SFTP)
     set(FALCON_ENABLE_SFTP OFF CACHE BOOL "Enable SFTP plugin" FORCE)
 endif()
 
+# WebDAV plugin（纯 libcurl 数据面：dav→http / davs→https scheme 重写，
+# Basic/Digest 经 CURLOPT_HTTPAUTH(CURLAUTH_ANY) 按 401 挑战协商）
+if(FALCON_ENABLE_WEBDAV AND CURL_FOUND)
+    add_subdirectory(plugins/webdav)
+    target_link_libraries(falcon_protocols PRIVATE falcon_plugin_webdav)
+    target_compile_definitions(falcon_protocols PRIVATE FALCON_ENABLE_WEBDAV_PLUGIN)
+elseif(FALCON_ENABLE_WEBDAV)
+    message(WARNING "WebDAV plugin requires libcurl; disabling FALCON_ENABLE_WEBDAV")
+    set(FALCON_ENABLE_WEBDAV OFF CACHE BOOL "Enable WebDAV plugin" FORCE)
+endif()
+
 # Metalink protocol（vendored libmetalink 语义解析 + expat 格式预检）
 if(FALCON_ENABLE_METALINK)
     # Metalink 文档语义解析交给 vendored libmetalink（aria2 同款，MIT）；

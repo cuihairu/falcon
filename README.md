@@ -30,7 +30,7 @@ lives in [docs/design/ui-sandbox/](docs/design/ui-sandbox/README.md).
     multi-source segmented downloading (P2SP) across mirrors, global & per-task speed
     limits, connection-level retries, task timeouts, chunked transfer encoding,
     overwrite protection, and atomic temporary-file publishing
-- **Multi-Protocol Support**: HTTP/HTTPS, FTP, Metalink, BitTorrent, Magnet links, private protocols
+- **Multi-Protocol Support**: HTTP/HTTPS, FTP, SFTP, WebDAV, Metalink, BitTorrent, Magnet links, private protocols
   - Thunder (迅雷), QQDL (腾讯旋风), FlashGet, ED2K (电驴), HLS/DASH streaming
 - **Metalink**: RFC 5854 `.meta4` / Metalink3 `.metalink` mirror lists, multi-mirror
   P2SP segmented download through the V2 engine, whole-file hash verification before publish
@@ -61,7 +61,29 @@ lives in [docs/design/ui-sandbox/](docs/design/ui-sandbox/README.md).
 
 ## Quick Start ⚡
 
-### Installation
+### One-Line Install (Nightly)
+
+Installs the desktop app from the daily build (anonymous download, idempotent — rerun to upgrade):
+
+```bash
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/cuihairu/falcon/main/scripts/install.sh | bash
+```
+
+```powershell
+# Windows (PowerShell 5.1+)
+irm https://raw.githubusercontent.com/cuihairu/falcon/main/scripts/install.ps1 | iex
+```
+
+| Platform | Artifact | Notes |
+|----------|----------|-------|
+| Linux x86_64 | `falcon-desktop-linux-nightly.AppImage` | Installed to `~/.local/bin/falcon-desktop` |
+| Linux aarch64 | `falcon-desktop-linux-arm64-nightly.AppImage` | Available after the first arm64 nightly build |
+| macOS Apple Silicon | `falcon-desktop-macos-arm64-nightly.dmg` | Installed to `/Applications`; right-click → Open on first launch (ad-hoc signed, not notarized) |
+| Windows x64 | `falcon-desktop-setup-nightly.exe` | Inno Setup installer, run silently to `Program Files`; user PATH (registry) + Start menu shortcut; legacy `%LOCALAPPDATA%\Falcon` zip layouts are cleaned up automatically |
+| macOS Intel | — | Not built yet; use the source build below |
+
+### Build from Source
 
 ```bash
 # Clone repository
@@ -73,9 +95,8 @@ cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
 
-Nightly CI builds (Windows zip / Linux AppImage / macOS app) are attached to the
-[Releases](https://github.com/cuihairu/falcon/releases) page. Source build is the
-documented path.
+All nightly CI builds are attached to the
+[Releases](https://github.com/cuihairu/falcon/releases) page (rolling `nightly` tag).
 
 ### Basic Usage
 
@@ -137,8 +158,9 @@ Run `falcon-cli --help` for the full parameter list.
 | HTTP/HTTPS | Enabled | Standard web protocols with resume support |
 | FTP/FTPS | Enabled | File Transfer Protocol with passive mode |
 | Metalink | Enabled | RFC 5854 `.meta4` / Metalink3 `.metalink` mirror lists with whole-file hash verification |
-| SFTP | Optional plugin | Implemented in repo but disabled by default in top-level CMake |
-| BitTorrent | Optional plugin | Implemented in repo but disabled by default in top-level CMake |
+| SFTP | Enabled | libssh2 data plane with known_hosts verification and resume |
+| WebDAV | Enabled | `dav://` / `davs://` over libcurl with Basic/Digest auth and resume |
+| BitTorrent | Enabled | libtorrent data plane (falls back to the built-in pure-C++ mode when absent) |
 | Thunder | Optional plugin | Implemented in repo but disabled by default in top-level CMake |
 | QQDL | Optional plugin | Implemented in repo but disabled by default in top-level CMake |
 | FlashGet | Optional plugin | Implemented in repo but disabled by default in top-level CMake |
@@ -260,6 +282,7 @@ cmake -B build -S . \
   -DFALCON_ENABLE_METALINK=ON \
   -DFALCON_ENABLE_BITTORRENT=ON \
   -DFALCON_ENABLE_SFTP=ON \
+  -DFALCON_ENABLE_WEBDAV=ON \
   -DFALCON_ENABLE_THUNDER=ON \
   -DFALCON_ENABLE_QQDL=ON \
   -DFALCON_ENABLE_FLASHGET=ON \
@@ -271,9 +294,9 @@ cmake -B build -S . \
   -DFALCON_ENABLE_CONFIG_MANAGER=ON
 ```
 
-HTTP, FTP, Metalink, cloud storage, resource browsing/search, and the config manager
-are ON by default; BitTorrent, SFTP, and the private-protocol plugins are OFF by
-default.
+HTTP, FTP, BitTorrent, SFTP, WebDAV, Metalink, cloud storage, resource
+browsing/search, and the config manager are ON by default; the private-protocol
+plugins (Thunder/QQDL/FlashGet/ED2K/HLS) are OFF by default.
 
 ## Contributing 🤝
 

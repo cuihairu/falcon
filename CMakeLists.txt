@@ -49,6 +49,7 @@ option(FALCON_ENABLE_HTTP "Enable HTTP/HTTPS plugin" ON)
 option(FALCON_ENABLE_FTP "Enable FTP plugin" ON)
 option(FALCON_ENABLE_BITTORRENT "Enable BitTorrent plugin" ON)
 option(FALCON_ENABLE_SFTP "Enable SFTP plugin" ON)
+option(FALCON_ENABLE_WEBDAV "Enable WebDAV plugin" ON)
 option(FALCON_ENABLE_METALINK "Enable Metalink plugin" ON)
 option(FALCON_ENABLE_NAT "Enable NAT port mapping (UPnP IGD + NAT-PMP)" ON)
 
@@ -216,6 +217,13 @@ if(TARGET falcon_plugin_sftp)
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     )
 endif()
+if(TARGET falcon_plugin_webdav)
+    list(APPEND FALCON_PLUGIN_EXPORT_TARGETS falcon_plugin_webdav)
+    install(TARGETS falcon_plugin_webdav EXPORT FalconTargets
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    )
+endif()
 
 install(EXPORT FalconTargets
     FILE FalconTargets.cmake
@@ -240,6 +248,7 @@ set(FALCON_PACKAGE_NEEDS_CURL OFF)
 if(CURL_FOUND AND (
     FALCON_ENABLE_HTTP OR
     FALCON_ENABLE_FTP OR
+    FALCON_ENABLE_WEBDAV OR
     FALCON_ENABLE_RESOURCE_BROWSER OR
     FALCON_ENABLE_CLOUD_STORAGE OR
     FALCON_ENABLE_RESOURCE_SEARCH
@@ -301,6 +310,7 @@ message(STATUS "  HTTP/HTTPS: ${FALCON_ENABLE_HTTP}")
 message(STATUS "  FTP: ${FALCON_ENABLE_FTP}")
 message(STATUS "  BitTorrent: ${FALCON_ENABLE_BITTORRENT}")
 message(STATUS "  SFTP: ${FALCON_ENABLE_SFTP}")
+message(STATUS "  WebDAV: ${FALCON_ENABLE_WEBDAV}")
 message(STATUS "  Metalink: ${FALCON_ENABLE_METALINK}")
 message(STATUS "  NAT port mapping: ${FALCON_ENABLE_NAT}")
 message(STATUS "")
