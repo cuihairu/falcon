@@ -52,6 +52,7 @@ SettingsPage::SettingsPage(QWidget* parent)
     , float_click_through_checkbox_(nullptr)
     , current_theme_label_(nullptr)
     , theme_toggle_button_(nullptr)
+    , task_view_combo_(nullptr)
     , check_updates_button_(nullptr)
     , update_result_label_(nullptr)
     , check_updates_on_startup_checkbox_(nullptr)
@@ -415,6 +416,13 @@ void SettingsPage::reset_to_defaults()
 
     // About & update settings
     check_updates_on_startup_checkbox_->setChecked(true);
+
+    // 任务列表视图（默认卡片）——set_task_view_grid 程序化回写不发信号，
+    // 恢复默认需显式回发让下载页即时回到卡片视图
+    if (task_view_combo_ && task_view_combo_->currentIndex() != 0) {
+        set_task_view_grid(true);
+        emit task_view_grid_changed(true);
+    }
 }
 
 void SettingsPage::apply_settings()
@@ -1084,7 +1092,53 @@ QWidget* SettingsPage::create_appearance_section_widget()
     desc_label->setObjectName("cardInfoLabel");
     layout->addWidget(desc_label);
 
+    // 任务列表视图（默认卡片；与顶栏/下载页内的切换按钮共用同一份记忆，
+    // 手动切换后此处同步显示，首次/无记录即「卡片视图（默认）」）
+    auto* view_layout = new QHBoxLayout();
+    view_layout->setSpacing(12);
+
+    auto* view_label = new QLabel(tr("任务列表视图:"), this);
+    view_layout->addWidget(view_label);
+
+    task_view_combo_ = new QComboBox(this);
+    task_view_combo_->addItem(tr("卡片视图（默认）"), true);
+    task_view_combo_->addItem(tr("列表视图"), false);
+    task_view_combo_->setCursor(Qt::PointingHandCursor);
+    connect(task_view_combo_, &QComboBox::currentIndexChanged, this,
+            [this](int) { emit task_view_grid_changed(is_task_view_grid()); });
+    view_layout->addWidget(task_view_combo_);
+
+    view_layout->addStretch();
+    layout->addLayout(view_layout);
+
+    auto* view_desc = new QLabel(tr("下载页任务的显示方式；切换后立即生效并记住你的选择。"), this);
+    view_desc->setObjectName("cardInfoLabel");
+    view_desc->setWordWrap(true);
+    layout->addWidget(view_desc);
+
     return group;
+}
+
+void SettingsPage::set_task_view_grid(bool grid_view)
+{
+    if (!task_view_combo_) {
+        return;
+    }
+    const int want = task_view_combo_->findData(grid_view);
+    if (want < 0 || task_view_combo_->currentIndex() == want) {
+        return;
+    }
+    // 程序化回写不反向触发 task_view_grid_changed（避免设置页→下载页→设置页回环）
+    QSignalBlocker blocker(task_view_combo_);
+    task_view_combo_->setCurrentIndex(want);
+}
+
+bool SettingsPage::is_task_view_grid() const
+{
+    if (!task_view_combo_) {
+        return true;  // 默认卡片视图
+    }
+    return task_view_combo_->currentData().toBool();
 }
 
 void SettingsPage::on_theme_button_clicked()

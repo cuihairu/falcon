@@ -55,6 +55,8 @@ public:
     void set_open_file_when_completed(bool enabled);
     void set_action_when_completed(int action);
     void set_theme_display(bool dark_mode);
+    /// 任务列表视图（true=卡片视图，默认；与顶栏/页内切换共用同一份记忆）
+    void set_task_view_grid(bool grid_view);
     void set_float_widget_enabled(bool enabled);
     void set_float_show_active_tasks(bool show);
     void set_float_show_total_progress(bool show);
@@ -156,6 +158,9 @@ public:
     int get_float_opacity_percent() const;
     bool is_float_click_through() const;
 
+    /// 当前任务列表视图是否为卡片（默认 true）
+    bool is_task_view_grid() const;
+
 signals:
     /**
      * @brief Signal emitted when settings are changed
@@ -172,6 +177,12 @@ signals:
      * @brief Signal emitted when theme toggle is requested
      */
     void theme_toggle_requested();
+
+    /**
+     * @brief Signal emitted when the task list view style is changed here
+     * @param grid_view true = 卡片视图
+     */
+    void task_view_grid_changed(bool grid_view);
 
 private slots:
     /**
@@ -255,6 +266,7 @@ private:
     // Appearance settings
     QLabel* current_theme_label_;
     QPushButton* theme_toggle_button_;
+    QComboBox* task_view_combo_;
 
     // About & update settings
     QPushButton* check_updates_button_;
