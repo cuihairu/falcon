@@ -529,6 +529,22 @@ void MainWindow::create_pages()
                 settings.sync();
             });
 
+    // 显示样式手动切换 → 立即落 QSettings（B15：记住选择，首次/无记录默认卡片）
+    // 并同步设置页下拉框
+    connect(download_page_, &DownloadPage::display_style_changed, this,
+            [this](bool grid_view) {
+                QSettings settings;
+                settings.beginGroup("desktop");
+                settings.setValue("task_display_style",
+                                  grid_view ? QStringLiteral("grid")
+                                            : QStringLiteral("table"));
+                settings.endGroup();
+                settings.sync();
+                if (settings_page_) {
+                    settings_page_->set_task_view_grid(grid_view);
+                }
+            });
+
     // 云盘页面
     auto* cloud_page = new CloudPage(this);
     content_stack_->addWidget(cloud_page);
@@ -584,6 +600,15 @@ void MainWindow::create_pages()
         apply_settings_to_runtime();
     });
     connect(settings_page_, &SettingsPage::theme_toggle_requested, this, &MainWindow::on_theme_toggle_requested);
+    // 设置页下拉框 → 下载页即时生效（经 set_display_style 回发
+    // display_style_changed 完成落盘，程序化回写有 QSignalBlocker 不回环）
+    connect(settings_page_, &SettingsPage::task_view_grid_changed, this,
+            [this](bool grid_view) {
+                if (download_page_) {
+                    download_page_->set_display_style(
+                        grid_view ? TaskDisplayStyle::Grid : TaskDisplayStyle::Table);
+                }
+            });
     if (theme_manager_) {
         settings_page_->set_theme_display(theme_manager_->current_theme() == ThemeType::Dark);
         connect(theme_manager_, &ThemeManager::theme_changed, settings_page_, [this](ThemeType theme) {
@@ -700,12 +725,21 @@ void MainWindow::load_settings()
         settings.value("float_click_through", false).toBool());
     // 手动排序（"3,1,2" 逗号串；无记录/全垃圾 → 空序 = id 升序默认行为）
     const QString task_order_text = settings.value("task_order", QString()).toString();
+    // 任务列表视图：首次/无记录默认卡片（grid）；"table" = 用户手动切过列表
+    const bool task_view_grid =
+        settings.value("task_display_style", QStringLiteral("grid")).toString() !=
+        QStringLiteral("table");
 
     settings.endGroup();
 
     if (download_page_) {
         download_page_->set_task_order(
             task_order::deserialize(task_order_text.toStdString()));
+        download_page_->set_display_style(
+            task_view_grid ? TaskDisplayStyle::Grid : TaskDisplayStyle::Table);
+    }
+    if (settings_page_) {
+        settings_page_->set_task_view_grid(task_view_grid);
     }
 }
 
