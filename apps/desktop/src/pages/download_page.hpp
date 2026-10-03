@@ -69,6 +69,8 @@ public:
     void set_text_filter(const QString& text);
     /// 顶栏视图切换 → 表格/网格互切（与页内按钮共用同一状态）
     void toggle_display_style();
+    /// 当前显示样式（表格/卡片）；默认卡片（首次/无记录），供持久化与设置页同步
+    TaskDisplayStyle display_style() const { return display_style_; }
     /// 恢复持久化的手动排序（启动时从 QSettings 装载；表格/网格共用，
     /// 空序 = 从未拖拽，保持 id 升序默认行为）
     void set_task_order(const std::vector<falcon::TaskId>& order);
@@ -84,6 +86,9 @@ signals:
     void stop_seeding_requested(falcon::TaskId id);
     /// 拖拽排序变化 → 序列化串（"3,1,2"），MainWindow 落 QSettings
     void task_order_changed(const QString& serialized);
+    /// 显示样式实际变化 → MainWindow 落 QSettings（手动切换记忆）并同步设置页
+    /// @param grid_view true=卡片视图，false=列表视图
+    void display_style_changed(bool grid_view);
 
 private slots:
     void on_new_task_clicked();

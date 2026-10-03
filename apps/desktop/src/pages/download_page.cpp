@@ -59,13 +59,14 @@ QString status_display_text(falcon::TaskStatus status)
 DownloadPage::DownloadPage(QWidget* parent)
     : QWidget(parent)
     , view_mode_(DownloadViewMode::Downloading)
-    , display_style_(TaskDisplayStyle::Table)
     , header_layout_(nullptr)
     , new_task_button_(nullptr)
     , refresh_button_(nullptr)
     , style_toggle_button_(nullptr)
     , more_button_(nullptr)
     , task_table_(nullptr)
+    // 默认卡片视图（B15：首次/无记录进卡片；手动切换经 QSettings 记忆）
+    , display_style_(TaskDisplayStyle::Grid)
     , grid_container_(nullptr)
     , grid_scroll_area_(nullptr)
     , grid_widget_(nullptr)
@@ -262,7 +263,9 @@ void DownloadPage::create_header_bar()
     connect(refresh_button_, &QPushButton::clicked, this, &DownloadPage::on_refresh_clicked);
     header_layout_->addWidget(refresh_button_);
 
-    style_toggle_button_ = new QPushButton(tr("卡片视图"), this);
+    // 按钮文字 = 点击后切换到的目标视图（默认卡片视图 → 提示「列表视图」）
+    style_toggle_button_ = new QPushButton(
+        display_style_ == TaskDisplayStyle::Table ? tr("卡片视图") : tr("列表视图"), this);
     style_toggle_button_->setObjectName("toolButton");
     connect(style_toggle_button_, &QPushButton::clicked, this, &DownloadPage::on_style_toggle_clicked);
     header_layout_->addWidget(style_toggle_button_);
@@ -1163,6 +1166,16 @@ void DownloadPage::set_display_style(TaskDisplayStyle style)
 
     rerender();
     update_empty_state();
+
+    // 按钮文字恒为「点击后切换到的目标视图」——外部（设置页）切换同样要跟上
+    if (style_toggle_button_) {
+        style_toggle_button_->setText(display_style_ == TaskDisplayStyle::Table
+                                          ? tr("卡片视图")
+                                          : tr("列表视图"));
+    }
+
+    // 手动切换记忆：MainWindow 落 QSettings 并同步设置页（首次/无记录默认卡片）
+    emit display_style_changed(display_style_ == TaskDisplayStyle::Grid);
 }
 
 void DownloadPage::set_text_filter(const QString& text)
@@ -1182,11 +1195,6 @@ void DownloadPage::toggle_display_style()
     set_display_style(display_style_ == TaskDisplayStyle::Table
                           ? TaskDisplayStyle::Grid
                           : TaskDisplayStyle::Table);
-
-    // 按钮文字提示点击后切换到的目标视图
-    style_toggle_button_->setText(display_style_ == TaskDisplayStyle::Table
-                                      ? tr("卡片视图")
-                                      : tr("列表视图"));
 }
 
 void DownloadPage::on_style_toggle_clicked()
