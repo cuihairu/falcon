@@ -1,6 +1,6 @@
 # BitTorrent 协议
 
-Falcon 代码库中包含 BitTorrent 插件实现，可处理 Magnet 链接和 `.torrent` 文件；该插件在顶层 CMake 中默认关闭。
+Falcon 代码库中包含 BitTorrent 插件实现，可处理 Magnet 链接和 `.torrent` 文件；数据面由 libtorrent 承担，顶层 CMake 默认启用（缺 libtorrent 时以 WARNING 优雅降级）。
 
 ## 启用方式
 
@@ -10,10 +10,10 @@ cmake -B build -S . -DFALCON_ENABLE_BITTORRENT=ON
 
 ## 特性
 
-- ✅ Magnet 链接
-- ✅ `.torrent` 文件
-- ✅ DHT / LSD / PEX / UPnP 等能力的插件实现
-- ✅ 大文件分发场景
+- Magnet 链接
+- `.torrent` 文件
+- DHT / LSD / PEX / UPnP 等能力的插件实现
+- 大文件分发场景
 
 ## 命令行示例
 

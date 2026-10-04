@@ -19,7 +19,7 @@ hero:
 features:
   - title: 多协议支持
     details: 传输核心默认启用 HTTP/HTTPS、FTP、SFTP、WebDAV、Metalink 与 BitTorrent，另提供迅雷、QQ 旋风、快车、ED2K、HLS/DASH 等可选兼容插件。
-  - title: 高性能
+  - title: 事件驱动引擎
     details: 基于 C++17 事件驱动架构，支持多线程分块下载、断点续传和可配置并发控制。
   - title: 多入口形态
     details: 仓库内包含核心库、CLI、Daemon、桌面端和浏览器扩展，便于按场景组合使用。
@@ -117,7 +117,7 @@ falcon/
 |------|------|------|
 | HTTP/HTTPS | 已启用 | 断点续传、分块下载 |
 | FTP/FTPS | 已启用 | 主动/被动模式 |
-| BitTorrent | 可选实现 | 代码库内有实现，当前未统一接入默认自动注册 |
+| BitTorrent | 已启用 | 基于 libtorrent，做种、DHT、NAT 端口映射 |
 | ED2K | 可选实现 | 代码库内有实现，默认构建通常关闭 |
 | 迅雷 | 可选实现 | 代码库内有实现，默认构建通常关闭 |
 | QQ旋风 | 可选实现 | 代码库内有实现，默认构建通常关闭 |

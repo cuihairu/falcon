@@ -8,7 +8,7 @@
 所有云存储解析器都使用"魔法数字"来跳过协议前缀：
 
 ```cpp
-// ❌ 当前代码（容易出错）
+// 反例：当前代码（容易出错）
 size_t bucket_start = 5;  // 为什么是 5？需要手动数 "oss://"
 ```
 
@@ -23,10 +23,10 @@ size_t bucket_start = 5;  // 为什么是 5？需要手动数 "oss://"
 ### 方案 1：constexpr 常量（推荐用于当前项目）
 
 **优点**：
-- ✅ 简单直接，易于理解
-- ✅ 编译期计算，零运行时开销
-- ✅ 不改变现有架构
-- ✅ 容易迁移现有代码
+- 简单直接，易于理解
+- 编译期计算，零运行时开销
+- 不改变现有架构
+- 容易迁移现有代码
 
 **实现**：
 ```cpp
@@ -47,10 +47,10 @@ namespace falcon::cloud {
 ### 方案 2：枚举类 + 类型安全
 
 **优点**：
-- ✅ 最强的类型安全
-- ✅ 编译期检查
-- ✅ 避免拼写错误
-- ✅ 可扩展性好
+- 最强的类型安全
+- 编译期检查
+- 避免拼写错误
+- 可扩展性好
 
 **实现**：
 ```cpp
@@ -73,9 +73,9 @@ size_t bucket_start = CloudProtocolUtils::get_prefix(protocol).size();
 ### 方案 3：模板元编程（最通用）
 
 **优点**：
-- ✅ 编译期生成代码
-- ✅ 零运行时开销
-- ✅ 类型安全
+- 编译期生成代码
+- 零运行时开销
+- 类型安全
 
 **实现**：
 ```cpp
@@ -100,7 +100,7 @@ using OSSUrlParser = CloudUrlParser<"oss://">;
 
 ### 阶段 1：立即可行（已完成）
 
-✅ 修复当前的魔法数字 bug
+修复当前的魔法数字 bug
 
 ### 阶段 2：渐进式重构（推荐）
 
@@ -110,11 +110,11 @@ using OSSUrlParser = CloudUrlParser<"oss://">;
 
 ```cpp
 // 迁移前
-size_t bucket_start = 5;  // ❌
+size_t bucket_start = 5;  // 不好
 
 // 迁移后
 using namespace cloud;
-size_t bucket_start = PROTOCOL_OSS.size();  // ✅
+size_t bucket_start = PROTOCOL_OSS.size();  // 好
 ```
 
 ### 阶段 3：统一接口（可选）

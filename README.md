@@ -12,9 +12,12 @@
 
   **The Universal Resource Transfer Engine**
 
-  A modern, high-performance, cross-platform C++ engine for downloading and
-  accessing resources across HTTP, FTP, SFTP, WebDAV, object storage, and P2P
-  networks — packaged as a CLI, a daemon, and a desktop app.
+  A cross-platform C++ engine for downloading and accessing resources across
+  HTTP, FTP, SFTP, WebDAV, object storage, and P2P networks — packaged as a
+  CLI, a daemon, and a desktop app. The transfer stack is built on open-source
+  components: libcurl, OpenSSL, libtorrent, and libssh2 carry the protocol data
+  planes; the event-driven V2 engine and the aria2-compatible CLI/RPC surface
+  follow aria2's architecture.
 
   [English](README.md) | [中文文档](README_CN.md)
 
@@ -24,7 +27,7 @@ Screenshots and design prototypes are showcased on the
 [docs site](https://cuihairu.github.io/falcon/); the full gallery (52 shots)
 lives in [docs/design/ui-sandbox/](docs/design/ui-sandbox/README.md).
 
-## Features 🚀
+## Features
 
 - **Dual Download Engines**
   - **V1 engine** (default): libcurl-based, multi-threaded segmented downloading, resume, per-task speed limits
@@ -52,7 +55,7 @@ lives in [docs/design/ui-sandbox/](docs/design/ui-sandbox/README.md).
   table & grid task views, cloud storage browsing, resource search, dual backend
   (in-process engine or daemon RPC with WebSocket event refresh)
 - **CLI** (`falcon-cli`): 60+ aria2-compatible parameters, batch input files, JSON config
-- **High Performance**:
+- **Performance characteristics**:
   - Multi-connection segmented downloading with adaptive sizing
   - Non-blocking I/O with event-driven architecture
   - Connection pooling for reduced latency
@@ -69,7 +72,7 @@ lives in [docs/design/ui-sandbox/](docs/design/ui-sandbox/README.md).
 - **Resource Search**: Built-in search provider framework for torrent and file resources
 - **Secure Configuration**: AES-256-GCM encrypted credential storage with master password protection
 
-## Quick Start ⚡
+## Quick Start
 
 ### One-Line Install (Nightly)
 
@@ -161,7 +164,7 @@ falcon-cli -d /tmp/downloads -o custom_name.zip https://example.com/file.zip
 
 Run `falcon-cli --help` for the full parameter list.
 
-## Supported Protocols 📡
+## Supported Protocols
 
 | Protocol | Status | Description |
 |----------|--------|-------------|
@@ -177,7 +180,7 @@ Run `falcon-cli --help` for the full parameter list.
 | ED2K | Optional plugin | Implemented in repo but disabled by default in top-level CMake |
 | HLS/DASH | Optional plugin | Implemented in repo but disabled by default in top-level CMake |
 
-## Cloud Storage Support ☁️
+## Cloud Storage Support
 
 Library-level browsing is implemented for Amazon S3, Alibaba Cloud OSS, Tencent COS,
 Qiniu Kodo, and Upyun (`packages/libfalcon-storage`): listing, tree views, object info,
@@ -191,13 +194,13 @@ cloud storage page backed by these modules.
 > older examples are **not implemented** — use the desktop GUI or call the libraries
 > directly.
 
-## Secure Configuration 🔐
+## Secure Configuration
 
 `libfalcon-drives` provides an encrypted configuration manager (SQLite-backed,
 AES-256-GCM credential encryption protected by a master password). The desktop
 application uses it in its settings page. CLI management commands are not exposed yet.
 
-## Advanced Features ⚙️
+## Advanced Features
 
 ### Resource Search
 `libfalcon-drives` includes a search provider framework (`resource_search`): a provider
@@ -210,7 +213,7 @@ library API for integration.
 COS, Kodo, and Upyun — format-tree/table listings, path validation, and recursive
 operations. The desktop cloud storage page is built on it.
 
-## UI Prototypes 🎨
+## UI Prototypes
 
 The desktop main view ships in the "warm console" theme (variant A) and has a
 "cold utility" variant candidate (variant B). Both dark-theme prototypes below are
@@ -231,7 +234,7 @@ Source assets and regeneration instructions live in
 the interactive comparison page is on the
 [docs site](https://cuihairu.github.io/falcon/developer/design-prototypes).
 
-## Architecture 🏗️
+## Architecture
 
 Falcon follows a modular architecture with aria2-inspired event-driven design:
 
@@ -267,7 +270,7 @@ Falcon uses an event-driven command pattern inspired by aria2:
 - [Developer Guide](docs/developer_guide.md) - Development setup and guidelines
 - [Migration Plan](docs/aria2c-migration-plan.md) - aria2 compatibility roadmap
 
-## Development 👷
+## Development
 
 ### Prerequisites
 - CMake 3.15+
@@ -308,7 +311,7 @@ HTTP, FTP, BitTorrent, SFTP, WebDAV, Metalink, cloud storage, resource
 browsing/search, and the config manager are ON by default; the private-protocol
 plugins (Thunder/QQDL/FlashGet/ED2K/HLS) are OFF by default.
 
-## Contributing 🤝
+## Contributing
 
 We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
 
@@ -317,11 +320,11 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 - Use `clang-format` for code formatting
 - Write unit tests for new features
 
-## License 📄
+## License
 
 This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
 
-## Acknowledgments 🙏
+## Acknowledgments
 
 - [libcurl](https://curl.se/) for HTTP/FTP/SFTP support
 - [libtorrent](https://www.libtorrent.org/) for BitTorrent support
@@ -334,5 +337,5 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 ---
 
 <div align="center">
-  Made with ❤️ by the Falcon Team
+  The Falcon Team
 </div>

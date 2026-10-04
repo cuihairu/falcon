@@ -402,7 +402,7 @@ void download(const std::string& url, const DownloadOptions& options);
 
 ## 禁止事项
 
-### ❌ 不要做的事情
+### 不要做的事情
 
 ```cpp
 // 1. 不要使用 C 风格转换

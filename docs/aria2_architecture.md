@@ -5,7 +5,7 @@
 
 ## 概述
 
-Falcon 下载器采用了与 aria2 类似的事件驱动架构，实现了高性能、可扩展的下载引擎。本文档详细说明了 Falcon 的核心架构设计。
+Falcon 下载器采用与 aria2 类似的事件驱动架构。本文档说明其核心架构设计。
 
 ## 架构设计原则
 
@@ -61,8 +61,8 @@ HttpRetryCommand (失败重试，可选)
 
 | 平台 | 实现 | 特点 |
 |------|------|------|
-| Linux | EPollEventPoll | 高性能，支持大量连接 |
-| macOS/BSD | KqueueEventPoll | 高性能，原生支持 |
+| Linux | EPollEventPoll | 支持大量连接 |
+| macOS/BSD | KqueueEventPoll | 系统原生接口 |
 | 其他 | PollEventPoll | 可移植，性能较低 |
 
 #### 使用示例
@@ -224,15 +224,15 @@ void DownloadEngineV2::run() {
 
 | 特性 | aria2 | Falcon |
 |------|-------|--------|
-| 架构 | 事件驱动 + 命令模式 | ✅ 事件驱动 + 命令模式 |
-| I/O 多路复用 | epoll/kqueue/IOCP | ✅ epoll/kqueue/poll |
-| 连接池 | ✅ | ✅ |
-| 分段下载 | ✅ | ✅ |
-| 多镜像支持 | ✅ | ✅ |
-| 命令行参数 | 丰富 | ✅ 30+ aria2 兼容参数 |
-| RPC 接口 | XML-RPC/JSON-RPC | 🚧 计划中 |
-| BitTorrent | ✅ | 🚧 计划中 |
-| Metalink | ✅ | ❌ 未计划 |
+| 架构 | 事件驱动 + 命令模式 | 事件驱动 + 命令模式 |
+| I/O 多路复用 | epoll/kqueue/IOCP | epoll/kqueue/poll |
+| 连接池 | 有 | 有 |
+| 分段下载 | 有 | 有 |
+| 多镜像支持 | 有 | 有 |
+| 命令行参数 | 丰富 | 60+ aria2 兼容参数 |
+| RPC 接口 | XML-RPC/JSON-RPC | JSON-RPC（HTTP 与 WebSocket 同端口，由 falcon-daemon 提供） |
+| BitTorrent | 有 | 有（libtorrent） |
+| Metalink | 有 | 有（vendored libmetalink） |
 
 ## 性能优化
 
@@ -377,6 +377,9 @@ try {
 ```
 
 ## 未来计划
+
+以下清单写于 V2 引擎设计阶段，仅作存档。清单中的 RPC、BitTorrent、Metalink、
+SFTP、图形界面此后均已落地，当前进展以 [README](../README.md) 的路线图为准。
 
 ### 短期 (1-3 个月)
 

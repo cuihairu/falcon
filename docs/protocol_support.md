@@ -7,7 +7,7 @@
 
 ### 1. 基础协议
 
-#### HTTP/HTTPS ✅
+#### HTTP/HTTPS
 - **文件位置**: `plugins/http/http_plugin.cpp`
 - **功能特性**:
   - 基础GET/POST请求
@@ -19,7 +19,7 @@
   - 代理支持（HTTP/SOCKS4/SOCKS5）
   - SSL证书验证控制
 
-#### FTP ✅
+#### FTP
 - **文件位置**: `plugins/ftp/ftp_plugin.cpp`
 - **功能特性**:
   - 被动/主动模式
@@ -30,36 +30,36 @@
 
 ### 2. 私有协议和磁力链
 
-#### Thunder（迅雷）✅
+#### Thunder（迅雷）
 - **文件位置**: `plugins/thunder/thunder_plugin.cpp`
 - **支持格式**:
   - `thunder://` (标准格式)
   - `thunderxl://` (迅雷极速版)
 - **实现方式**: Base64解码还原为HTTP链接
 
-#### QQDL（QQ旋风）✅
+#### QQDL（QQ旋风）
 - **文件位置**: `plugins/qqdl/qqdl_plugin.cpp`
 - **支持格式**: `qqlink://`
 - **实现方式**: GID验证 + Base64解码
 
-#### FlashGet（快车）✅
+#### FlashGet（快车）
 - **文件位置**: `plugins/flashget/flashget_plugin.cpp`
 - **支持格式**: `flashget://`
 - **实现方式**: URL解码 + 参数提取
 
-#### ED2K（电驴）✅
+#### ED2K（电驴）
 - **文件位置**: `plugins/ed2k/ed2k_plugin.cpp`
 - **支持格式**: `ed2k://`
 - **实现方式**: MD4哈希解析 + eD2k链接处理
 
-#### BitTorrent/Magnet ✅
+#### BitTorrent/Magnet
 - **文件位置**: `plugins/bittorrent/bittorrent_plugin.cpp`
 - **支持格式**:
   - 磁力链接 `magnet:?xt=urn:btih:`
   - 种子文件 `.torrent`
 - **功能特性**: DHT网络支持、Tracker支持、Piece校验
 
-#### HLS/DASH ✅
+#### HLS/DASH
 - **文件位置**: `plugins/hls/hls_plugin.cpp`
 - **支持格式**:
   - M3U8播放列表（HLS）
@@ -68,7 +68,7 @@
 
 ### 3. 网盘和云存储
 
-#### 蓝奏云 ✅
+#### 蓝奏云
 - **文件位置**: `src/cloud_storage_plugin.cpp`
 - **支持格式**: `lanzouy.com`、`lanzoux.com`等
 - **功能特性**:
@@ -77,7 +77,7 @@
   - 文件信息获取
   - 直链下载
 
-#### 网盘支持矩阵（原生 WebDAV / Alist 聚合）✅
+#### 网盘支持矩阵（原生 WebDAV / Alist 聚合）
 - **文件位置**: `packages/libfalcon-storage/plugins/webdav/webdav_browser.cpp`（浏览/元数据）、`include/falcon/storage/storage_presets.hpp`（连接预设）
 - **支持格式**: `webdav://[user:pass@]host[:port]/path`（`dav://`、`davs://`、`webdavs://` 同义）
 - **功能特性**:
@@ -112,7 +112,7 @@
 
 ### 4. 对象存储
 
-#### S3 兼容对象存储矩阵 ✅
+#### S3 兼容对象存储矩阵
 - **文件位置**: `packages/libfalcon-storage/plugins/s3/s3_browser.cpp`、`include/falcon/storage/storage_presets.hpp`
 - **协议面**: ListObjectsV2 XML（`list-type=2`）——真 S3/MinIO/R2/B2/Wasabi/GCS
   一律应答 XML `ListBucketResult`，`xml_scan.hpp` 手工扫描器解析（零新增依赖，
@@ -158,7 +158,7 @@
 
 ### 5. 资源搜索功能
 
-#### 搜索引擎集成 ✅
+#### 搜索引擎集成
 - **文件位置**: `src/resource_search.cpp`
 - **支持的搜索引擎**:
   - TorrentGalaxy
@@ -173,9 +173,9 @@
   - 网盘资源搜索支持
   - JSON配置文件支持
 
-### 6. NAS协议支持计划 📋
+### 6. NAS协议支持计划（未实现）
 
-#### Samba/CIFS 🔄
+#### Samba/CIFS（未实现）
 - **协议说明**: Windows网络共享协议
 - **实现计划**:
   - 使用libsmbclient库
@@ -184,7 +184,7 @@
   - 文件浏览和下载
 - **预计实现时间**: Q1 2024
 
-#### NFS 🔄
+#### NFS（未实现）
 - **协议说明**: 网络文件系统协议
 - **实现计划**:
   - 使用libnfs库
@@ -193,27 +193,20 @@
   - 大文件传输优化
 - **预计实现时间**: Q1 2024
 
-#### WebDAV 🔄
+#### WebDAV（已实现）
 - **协议说明**: 基于HTTP的分布式文件系统
-- **实现计划**:
-  - HTTP/WebDAV客户端实现
-  - 支持认证（Basic/Digest）
-  - 属性获取和管理
-  - 集成到现有HTTP插件
-- **预计实现时间**: Q2 2024
+- **实现状态**: 已实现——`dav://` / `davs://` / `webdavs://` 入口，libcurl 数据面，
+  PROPFIND 浏览、Basic/Digest 认证、断点续传；远程目录浏览见
+  `packages/libfalcon-storage` 的 webdav_browser（上文「网盘支持矩阵」）
 
-#### FTPS/SFTP 🔄
+#### FTPS/SFTP（已实现）
 - **协议说明**: 安全文件传输协议
-- **实现计划**:
-  - SFTP: 使用libssh2
-  - FTPS: OpenSSL集成
-  - 主机密钥验证
-  - 公钥/私钥认证
-- **预计实现时间**: Q1 2024
+- **实现状态**: SFTP 已实现（libssh2 数据面，known_hosts 主机密钥验证、
+  公钥/密码认证、断点续传）；FTPS 经 libcurl 支持（explict/tls）
 
 ### 7. 高级功能
 
-#### 代理支持 ✅
+#### 代理支持
 - **支持类型**:
   - HTTP代理
   - SOCKS4代理
@@ -221,8 +214,8 @@
   - 代理认证（用户名/密码）
 - **配置方式**: 命令行参数、配置文件
 
-#### 资源搜索与网盘集成 🚀
-- **创新功能**:
+#### 资源搜索与网盘集成
+- **功能说明**:
   - 搜索结果包含网盘分享链接
   - 自动识别和解析网盘链接
   - 统一的下载体验
@@ -236,18 +229,13 @@ falcon-cli https://example.com/file.zip
 # 磁力链接下载
 falcon-cli "magnet:?xt=urn:btih:..."
 
-# S3对象下载
-falcon-cli s3://my-bucket/path/to/file
-
-# 搜索资源
-falcon-cli --search "Ubuntu 22.04" --min-seeds 10 --download 1
-
 # 使用代理下载
 falcon-cli https://example.com/large.iso --proxy socks5://127.0.0.1:1080
-
-# 网盘下载（需要密码）
-falcon-cli https://www.lanzoux.com/iabcdefg --password "123"
 ```
+
+快照原文中的 `--search` / `--min-seeds` / `--download` / `--password` 参数与
+`s3://` 入口并未实现：云存储浏览与资源搜索目前是库层能力（桌面云盘页在用），
+CLI 未提供入口。完整参数清单以 `falcon-cli --help` 为准。
 
 ## 架构设计
 
@@ -270,10 +258,13 @@ falcon-cli https://www.lanzoux.com/iabcdefg --password "123"
   - spdlog（日志）
   - libtorrent（BitTorrent）
   - OpenSSL（S3签名）
-  - libssh2（SFTP，计划中）
-  - libsmbclient（Samba，计划中）
+  - libssh2（SFTP）
+  - libsmbclient（Samba，未实现）
 
 ## 未来规划
+
+以下为快照时点的规划清单，仅存档：桌面 GUI（Qt6）、WebDAV、SFTP、P2P 加速
+（多源分段）此后已落地，其余未实现，现状以 [README](../README.md) 为准。
 
 ### 短期目标（3个月）
 1. 完善NAS协议支持（Samba、NFS、WebDAV）

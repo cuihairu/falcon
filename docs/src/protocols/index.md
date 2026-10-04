@@ -6,14 +6,14 @@ Falcon 的传输能力围绕统一引擎按层级组织：核心传输协议默�
 
 | 层级 | 协议 | 默认 | 说明 |
 |------|------|------|------|
-| **1 · 核心传输** | HTTP/HTTPS | ✅ 开 | V1/libcurl 与 V2 事件驱动双引擎、断点续传、多段下载、代理 |
-| **1 · 核心传输** | FTP/FTPS | ✅ 开 | 主动/被动模式、REST 续传 |
-| **1 · 核心传输** | SFTP | ✅ 开（需 libssh2） | known_hosts 验证、断点续传 |
-| **1 · 核心传输** | WebDAV | ✅ 开 | `dav`/`davs`；storage 层另有 WebDAV 浏览器 |
-| **2 · P2P 与多源** | BitTorrent/Magnet | ✅ 开（需 libtorrent） | 分片级 P2P、做种、DHT、NAT 端口映射 |
-| **2 · P2P 与多源** | Metalink | ✅ 开 | RFC 5854 `.meta4` / Metalink3 `.metalink`，多镜像 P2SP 分段 + 发布前哈希校验 |
+| **1 · 核心传输** | HTTP/HTTPS | 开 | V1/libcurl 与 V2 事件驱动双引擎、断点续传、多段下载、代理 |
+| **1 · 核心传输** | FTP/FTPS | 开 | 主动/被动模式、REST 续传 |
+| **1 · 核心传输** | SFTP | 开（需 libssh2） | known_hosts 验证、断点续传 |
+| **1 · 核心传输** | WebDAV | 开 | `dav`/`davs`；storage 层另有 WebDAV 浏览器 |
+| **2 · P2P 与多源** | BitTorrent/Magnet | 开（需 libtorrent） | 分片级 P2P、做种、DHT、NAT 端口映射 |
+| **2 · P2P 与多源** | Metalink | 开 | RFC 5854 `.meta4` / Metalink3 `.metalink`，多镜像 P2SP 分段 + 发布前哈希校验 |
 | **3 · 兼容插件** | 迅雷 / QQ 旋风 / 快车 / ED2K / HLS-DASH | 可选 | 默认关闭，按需 `FALCON_ENABLE_*` 打开 |
-| **资源访问** | S3 / OSS / COS / Kodo / 又拍云 | ✅ 开 | 对象存储（SigV4）、MinIO / RustFS 私有网关、远程浏览与资源搜索 |
+| **资源访问** | S3 / OSS / COS / Kodo / 又拍云 | 开 | 对象存储（SigV4）、MinIO / RustFS 私有网关、远程浏览与资源搜索 |
 
 ## 基础协议
 
@@ -127,14 +127,16 @@ cmake -B build \
 
 ## 协议对比
 
-| 协议 | 速度 | 稳定性 | 资源占用 | 适用场景 |
-|------|------|--------|----------|----------|
-| HTTP/HTTPS | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | 低 | 网页、文件下载 |
-| FTP | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | 低 | 企业文件共享 |
-| BitTorrent | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | 高 | 大文件分发 |
-| ED2K | ⭐⭐⭐ | ⭐⭐ | 中 | 老资源共享 |
-| 迅雷/快车 | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | 中 | 中文资源 |
-| HLS/DASH | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | 中 | 视频点播 |
+| 协议 | 资源占用 | 适用场景 |
+|------|----------|----------|
+| HTTP/HTTPS | 低 | 网页、文件下载 |
+| FTP | 低 | 企业文件共享 |
+| BitTorrent | 高 | 大文件分发 |
+| ED2K | 中 | 老资源共享 |
+| 迅雷/快车 | 中 | 中文资源 |
+| HLS/DASH | 中 | 视频点播 |
+
+速度与稳定性取决于源站与网络条件，协议本身给不出统一评分，故不设星级列。
 
 ::: tip 选择合适的协议
 - **日常下载**：使用 HTTP/HTTPS

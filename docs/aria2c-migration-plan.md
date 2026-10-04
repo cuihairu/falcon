@@ -1,9 +1,13 @@
 # aria2c 核心功能迁移计划
 
 > [!NOTE]
-> 本文档为迁移计划与历史记录，不保证与当前 CLI 实现完全一致。
+> 本文档为 2025-12-25 的迁移计划快照与历史记录。快照之后多数「待实现」条目已经落地：
+> aria2 兼容 RPC 由 falcon-daemon 提供（JSON-RPC，同端口 WebSocket 事件流），`--file-allocation`、
+> `--seed-ratio`、`--seed-time`、`--auto-file-renaming`、`--load-cookies`、`--save-cookies`、
+> `--referer`、`--retry-wait`、`--config` 等参数已进 CLI。文中完成度百分比与参数状态不再逐一
+> 更新，现状以 `falcon-cli --help` 和 [README](../README.md) 为准。
 
-> 基于对 [aria2/aria2](https://github.com/aria2/aria2) 源码的深度分析，制定 Falcon 下载器的核心功能实现路线图。
+> 基于 [aria2/aria2](https://github.com/aria2/aria2) 源码分析，制定 Falcon 下载器的核心功能实现路线图。
 
 ## 文档版本
 
@@ -11,7 +15,7 @@
 - **最后更新**: 2025-12-25
 - **aria2c 分析版本**: 1.37.0 (commit: b519ce04)
 - **参考来源**: [aria2 DeepWiki 文档](https://github.com/aria2/aria2)
-- **实现状态**: ✅ Phase 1-6 已完成
+- **实现状态**: Phase 1-6 完成（快照时点）
 
 ---
 
@@ -19,13 +23,13 @@
 
 | Phase | 名称 | 状态 | 完成日期 |
 |-------|------|------|----------|
-| Phase 1 | 命令系统 (Command Pattern) | ✅ 完成 | 2025-12-25 |
-| Phase 2.1 | EventPoll 接口 | ✅ 完成 | 2025-12-25 |
-| Phase 2.2 | 事件驱动 DownloadEngineV2 | ✅ 完成 | 2025-12-25 |
-| Phase 3 | RequestGroup 管理 | ✅ 完成 | 2025-12-25 |
-| Phase 4 | Socket 连接池 | ✅ 完成 | 2025-12-25 |
-| Phase 5 | aria2 兼容命令行参数 | ✅ 完成 | 2025-12-25 |
-| Phase 6 | 文件校验功能 (SHA-1/SHA256/MD5) | ✅ 完成 | 2025-12-25 |
+| Phase 1 | 命令系统 (Command Pattern) | 完成 | 2025-12-25 |
+| Phase 2.1 | EventPoll 接口 | 完成 | 2025-12-25 |
+| Phase 2.2 | 事件驱动 DownloadEngineV2 | 完成 | 2025-12-25 |
+| Phase 3 | RequestGroup 管理 | 完成 | 2025-12-25 |
+| Phase 4 | Socket 连接池 | 完成 | 2025-12-25 |
+| Phase 5 | aria2 兼容命令行参数 | 完成 | 2025-12-25 |
+| Phase 6 | 文件校验功能 (SHA-1/SHA256/MD5) | 完成 | 2025-12-25 |
 
 ---
 
@@ -718,64 +722,68 @@ private:
  * aria2c 参数          Falcon 参数              状态
  * ==================================================
  * 基础选项:
- * -h, --help          -h, --help              ✅ 已实现
- * -V, --version       -V, --version           ✅ 已实现
- * -o, --out           -o, --output            ✅ 已实现
- * -d, --dir           -d, --directory         ✅ 已实现
+ * -h, --help          -h, --help              已实现
+ * -V, --version       -V, --version           已实现
+ * -o, --out           -o, --output            已实现
+ * -d, --dir           -d, --directory         已实现
  *
  * 下载队列:
- * -j, --max-concurrent-downloads  -j         ✅ 已实现
- * --enable-rpc        --enable-rpc            ❌ 待实现
- * --rpc-listen-port   --rpc-port              ❌ 待实现
+ * -j, --max-concurrent-downloads  -j         已实现
+ * --enable-rpc        --enable-rpc            待实现
+ * --rpc-listen-port   --rpc-listen-port       已实现
  *
  * HTTP/FTP 选项:
- * -x, --max-connection-per-server  -c         ✅ 已实现
- * -s, --split         -s, --split             ✅ 已实现
- * -k, --min-split-size  -k, --min-split-size  ✅ 已实现
- * --min-turtle-speed  --min-speed             ❌ 待实现
- * --max-overall-download-limit  --limit       ✅ 已实现
- * --max-download-limit  --limit               ✅ 已实现
+ * -x, --max-connection-per-server  -c         已实现
+ * -s, --split         -s, --split             已实现
+ * -k, --min-split-size  -k, --min-split-size  已实现
+ * --min-turtle-speed  --min-speed             待实现
+ * --max-overall-download-limit  --limit       已实现
+ * --max-download-limit  --limit               已实现
  *
  * 连接选项:
- * --connect-timeout   --connect-timeout       ❌ 待实现
- * --timeout           -t, --timeout           ✅ 已实现
- * --max-tries         -r, --retry             ✅ 已实现
- * --retry-wait        --retry-wait            ❌ 待实现
+ * --connect-timeout   --connect-timeout       待实现
+ * --timeout           -t, --timeout           已实现
+ * --max-tries         -r, --retry             已实现
+ * --retry-wait        --retry-wait            已实现
  *
  * 代理选项:
- * --all-proxy         --proxy                 🔄 基础支持
- * --http-proxy        --http-proxy            ❌ 待实现
- * --https-proxy       --https-proxy           ❌ 待实现
- * --ftp-proxy         --ftp-proxy             ❌ 待实现
- * --no-proxy          --no-proxy              ❌ 待实现
+ * --all-proxy         --proxy                 基础支持
+ * --http-proxy        --http-proxy            待实现
+ * --https-proxy       --https-proxy           待实现
+ * --ftp-proxy         --ftp-proxy             待实现
+ * --no-proxy          --no-proxy              待实现
  *
  * HTTP 选项:
- * -U, --user-agent    -U, --user-agent        ✅ 已实现
- * -H, --header        -H, --header            ✅ 已实现
- * --load-cookies      --load-cookies          ❌ 待实现
- * --save-cookies      --save-cookies          ❌ 待实现
- * --referer           --referer               ❌ 待实现
+ * -U, --user-agent    -U, --user-agent        已实现
+ * -H, --header        -H, --header            已实现
+ * --load-cookies      --load-cookies          已实现
+ * --save-cookies      --save-cookies          已实现
+ * --referer           --referer               已实现
  *
  * 文件选项:
- * -c, --continue      (默认启用)              ✅ 已实现
- * --no-continue       --no-continue           ✅ 已实现
- * --file-allocation   --file-allocation       ❌ 待实现
- * --auto-file-renaming  --auto-rename         ❌ 待实现
+ * -c, --continue      (默认启用)              已实现
+ * --no-continue       --no-continue           已实现
+ * --file-allocation   --file-allocation       已实现
+ * --auto-file-renaming  --auto-file-renaming  已实现
  *
  * 校验选项:
- * --check-integrity   --verify                ❌ 待实现
- * --checksum          --checksum              ❌ 待实现
+ * --check-integrity   --verify                待实现
+ * --checksum          --checksum              待实现
  *
  * BitTorrent 选项:
- * --seed-time         --bt-seed-time          ❌ 待实现
- * --seed-ratio        --bt-seed-ratio         ❌ 待实现
- * --peer-id-prefix    --bt-peer-prefix        ❌ 待实现
+ * --seed-time         --seed-time             已实现
+ * --seed-ratio        --seed-ratio            已实现
+ * --peer-id-prefix    --bt-peer-prefix        待实现
  *
  * 高级选项:
- * --summary-interval  --summary-interval      ❌ 待实现
- * --conf-path         --config                ❌ 待实现
+ * --summary-interval  --summary-interval      待实现
+ * --conf-path         --config                已实现
  */
 ```
+
+RPC 三个参数（`--rpc-secret`、`--rpc-listen-port`、`--rpc-allow-origin-all`）CLI 已能解析并写进配置，
+但 falcon-cli 本体不内嵌 RPC 服务器，aria2 兼容 RPC 由 falcon-daemon 提供。完整参数清单以
+`falcon-cli --help` 为准。
 
 **新增参数实现**:
 
@@ -1229,12 +1237,16 @@ falcon-cli https://example.com/file.zip --limit 1M
 
 ### 4.3 性能基准测试
 
-| 测试项 | aria2c | Falcon (当前) | Falcon (目标) |
-|--------|--------|--------------|--------------|
-| 单文件下载速度 | 100% | 90% | 100%+ |
-| 并发 8 连接 | 100% | 85% | 100%+ |
-| 内存占用 | 100% | 80% | 80% |
-| 启动时间 | 100% | 120% | 100% |
+下表是计划制定时的性能目标。仓库至今没有做受控的 aria2c 对比测量（相同硬件、
+相同网络、相同任务集），「当前」一列的百分比没有测量条件支撑，已删除；这些
+是目标，不是实测结论：
+
+| 测试项 | aria2c（基准） | Falcon 目标 |
+|--------|--------------|------------|
+| 单文件下载速度 | 100% | ≥ 100% |
+| 并发 8 连接 | 100% | ≥ 100% |
+| 内存占用 | 100% | ≤ 80% |
+| 启动时间 | 100% | ≈ 100% |
 
 ---
 

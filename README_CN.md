@@ -12,8 +12,10 @@
 
   **统一资源传输引擎（Universal Resource Transfer Engine）**
 
-  现代化、高性能、跨平台的 C++ 引擎,统一承载 HTTP、FTP、SFTP、WebDAV、
-  对象存储与 P2P 资源的下载与访问——以 CLI、Daemon、桌面端多形态交付。
+  跨平台的 C++ 传输引擎,统一承载 HTTP、FTP、SFTP、WebDAV、对象存储与
+  P2P 资源的下载与访问,以 CLI、Daemon、桌面端多形态交付。传输底座基于
+  开源组件:libcurl、OpenSSL、libtorrent、libssh2 承载各协议数据面;
+  事件驱动的 V2 引擎与 aria2 兼容参数/RPC 参照 aria2 的架构与语义实现。
 
   [中文文档](README_CN.md) | [English](README.md)
 
@@ -22,7 +24,7 @@
 界面截图与设计原型统一在[文档站](https://cuihairu.github.io/falcon/)首页展示；
 完整图库（52 张）见 [docs/design/ui-sandbox/](docs/design/ui-sandbox/README.md)。
 
-## 特性 🚀
+## 特性
 
 - **双下载引擎**
   - **V1 引擎**(默认):基于 libcurl,多线程分段下载、断点续传、任务级限速
@@ -46,7 +48,7 @@
 - **桌面应用** (Qt6):Fluent 设计语言、亮暗主题、无边框窗口、表格/网格双任务视图、
   云盘浏览、资源搜索、双后端(进程内引擎或 Daemon RPC + WebSocket 事件刷新)
 - **命令行工具** (`falcon-cli`):60+ 个 aria2 兼容参数、批量输入文件、JSON 配置
-- **高性能**:
+- **性能相关设计**:
   - 多连接分段下载,自适应分段
   - 事件驱动的非阻塞 I/O 架构
   - 连接复用降低延迟
@@ -63,7 +65,7 @@
 - **资源搜索**: 内置搜索提供者框架,支持种子和文件资源搜索
 - **安全配置**: AES-256-GCM 加密存储凭据,主密码保护
 
-## 快速开始 ⚡
+## 快速开始
 
 ### 一键安装（每日构建）
 
@@ -155,7 +157,7 @@ falcon-cli -d /tmp/downloads -o custom_name.zip https://example.com/file.zip
 
 完整参数列表见 `falcon-cli --help`。
 
-## 支持的协议 📡
+## 支持的协议
 
 | 协议 | 状态 | 描述 |
 |------|------|------|
@@ -171,7 +173,7 @@ falcon-cli -d /tmp/downloads -o custom_name.zip https://example.com/file.zip
 | 电驴 | 可选插件 | 仓库内已实现，默认构建关闭 |
 | HLS/DASH | 可选插件 | 仓库内已实现，默认构建关闭 |
 
-## 云存储支持 ☁️
+## 云存储支持
 
 仓库已实现库层级的云存储浏览（`packages/libfalcon-storage`），覆盖亚马逊 S3、阿里云
 OSS、腾讯云 COS、七牛云 Kodo、又拍云：列举、树形视图、对象信息、建目录/改名/
@@ -183,12 +185,12 @@ OSS、腾讯云 COS、七牛云 Kodo、又拍云：列举、树形视图、对�
 > `--search`、`--add-config`、`--set-master-password` 等参数**并未实现**——请使用
 > 桌面应用，或直接调用相关库。
 
-## 安全配置 🔐
+## 安全配置
 
 `libfalcon-drives` 提供加密配置管理器（SQLite 存储，AES-256-GCM 凭据加密，主密码
 保护）。桌面应用的设置页基于它实现。CLI 管理命令尚未开放。
 
-## 高级功能 ⚙️
+## 高级功能
 
 ### 资源搜索
 `libfalcon-drives` 内置搜索提供者框架（`resource_search`）：提供者接口、URL 校验、
@@ -199,7 +201,7 @@ OSS、腾讯云 COS、七牛云 Kodo、又拍云：列举、树形视图、对�
 `libfalcon-storage` 实现 `ResourceBrowser` 接口，覆盖 FTP、SFTP、S3、OSS、COS、
 Kodo、又拍云——格式化树/表格列举、路径校验、递归操作。桌面云盘页面即基于它构建。
 
-## 界面原型 🎨
+## 界面原型
 
 桌面端主视图当前采用「warm console」主题（变体 A），另有一版「cold utility」
 变体候选（变体 B）。下方两张暗色主题原型均由真实 Qt 组件树离屏渲染（含 demo
@@ -218,7 +220,7 @@ Kodo、又拍云——格式化树/表格列举、路径校验、递归操作。
 源资产与再生成说明见 [`docs/design/prototypes/`](docs/design/prototypes/README.md)，
 对比页见[文档站](https://cuihairu.github.io/falcon/developer/design-prototypes)。
 
-## 架构设计 🏗️
+## 架构设计
 
 Falcon 采用模块化架构，数据面为 aria2 风格的事件驱动设计：
 
@@ -247,7 +249,7 @@ Falcon 采用 aria2 启发的事件驱动命令模式：
 3. **连接复用**：HTTP/HTTPS 连接池化，降低延迟
 4. **非阻塞 I/O**：所有 socket 非阻塞，由事件驱动
 
-## 开发指南 👷
+## 开发指南
 
 ### 系统要求
 - CMake 3.15+
@@ -287,7 +289,7 @@ cmake -B build -S . \
 HTTP、FTP、BitTorrent、SFTP、WebDAV、Metalink、云存储、资源浏览/搜索与
 配置管理器默认开启；私有协议插件（迅雷/旋风/快车/电驴/HLS）默认关闭。
 
-## 贡献指南 🤝
+## 贡献指南
 
 我们欢迎贡献！请查看我们的[贡献指南](CONTRIBUTING_CN.md)了解详情。
 
@@ -296,11 +298,11 @@ HTTP、FTP、BitTorrent、SFTP、WebDAV、Metalink、云存储、资源浏览/�
 - 使用 `clang-format` 进行代码格式化
 - 为新功能编写单元测试
 
-## 许可证 📄
+## 许可证
 
 本项目采用 Apache License 2.0 许可证 - 详见 [LICENSE](LICENSE) 文件。
 
-## 致谢 🙏
+## 致谢
 
 - [libcurl](https://curl.se/) 用于 HTTP/FTP/SFTP 支持
 - [libtorrent](https://www.libtorrent.org/) 用于 BitTorrent 支持
@@ -310,9 +312,9 @@ HTTP、FTP、BitTorrent、SFTP、WebDAV、Metalink、云存储、资源浏览/�
 - [SQLite](https://sqlite.org/) 用于任务持久化与配置存储
 - [Qt 6](https://www.qt.io/) 用于桌面应用
 
-## 功能路线图 📋
+## 功能路线图
 
-### 已完成 ✅
+### 已完成
 - [x] 核心下载引擎（V1 libcurl + V2 事件驱动实验引擎）
 - [x] HTTP/HTTPS、FTP/FTPS 插件
 - [x] Metalink 下载（多镜像 P2SP 分段 + 整文件哈希校验）
@@ -324,16 +326,16 @@ HTTP、FTP、BitTorrent、SFTP、WebDAV、Metalink、云存储、资源浏览/�
 - [x] 云存储浏览（S3、阿里云OSS、腾讯云COS、七牛云、又拍云）
 - [x] 资源搜索、加密配置管理
 
-### 进行中 🚧
+### 进行中
 - [ ] 可选协议插件的默认构建与文档一致性
 - [ ] 更多私有协议与网盘直链解析
 
-### 计划中 📅
+### 计划中
 - [ ] 更多私有协议与网盘直链解析增强
 - [ ] 移动端支持
 
 ---
 
 <div align="center">
-  Made with ❤️ by Falcon Team
+  Falcon Team
 </div>
