@@ -2,7 +2,7 @@
 
   <img src="./assets/falcon.png" alt="Falcon Logo" width="200"/>
 
-  # Falcon 下载器
+  # Falcon
 
   [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
   [![Build Status](https://github.com/cuihairu/falcon/workflows/CMake%20Build/badge.svg)](https://github.com/cuihairu/falcon/actions)
@@ -10,7 +10,10 @@
   [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/cuihairu/falcon)
   [![Version](https://img.shields.io/badge/version-0.1.0-green.svg)](https://github.com/cuihairu/falcon/releases)
 
-  **现代化、高性能、跨平台的下载加速器**
+  **统一资源传输引擎（Universal Resource Transfer Engine）**
+
+  现代化、高性能、跨平台的 C++ 引擎,统一承载 HTTP、FTP、SFTP、WebDAV、
+  对象存储与 P2P 资源的下载与访问——以 CLI、Daemon、桌面端多形态交付。
 
   [中文文档](README_CN.md) | [English](README.md)
 
@@ -27,8 +30,14 @@
     I/O(epoll/kqueue/poll/WSAPoll)、命令模式与连接复用、`.falcon.ctrl` 控制文件
     持久化断点(If-Range 内容变更防护)、多镜像多源分段下载(P2SP)、全局/任务级
     限速、连接级重试、任务超时清理、chunked 传输编码、覆盖保护、临时文件原子发布
-- **多协议支持**: HTTP/HTTPS、FTP、SFTP、WebDAV、Metalink、BitTorrent、磁力链接、私有协议
-  - 迅雷 (Thunder)、腾讯旋风 (QQDL)、快车 (FlashGet)、电驴 (ED2K)、HLS/DASH 流媒体
+- **多协议支持**,围绕单一传输核心分级组织:
+
+  | 层级 | 协议 | 定位 |
+  |------|------|------|
+  | **1 · 核心传输**(默认开) | HTTP/HTTPS、FTP/FTPS、SFTP、WebDAV | 文件传输:断点续传、分段下载、限速、代理 |
+  | **2 · P2P 与多源**(默认开) | BitTorrent/Magnet、Metalink | 分片级 P2P(libtorrent)、镜像列表多源分段传输(P2SP) |
+  | **3 · 兼容插件**(可选) | 迅雷、QQ 旋风、快车、ED2K、HLS/DASH | 历史/私有链接格式与流媒体清单 |
+  | **资源访问**(默认开) | S3、OSS、COS、Kodo、又拍云 | 对象存储(SigV4)、远程浏览、资源搜索 |
 - **Metalink**:RFC 5854 `.meta4` / Metalink3 `.metalink` 镜像列表,经 V2 引擎多镜像
   P2SP 分段下载,发布前整文件哈希校验
 - **守护进程与 RPC 服务** (`falcon-daemon`):aria2 兼容 JSON-RPC,同端口 HTTP +

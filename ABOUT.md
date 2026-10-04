@@ -1,6 +1,6 @@
-# About Falcon Downloader
+# About Falcon
 
-**Falcon Downloader** is a next-generation download manager designed for speed, security, and versatility. Built with modern C++17/20, it delivers exceptional performance across all major platforms - Windows, macOS, and Linux.
+**Falcon** is a universal resource transfer engine and download platform designed for speed, security, and versatility. Built with modern C++17, it delivers one transfer core — HTTP, FTP, SFTP, WebDAV, BitTorrent, Metalink, object storage, and private-protocol compatibility — across all major platforms: Windows, macOS, and Linux.
 
 ## Our Mission
 
@@ -49,14 +49,7 @@ Falcon is proudly open source under the Apache License 2.0. We believe in transp
 
 Your privacy is our top priority. Falcon never collects personal data or tracks your downloads. All credentials are encrypted locally with industry-standard AES-256 encryption, ensuring your cloud storage accounts remain secure.
 
-## Performance Benchmarks
-
-Falcon consistently outperforms competitors in speed tests:
-- Up to 5x faster than standard browser downloads
-- 30% more efficient memory usage
-- Sub-second startup time on modern hardware
-
-## Join the Community
+## Community
 
 Become part of the Falcon community and help shape the future of downloading:
 
@@ -67,18 +60,16 @@ Become part of the Falcon community and help shape the future of downloading:
 ## Future Roadmap
 
 We're constantly innovating. Coming soon:
-- Native GUI application
 - Web management interface
 - Mobile apps (iOS/Android)
 - Advanced scheduling features
-- Plugin system for custom protocols
+- Cross-protocol multi-source scheduling (HTTP / object storage / P2P in one transfer plan)
 
 ## Contact Us
 
 Have questions or feedback? We'd love to hear from you:
 - Create an issue on [GitHub](https://github.com/cuihairu/falcon/issues)
 - Join our [Discussions](https://github.com/cuihairu/falcon/discussions)
-- Email us at [falcon@example.com](mailto:falcon@example.com)
 
 ---
 

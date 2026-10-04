@@ -2,9 +2,9 @@
 layout: home
 
 hero:
-  name: Falcon 下载器
-  text: 现代化、跨平台的 C++ 下载解决方案
-  tagline: 面向 CLI、Daemon、桌面端和可扩展协议栈的下载能力集合
+  name: Falcon
+  text: 现代化、跨平台的 C++ 资源传输引擎
+  tagline: 统一承载 HTTP、FTP、SFTP、WebDAV、对象存储与 P2P 资源的下载与访问——以 CLI、Daemon、桌面端多形态交付
   image:
     src: /logo.svg
     alt: Falcon 徽标
@@ -18,7 +18,7 @@ hero:
 
 features:
   - title: 多协议支持
-    details: 当前默认启用 HTTP/HTTPS、FTP，并为 BitTorrent、ED2K、迅雷、QQ 旋风、快车、HLS/DASH 等协议保留了可选实现与后续迁移入口。
+    details: 传输核心默认启用 HTTP/HTTPS、FTP、SFTP、WebDAV、Metalink 与 BitTorrent，另提供迅雷、QQ 旋风、快车、ED2K、HLS/DASH 等可选兼容插件。
   - title: 高性能
     details: 基于 C++17 事件驱动架构，支持多线程分块下载、断点续传和可配置并发控制。
   - title: 多入口形态

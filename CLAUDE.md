@@ -3288,7 +3288,7 @@
 
 ## 项目愿景
 
-**Falcon（猎鹰下载器）** 是一个现代化、跨平台的 C++ 下载解决方案，采用 Monorepo 架构，致力于提供高性能、可扩展的多协议下载能力。
+**Falcon（猎鹰）** 的目标定位是「统一资源传输引擎」（Universal Resource Transfer Engine）：一个现代化、跨平台的 C++ 解决方案，采用 Monorepo 架构，围绕统一引擎承载多协议传输（HTTP/FTP/SFTP/WebDAV）、P2P 与多源（BitTorrent/Metalink/P2SP）、对象存储访问（S3/OSS/COS/Kodo/Upyun）与资源浏览/发现，并以 CLI、Daemon、桌面端多形态交付（aria2 兼容参数与 RPC 是兼容层，不是定位本身）。
 
 ### 核心目标
 - 打造一个轻量级、高性能的下载引擎核心库（libfalcon-core）

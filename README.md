@@ -2,7 +2,7 @@
 
   <img src="./assets/falcon.png" alt="Falcon Logo" width="200"/>
 
-  # Falcon Downloader
+  # Falcon
 
   [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
   [![Build Status](https://github.com/cuihairu/falcon/workflows/CMake%20Build/badge.svg)](https://github.com/cuihairu/falcon/actions)
@@ -10,7 +10,11 @@
   [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/cuihairu/falcon)
   [![Version](https://img.shields.io/badge/version-0.1.0-green.svg)](https://github.com/cuihairu/falcon/releases)
 
-  **A modern, high-performance, cross-platform download accelerator**
+  **The Universal Resource Transfer Engine**
+
+  A modern, high-performance, cross-platform C++ engine for downloading and
+  accessing resources across HTTP, FTP, SFTP, WebDAV, object storage, and P2P
+  networks — packaged as a CLI, a daemon, and a desktop app.
 
   [English](README.md) | [中文文档](README_CN.md)
 
@@ -30,8 +34,14 @@ lives in [docs/design/ui-sandbox/](docs/design/ui-sandbox/README.md).
     multi-source segmented downloading (P2SP) across mirrors, global & per-task speed
     limits, connection-level retries, task timeouts, chunked transfer encoding,
     overwrite protection, and atomic temporary-file publishing
-- **Multi-Protocol Support**: HTTP/HTTPS, FTP, SFTP, WebDAV, Metalink, BitTorrent, Magnet links, private protocols
-  - Thunder (迅雷), QQDL (腾讯旋风), FlashGet, ED2K (电驴), HLS/DASH streaming
+- **Multi-Protocol Support** organized in tiers around a single transfer core:
+
+  | Tier | Protocols | Role |
+  |------|-----------|------|
+  | **1 · Core transfer** (default on) | HTTP/HTTPS, FTP/FTPS, SFTP, WebDAV | File transfer: resume, segmented downloading, speed limits, proxies |
+  | **2 · P2P & multi-source** (default on) | BitTorrent/Magnet, Metalink | Piece-level P2P (libtorrent), mirror lists with multi-source segmented transfers (P2SP) |
+  | **3 · Compatibility plugins** (opt-in) | Thunder, QQDL, FlashGet, ED2K, HLS/DASH | Legacy/private link formats and streaming manifests |
+  | **Resource access** (default on) | S3, OSS, COS, Kodo, Upyun | Object storage with SigV4, remote browsing, resource search |
 - **Metalink**: RFC 5854 `.meta4` / Metalink3 `.metalink` mirror lists, multi-mirror
   P2SP segmented download through the V2 engine, whole-file hash verification before publish
 - **Daemon & RPC Service** (`falcon-daemon`): aria2-compatible JSON-RPC over HTTP +
