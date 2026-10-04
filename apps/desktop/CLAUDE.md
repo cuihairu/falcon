@@ -2,6 +2,13 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-04 - B23 复选框「隐形」修复（QSS data-URI 不支持 → qrc SVG url 引用 + 亮暗双主题像素级复验）
+- **根因**：双 QSS `QCheckBox::indicator` 的 `url(data:image/svg+xml;base64,…)` 形态——**Qt QSS 不支持 data: URI**，图标加载失败零渲染，勾选/未勾选两态全部不可见（2026-09-28 warm console 批次「checkbox 内嵌 base64 SVG」引入，沙盒目测验收漏检；功能点击不受影响故用户感知为「看不见开关状态」）
+- **修法**：4 个 16×16 SVG（checked = accent 实底 rx=3 圆角方块 + 对比色勾；unchecked = 中性描边空心框）入 `resources/icons/checkbox-{checked,unchecked}-{light,dark}.svg` + `resources.qrc` alias；双 QSS 指示器改 `image: url(:/icons/…)`。色值：light checked 底 #c2410c + 白勾 / unchecked stroke #a29a92（= disabled token）；dark checked 底 #ffa07a + #27140a 勾 / unchecked stroke #6e665e
+- **像素级复验（Xvfb :93 真实应用，非沙盒）**：亮色 checked 7 处各 16×16 px=196 @ #c2410c + unchecked 环 #a29a92 x32 精确色；toggle 往返（取消后与基线 0 diff）；QSettings 持久化跨重启（sound/daemon=true → 重启 ☑）；暗色 checked 4 处 @ #ffa07a + disabled ring #6e665e x32 + light accent 零残留 + theme=dark 重启保持
+- **归档刷新**：ui-sandbox 52 张重新生成（旧截图 checkbox 零渲染形态过时）
+- **如实披露**：unchecked ring 对比度 light ≈3.0:1 / dark ≈2.5:1（与既有 disabled token 同源，未另开新 token）；disabled checkbox 无独立 :disabled 指示器图像（复用 unchecked SVG，色彩恰同为灰阶语义）
+
 ### 2026-09-30 - 设置项接入下载选项（connection_timeout/retry_count 保存却不消费的收口）
 - `show_add_download_dialog`/`add_download_task` 两站点把设置页
   连接超时（QSettings `connection_timeout_seconds` 默认 30）与重试

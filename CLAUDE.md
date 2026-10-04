@@ -2,6 +2,13 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-04 - B23 桌面复选框「隐形」修复（Qt QSS 不支持 data: URI → qrc SVG）+ 亮暗双主题 Xvfb 像素级复验
+- **根因**：`fluent_light.qss`/`fluent_dark.qss` 的 `QCheckBox::indicator` 用 `url(data:image/svg+xml;base64,…)`——**Qt QSS 不支持 data: URI**，图标加载失败零渲染，设置页全部复选框两态不可见（2026-09-28 warm console 批次「checkbox 内嵌 base64 SVG」引入，与「编译不查资源」同族的「加载失败仅 WARNING」静默缺陷；功能点击不受影响故长期未暴露，B21 Xvfb 走查发现）
+- **修法**：4 个 16×16 checkbox SVG（checked = accent 实底圆角方块 + 对比色勾 / unchecked = 中性描边空心框，light/dark 各一对）入 qrc alias，双 QSS 改 `image: url(:/icons/checkbox-*.svg)`；色值全部取既有 token（light #c2410c/#a29a92、dark #ffa07a/#6e665e，与 disabled 文字 token 同源零新 token）
+- **像素级复验（Xvfb :93 真实应用双主题全链）**：亮色 checked 7 处各 16×16 px=196 @ accent + unchecked 环 #a29a92 x32 精确色；toggle 两态往返（取消后与基线截图 0 diff）；QSettings 持久化跨重启两方向（sound/daemon=true 重启 ☑；theme=dark 重启保持暗色）；暗色 checked 4 处 @ #ffa07a + disabled ring #6e665e x32 + light accent 全截图零残留（clusters 扫描）
+- **测量级教训**：QSS `image:` 加载失败是静默 WARNING 非报错——「编译绿 + 资源编入」还不等于「QSS 引用的资源可加载」，data: URI 这类语法级不支持在离屏截图目测中被漏检（设置页截图无人细看 checkbox 象限），像素级扫描（精确色 hist/连通分量）才是这类「该有而没有」缺陷的可靠验收
+- **附带**：ui-sandbox 52 张设计归档重新生成（旧截图 checkbox 零渲染形态过时）；如实披露 unchecked ring 对比度 light ≈3.0:1 / dark ≈2.5:1（非文本图形 WCAG AA 3:1 临界附近）
+
 ### 2026-10-01 - 测试基建 detached 连接线程生命周期收口（falcon_protocols_tests 全量 #622 进程级崩溃根因闭环）
 - **红面**：本地全量 falcon_protocols_tests 以 ~60% 复现率在 #622（DownloadEngineV2Injection 套件区）崩溃，三种错误面轮换——glibc tpp.c:83 断言 / pthread_mutex_lock.c:426 `e != ESRCH || !robust` / std::system_error EINVAL → terminate；监控铁证 exit=134、线程 1-11 稳定（排除资源累积），单跑 #622 恒绿
 - **gdb 三线程栈统一解释三错误面（直接铁证）**：崩溃线程栈帧 #10 = `ScriptedHttpServer::handle_connection`——**上一个测试的栈上服务器对象**的 detached 连接线程（scripted_http_server.hpp accept_loop `.detach()`），醒来后锁 `mutex_=0x7fffffff5310`（地址落在**当前测试主线程栈帧区域**）；测试函数返回 → 栈帧复用 → mutex `__kind` 是垃圾：含 PI 位 → tpp.c:83 断言；robust 位 + owner tid 已死 → lock.c:426；其他垃圾 → EINVAL → system_error。主线程同时阻塞在下一个测试的 `ProxyTestServer::stop()` join——崩溃面（#622 处）与感染源（早期套件的 ScriptedHttpServer）分离，单跑恒绿系统性掩盖

@@ -29,6 +29,10 @@
         <file alias="arrow-up.svg">resources/icons/arrow-up.svg</file>
         <file alias="arrow-down.svg">resources/icons/arrow-down.svg</file>
         <file alias="check-circle-2.svg">resources/icons/check-circle-2.svg</file>
+        <file alias="checkbox-checked-dark.svg">resources/icons/checkbox-checked-dark.svg</file>
+        <file alias="checkbox-checked-light.svg">resources/icons/checkbox-checked-light.svg</file>
+        <file alias="checkbox-unchecked-dark.svg">resources/icons/checkbox-unchecked-dark.svg</file>
+        <file alias="checkbox-unchecked-light.svg">resources/icons/checkbox-unchecked-light.svg</file>
         <file alias="alert-circle.svg">resources/icons/alert-circle.svg</file>
         <file alias="clock.svg">resources/icons/clock.svg</file>
         <file alias="file.svg">resources/icons/file.svg</file>

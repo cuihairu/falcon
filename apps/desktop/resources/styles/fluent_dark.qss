@@ -253,12 +253,14 @@ QCheckBox::indicator {
     height: 16px;
 }
 
+/* 指示器 = qrc SVG（Qt QSS 不支持 data: URI，2026-10-04 B23 根因——
+   此前的 data:image/svg+xml;base64 形态零渲染，勾选/未勾选全不可见） */
 QCheckBox::indicator:unchecked {
-    image: url(data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+PHJlY3QgeD0iMC41IiB5PSIwLjUiIHdpZHRoPSIxNSIgaGVpZ2h0PSIxNSIgcng9IjMiIGZpbGw9IiMyNjIwMTkiIHN0cm9rZT0iIzZlNjY1ZSIvPjwvc3ZnPg==);
+    image: url(:/icons/checkbox-unchecked-dark.svg);
 }
 
 QCheckBox::indicator:checked {
-    image: url(data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+PHJlY3Qgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2IiByeD0iMyIgZmlsbD0iI2ZmYTA3YSIvPjxwYXRoIGQ9Ik00IDguNWwyLjggMi44TDEyIDUuNSIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMjcxNDBhIiBzdHJva2Utd2lkdGg9IjEuOCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+PC9zdmc+);
+    image: url(:/icons/checkbox-checked-dark.svg);
 }
 
 QGroupBox {
