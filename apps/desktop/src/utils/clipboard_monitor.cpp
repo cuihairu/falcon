@@ -43,7 +43,11 @@ void ClipboardMonitor::start()
 {
     if (!is_monitoring_) {
         is_monitoring_ = true;
-        last_clipboard_text_.clear();
+        // 去重基线 = 开始监听那一刻的剪贴板内容：只对**监听期间新复制**
+        // 的内容弹窗（主流下载器语义）。清空基线的旧实现会对开启瞬间
+        // 既有的剪贴板内容立即弹窗——默认开启监控后变成每次启动都弹
+        // 旧链接。
+        last_clipboard_text_ = clipboard_ ? clipboard_->text() : QString();
         check_timer_->start(detection_delay_);
     }
 }

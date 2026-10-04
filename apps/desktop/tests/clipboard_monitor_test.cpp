@@ -190,23 +190,38 @@ TEST_F(ClipboardMonitorTest, EmptyTextAfterDetectionIgnored)
     EXPECT_EQ(emissions, 1) << "空文本不得派发";
 }
 
-TEST_F(ClipboardMonitorTest, StopThenRestartRedetectsSameText)
+TEST_F(ClipboardMonitorTest, StartSeedsBaselineExistingContentNotDetected)
 {
-    // stop/start 清空去重基线（last_clipboard_text_ clear）——同一文本
-    // 在重新开始监听后必须再次派发（用户复制同一链接二次弹窗的语义）；
-    // 小间隔定时器兜底：同值 setText 的 changed 平台可能不触发，轮询路径
-    // 必须独立保证重新检测
+    // start() 以当前剪贴板内容做去重基线：开启监听瞬间已存在的旧内容
+    // 不得立即弹窗（主流下载器语义——只对监听期间**新复制**的内容反应；
+    // 旧实现清空基线 → 默认开启监控后每次启动都弹旧链接）
+    QGuiApplication::clipboard()->setText(unique_url("stale"));
     monitor->set_detection_delay(40);
     monitor->start();
-    const QString url = unique_url("redetect");
+
+    pump_events(300);
+    EXPECT_EQ(emissions, 0) << "开启监听时既有的剪贴板内容不得派发";
+
+    // 监听期间新复制的内容照常检测
+    QGuiApplication::clipboard()->setText(unique_url("fresh"));
+    EXPECT_TRUE(spin_until([&] { return emissions == 1; })) << "监听期间新复制的链接必须派发";
+}
+
+TEST_F(ClipboardMonitorTest, RestartWithUnchangedClipboardDoesNotRedetect)
+{
+    // stop→start 基线重播种：剪贴板内容未变化时重启监听不得把旧内容
+    // 再派发一次（与 StartSeedsBaseline 同一语义；小间隔轮询路径独立
+    // 验证，不依赖 changed 信号的平台差异）
+    monitor->set_detection_delay(40);
+    monitor->start();
+    const QString url = unique_url("restart");
     QGuiApplication::clipboard()->setText(url);
     EXPECT_TRUE(spin_until([&] { return emissions == 1; }));
 
     monitor->stop();
     monitor->start();
-
-    QGuiApplication::clipboard()->setText(url);
-    EXPECT_TRUE(spin_until([&] { return emissions == 2; })) << "重启监听后同一文本必须重新检测";
+    pump_events(300);
+    EXPECT_EQ(emissions, 1) << "剪贴板未变化时重启监听不得重复派发";
 }
 
 TEST_F(ClipboardMonitorTest, StoppedMonitorIgnoresClipboardChanges)

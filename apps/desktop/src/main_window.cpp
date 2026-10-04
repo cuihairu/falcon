@@ -373,6 +373,13 @@ void MainWindow::show_add_download_dialog(UrlInfo url_info, const IncomingDownlo
         dialog.set_request_cookies(request_context->cookies);
     }
 
+    // 主窗可能隐藏在托盘（剪贴板检测弹窗场景）：模态 exec 前显式
+    // show/raise/activateWindow 保证对话框落到前台并获得焦点——否则
+    // 在部分窗口管理器下对话框藏在其他窗口后面，用户看不到"没反应"
+    dialog.show();
+    dialog.raise();
+    dialog.activateWindow();
+
     if (dialog.exec() != QDialog::Accepted) {
         return;
     }
@@ -673,8 +680,10 @@ void MainWindow::load_settings()
     QSettings settings;
     settings.beginGroup("desktop");
 
+    // 剪贴板监听默认开启（主流下载器语义）：首次启动（无持久化记录）
+    // 即生效；用户显式关闭后按持久化值保持关闭
     settings_page_->set_clipboard_monitoring_enabled(
-        settings.value("clipboard_monitoring_enabled", false).toBool());
+        settings.value("clipboard_monitoring_enabled", true).toBool());
     settings_page_->set_clipboard_detection_delay(
         settings.value("clipboard_detection_delay_ms", 1000).toInt());
     settings_page_->set_default_download_dir(

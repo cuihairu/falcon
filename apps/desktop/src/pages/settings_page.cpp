@@ -370,8 +370,9 @@ void SettingsPage::browse_download_dir()
 
 void SettingsPage::reset_to_defaults()
 {
-    // Clipboard settings
-    clipboard_monitoring_checkbox_->setChecked(false);
+    // Clipboard settings（默认开启，与 load_settings 出厂默认一致——
+    // 主流下载器语义）
+    clipboard_monitoring_checkbox_->setChecked(true);
     clipboard_delay_spin_->setValue(1000);
 
     // Download settings
