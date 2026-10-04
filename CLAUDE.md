@@ -8,6 +8,7 @@
 - **像素级复验（Xvfb :93 真实应用双主题全链）**：亮色 checked 7 处各 16×16 px=196 @ accent + unchecked 环 #a29a92 x32 精确色；toggle 两态往返（取消后与基线截图 0 diff）；QSettings 持久化跨重启两方向（sound/daemon=true 重启 ☑；theme=dark 重启保持暗色）；暗色 checked 4 处 @ #ffa07a + disabled ring #6e665e x32 + light accent 全截图零残留（clusters 扫描）
 - **测量级教训**：QSS `image:` 加载失败是静默 WARNING 非报错——「编译绿 + 资源编入」还不等于「QSS 引用的资源可加载」，data: URI 这类语法级不支持在离屏截图目测中被漏检（设置页截图无人细看 checkbox 象限），像素级扫描（精确色 hist/连通分量）才是这类「该有而没有」缺陷的可靠验收
 - **附带**：ui-sandbox 52 张设计归档重新生成（旧截图 checkbox 零渲染形态过时）；如实披露 unchecked ring 对比度 light ≈3.0:1 / dark ≈2.5:1（非文本图形 WCAG AA 3:1 临界附近）
+- **CI 三平台收口（run 37196342271 @ 91f4b18，8/8 job 全绿）**：三平台 Qt6 Desktop job（windows/ubuntu/macos-15）渲染路径编译验证全绿（qrc AUTORCC + QSS 随应用编译，`FALCON_BUILD_TESTS=OFF` 设计内）+ 主矩阵/coverage 全量回归零失败（Windows cl 1610 / macOS clang 1568 / Linux gcc、clang 各 1564 / Coverage 2789 全过，codecov 上报完成）+ Docs Check / Deploy Docs 绿；如实边界：CI Qt6 job 不跑 desktop 单测，checkbox 渲染面以本机 Xvfb 像素级复验为准、desktop 单测按既有分工在本地 build-desktop 树（2610/2610）执行
 
 ### 2026-10-01 - 测试基建 detached 连接线程生命周期收口（falcon_protocols_tests 全量 #622 进程级崩溃根因闭环）
 - **红面**：本地全量 falcon_protocols_tests 以 ~60% 复现率在 #622（DownloadEngineV2Injection 套件区）崩溃，三种错误面轮换——glibc tpp.c:83 断言 / pthread_mutex_lock.c:426 `e != ESRCH || !robust` / std::system_error EINVAL → terminate；监控铁证 exit=134、线程 1-11 稳定（排除资源累积），单跑 #622 恒绿
