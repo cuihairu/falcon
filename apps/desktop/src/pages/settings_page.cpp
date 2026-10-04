@@ -411,7 +411,7 @@ void SettingsPage::reset_to_defaults()
     float_enabled_checkbox_->setChecked(true);
     float_show_active_checkbox_->setChecked(true);
     float_show_progress_checkbox_->setChecked(true);
-    float_size_combo_->setCurrentIndex(1);
+    float_size_combo_->setCurrentIndex(0); // B21①: 默认紧凑档 = 小
     float_opacity_spin_->setValue(90);
     float_click_through_checkbox_->setChecked(false);
 
@@ -921,6 +921,10 @@ QWidget* SettingsPage::create_float_widget_section_widget()
     float_enabled_checkbox_ = new QCheckBox(
         tr("显示悬浮速度窗（始终置顶，可拖动到任意位置）"), this);
     float_enabled_checkbox_->setChecked(true);
+    // 勾选即时生效（沿剪切板监听范式）：不经「应用」按钮立即显隐；
+    // 持久化与显隐由 MainWindow 的 toggled 处理器收口（B21③）
+    connect(float_enabled_checkbox_, &QCheckBox::toggled, this,
+            [this](bool checked) { emit float_widget_toggled(checked); });
     layout->addWidget(float_enabled_checkbox_);
 
     float_show_active_checkbox_ = new QCheckBox(tr("显示活跃任务数"), this);
@@ -937,7 +941,7 @@ QWidget* SettingsPage::create_float_widget_section_widget()
     float_size_combo_->addItem(tr("小"));
     float_size_combo_->addItem(tr("中"));
     float_size_combo_->addItem(tr("大"));
-    float_size_combo_->setCurrentIndex(1);
+    float_size_combo_->setCurrentIndex(0); // B21①: 默认紧密档 = 小
     size_row->addWidget(float_size_combo_);
     size_row->addStretch();
     layout->addLayout(size_row);

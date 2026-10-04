@@ -380,7 +380,8 @@ void MainWindow::show_add_download_dialog(UrlInfo url_info, const IncomingDownlo
     dialog.raise();
     dialog.activateWindow();
 
-    if (dialog.exec() != QDialog::Accepted) {
+    const int exec_result = dialog.exec();
+    if (exec_result != QDialog::Accepted) {
         return;
     }
 
@@ -612,6 +613,19 @@ void MainWindow::create_pages()
         settings.setValue("clipboard_monitoring_enabled", enabled);
         settings.endGroup();
     });
+    // B21③: 设置页「显示悬浮速度窗」开关即时生效 + 即时落盘（沿
+    // clipboard 范式——勾选后直接关机也不丢，右键「关闭浮窗」也走此
+    // 处理器统一收口：回写复选框 → toggled → 显隐 + 落盘）
+    connect(settings_page_, &SettingsPage::float_widget_toggled, this,
+            [this](bool enabled) {
+                if (speed_float_) {
+                    speed_float_->setVisible(enabled);
+                }
+                QSettings settings;
+                settings.beginGroup("desktop");
+                settings.setValue("float_widget_enabled", enabled);
+                settings.endGroup();
+            });
     connect(settings_page_, &SettingsPage::settings_changed, this, [this]() {
         save_settings();
         apply_settings_to_runtime();
@@ -665,6 +679,31 @@ void MainWindow::setup_speed_float()
 
     connect(theme_manager_, &ThemeManager::theme_changed, speed_float_,
             &SpeedFloatWidget::apply_theme);
+
+    // 浮窗按钮/右键菜单的暂停/继续请求 → 下载服务（与下载页行内按钮同路径）
+    connect(speed_float_, &SpeedFloatWidget::pause_resume_requested, this,
+            [this](std::uint64_t task_id, bool pause) {
+                if (!download_service_) {
+                    return;
+                }
+                const falcon::TaskId id = static_cast<falcon::TaskId>(task_id);
+                if (pause) {
+                    download_service_->pause_task(id);
+                } else {
+                    download_service_->resume_task(id);
+                }
+            });
+
+    // B21③: 右键「关闭浮窗」= 关闭并持久化隐藏。回写设置页复选框
+    // （setChecked 触发 toggled → float_widget_toggled 处理器统一收口
+    // 显隐 + 落盘，无第二路径）
+    connect(speed_float_, &SpeedFloatWidget::close_requested, this, [this]() {
+        if (settings_page_) {
+            settings_page_->set_float_widget_enabled(false);
+        } else if (speed_float_) {
+            speed_float_->setVisible(false);
+        }
+    });
 
     // 恢复上次位置；无记录默认停靠主屏右下角
     QSettings settings;
@@ -737,7 +776,7 @@ void MainWindow::load_settings()
     settings_page_->set_float_show_total_progress(
         settings.value("float_show_total_progress", true).toBool());
     settings_page_->set_float_size_preset(
-        settings.value("float_size_preset", 1).toInt());
+        settings.value("float_size_preset", 0).toInt()); // B21①: 默认紧凑档
     settings_page_->set_float_opacity_percent(
         settings.value("float_opacity_percent", 90).toInt());
     settings_page_->set_float_click_through(
@@ -958,6 +997,11 @@ void MainWindow::on_tray_quit_clicked()
 {
     // 保存设置后退出
     save_settings();
+    // B21③: 托盘退出显式收窗——悬浮窗是独立顶层窗口，显式 close 保证
+    // 与主窗同步消失不残留（QApplication::quit 只是退出事件循环）
+    if (speed_float_) {
+        speed_float_->close();
+    }
     QApplication::quit();
 }
 
@@ -1152,6 +1196,29 @@ void MainWindow::on_tasks_refreshed(const std::vector<falcon::daemon::rpc::TaskS
 
     if (download_page_) {
         download_page_->update_tasks(tasks);
+    }
+
+    // 悬浮速度窗预览任务:第一个 Downloading,否则第一个 Paused
+    // (B21: 标题行显示任务名 + 暂停/继续钮;无活动/暂停任务时 has_task=false)
+    if (speed_float_) {
+        SpeedFloatWidget::TaskPreview preview;
+        for (const auto& snap : tasks) {
+            if (snap.status != falcon::TaskStatus::Downloading
+                && snap.status != falcon::TaskStatus::Paused) {
+                continue;
+            }
+            preview.has_task = true;
+            preview.task_id = static_cast<std::uint64_t>(snap.id);
+            preview.running = snap.status == falcon::TaskStatus::Downloading;
+            preview.url = QString::fromStdString(snap.url);
+            const QFileInfo file_info(
+                QString::fromStdString(snap.output_path));
+            preview.file_name = file_info.fileName();
+            preview.directory = file_info.absolutePath();
+            preview.progress = snap.progress;
+            break;
+        }
+        speed_float_->update_task_preview(preview);
     }
 }
 

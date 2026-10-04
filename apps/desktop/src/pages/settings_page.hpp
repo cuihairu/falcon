@@ -174,6 +174,12 @@ signals:
     void clipboard_monitoring_toggled(bool enabled);
 
     /**
+     * @brief Signal emitted when float widget visibility setting is toggled
+     * @param enabled true if the float window should be shown
+     */
+    void float_widget_toggled(bool enabled);
+
+    /**
      * @brief Signal emitted when theme toggle is requested
      */
     void theme_toggle_requested();

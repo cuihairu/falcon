@@ -18,9 +18,9 @@
  *                              高对比文字/克制 accent)——token 值仅在本次
  *                              沙盒会话内替换(QSS hex 替换 + QPalette 重建),
  *                              生产 theme_tokens/QSS 零改动
- *   falcon-ui-sandbox --speed-float [输出目录]   悬浮速度水波纹窗走查:
- *     亮暗双主题 × 速度三档(0 / 2MB/s / 15MB/s),每档在动画推进后连拍
- *     两帧(a/b)——对照可验证水位高度差与波纹相位在动
+ *   falcon-ui-sandbox --speed-float [输出目录]   悬浮速度窗走查:
+ *     亮暗双主题 × 速度三档(0 / 2MB/s / 15MB/s);mid/fast 档喂任务预览
+ *     (标题省略 + 暂停/继续钮 + 进度行),idle 档验证无任务占位
  *
  * @author Falcon Team
  * @date 2026-09-17
@@ -344,17 +344,22 @@ int main(int argc, char** argv)
     }
 
     if (speed_float_mode) {
-        // 悬浮速度水波纹窗走查:B12 验收面。水位/波纹是 33ms 定时器动画,
-        // processEvents + msleep 推进;每档速度在水位收敛后连拍两帧,
-        // a/b 帧对照 = 波形确实在动的证据。
-        struct SpeedCase { const char* tag; std::uint64_t speed; int tasks; };
+        // 悬浮速度窗走查:B21/B22 重构后的紧凑横条。布局无动画,帧推进
+        // 只为让布局/省略号稳定;mid/fast 档喂任务预览(长文件名触发
+        // 省略 + 暂停/继续钮 + 进度行),idle 档验证无任务占位形态。
+        struct SpeedCase {
+            const char* tag;
+            std::uint64_t speed;
+            int tasks;
+            bool with_task;
+            double progress;
+        };
         const SpeedCase speed_cases[] = {
-            {"idle", 0, 0},
-            {"mid", 2ULL * 1024 * 1024, 3},
-            {"fast", 15ULL * 1024 * 1024, 5},
+            {"idle", 0, 0, false, 0.0},
+            {"mid", 2ULL * 1024 * 1024, 3, true, 0.42},
+            {"fast", 15ULL * 1024 * 1024, 5, true, 0.87},
         };
         const ThemeType themes[] = {ThemeType::Light, ThemeType::Dark};
-        // 帧推进(~0.5s):既让指数逼近收敛,又留相位差给 a/b 对照
         const auto pump = [&app](int frames) {
             for (int i = 0; i < frames; ++i) {
                 app.processEvents();
@@ -373,17 +378,30 @@ int main(int argc, char** argv)
                 SpeedFloatWidget::Stats st;
                 st.download_speed = speed_case.speed;
                 st.active_tasks = speed_case.tasks;
-                st.overall_progress = speed_case.speed > 0 ? 0.42 : -1.0;
+                st.overall_progress =
+                    speed_case.speed > 0 ? speed_case.progress : -1.0;
                 float_widget.update_stats(st);
-                pump(48); // 水位指数逼近 0.12/帧 → ~48 帧收敛到目标 99.8%
+                if (speed_case.with_task) {
+                    SpeedFloatWidget::TaskPreview tp;
+                    tp.has_task = true;
+                    tp.task_id = 1;
+                    tp.running = speed_case.speed > 0;
+                    tp.url = QStringLiteral("https://example.com/falcon/"
+                                            "speed-float-preview.bin");
+                    tp.file_name = QStringLiteral(
+                        "speed_float_preview_very_long_file_name.bin");
+                    tp.directory = QStringLiteral("/tmp");
+                    tp.progress = speed_case.progress;
+                    float_widget.update_task_preview(tp);
+                } else {
+                    float_widget.update_task_preview({});
+                }
+                pump(8);
                 const QString prefix = out_dir + "/"
                     + (theme_type == ThemeType::Light ? "light" : "dark")
-                    + "_" + speed_case.tag;
-                float_widget.grab().save(prefix + "_a.png");
-                std::printf("saved %s_a.png\n", qPrintable(prefix));
-                pump(30);
-                float_widget.grab().save(prefix + "_b.png");
-                std::printf("saved %s_b.png\n", qPrintable(prefix));
+                    + "_" + speed_case.tag + ".png";
+                float_widget.grab().save(prefix);
+                std::printf("saved %s\n", qPrintable(prefix));
             }
         }
         return 0;

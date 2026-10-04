@@ -1,26 +1,34 @@
 /**
  * @file speed_float_widget.cpp
- * @brief 悬浮速度窗实现(水波纹水位计)
+ * @brief 悬浮速度窗实现(紧凑横条,布局约束替代画布手算)
  *
- * 绘制三层:① 圆角卡片底(theme card 色);② 双层正弦波水体(theme accent
- * 色,半透明,副波相位错开做涌动层次);③ 文本(速度 + 可选活跃任务数/总进度)
- * ——速度文本按水面裁剪双重绘制:水下部分用 accent_text 色,水上部分用
- * text 色,任何水位下都可读。
+ * B22 根因修复:旧实现全部文本由 QPainter 按基线手算定位(速度基线 +
+ * descent + 4px gap 排副行,漏算副行字体 ascent → 副行文字上浮 ~13px
+ * 与速度行叠字),字体度量/翻译文案变长时无布局约束必然挤压。新实现
+ * 速度与任务数放进 QHBoxLayout 两格、进度条独立一行——QLayout 的
+ * 单元格互斥占据,结构性消灭叠字;任何档位宽度下都不重叠。
  *
  * @author Falcon Team
- * @date 2026-10-02
+ * @date 2026-10-04
  */
 
 #include "widgets/speed_float_widget.hpp"
 
+#include <QAction>
+#include <QClipboard>
+#include <QContextMenuEvent>
+#include <QDesktopServices>
+#include <QGuiApplication>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QMenu>
 #include <QMouseEvent>
-#include <QPainter>
-#include <QPainterPath>
+#include <QProgressBar>
 #include <QShowEvent>
-#include <QTimer>
+#include <QToolButton>
+#include <QUrl>
+#include <QVBoxLayout>
 #include <QWindow>
-
-#include <cmath>
 
 #include "utils/theme_tokens.hpp"
 
@@ -28,12 +36,17 @@ namespace falcon::desktop {
 
 namespace {
 
-// 满水位对应的速度(10MB/s 达满;sqrt 标度让低速段也有可感知的水位差)
-constexpr std::uint64_t kFullScaleSpeed = 10ULL * 1024 * 1024;
-// 速度为 0 时的静息水位(不贴底,保持"水位计"形态可辨)
-constexpr double kIdleLevel = 0.06;
-// 水位/文本区域留白(占短边比例)
-constexpr double kWaterInsetRatio = 0.06;
+// 三档宽度(高度由布局按内容决定,紧凑横条)
+constexpr int kPresetWidths[] = {260, 320, 380};
+constexpr int kLabelSpacing = 12;
+
+QString elide_for_width(const QString& text, const QFontMetrics& fm, int width)
+{
+    if (text.isEmpty()) {
+        return text;
+    }
+    return fm.elidedText(text, Qt::ElideMiddle, qMax(16, width));
+}
 
 } // namespace
 
@@ -41,38 +54,23 @@ SpeedFloatWidget::SpeedFloatWidget(QWidget* parent)
     : QWidget(parent, Qt::Tool | Qt::FramelessWindowHint
                           | Qt::WindowStaysOnTopHint)
 {
-    setAttribute(Qt::WA_TranslucentBackground);
-    // 悬浮窗不是业务页面,不吃通用 QSS 背景
+    // 不设 WA_TranslucentBackground:实测(Xvfb + 直取窗口像素)局部 QSS
+    // 背景在该属性下不绘制——窗口除子控件外全透明,悬浮窗变成无卡片
+    // 底板的浮字;本窗卡片底色本就不透明(theme_tokens card),取消该
+    // 属性后背景恒绘制、圆角由 QSS border 描出,任何合成器有无的桌面
+    // 都可读。窗内容深浅随主题用 restyle() 局部样式表,不进全局 QSS
     setObjectName("speedFloat");
 
-    setFixedSize(size_for_preset(size_preset_));
     setWindowOpacity(opacity_percent_ / 100.0);
     setCursor(Qt::SizeAllCursor);
-    setToolTip(tr("拖动移动位置"));
+    setToolTip(tr("拖动移动位置 · 右键更多操作"));
 
-    timer_ = new QTimer(this);
-    timer_->setInterval(33); // ~30fps
-    connect(timer_, &QTimer::timeout, this, [this]() {
-        const double target = water_level_for_speed(stats_.download_speed);
-        // 指数逼近目标水位,速度抖动被平滑成水面涨落
-        display_level_ += (target - display_level_) * 0.12;
-        // 相位推进速率 ∝ 速度:速度快时波涌更急
-        phase_ += 0.05 + 0.22 * target;
-        update();
-    });
+    setup_ui();
+    set_size_preset(size_preset_);
+    restyle();
 }
 
 SpeedFloatWidget::~SpeedFloatWidget() = default;
-
-double SpeedFloatWidget::water_level_for_speed(std::uint64_t bytes_per_second)
-{
-    if (bytes_per_second == 0) {
-        return kIdleLevel;
-    }
-    const double t = std::sqrt(static_cast<double>(bytes_per_second)
-                               / static_cast<double>(kFullScaleSpeed));
-    return kIdleLevel + (1.0 - kIdleLevel) * qBound(0.0, t, 1.0);
-}
 
 QString SpeedFloatWidget::format_speed(std::uint64_t bytes_per_second)
 {
@@ -86,51 +84,107 @@ QString SpeedFloatWidget::format_speed(std::uint64_t bytes_per_second)
     return QString("%1 %2").arg(speed, 0, 'f', 1).arg(QLatin1String(units[unit]));
 }
 
+void SpeedFloatWidget::setup_ui()
+{
+    auto* root = new QVBoxLayout(this);
+    root->setContentsMargins(12, 8, 12, 9);
+    root->setSpacing(5);
+
+    // 行 1:文件名(省略) + 暂停/继续钮
+    auto* top_row = new QHBoxLayout();
+    top_row->setSpacing(8);
+    name_label_ = new QLabel(this);
+    name_label_->setObjectName("floatFileName");
+    name_label_->setTextInteractionFlags(Qt::NoTextInteraction);
+    top_row->addWidget(name_label_, /*stretch=*/1);
+
+    pause_button_ = new QToolButton(this);
+    pause_button_->setObjectName("floatPauseButton");
+    pause_button_->setAutoRaise(true);
+    pause_button_->setEnabled(false);
+    connect(pause_button_, &QToolButton::clicked, this, [this]() {
+        if (preview_.has_task) {
+            emit pause_resume_requested(preview_.task_id, preview_.running);
+        }
+    });
+    top_row->addWidget(pause_button_);
+    root->addLayout(top_row);
+
+    // 行 2:进度条 + 百分比
+    auto* progress_row = new QHBoxLayout();
+    progress_row->setSpacing(8);
+    progress_bar_ = new QProgressBar(this);
+    progress_bar_->setObjectName("floatProgressBar");
+    progress_bar_->setRange(0, 100);
+    progress_bar_->setTextVisible(false);
+    progress_row->addWidget(progress_bar_, /*stretch=*/1);
+
+    percent_label_ = new QLabel(this);
+    percent_label_->setObjectName("floatPercentLabel");
+    percent_label_->setFixedWidth(36);
+    percent_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    progress_row->addWidget(percent_label_);
+    root->addLayout(progress_row);
+
+    // 行 3:速度 | 任务数 —— 两个独立单元格(B22 分格,永不叠字)
+    auto* meta_row = new QHBoxLayout();
+    meta_row->setSpacing(kLabelSpacing);
+    speed_label_ = new QLabel(this);
+    speed_label_->setObjectName("floatMetaLabel");
+    meta_row->addWidget(speed_label_);
+
+    meta_row->addStretch();
+
+    task_count_label_ = new QLabel(this);
+    task_count_label_->setObjectName("floatMetaLabel");
+    meta_row->addWidget(task_count_label_);
+    root->addLayout(meta_row);
+}
+
 void SpeedFloatWidget::apply_theme(ThemeType theme)
 {
     theme_ = theme;
-    update();
+    restyle();
 }
 
 void SpeedFloatWidget::update_stats(const Stats& stats)
 {
     stats_ = stats;
-    // 水位/相位在定时器里平滑推进;文本即时刷新
+    refresh_display();
+}
+
+void SpeedFloatWidget::update_task_preview(const TaskPreview& preview)
+{
+    preview_ = preview;
+    refresh_display();
 }
 
 void SpeedFloatWidget::set_show_active_tasks(bool show)
 {
     show_active_tasks_ = show;
-    update();
+    refresh_display();
 }
 
 void SpeedFloatWidget::set_show_total_progress(bool show)
 {
     show_total_progress_ = show;
-    update();
+    refresh_display();
 }
 
 QSize SpeedFloatWidget::size_for_preset(SizePreset preset) const
 {
-    switch (preset) {
-    case SizePreset::Small:
-        return {132, 132};
-    case SizePreset::Large:
-        return {208, 208};
-    case SizePreset::Medium:
-    default:
-        return {168, 168};
-    }
+    // 只定宽;高度由布局按内容决定(紧凑横条,构造期 height() 尚无意义)
+    const int index = qBound(0, static_cast<int>(preset), 2);
+    return {kPresetWidths[index], qMax(height(), 74)};
 }
 
 void SpeedFloatWidget::set_size_preset(SizePreset preset)
 {
-    if (preset == size_preset_) {
-        return;
-    }
     size_preset_ = preset;
-    setFixedSize(size_for_preset(preset));
-    update();
+    const QSize size = size_for_preset(preset);
+    setFixedWidth(size.width());
+    adjustSize(); // 高度交还布局(内容驱动,改档位只变宽度)
+    refresh_name_elide();
 }
 
 void SpeedFloatWidget::set_opacity_percent(int percent)
@@ -149,15 +203,114 @@ void SpeedFloatWidget::set_click_through(bool enable)
     setCursor(enable ? Qt::ArrowCursor : Qt::SizeAllCursor);
 }
 
-void SpeedFloatWidget::showEvent(QShowEvent* event)
+void SpeedFloatWidget::refresh_display()
 {
-    QWidget::showEvent(event);
-    if (windowHandle()) {
-        windowHandle()->setFlag(Qt::WindowTransparentForInput, click_through_);
+    // 标题行:预览任务文件名(省略),无任务显示占位
+    if (preview_.has_task) {
+        name_label_->setToolTip(preview_.file_name);
+        pause_button_->setEnabled(true);
+        pause_button_->setText(preview_.running ? tr("暂停") : tr("继续"));
+        pause_button_->setToolTip(preview_.running ? tr("暂停该任务")
+                                                   : tr("继续该任务"));
+    } else {
+        name_label_->setToolTip(QString());
+        pause_button_->setEnabled(false);
+        pause_button_->setText(tr("暂停"));
+        pause_button_->setToolTip(tr("暂无活动任务"));
     }
-    if (!timer_->isActive()) {
-        timer_->start();
+    refresh_name_elide();
+
+    // 进度行:优先预览任务进度,无任务回落全局总进度
+    double progress = preview_.has_task
+        ? preview_.progress
+        : stats_.overall_progress;
+    const bool has_progress = preview_.has_task || progress >= 0.0;
+    progress_bar_->setVisible(show_total_progress_ && has_progress);
+    percent_label_->setVisible(show_total_progress_ && has_progress);
+    if (has_progress) {
+        const int pct = qRound(qBound(0.0, progress, 1.0) * 100.0);
+        progress_bar_->setValue(pct);
+        percent_label_->setText(QString("%1%").arg(pct));
     }
+
+    // 元信息行:速度 | 任务数(两格,各自独立布局约束)
+    speed_label_->setText(tr("⬇ %1").arg(format_speed(stats_.download_speed)));
+    task_count_label_->setText(tr("%1 个任务").arg(stats_.active_tasks));
+    task_count_label_->setVisible(show_active_tasks_);
+}
+
+void SpeedFloatWidget::refresh_name_elide()
+{
+    const QString text = preview_.has_task
+        ? preview_.file_name
+        : tr("暂无下载任务");
+    // 预留右侧按钮宽度(按钮文本 暂停/继续 同字号)
+    const int reserved = pause_button_->sizeHint().width() + 8;
+    const QFontMetrics fm(name_label_->font());
+    name_label_->setText(elide_for_width(
+        text, fm, qMax(24, name_label_->width() - reserved)));
+}
+
+void SpeedFloatWidget::restyle()
+{
+    const ThemeTokens t = tokens_for(theme_);
+    // 局部样式表(悬浮窗不进全局 QSS);色值全部取自双主题 token 表
+    setStyleSheet(QStringLiteral(
+        "#speedFloat { background: %1; border: 1px solid %2;"
+        "  border-radius: 10px; }"
+        "#floatFileName { color: %3; font-size: 12px; font-weight: 600;"
+        "  background: transparent; border: none; }"
+        "#floatMetaLabel { color: %4; font-size: 11px;"
+        "  background: transparent; border: none; }"
+        "#floatPercentLabel { color: %3; font-size: 11px;"
+        "  background: transparent; border: none; }"
+        "#floatPauseButton { color: %3; background: transparent;"
+        "  border: 1px solid %2; border-radius: 6px;"
+        "  padding: 1px 10px; font-size: 11px; }"
+        "#floatPauseButton:hover:enabled { color: %5; border-color: %5; }"
+        "#floatPauseButton:disabled { color: %6; border-color: %2; }"
+        "#floatProgressBar { background: %7; border: none;"
+        "  border-radius: 3px; min-height: 6px; max-height: 6px; }"
+        "#floatProgressBar::chunk { background: %5; border-radius: 3px; }")
+        .arg(t.card.name(), t.divider.name(), t.text.name(),
+             t.text_secondary.name(), t.accent.name(),
+             t.text_disabled.name(),
+             t.divider.name()));
+}
+
+void SpeedFloatWidget::contextMenuEvent(QContextMenuEvent* event)
+{
+    // B21②: 常用项右键菜单(穿透开启时窗口对输入透明,本事件不会到达)
+    QMenu menu(this);
+    menu.setAttribute(Qt::WA_DeleteOnClose, false);
+
+    QAction* toggle = menu.addAction(
+        preview_.running ? tr("暂停任务") : tr("继续任务"));
+    toggle->setEnabled(preview_.has_task);
+    connect(toggle, &QAction::triggered, this, [this]() {
+        if (preview_.has_task) {
+            emit pause_resume_requested(preview_.task_id, preview_.running);
+        }
+    });
+
+    QAction* copy_link = menu.addAction(tr("复制链接"));
+    copy_link->setEnabled(!preview_.url.isEmpty());
+    connect(copy_link, &QAction::triggered, this, [this]() {
+        QGuiApplication::clipboard()->setText(preview_.url);
+    });
+
+    QAction* open_dir = menu.addAction(tr("打开所在目录"));
+    open_dir->setEnabled(!preview_.directory.isEmpty());
+    connect(open_dir, &QAction::triggered, this, [this]() {
+        QDesktopServices::openUrl(QUrl::fromLocalFile(preview_.directory));
+    });
+
+    menu.addSeparator();
+    QAction* close_action = menu.addAction(tr("关闭浮窗"));
+    connect(close_action, &QAction::triggered, this,
+            &SpeedFloatWidget::close_requested);
+
+    menu.exec(event->globalPos());
 }
 
 void SpeedFloatWidget::mousePressEvent(QMouseEvent* event)
@@ -186,129 +339,19 @@ void SpeedFloatWidget::mouseReleaseEvent(QMouseEvent* event)
     QWidget::mouseReleaseEvent(event);
 }
 
-void SpeedFloatWidget::paintEvent(QPaintEvent* /*event*/)
+void SpeedFloatWidget::resizeEvent(QResizeEvent* event)
 {
-    QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing);
+    QWidget::resizeEvent(event);
+    refresh_name_elide();
+}
 
-    const ThemeTokens tokens = tokens_for(theme_);
-    const int w = width();
-    const int h = height();
-    const double radius = w / 5.0;
-
-    // ① 卡片底(半透明圆角矩形)
-    QRectF card_rect(0.5, 0.5, w - 1.0, h - 1.0);
-    QPainterPath card_path;
-    card_path.addRoundedRect(card_rect, radius, radius);
-
-    QColor card = tokens.card;
-    card.setAlpha(232);
-    painter.fillPath(card_path, card);
-
-    // 描边(divider 色勾边,弱化贴边感)
-    QColor edge = tokens.divider;
-    edge.setAlpha(160);
-    painter.setPen(QPen(edge, 1.0));
-    painter.drawPath(card_path);
-
-    // ② 水体:水位 = 静息..满 之间;副波相位错开、振幅略低,叠出涌动层次
-    const double inset = w * kWaterInsetRatio;
-    const double water_top_max = inset;                 // 满水位时波峰可达处
-    const double water_bottom = h - inset;              // 静息水位线
-    const double amplitude = 2.0 + 9.0 * display_level_;
-    const double level_y = water_bottom
-        - display_level_ * (water_bottom - water_top_max);
-
-    auto wave_y = [&](double x, double freq, double ph, double amp) {
-        return level_y + amp * std::sin(x * freq + ph);
-    };
-
-    painter.save();
-    painter.setClipPath(card_path);
-
-    QColor water_main = tokens.accent;
-    water_main.setAlpha(150);
-    QColor water_sub = tokens.accent;
-    water_sub.setAlpha(80);
-
-    // 副波(水位略高、相位滞后,先画,做层次)
-    QPainterPath sub_path;
-    sub_path.moveTo(0, h);
-    for (double x = 0; x <= w; x += 2.0) {
-        sub_path.lineTo(x, wave_y(x, 0.045, -phase_ * 0.7 + 1.7, amplitude * 0.6));
+void SpeedFloatWidget::showEvent(QShowEvent* event)
+{
+    QWidget::showEvent(event);
+    if (windowHandle()) {
+        windowHandle()->setFlag(Qt::WindowTransparentForInput, click_through_);
     }
-    sub_path.lineTo(w, h);
-    sub_path.closeSubpath();
-    painter.fillPath(sub_path, water_sub);
-
-    // 主波
-    QPainterPath water_path;
-    water_path.moveTo(0, h);
-    for (double x = 0; x <= w; x += 2.0) {
-        water_path.lineTo(x, wave_y(x, 0.06, phase_, amplitude));
-    }
-    water_path.lineTo(w, h);
-    water_path.closeSubpath();
-    painter.fillPath(water_path, water_main);
-
-    painter.restore();
-
-    // ③ 文本:速度为主行,活跃任务数/总进度为副行
-    const QString speed_text = format_speed(stats_.download_speed);
-    QString sub_text;
-    if (show_active_tasks_ && show_total_progress_) {
-        sub_text = stats_.overall_progress >= 0.0
-            ? tr("%1 个任务 · %2%")
-                  .arg(stats_.active_tasks)
-                  .arg(qRound(stats_.overall_progress * 100.0))
-            : tr("%1 个任务").arg(stats_.active_tasks);
-    } else if (show_active_tasks_) {
-        sub_text = tr("%1 个任务").arg(stats_.active_tasks);
-    } else if (show_total_progress_ && stats_.overall_progress >= 0.0) {
-        sub_text = tr("%1%").arg(qRound(stats_.overall_progress * 100.0));
-    }
-
-    QFont speed_font = font();
-    speed_font.setBold(true);
-    speed_font.setPixelSize(qMax(14, static_cast<int>(w * 0.155)));
-    QFont sub_font = font();
-    sub_font.setPixelSize(qMax(10, static_cast<int>(w * 0.095)));
-
-    QFontMetrics speed_fm(speed_font);
-    const int line_gap = 4;
-    const int sub_h = sub_text.isEmpty() ? 0 : QFontMetrics(sub_font).height();
-    const int text_block_h = speed_fm.height() + line_gap + sub_h;
-    double y = (h - text_block_h) / 2.0 + speed_fm.ascent();
-
-    painter.setFont(speed_font);
-    const QPointF speed_pos((w - speed_fm.horizontalAdvance(speed_text)) / 2.0, y);
-
-    // 双通道绘制:水上用干色(text/text_secondary),水下用 accent_text
-    // ——水面淹没文字的任何位置都保持可读
-    const auto draw_duotone = [&](const QString& text, const QPointF& pos,
-                                   const QColor& dry_color) {
-        painter.save();
-        painter.setClipPath(card_path);
-        painter.setPen(dry_color);
-        painter.drawText(pos, text);
-        painter.restore();
-        painter.save();
-        painter.setClipPath(water_path, Qt::IntersectClip);
-        painter.setPen(tokens.accent_text);
-        painter.drawText(pos, text);
-        painter.restore();
-    };
-
-    draw_duotone(speed_text, speed_pos, tokens.text);
-
-    if (!sub_text.isEmpty()) {
-        y += speed_fm.descent() + line_gap;
-        painter.setFont(sub_font);
-        const QFontMetrics sub_fm(sub_font);
-        draw_duotone(sub_text,
-                     QPointF((w - sub_fm.horizontalAdvance(sub_text)) / 2.0, y),
-                     tokens.text_secondary);
-    }
+    refresh_name_elide();
 }
 
 } // namespace falcon::desktop
