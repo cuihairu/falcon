@@ -13,7 +13,7 @@ Falcon 今天已有的能力(2026-09 现状):
 | V2 引擎多源分段(P2SP) | metalink 阶段 2 落地,同一文件多镜像段级换源 | **数据面已具备"从多个来源拉同一文件"的全部机制** |
 | daemon aria2 兼容 RPC | 28 方法,HTTP + WebSocket 同端口,自实现零新依赖 | Rendezvous 与节点控制面的技术底座候选 |
 | metalink | RFC 5854/Metalink3 双兼容,整文件哈希校验后才发布成品 | "哈希带外已知"的下载形态,天然支持下载中共享 |
-| BT/DHT | libtorrent 数据面 + 自研 DhtClient(Kademlia 迭代查找) | 检验过"对等网络"的全部工程约束(见 §4 选型) |
+| BT/DHT | libtorrent 数据面 + 自行开发 DhtClient(Kademlia 迭代查找) | 检验过"对等网络"的全部工程约束(见 §4 选型) |
 | 任务持久化 | SQLite,停机恢复 | 节点侧公告状态机的持久化惯例参考 |
 
 **缺的是最后一环**:多源分段目前只能从 metalink 文档或单一下载任务的 URL 得到"同一内容的多路来源"。用户的真实场景是拥有一群 falcon 节点——家庭 NAS、桌面机、云机——它们各自下载文件,却互不知道对方手里有什么:
@@ -109,7 +109,7 @@ Rendezvous 中继内容(TURN 式)会把自托管 Rendezvous 的带宽变成全�
 
 合成 infohash(成品 SHA-1 加魔数前缀派生)公告进公共 DHT,零基建。**否决,四个理由,前两个有仓库实证**:
 
-1. **实现成本被现状推翻**。备忘预估"最省数据面",但对自研 `DhtClient` 的现状调查(2026-09)表明:`announce_peer` 是零实现(仅 `DhtQueryType::AnnouncePeer=3` 枚举与字符串映射占位,`dht_node.cpp` 中 token 零命中——不捕获、不存储、不回传);无入站查询应答(`handleMessage` 只处理 Response,`y=q` 一律忽略,即没有 infohash→peers 存储表与服务端能力);BEP-5 线格式三处偏差(id 写在顶层 dict 而非 `a`/`r` 内、decode 的 `r` 只吸收字符串值导致真实 `values` 列表被整体丢弃、`arguments` 的 `map<string,string>` 装不下 `implied_port` 整数)。对接公共 DHT = 先补齐公告发送 + token 流程 + 入站应答 + wire 修正四大块新建面,并逐一通过 MockDhtNode 与真实节点互通验证。
+1. **实现成本被现状推翻**。备忘预估"最省数据面",但对自行开发 `DhtClient` 的现状调查(2026-09)表明:`announce_peer` 是零实现(仅 `DhtQueryType::AnnouncePeer=3` 枚举与字符串映射占位,`dht_node.cpp` 中 token 零命中——不捕获、不存储、不回传);无入站查询应答(`handleMessage` 只处理 Response,`y=q` 一律忽略,即没有 infohash→peers 存储表与服务端能力);BEP-5 线格式三处偏差(id 写在顶层 dict 而非 `a`/`r` 内、decode 的 `r` 只吸收字符串值导致真实 `values` 列表被整体丢弃、`arguments` 的 `map<string,string>` 装不下 `implied_port` 整数)。对接公共 DHT = 先补齐公告发送 + token 流程 + 入站应答 + wire 修正四大块新建面,并逐一通过 MockDhtNode 与真实节点互通验证。
 2. **公网暴露面**。合成 infohash 的魔数前缀防的是意外碰撞,防不了主动扫描:任何第三方都能枚举 DHT 收集"谁持有哪个 sha256",把私有下载行为公告进公共可观测空间。
 3. **NAT 失效**。NAT 后节点公告的 ip:port 对公网不可达,公共 DHT 无法辅助打洞(§4.2)——公告了个寂寞,这是结构性缺陷不是调优问题。
 4. **公共 DHT 的治理缺位**。无认证(任何人可就任意 infohash 应答假地址)、无吊销、无限频,污染与滥用防护只能靠客户端侧校验兜底。
@@ -120,9 +120,9 @@ Rendezvous 中继内容(TURN 式)会把自托管 Rendezvous 的带宽变成全�
 
 - **冷启动在私有形态下无解**:私有圈节点数个位数,DHT 查找的多跳迭代纯增延迟(bootstrap → get_peers 迭代 → 收敛,秒级;HTTPS 查询毫秒级)。
 - 引导节点就是另一个要维护的常驻服务——复杂度不降反升。
-- 自研 DHT 的维护线程每 5 分钟随机 find_node(既有行为),私有网络里是无意义流量。
+- 自行开发 DHT 的维护线程每 5 分钟随机 find_node(既有行为),私有网络里是无意义流量。
 
-**DHT 能力不浪费**:自研 DhtClient 服务于 BT 任务(libtorrent 模式之外的基础设施),与本设计正交。若未来进入公共 P2P 形态,DHT 路线可重新评估。
+**DHT 能力不浪费**:自行开发 DhtClient 服务于 BT 任务(libtorrent 模式之外的基础设施),与本设计正交。若未来进入公共 P2P 形态,DHT 路线可重新评估。
 
 #### 方案四:mDNS(局域网自动发现)——延后,列为可选加速层
 
