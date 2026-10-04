@@ -38,6 +38,13 @@ public:
     /** 底部统计卡显示当前活跃任务数(DownloadService stats 推送) */
     void set_queue_count(int count);
 
+    /**
+     * 下载页签高亮跟随（B20 双向联动：页签 → 侧栏方向）
+     * 程序化设置「下载中/已完成」高亮（不触发 clicked，不回流）；
+     * @param completed true=高亮「已完成」，false=高亮「下载中」
+     */
+    void set_active_download_tab(bool completed);
+
 signals:
     void cloudClicked();
     void discoveryClicked();

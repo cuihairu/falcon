@@ -89,6 +89,10 @@ signals:
     /// 显示样式实际变化 → MainWindow 落 QSettings（手动切换记忆）并同步设置页
     /// @param grid_view true=卡片视图，false=列表视图
     void display_style_changed(bool grid_view);
+    /// 视图模式实际变化（下载中/已完成）→ MainWindow 同步侧栏高亮
+    /// （B20 双向联动：页头分段切换器 → 侧栏方向；侧栏 → 页签方向
+    /// 走 downloadingTabClicked/completedTabClicked 既有接线）
+    void view_mode_changed(DownloadViewMode mode);
 
 private slots:
     void on_new_task_clicked();

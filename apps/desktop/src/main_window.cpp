@@ -552,6 +552,16 @@ void MainWindow::create_pages()
                 }
             });
 
+    // 视图模式（下载中/已完成）变化 → 侧栏高亮跟随（B20 双向联动的
+    // 页签 → 侧栏方向；反向走 downloadingTabClicked/completedTabClicked
+    // 既有接线。set_active_download_tab 内 QSignalBlocker 防回环）
+    connect(download_page_, &DownloadPage::view_mode_changed, this,
+            [this](DownloadViewMode mode) {
+                if (side_bar_) {
+                    side_bar_->set_active_download_tab(mode == DownloadViewMode::Completed);
+                }
+            });
+
     // 云盘页面
     auto* cloud_page = new CloudPage(this);
     content_stack_->addWidget(cloud_page);

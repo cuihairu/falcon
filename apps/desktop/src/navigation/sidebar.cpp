@@ -84,6 +84,20 @@ void SideBar::set_queue_count(int count)
     }
 }
 
+void SideBar::set_active_download_tab(bool completed)
+{
+    if (!downloading_tab_ || !completed_tab_) {
+        return;
+    }
+    // QSignalBlocker + 双向显式 setChecked：程序化高亮不触发 clicked
+    // （本类两个信号源），不回流 MainWindow；两个都显式设置，不依赖
+    // QButtonGroup 排他行为在信号阻断下的具体实现
+    const QSignalBlocker block_downloading(downloading_tab_);
+    const QSignalBlocker block_completed(completed_tab_);
+    downloading_tab_->setChecked(!completed);
+    completed_tab_->setChecked(completed);
+}
+
 QPushButton* SideBar::create_nav_button(const QString& text, icons::Id icon)
 {
     auto* button = new QPushButton(text, this);

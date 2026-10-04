@@ -326,6 +326,7 @@ void DownloadPage::create_task_table()
 
 void DownloadPage::set_view_mode(DownloadViewMode mode)
 {
+    const bool changed = (view_mode_ != mode);
     view_mode_ = mode;
     update_header_for_mode();
 
@@ -339,6 +340,12 @@ void DownloadPage::set_view_mode(DownloadViewMode mode)
     task_table_->setRowCount(0);
     row_by_task_id_.clear();
     rerender();
+
+    // B20 双向联动（页签 → 侧栏方向）：视图模式实际变化才发信号，
+    // 侧栏高亮由 MainWindow 接线跟随
+    if (changed) {
+        emit view_mode_changed(mode);
+    }
 }
 
 void DownloadPage::update_header_for_mode()
