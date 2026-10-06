@@ -2,6 +2,11 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-07 - B15 视图记忆真实走查闭环（实现为 e679035/470d0ef，本批补走查证据 + 登记回填）
+- **实现已在库**（2026-10-04）：首次/无记录默认卡片（load_settings 缺省 grid）+ 顶栏切换即时落 QSettings（display_style_changed → sync）+ 设置页「任务列表视图」下拉框双向同步（QSignalBlocker 防回环、恢复默认回发即时生效）
+- **本批真实走查（Xvfb :96 + openbox，7 图 /home/cui/fb-shots/b15-s1~s7）**：全新配置首启 = 卡片（钮显「列表视图」+ conf 无记录）→ 切列表 → conf 即时 `task_display_style=table`（QSettings 实落 FalconTeam/Falcon.conf——注意 desktop.conf 是另一文件，QSettings 组织/应用名落在 FalconTeam/Falcon）→ 重启记住列表（零点击）→ 设置页同步 +「卡片视图（默认）」标注 + 说明文字 → 设置页切回 → conf=grid → 重启卡片恢复
+- **测量备注**：QSettings 落点按组织/应用名（FalconTeam/Falcon.conf）而非 `.config/falcon/desktop.conf`——desktop.conf 为应用自管配置（engines.json 同目录），走查断言 conf 状态时认对文件
+
 ### 2026-10-07 - B24 剪贴板「对话框关闭后失效」定性收口（干净环境不复现）+ B25 兜底定时器不触发登记 + 嵌套事件循环回归钉子
 - **B24 定性（用户症状不复现，环境因由）**：Request B 置顶缺陷「第一个添加对话框关闭后剪贴板检测整体失效」——干净环境（Xvfb :95 + openbox 重建）逐字复现剧本：Escape 关闭对话框 → 复制新的不同链接 → 4s 内对话框重开（PB1-reopen-check.png），QClipboard::changed 主信号路径关闭后存活。用户观感解释 = 走查环境污染：卡死的 XTEST Escape 注入 + autorepeat rate 25（≈25Hz Escape 重放）→ QDialog::reject 循环 → 弹出即关（256ms 内消失）=「不弹窗」假象（干净环境对话框稳定打开 ≥35s）。/tmp 时间线证据 2026-10-06 停电丢失，定性以存活截图为准（如实记录）
 - **B25 附带发现（登记待查）**：兜底轮询 QTimer 从不触发——check_clipboard 断点 12-15s 空闲窗 0 命中 ×2 + strace ppoll timeout=NULL，而 start() 确定执行（源码在位 + is_monitoring_ 实读）；主信号路径不受影响。已排除六类假设，未排除错误线程 start()（Qt 只告警不启动）；QTimer::timerEvent 断点在 Qt 6.8+ 无意义（QSingleShotTimer 重构）、发行版 Qt 无调试符号（`p *check_timer_` incomplete type）——续查需复建环境 + gdb 断 start
