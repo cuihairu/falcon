@@ -506,6 +506,8 @@ void MainWindow::create_pages()
             this, &MainWindow::on_remove_task_requested);
     connect(download_page_, &DownloadPage::remove_finished_tasks_requested,
             this, &MainWindow::on_remove_finished_tasks_requested);
+    connect(download_page_, &DownloadPage::redownload_requested,
+            this, &MainWindow::on_redownload_requested);
     connect(download_page_, &DownloadPage::priority_changed,
             this, &MainWindow::on_priority_changed);
     connect(download_page_, &DownloadPage::pause_requested,
@@ -1076,6 +1078,13 @@ void MainWindow::on_remove_finished_tasks_requested()
     }
 
     download_service_->remove_finished_tasks();
+}
+
+void MainWindow::on_redownload_requested(const QString& url)
+{
+    // 重新下载（已完成视图批量菜单）：按原 URL 新建任务并立即开始，
+    // 走与「新建任务」同一条 add_download_task 路径（协议/对话框逻辑复用）
+    add_download_task(url, true);
 }
 
 void MainWindow::on_priority_changed(falcon::TaskId id, falcon::TaskPriority priority)

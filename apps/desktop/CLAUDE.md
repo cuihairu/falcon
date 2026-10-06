@@ -2,6 +2,16 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-07 - B16 批量操作菜单按 tab 区分（下载中/已完成双菜单 + 逐项真实走查 17 图）
+- **根因**：批量操作菜单未按视图区分——两个 tab 弹同一个菜单（含对当前 tab 无意义的项，如已完成的「全部暂停」、下载中的「清空完成记录」）
+- **修法**（`download_page.cpp` `on_more_options_clicked`）：菜单在每次点击时现建，按 `view_mode_` 分支——**切 tab 菜单实时换**（同一按钮两 tab 菜单不同，走查实证）
+  - 「下载中」：全部开始（Paused/Failed/Pending → `resume_requested`）/ 全部暂停（Downloading/Preparing → `pause_requested`）/ 全部取消（Pending/Preparing/Downloading/Paused 四态 → `remove_task_requested` 进回收站；**不动 Failed**——失败任务留「继续」重试入口；**已完成记录不受影响**）/ 删除任务（选中行；无选中禁用）/ 清空列表（全部下载中视图任务移入回收站）
+  - 「已完成」：清空完成记录（`remove_finished_tasks_requested`，只删记录不动文件）/ 删除选中（无选中禁用）/ 重新下载（按原 URL 新建任务并立即开始 → 新信号 `redownload_requested(url)` → MainWindow 走与「新建任务」同一条 `add_download_task` 路径；无选中禁用）/ 打开所在文件夹（`QDesktopServices::openUrl`，无选中禁用）——**无开始/暂停类**
+  - **选择语义**：`selected_record()` 仅表格视图有效 → 选择依赖项（删除任务/删除选中/重新下载/打开所在文件夹）在菜单 exec 前**值捕获**选中 id/url/dir，无选中置 disabled
+- **取消/删除的产品语义（走查实证 ground truth）**：取消任务 → 回收站条目 `file_in_trash: false` + 部分文件 `<name>.bin.falcon.tmp` 留 Downloads（断点）；删除已完成任务 → 文件移入 `.falcon-trash/<id>_<name>` + `file_in_trash: true`；清空完成记录只删记录
+- **真实走查**（Xvfb :96 + 64KB/s 限速 ThreadingTCPServer 真实下载，17 图 `/home/cui/fb-shots/b16/`）：下载中菜单 m1 / 已完成菜单 m2（无开始暂停类+无选中灰禁）/ 选中启用 m3 / 全部暂停 s6 / 全部开始 s7 / 打开所在文件夹 s8（xdg-open.log 铁证）/ 重新下载 s9（活动 0→1 + 悬浮窗出现 + 已完成 7→8）/ 删除选中 s10（8→7）/ 清空完成记录 s11（7→0）/ 全部取消 s13c→s14b（双任务下载中→0，误完成的 slow8/9 记录原样保留=「不动已完成」范围正确性铁证）/ 回收站 s15（3 项状态正确）/ 删除任务 s16a→s16（选中 slow10 删、slow11 保留下载中）/ 清空列表 s17（下载中→空态、已完成 2 不受影响）
+- **测量备注**：走查用 16KB/250ms 限速（≈64KB/s）把 400MB 窗口拉到 ~100min——此前 4.2MB/s 档 97s 窗口在多轮 turn 间耗尽（全部取消点击时任务已自行完成，无物可取消）；多步 UI 序列（对话框添加+菜单点击+截图）必须链进单条 Bash 命令
+
 ### 2026-10-07 - B15 视图记忆真实走查闭环（实现为 e679035/470d0ef，本批补走查证据 + 登记回填）
 - **实现已在库**（2026-10-04）：首次/无记录默认卡片（load_settings 缺省 grid）+ 顶栏切换即时落 QSettings（display_style_changed → sync）+ 设置页「任务列表视图」下拉框双向同步（QSignalBlocker 防回环、恢复默认回发即时生效）
 - **本批真实走查（Xvfb :96 + openbox，7 图 /home/cui/fb-shots/b15-s1~s7）**：全新配置首启 = 卡片（钮显「列表视图」+ conf 无记录）→ 切列表 → conf 即时 `task_display_style=table`（QSettings 实落 FalconTeam/Falcon.conf——注意 desktop.conf 是另一文件，QSettings 组织/应用名落在 FalconTeam/Falcon）→ 重启记住列表（零点击）→ 设置页同步 +「卡片视图（默认）」标注 + 说明文字 → 设置页切回 → conf=grid → 重启卡片恢复

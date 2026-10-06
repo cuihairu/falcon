@@ -84,6 +84,8 @@ signals:
     void resume_requested(falcon::TaskId id);
     /// 停止做种（BitTorrent；仅对 seeding_active 任务出现菜单项）
     void stop_seeding_requested(falcon::TaskId id);
+    /// 重新下载（已完成视图批量菜单）：按原 URL 新建任务并立即开始
+    void redownload_requested(const QString& url);
     /// 拖拽排序变化 → 序列化串（"3,1,2"），MainWindow 落 QSettings
     void task_order_changed(const QString& serialized);
     /// 显示样式实际变化 → MainWindow 落 QSettings（手动切换记忆）并同步设置页

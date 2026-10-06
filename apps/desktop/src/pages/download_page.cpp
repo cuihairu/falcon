@@ -856,50 +856,108 @@ void DownloadPage::on_refresh_clicked()
 
 void DownloadPage::on_more_options_clicked()
 {
+    // B16：批量菜单按当前 tab 区分——「下载中」= 启停/取消类，
+    // 「已完成」= 记录管理类（绝无开始/暂停）。菜单每次点击即席构建，
+    // 切 tab 后下一次点击自然换套，无需增量维护。
     QMenu menu(this);
 
-    auto* start_all_action = menu.addAction(tr("全部开始"));
-    connect(start_all_action, &QAction::triggered, this, [this]() {
-        for (auto it = task_records_.cbegin(); it != task_records_.cend(); ++it) {
-            const auto& snap = it.value().snapshot;
-            if (snap.status == falcon::TaskStatus::Paused ||
-                snap.status == falcon::TaskStatus::Failed ||
-                snap.status == falcon::TaskStatus::Pending) {
-                emit resume_requested(snap.id);
+    // 选中类条目统一按值捕获（菜单 exec 期间快照表可能被 update_tasks
+    // 整体重建，指针不可跨 exec 存活）；网格视图无选中模型，无选中时
+    // 这些条目禁用（诚实呈现，而非点了没反应）
+    const TaskRecord* selected = selected_record();
+    const qulonglong selected_id = selected ? selected->snapshot.id : 0;
+    const QString selected_url =
+        selected ? QString::fromStdString(selected->snapshot.url) : QString();
+    const QString selected_dir = selected
+        ? QFileInfo(selected->save_path.isEmpty()
+                        ? QString::fromStdString(selected->snapshot.url)
+                        : selected->save_path).absolutePath()
+        : QString();
+
+    if (view_mode_ == DownloadViewMode::Completed) {
+        // ---- 已完成：清空完成记录 / 删除选中 / 重新下载 / 打开所在文件夹 ----
+        auto* clear_finished_action = menu.addAction(tr("清空完成记录"));
+        connect(clear_finished_action, &QAction::triggered, this, [this]() {
+            emit remove_finished_tasks_requested();
+        });
+
+        auto* delete_selected_action = menu.addAction(tr("删除选中"));
+        delete_selected_action->setEnabled(selected_id != 0);
+        connect(delete_selected_action, &QAction::triggered, this, [this, selected_id]() {
+            emit remove_task_requested(static_cast<falcon::TaskId>(selected_id));
+        });
+
+        menu.addSeparator();
+
+        auto* redownload_action = menu.addAction(tr("重新下载"));
+        redownload_action->setEnabled(selected_id != 0 && !selected_url.isEmpty());
+        connect(redownload_action, &QAction::triggered, this,
+                [this, selected_url]() { emit redownload_requested(selected_url); });
+
+        auto* open_dir_action = menu.addAction(tr("打开所在文件夹"));
+        open_dir_action->setEnabled(selected_id != 0 && !selected_dir.isEmpty());
+        connect(open_dir_action, &QAction::triggered, this, [selected_dir]() {
+            QDesktopServices::openUrl(QUrl::fromLocalFile(selected_dir));
+        });
+    } else {
+        // ---- 下载中：全部开始 / 全部暂停 / 全部取消 / 删除任务 / 清空列表 ----
+        auto* start_all_action = menu.addAction(tr("全部开始"));
+        connect(start_all_action, &QAction::triggered, this, [this]() {
+            for (auto it = task_records_.cbegin(); it != task_records_.cend(); ++it) {
+                const auto& snap = it.value().snapshot;
+                if (snap.status == falcon::TaskStatus::Paused ||
+                    snap.status == falcon::TaskStatus::Failed ||
+                    snap.status == falcon::TaskStatus::Pending) {
+                    emit resume_requested(snap.id);
+                }
             }
-        }
-    });
+        });
 
-    auto* pause_all_action = menu.addAction(tr("全部暂停"));
-    connect(pause_all_action, &QAction::triggered, this, [this]() {
-        for (auto it = task_records_.cbegin(); it != task_records_.cend(); ++it) {
-            const auto& snap = it.value().snapshot;
-            if (snap.status == falcon::TaskStatus::Downloading ||
-                snap.status == falcon::TaskStatus::Preparing) {
-                emit pause_requested(snap.id);
+        auto* pause_all_action = menu.addAction(tr("全部暂停"));
+        connect(pause_all_action, &QAction::triggered, this, [this]() {
+            for (auto it = task_records_.cbegin(); it != task_records_.cend(); ++it) {
+                const auto& snap = it.value().snapshot;
+                if (snap.status == falcon::TaskStatus::Downloading ||
+                    snap.status == falcon::TaskStatus::Preparing) {
+                    emit pause_requested(snap.id);
+                }
             }
-        }
-    });
+        });
 
-    menu.addSeparator();
+        // 全部取消：活动/暂停/排队任务移出列表并进回收站（有回收站时
+        // 先取消再移除，可恢复；daemon 路径 aria2.remove 本就对活动
+        // 任务生效）。与「清空列表」的差别：不动失败任务。
+        auto* cancel_all_action = menu.addAction(tr("全部取消"));
+        connect(cancel_all_action, &QAction::triggered, this, [this]() {
+            for (auto it = task_records_.cbegin(); it != task_records_.cend(); ++it) {
+                const auto& snap = it.value().snapshot;
+                if (snap.status == falcon::TaskStatus::Pending ||
+                    snap.status == falcon::TaskStatus::Preparing ||
+                    snap.status == falcon::TaskStatus::Downloading ||
+                    snap.status == falcon::TaskStatus::Paused) {
+                    emit remove_task_requested(snap.id);
+                }
+            }
+        });
 
-    auto* remove_finished_action = menu.addAction(tr("清除已完成"));
-    connect(remove_finished_action, &QAction::triggered, this, [this]() {
-        emit remove_finished_tasks_requested();
-    });
+        menu.addSeparator();
 
-    menu.addSeparator();
+        auto* delete_selected_action = menu.addAction(tr("删除任务"));
+        delete_selected_action->setEnabled(selected_id != 0);
+        connect(delete_selected_action, &QAction::triggered, this, [this, selected_id]() {
+            emit remove_task_requested(static_cast<falcon::TaskId>(selected_id));
+        });
 
-    auto* open_dir_action = menu.addAction(tr("打开保存目录"));
-    connect(open_dir_action, &QAction::triggered, this, [this]() {
-        if (const auto* record = selected_record()) {
-            const QString path = record->save_path.isEmpty()
-                ? QString::fromStdString(record->snapshot.url)
-                : record->save_path;
-            const QString dir = QFileInfo(path).absolutePath();
-            QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
-        }
-    });
+        // 清空列表：下载中视图全部可见任务（含失败）移出列表并回收
+        auto* clear_list_action = menu.addAction(tr("清空列表"));
+        connect(clear_list_action, &QAction::triggered, this, [this]() {
+            for (auto it = task_records_.cbegin(); it != task_records_.cend(); ++it) {
+                if (should_show(it.value().snapshot)) {
+                    emit remove_task_requested(it.value().snapshot.id);
+                }
+            }
+        });
+    }
 
     menu.exec(more_button_->mapToGlobal(more_button_->rect().bottomLeft()));
 }
