@@ -2,6 +2,12 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-07 - B24 剪贴板「对话框关闭后失效」定性收口（干净环境不复现）+ B25 兜底定时器不触发登记 + 嵌套事件循环回归钉子
+- **B24 定性（用户症状不复现，环境因由）**：Request B 置顶缺陷「第一个添加对话框关闭后剪贴板检测整体失效」——干净环境（Xvfb :95 + openbox 重建）逐字复现剧本：Escape 关闭对话框 → 复制新的不同链接 → 4s 内对话框重开（PB1-reopen-check.png），QClipboard::changed 主信号路径关闭后存活。用户观感解释 = 走查环境污染：卡死的 XTEST Escape 注入 + autorepeat rate 25（≈25Hz Escape 重放）→ QDialog::reject 循环 → 弹出即关（256ms 内消失）=「不弹窗」假象（干净环境对话框稳定打开 ≥35s）。/tmp 时间线证据 2026-10-06 停电丢失，定性以存活截图为准（如实记录）
+- **B25 附带发现（登记待查）**：兜底轮询 QTimer 从不触发——check_clipboard 断点 12-15s 空闲窗 0 命中 ×2 + strace ppoll timeout=NULL，而 start() 确定执行（源码在位 + is_monitoring_ 实读）；主信号路径不受影响。已排除六类假设，未排除错误线程 start()（Qt 只告警不启动）；QTimer::timerEvent 断点在 Qt 6.8+ 无意义（QSingleShotTimer 重构）、发行版 Qt 无调试符号（`p *check_timer_` incomplete type）——续查需复建环境 + gdb 断 start
+- **回归钉子**：`NestedEventLoopInHandlerDoesNotKillSubsequentDetection`（clipboard 11 → 12）——url_detected handler 内转 QEventLoop::exec（与生产 QDialog::exec 嵌套循环同构）后，第二个不同 URL 仍必须被检测到；钉住「对话框消费不杀监控」不变式（B24 场景的产品行为契约）
+- **验证**：clipboard 12/12 + desktop 全部 8 二进制 112 用例回归绿（backend 26 / order 14 / url 8 / ipc 23 / storage 16 / update 7 / visibility 6）
+
 ### 2026-10-04 - B23 复选框「隐形」修复（QSS data-URI 不支持 → qrc SVG url 引用 + 亮暗双主题像素级复验）
 - **根因**：双 QSS `QCheckBox::indicator` 的 `url(data:image/svg+xml;base64,…)` 形态——**Qt QSS 不支持 data: URI**，图标加载失败零渲染，勾选/未勾选两态全部不可见（2026-09-28 warm console 批次「checkbox 内嵌 base64 SVG」引入，沙盒目测验收漏检；功能点击不受影响故用户感知为「看不见开关状态」）
 - **修法**：4 个 16×16 SVG（checked = accent 实底 rx=3 圆角方块 + 对比色勾；unchecked = 中性描边空心框）入 `resources/icons/checkbox-{checked,unchecked}-{light,dark}.svg` + `resources.qrc` alias；双 QSS 指示器改 `image: url(:/icons/…)`。色值：light checked 底 #c2410c + 白勾 / unchecked stroke #a29a92（= disabled token）；dark checked 底 #ffa07a + #27140a 勾 / unchecked stroke #6e665e

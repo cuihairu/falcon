@@ -244,6 +244,43 @@ TEST_F(ClipboardMonitorTest, DetectionDelayChangeAppliesToSubsequentStart)
     EXPECT_TRUE(spin_until([&] { return emissions == 1; }));
 }
 
+// ---------- 嵌套事件循环下的持续监控（模态对话框回归钉子） ----------
+//
+// 生产形态：MainWindow::on_url_detected 在 url_detected 直连槽里
+// exec() 模态添加对话框——X11 上即 QClipboard::changed 派发栈内的
+// 嵌套事件循环。实测（Xvfb :94 真实应用走查，2026-10-04）：第一个
+// 对话框关闭后监控整体哑掉，后续 3 个不同 URL 均不再弹窗（剪贴板
+// 侧 xclip -o 确认已更新、进程存活）。
+//
+// 本用例复刻该消费形态：handler 内转嵌套事件循环（QEventLoop::exec
+// 与 QDialog::exec 同构），断言第二个不同 URL 仍被检测到——监控不
+// 得因消费者的重入而死亡。
+TEST_F(ClipboardMonitorTest, NestedEventLoopInHandlerDoesNotKillSubsequentDetection)
+{
+    ClipboardMonitor local_monitor(QGuiApplication::clipboard());
+    QStringList detected;
+    QObject::connect(&local_monitor, &ClipboardMonitor::url_detected,
+                     &local_monitor, [&](const falcon::desktop::UrlInfo& info) {
+                         detected << info.original_url;
+                         // 生产消费形态同构：模态对话框 exec() = handler
+                         // 栈上的嵌套事件循环
+                         QEventLoop nested;
+                         QTimer::singleShot(300, &nested, &QEventLoop::quit);
+                         nested.exec();
+                     });
+    local_monitor.start();
+
+    QGuiApplication::clipboard()->setText(unique_url("nested-first"));
+    ASSERT_TRUE(spin_until([&] { return detected.size() >= 1; }))
+        << "第一个 URL 必须触发检测（前置条件）";
+
+    QGuiApplication::clipboard()->setText(unique_url("nested-second"));
+    EXPECT_TRUE(spin_until([&] { return detected.size() >= 2; }, 3000))
+        << "嵌套事件循环消费者处理后，第二个不同 URL 仍必须被检测到";
+    EXPECT_EQ(detected.size(), 2);
+    local_monitor.stop();
+}
+
 int main(int argc, char** argv)
 {
     // xvfb 口径：优先环境给出的真实平台（xvfb-run 的 xcb / 桌面会话）；
