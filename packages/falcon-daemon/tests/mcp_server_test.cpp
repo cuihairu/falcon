@@ -500,7 +500,7 @@ TEST(McpServerHttpTest, UnknownMethodReturns32601) {
 TEST(McpToolsManifestTest, ManifestSchemaShape) {
     json tools = falcon::daemon::rpc::mcp_tools_manifest();
     ASSERT_TRUE(tools.is_array());
-    ASSERT_EQ(tools.size(), 10u);
+    ASSERT_EQ(tools.size(), 13u);
 
     std::set<std::string> names;
     for (const auto& t : tools) {
@@ -522,10 +522,13 @@ TEST(McpToolsManifestTest, ManifestSchemaShape) {
     }
 
     const std::set<std::string> kExpected = {
-        "falcon_add_download",   "falcon_list_tasks",     "falcon_get_task",
-        "falcon_pause_task",     "falcon_resume_task",    "falcon_remove_task",
-        "falcon_pause_all",      "falcon_resume_all",     "falcon_get_global_stats",
-        "falcon_get_task_files"};
+        "falcon_add_download",      "falcon_list_tasks",
+        "falcon_get_task",          "falcon_pause_task",
+        "falcon_resume_task",       "falcon_remove_task",
+        "falcon_pause_all",         "falcon_resume_all",
+        "falcon_get_global_stats",  "falcon_get_task_files",
+        "falcon_get_global_option", "falcon_set_global_option",
+        "falcon_stop_seeding"};
     EXPECT_EQ(names, kExpected);
 
     // 破坏性标注：remove / pause_all
@@ -563,7 +566,7 @@ TEST(McpServerHttpTest, ToolsListReturnsManifestOverHttp) {
     EXPECT_EQ(resp->status, 200);
     json body = json::parse(resp->body);
     ASSERT_TRUE(body.at("result").at("tools").is_array());
-    EXPECT_EQ(body.at("result").at("tools").size(), 10u);
+    EXPECT_EQ(body.at("result").at("tools").size(), 13u);
 }
 
 // ---- tools/call 翻译层 ----
@@ -760,6 +763,117 @@ TEST(McpServerHttpTest, DownloadLifecycleOverTools) {
                   .find("Error(2)"),
               std::string::npos)
         << gone.dump();
+}
+
+TEST(McpServerHttpTest, GlobalOptionToolsRoundTrip) {
+    falcon::DownloadEngine engine;
+    auto server = make_server(engine);
+    std::string sid = open_session(server->port(), kSecret);
+
+    // get：全量选项表（aria2 形状，字符串值）
+    json got = call_tool(server->port(), kSecret, sid, "falcon_get_global_option",
+                         json::object());
+    ASSERT_FALSE(got.value("isError", false)) << got.dump();
+    const json& opts = got.at("structuredContent");
+    ASSERT_TRUE(opts.is_object());
+    ASSERT_TRUE(opts.at("max-overall-download-limit").is_string());
+    ASSERT_TRUE(opts.at("max-concurrent-downloads").is_string());
+    ASSERT_TRUE(opts.contains("dir"));
+
+    // set：整数并发数 → "OK" → get 回读生效
+    json set = call_tool(server->port(), kSecret, sid, "falcon_set_global_option",
+                         json{{"options", json{{"max-concurrent-downloads", 3}}}});
+    ASSERT_FALSE(set.value("isError", false)) << set.dump();
+    EXPECT_EQ(set.at("structuredContent"), "OK");
+    json reread = call_tool(server->port(), kSecret, sid, "falcon_get_global_option",
+                            json::object());
+    EXPECT_EQ(reread.at("structuredContent").at("max-concurrent-downloads"), "3");
+
+    // 限速键位：字符串 "none" = 不限速（合法值不报错）
+    json limit_off = call_tool(server->port(), kSecret, sid, "falcon_set_global_option",
+                               json{{"options",
+                                     json{{"max-overall-download-limit", "none"}}}});
+    ASSERT_FALSE(limit_off.value("isError", false)) << limit_off.dump();
+    EXPECT_EQ(limit_off.at("structuredContent"), "OK");
+
+    // 白名单外键位（dir 只可查不可设）→ daemon 业务错误 code 1 → isError
+    json unsupported = call_tool(server->port(), kSecret, sid,
+                                 "falcon_set_global_option",
+                                 json{{"options", json{{"dir", "/tmp"}}}});
+    EXPECT_EQ(unsupported.at("isError"), true);
+    EXPECT_NE(unsupported.at("content").at(0).at("text").get<std::string>()
+                  .find("Option not supported: dir"),
+              std::string::npos)
+        << unsupported.dump();
+
+    // 非法值（非数字限速）→ 业务错误 "Invalid option value"
+    json invalid = call_tool(server->port(), kSecret, sid, "falcon_set_global_option",
+                             json{{"options",
+                                   json{{"max-overall-download-limit", "abc"}}}});
+    EXPECT_EQ(invalid.at("isError"), true);
+    EXPECT_NE(invalid.at("content").at(0).at("text").get<std::string>()
+                  .find("Invalid option value: max-overall-download-limit"),
+              std::string::npos)
+        << invalid.dump();
+
+    // 缺 options → 协议层 -32602（不经 call_tool，它断言 result 存在）
+    auto resp = mcp_request(
+        server->port(), "POST", kSecret, sid,
+        rpc_body(30, "tools/call",
+                 json{{"name", "falcon_set_global_option"},
+                      {"arguments", json::object()}})
+            .dump());
+    ASSERT_TRUE(resp.has_value());
+    EXPECT_EQ(json::parse(resp->body).at("error").at("code"), -32602);
+}
+
+TEST(McpServerHttpTest, StopSeedingToolMapsSeedErrors) {
+    falcon::DownloadEngine engine;
+    auto handler = std::make_unique<BlockingTestHandler>();
+    BlockingTestHandler* handler_ptr = handler.get();
+    engine.register_handler(std::move(handler));
+    auto server = make_server(engine);
+    std::string sid = open_session(server->port(), kSecret);
+
+    // 非做种任务：get_seed_info 默认 seeding_active=false → 业务错误 code 1
+    json added = call_tool(server->port(), kSecret, sid, "falcon_add_download",
+                           json{{"urls", json::array({"test://seed.bin"})}});
+    ASSERT_FALSE(added.value("isError", false)) << added.dump();
+    const std::string gid = added.at("structuredContent").get<std::string>();
+
+    json not_seeding = call_tool(server->port(), kSecret, sid, "falcon_stop_seeding",
+                                 json{{"gid", gid}});
+    EXPECT_EQ(not_seeding.at("isError"), true);
+    ASSERT_TRUE(not_seeding.at("content").is_array() &&
+                !not_seeding.at("content").empty());
+    const std::string text =
+        not_seeding.at("content").at(0).at("text").get<std::string>();
+    EXPECT_NE(text.find("Error(1)"), std::string::npos) << text;
+    EXPECT_NE(text.find("Task is not seeding"), std::string::npos) << text;
+
+    // gid 不存在（合法 16 hex 形态）→ 业务错误 code 2
+    json gone = call_tool(server->port(), kSecret, sid, "falcon_stop_seeding",
+                          json{{"gid", std::string("ffffffffffffffff")}});
+    EXPECT_EQ(gone.at("isError"), true);
+    EXPECT_NE(gone.at("content").at(0).at("text").get<std::string>().find("Error(2)"),
+              std::string::npos)
+        << gone.dump();
+
+    // 非法 gid 形态 → 协议层 -32602
+    auto resp = mcp_request(
+        server->port(), "POST", kSecret, sid,
+        rpc_body(31, "tools/call",
+                 json{{"name", "falcon_stop_seeding"}, {"arguments", json::object()}})
+            .dump());
+    ASSERT_TRUE(resp.has_value());
+    EXPECT_EQ(json::parse(resp->body).at("error").at("code"), -32602);
+
+    // 收尾：暂停放行阻塞的 download 线程再汇合（沿 DownloadLifecycleOverTools
+    // 的既有约定——任务留在 Downloading 会让 wait_until_idle 永等）
+    json paused = call_tool(server->port(), kSecret, sid, "falcon_pause_task",
+                            json{{"gid", gid}});
+    ASSERT_FALSE(paused.value("isError", false)) << paused.dump();
+    handler_ptr->wait_until_idle();
 }
 
 TEST(McpServerHttpTest, ListTasksInvalidStatusReturns32602) {

@@ -6,6 +6,23 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-08 - MCP server 阶段 2 增量 1（全局选项与做种工具，10 → 13）
+- **3 新工具**（设计文档 `docs/design/mcp_server_design.md` §3 阶段 2 追加表）：
+  `falcon_get_global_option` → `aria2.getGlobalOption`（无参，返回全量选项表
+  max-overall-download-limit/max-concurrent-downloads/dir，aria2 字符串值形态）；
+  `falcon_set_global_option` → `aria2.changeGlobalOption`（必填 `options` 对象；
+  **键位白名单不在 MCP 层重复**——daemon 侧对未知键/非法值自带业务错误
+  "Option not supported"/"Invalid option value" code 1，经 wrap_tool_result 映射
+  isError，薄适配原则）；`falcon_stop_seeding` → `falcon.stopSeeding`
+  （必填 gid；code 1 非做种/code 2 任务不存在 → isError，参数形状违规 → -32602）
+- **测试**：`mcp_server_test.cpp` 20 → 22 用例（`falcon_daemon_rpc_tests`
+  54 → 56：manifest schema 13 工具断言；get/set 全局选项 HTTP 往返——整数与
+  "none" 合法值、`dir` 不可设业务错误、非法值业务错误、缺 options -32602；
+  做种停止三错误路径——非做种 code 1/不存在 gid code 2/缺 gid -32602）；
+  daemon 全套件绿（rpc 56/config 31/lifecycle 27/main 33/rpc_client 62/
+  rpc_coverage 90/rpc_storage 20/storage 50）
+- 阶段 2 剩余：stdio 薄壳、进度订阅（SSE/notifications）
+
 ### 2026-10-07 - MCP server 阶段 1（/mcp 端点 + 10 工具翻译层 + Bearer 鉴权/会话管理）
 - **新文件 `src/rpc/mcp_server.{hpp,cpp}`**：MCP（Model Context Protocol）
   Streamable HTTP 端点，与 `/jsonrpc` 同端口复用既有监听/token 配置——
@@ -282,7 +299,7 @@
 4. **任务持久化**：SQLite 状态/进度实时落库，停机保存、重启恢复
 5. **多客户端支持**：无状态 HTTP 请求，天然支持多客户端并发
 6. **MCP 工具面**：同端口 `/mcp` 端点（Model Context Protocol，Streamable
-   HTTP，默认关），10 个下载工具暴露给 AI host（Claude Desktop/Code、Cursor
+   HTTP，默认关），13 个下载工具暴露给 AI host（Claude Desktop/Code、Cursor
    等），Bearer 鉴权 + 会话管理，`tools/call` 翻译到既有 aria2 RPC
 
 ### 包内静态库（2026-09-25 拆库，源零改动）
@@ -521,9 +538,12 @@ Windows Service Options（仅 Windows）:
 | `falcon_pause_all` / `falcon_resume_all` | `aria2.pauseAll` / `unpauseAll` | `pause_all` 带 `destructiveHint:true` |
 | `falcon_get_global_stats` | `aria2.getGlobalStat` | `readOnlyHint:true` |
 | `falcon_get_task_files` | `aria2.getFiles` | `readOnlyHint:true` |
+| `falcon_get_global_option` | `aria2.getGlobalOption`（全量选项表，aria2 字符串值） | `readOnlyHint:true` |
+| `falcon_set_global_option` | `aria2.changeGlobalOption`（`options` 对象透传；未知键/非法值由 daemon 侧业务错误 code 1 → isError） | — |
+| `falcon_stop_seeding` | `falcon.stopSeeding`（code 1 非做种/code 2 不存在 → isError） | — |
 
-- 阶段 2 排队（未实现）：stdio 薄壳、进度订阅（notifications/SSE）、
-  全局选项与做种工具（`falcon.stopSeeding` 等）
+- 阶段 2 排队（未实现）：stdio 薄壳、进度订阅（notifications/SSE）；
+  全局选项与做种工具已于 2026-10-08 增量 1 落地（13 工具）
 
 ### 查询的存储回落
 

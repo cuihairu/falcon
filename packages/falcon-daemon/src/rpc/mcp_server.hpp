@@ -20,8 +20,10 @@ namespace falcon::daemon::rpc {
 /// {"error":{code,message}} 映射为 MCP result.isError 形状，
 /// 不占用 JSON-RPC 协议错误码。
 ///
-/// 阶段 1 边界：GET（SSE）不支持（回 405）；批量请求不支持（回 400）；
-/// 工具面为设计文档 §3 的 10 个只读+控制工具，无资源/提示词面。
+/// 阶段边界：GET（SSE）不支持（回 405，阶段 2 进度订阅落地时接入）；
+/// 批量请求不支持（回 400）；工具面为设计文档 §3 的 13 个只读+控制
+/// 工具（阶段 1 的 10 个 + 阶段 2 增量 1 的全局选项 2 个与做种 1 个），
+/// 无资源/提示词面。
 class McpServer {
 public:
     struct Request {
@@ -57,7 +59,7 @@ private:
     std::deque<std::string> sessions_;  // FIFO，超 kMaxSessions 淘汰最旧
 };
 
-/// tools/list 清单（10 工具，静态数据——描述不拼接运行时数据，
+/// tools/list 清单（13 工具，静态数据——描述不拼接运行时数据，
 /// 防提示注入放大）。独立自由函数便于单测直接断言 schema 形状。
 nlohmann::json mcp_tools_manifest();
 

@@ -273,6 +273,20 @@ json translate_tool_call(const std::string& tool, const json& args,
     if (tool == "falcon_get_global_stats")
         return dispatch("aria2.getGlobalStat", json::array());
 
+    // 键位白名单不在翻译层重复：changeGlobalOption 对未知键/非法值
+    // 自带业务错误（"Option not supported"/"Invalid option value"），
+    // 经 wrap_tool_result 映射 isError 即可——薄适配原则。
+    if (tool == "falcon_get_global_option")
+        return dispatch("aria2.getGlobalOption", json::array());
+    if (tool == "falcon_set_global_option") {
+        auto o = args.find("options");
+        if (o == args.end() || !o->is_object())
+            throw_invalid("Invalid params: 'options' (object) is required");
+        return dispatch("aria2.changeGlobalOption", json::array({*o}));
+    }
+    if (tool == "falcon_stop_seeding")
+        return dispatch("falcon.stopSeeding", json::array({require_string("gid")}));
+
     if (tool == "falcon_remove_task") {
         const std::string gid = require_string("gid");
         bool force = false;
@@ -296,7 +310,8 @@ bool is_known_tool(const std::string& name) {
         "falcon_add_download",   "falcon_list_tasks",     "falcon_get_task",
         "falcon_pause_task",     "falcon_resume_task",    "falcon_remove_task",
         "falcon_pause_all",      "falcon_resume_all",     "falcon_get_global_stats",
-        "falcon_get_task_files"};
+        "falcon_get_task_files", "falcon_get_global_option",
+        "falcon_set_global_option", "falcon_stop_seeding"};
     return kTools.count(name) != 0;
 }
 
@@ -621,6 +636,48 @@ nlohmann::json mcp_tools_manifest() {
             }(),
             json::array({"gid"}),
             json{{"title", "Get task files"}, {"readOnlyHint", true}, {"openWorldHint", false}}),
+
+        tool("falcon_get_global_option",
+             "Get daemon global options: max-overall-download-limit (bytes per "
+             "second as a string, \"0\" = unlimited), max-concurrent-downloads "
+             "and dir (\"\": Falcon picks the output directory per download).",
+             json::object(), json::array(),
+             json{{"title", "Get global options"},
+                  {"readOnlyHint", true},
+                  {"openWorldHint", false}}),
+
+        tool(
+            "falcon_set_global_option",
+            "Change daemon global options (aria2 key names). Supported keys: "
+            "max-overall-download-limit (string, bytes per second; \"0\" or "
+            "\"none\" = unlimited) and max-concurrent-downloads (integer). "
+            "Returns \"OK\" on success; unsupported keys or invalid values fail.",
+            [&] {
+                json p = json::object();
+                p["options"] = prop("object",
+                                    "Options to change: max-overall-download-limit "
+                                    "or max-concurrent-downloads.");
+                return p;
+            }(),
+            json::array({"options"}),
+            json{{"title", "Set global options"},
+                 {"readOnlyHint", false},
+                 {"openWorldHint", false}}),
+
+        tool(
+            "falcon_stop_seeding",
+            "Stop seeding for a completed BitTorrent task. The stop is sticky: it "
+            "survives pause/resume until the task is removed. Fails if the task "
+            "is not currently seeding.",
+            [&] {
+                json p = json::object();
+                p["gid"] = prop("string", "Task id to stop seeding for.");
+                return p;
+            }(),
+            json::array({"gid"}),
+            json{{"title", "Stop seeding"},
+                 {"readOnlyHint", false},
+                 {"openWorldHint", false}}),
     });
 }
 

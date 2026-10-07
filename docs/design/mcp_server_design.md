@@ -100,7 +100,7 @@ FlowDown 的方向：**让 AI 调用外部工具**。falcon 的方向相反：**
 
 ---
 
-## 3. 工具清单（10 个，映射既有 daemon RPC）
+## 3. 工具清单（阶段 1 十个 + 阶段 2 增量 1 三个 = 13 个，映射既有 daemon RPC）
 
 命名 `falcon_` 前缀，参数/返回 JSON Schema 全部显式（`additionalProperties: false`）。
 映射列是既有 aria2 兼容 RPC 方法——MCP 层是**薄适配**，不新写业务逻辑。
@@ -121,9 +121,9 @@ FlowDown 的方向：**让 AI 调用外部工具**。falcon 的方向相反：**
 
 | 工具 | 说明 | 映射 |
 |---|---|---|
-| `falcon_set_global_option` / `falcon_get_global_option` | 全局限速/并发等 | `changeGlobalOption`/`getGlobalOption` |
-| `falcon_stop_seeding` | BT 手动停止做种 | `falcon.stopSeeding` |
-| 进度订阅 | 进度通知经 MCP `notifications`/resource 推送，替代模型轮询 | 复用既有 WS 事件桥 |
+| `falcon_set_global_option` / `falcon_get_global_option` | 全局限速/并发等 | `changeGlobalOption`/`getGlobalOption`（**已实现，2026-10-08 增量 1**——键位白名单不在 MCP 层重复，daemon 侧业务错误经 isError 映射） |
+| `falcon_stop_seeding` | BT 手动停止做种 | `falcon.stopSeeding`（**已实现，2026-10-08 增量 1**——code 1/2 → isError） |
+| 进度订阅 | 进度通知经 MCP `notifications`/resource 推送，替代模型轮询 | 复用既有 WS 事件桥（未实现） |
 
 **轮询指引写进工具描述**：MCP 无推送（阶段 2 前），`falcon_add_download` 的返回描述明确
 「用 falcon_get_task(gid) 轮询 status==complete」——模型自行决定节奏，host 侧有超时兜底。
@@ -185,7 +185,9 @@ FlowDown 的方向：**让 AI 调用外部工具**。falcon 的方向相反：**
 - **阶段 1**（一次增量）：daemon `/mcp` 路由 + initialize/握手/会话 + `tools/list`（10 工具）
   + `tools/call` 翻译层 + daemon.json `mcp` 节 + 单测（握手往返/清单 schema 校验/翻译表
   参数往返/错误语义）+ 真实 host 冒烟（MCP inspector 回环）。README 补接入片段（差距表 #4）。
-- **阶段 2**（独立排队）：stdio 薄壳、进度订阅（notifications/resource）、全局选项与做种工具。
+- **阶段 2**（已开工，2026-10-08）：增量 1 全局选项与做种工具**已实现**
+  （13 工具，见 §3 追加表标注）；剩余增量：stdio 薄壳、进度订阅
+  （notifications/resource）。
 - 明确不做：MCP 客户端、内建 AI 工具、GUI 内嵌对话界面。
 - 文档对账：实现落地时同步 daemon CLAUDE.md/README 标注「已实现」，本文档状态行改写；
   未实现前本文档保持「设计稿」字样（不写假文档）。
