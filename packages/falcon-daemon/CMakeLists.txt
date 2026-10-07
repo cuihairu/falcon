@@ -1,7 +1,10 @@
 cmake_minimum_required(VERSION 3.15)
 
+# 本包 project VERSION 是 falcon-mcp --version 的单一事实源（沿
+# falcon-cli 先例：版本注入前同步升所属包 project VERSION，防自报
+# 版本与发布版静默漂移）
 project(falcon-daemon
-    VERSION 0.1.0
+    VERSION 0.2.0
     DESCRIPTION "Falcon download daemon service"
     LANGUAGES CXX
 )
@@ -196,6 +199,42 @@ if(nlohmann_json_FOUND)
     target_compile_features(falcon-daemon PRIVATE cxx_std_17)
 
     # ============================================================================
+    # MCP stdio 薄壳（falcon-mcp，阶段 2 增量 2）
+    # ============================================================================
+
+    # 桥层：stdin 行协议 ↔ daemon /mcp。仅依赖 nlohmann json + CURL，
+    # 不链 libfalcon-core（设计文档 §4：避免第二个进程内引擎形态）。
+    # 传输经 HttpPostFn 注入——curl 实现（mcp_curl_post）与单测 fake
+    # 走同一桥逻辑。
+    if(CURL_FOUND)
+        add_library(falcon_daemon_mcp_stdio STATIC
+            tools/mcp_stdio.cpp
+            tools/mcp_stdio.hpp
+            tools/mcp_curl_post.cpp
+            tools/mcp_curl_post.hpp
+        )
+
+        target_link_libraries(falcon_daemon_mcp_stdio
+            PUBLIC
+                nlohmann_json::nlohmann_json
+                CURL::libcurl
+        )
+
+        target_include_directories(falcon_daemon_mcp_stdio
+            PUBLIC
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools
+        )
+
+        target_compile_features(falcon_daemon_mcp_stdio PRIVATE cxx_std_17)
+
+        add_executable(falcon-mcp tools/falcon-mcp.cpp)
+        target_link_libraries(falcon-mcp PRIVATE falcon_daemon_mcp_stdio)
+        target_compile_features(falcon-mcp PRIVATE cxx_std_17)
+        target_compile_definitions(falcon-mcp
+            PRIVATE FALCON_MCP_VERSION="${PROJECT_VERSION}")
+    endif()
+
+    # ============================================================================
     # 安装
     # ============================================================================
 
@@ -204,6 +243,12 @@ if(nlohmann_json_FOUND)
     install(TARGETS falcon-daemon
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     )
+
+    if(TARGET falcon-mcp)
+        install(TARGETS falcon-mcp
+            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        )
+    endif()
 
     # ============================================================================
     # 测试

@@ -15,12 +15,19 @@ endif()
 
 enable_testing()
 
-# RPC Tests（含 WebSocket 事件流订阅 + MCP 端点）
+# RPC Tests（含 WebSocket 事件流订阅 + MCP 端点 + MCP stdio 薄壳）
 add_executable(falcon_daemon_rpc_tests
     json_rpc_server_test.cpp
     websocket_test.cpp
     mcp_server_test.cpp
 )
+
+# MCP stdio 薄壳（桥层 fake 单测 + 真 curl 回环 e2e）：
+# 薄壳库仅在 CURL 可用时存在
+if(TARGET falcon_daemon_mcp_stdio)
+    target_sources(falcon_daemon_rpc_tests PRIVATE mcp_stdio_test.cpp)
+    target_link_libraries(falcon_daemon_rpc_tests PRIVATE falcon_daemon_mcp_stdio)
+endif()
 
 target_link_libraries(falcon_daemon_rpc_tests
     PRIVATE

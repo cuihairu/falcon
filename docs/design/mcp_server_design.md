@@ -1,8 +1,9 @@
 # Falcon MCP Server 设计（AI 助手驱动下载）
 
 状态：**阶段 1 已实现**（daemon `/mcp` 端点 + 10 工具翻译层 + Bearer 鉴权/会话管理，
-单测 + 真实二进制冒烟收口，实现对账见 §8）。**阶段 2 已拍板开工（2026-10-08 巡检）**：
-stdio 薄壳/进度订阅/全局选项与做种工具，按 §7 拆原子增量逐项实施（进度见 daemon
+单测 + 真实二进制冒烟收口，实现对账见 §8）。**阶段 2 实施中（2026-10-08 巡检开工）**：
+增量 1 全局选项与做种工具（13 工具）与增量 2 stdio 薄壳（`falcon-mcp`）**已实现**；
+剩余增量：进度订阅（notifications/resource），按 §7 逐项实施（进度见 daemon
 CLAUDE.md 变更记录）。
 调研参考件：[Lakr233/FlowDown](https://github.com/Lakr233/FlowDown)（AGPL-3.0，★1.2k）。
 只参考接口设计与交互形态，不抄代码。
@@ -82,7 +83,7 @@ FlowDown 的方向：**让 AI 调用外部工具**。falcon 的方向相反：**
 | 项 | 决策 | 理由（沿 FlowDown 先例） |
 |---|---|---|
 | 传输 | **Streamable HTTP**：`POST /mcp`（JSON-RPC 2.0 请求，响应 `application/json` 或 `text/event-stream`） | MCP 当前主推形态；FlowDown 只做这一种，工程量与兼容面最优 |
-| stdio | 阶段 2 可选薄壳（`falcon-mcp` 命令转发 daemon RPC） | AI 编码工具（Claude Code 等）生态大量假设 stdio；但 daemon 已有 HTTP 面，薄壳纯转发 |
+| stdio | 阶段 2 可选薄壳（`falcon-mcp` 命令转发 daemon RPC；**已实现，2026-10-08 增量 2**——不链 libfalcon-core，`HttpPostFn` 注入传输） | AI 编码工具（Claude Code 等）生态大量假设 stdio；但 daemon 已有 HTTP 面，薄壳纯转发 |
 | 端点 | daemon 同端口新增 `/mcp` 路由（RPC 端口 6800） | 复用既有监听/鉴权/token 配置，不多开端口 |
 | 会话 | 实现 `Mcp-Session-Id` 响应头 + 后续请求校验 | Streamable HTTP 规范要求；会话表带上界防泄漏 |
 | 鉴权 | `Authorization: Bearer <token>`，复用 daemon `rpc.secret`；daemon 未开 RPC 时 `/mcp` 一并关闭 | 单一事实源，不发明第二套凭据 |
@@ -145,8 +146,10 @@ FlowDown 的方向：**让 AI 调用外部工具**。falcon 的方向相反：**
 - **健壮性沿 FlowDown 客户端三件套反向落实**（服务端视角）：`tools/list` 响应内存快取
   （静态清单，零成本）；会话表有界 + `Mcp-Session-Id` 失效即 404 清理（防泄漏）；
   单会话请求超时沿用 daemon RPC 既有处理。
-- **stdio 薄壳**（阶段 2）：独立小二进制读 stdin 写 stdout，内部转发 daemon HTTP RPC——
-  不链 libfalcon-core，避免第二个进程内引擎形态。
+- **stdio 薄壳**（阶段 2；**已实现，2026-10-08 增量 2**，`falcon-daemon/tools/`）：独立
+  小二进制 `falcon-mcp` 读 stdin 写 stdout，内部转发 daemon HTTP RPC——
+  不链 libfalcon-core，避免第二个进程内引擎形态；传输经 `HttpPostFn` 注入
+  （curl 实现 + 单测 fake 同一桥逻辑）。
 - **不做**：falcon 自身不做 MCP host/客户端（不连接外部 MCP 服务器——falcon 不是 AI
   会话产品，FlowDown 的 MCPService 没有镜像价值）；不做内建 AI 工具（日历/搜索/记忆）。
 
@@ -186,7 +189,8 @@ FlowDown 的方向：**让 AI 调用外部工具**。falcon 的方向相反：**
   + `tools/call` 翻译层 + daemon.json `mcp` 节 + 单测（握手往返/清单 schema 校验/翻译表
   参数往返/错误语义）+ 真实 host 冒烟（MCP inspector 回环）。README 补接入片段（差距表 #4）。
 - **阶段 2**（已开工，2026-10-08）：增量 1 全局选项与做种工具**已实现**
-  （13 工具，见 §3 追加表标注）；剩余增量：stdio 薄壳、进度订阅
+  （13 工具，见 §3 追加表标注）；增量 2 stdio 薄壳 **已实现**（`falcon-mcp`
+  + `falcon_daemon_mcp_stdio` 桥库，见 §2.1/§4 标注）；剩余增量：进度订阅
   （notifications/resource）。
 - 明确不做：MCP 客户端、内建 AI 工具、GUI 内嵌对话界面。
 - 文档对账：实现落地时同步 daemon CLAUDE.md/README 标注「已实现」，本文档状态行改写；

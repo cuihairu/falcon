@@ -6,6 +6,43 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-08 - MCP server 阶段 2 增量 2（stdio 薄壳 falcon-mcp）
+- **新目录 `tools/` 三件**（设计文档 §4 薄壳原则）：
+  - `tools/mcp_stdio.{hpp,cpp}`（`falcon_daemon_mcp_stdio` 静态库）：
+    `McpStdioBridge`——stdin 逐行读 MCP JSON-RPC 消息 → POST daemon
+    `/mcp` → stdout 逐行回写响应体；会话生命周期（任一响应的
+    `Mcp-Session-Id` 头捕获 → 后续请求附带 → 404 清除 → EOF 时 DELETE
+    拆除，best-effort）；通知（202 或 200 空体）静默不写 stdout；传输
+    失败（status 0）仅对带 id 的消息合成 -32603 信封（id 判定用
+    `json::parse(..., allow_exceptions=false)`，非 JSON 行照常转发不
+    合成——薄壳不预校验消息体，daemon 校验请求形状）；Accept 头恒带
+    `application/json, text/event-stream`（spec 要求集，SSE 响应流属
+    进度订阅增量）
+  - `tools/mcp_curl_post.{hpp,cpp}`：`HttpPostFn` 传输注入点的 curl
+    实现（逐请求 easy handle——S3 批次 handle 复用残留教训；DELETE 走
+    `CURLOPT_CUSTOMREQUEST` 不带 POSTFIELDS；`CURLOPT_NOSIGNAL`；
+    `curl_global_init` call_once 进程生命周期不清理——WSAStartup 先例）
+  - `tools/falcon-mcp.cpp`：主程序（`--rpc-url`/`--secret`/`--help`/
+    `--version`；缺值与未知参数 stderr + usage exit 2）
+- **不链 libfalcon-core**（设计文档 §4：避免第二个进程内引擎形态）：
+  桥库仅 nlohmann_json + CURL；CURL 缺席时 `falcon_daemon_mcp_stdio`
+  与 `falcon-mcp` 目标整体不构建
+- **版本单一事实源**：daemon 包 `project(falcon-daemon VERSION 0.2.0)`
+  ——falcon-mcp 注入 `${PROJECT_VERSION}`（沿 falcon-cli 先例：自报
+  版本取所属包 project VERSION，根 project 仍 0.1.0）
+- **测试**：新文件 `tests/mcp_stdio_test.cpp` 9 用例入
+  `falcon_daemon_rpc_tests`（56 → 65；仅 CURL 可用时编入）——fake
+  `HttpPostFn` 8 用例钉桥逻辑（转发与会话捕获 + EOF DELETE/Bearer 与
+  静态头/通知 202 静默/404 清会话且错误体透传/传输失败信封
+  request≠notification/DELETE 拆除一次性与无会话 no-op/空行与行尾 CR
+  容错/非 JSON 行转发不合成）+ 真 curl 回环 e2e 1 用例（initialize →
+  tools/list（恰 13 工具）→ ping 三往返 + DELETE 拆除的服务器侧证据
+  ——拆除后再请求得 404 "re-initialize" 透传）；daemon 门禁全套件
+  473/473；真实二进制冒烟（真 daemon :16899 + 真 falcon-mcp 管道：
+  initialize/tools/list 13 工具逐名核对/--help/--version 0.2.0/未知
+  参数 exit 2）
+- 阶段 2 剩余：进度订阅（SSE/notifications）
+
 ### 2026-10-08 - MCP server 阶段 2 增量 1（全局选项与做种工具，10 → 13）
 - **3 新工具**（设计文档 `docs/design/mcp_server_design.md` §3 阶段 2 追加表）：
   `falcon_get_global_option` → `aria2.getGlobalOption`（无参，返回全量选项表
@@ -300,7 +337,9 @@
 5. **多客户端支持**：无状态 HTTP 请求，天然支持多客户端并发
 6. **MCP 工具面**：同端口 `/mcp` 端点（Model Context Protocol，Streamable
    HTTP，默认关），13 个下载工具暴露给 AI host（Claude Desktop/Code、Cursor
-   等），Bearer 鉴权 + 会话管理，`tools/call` 翻译到既有 aria2 RPC
+   等），Bearer 鉴权 + 会话管理，`tools/call` 翻译到既有 aria2 RPC；
+   另附 stdio 薄壳 `falcon-mcp`（stdin/stdout 行协议转发 `/mcp`，供假设
+   stdio 传输的 AI 编码工具接入）
 
 ### 包内静态库（2026-09-25 拆库，源零改动）
 
@@ -308,6 +347,7 @@
 |---|---|---|
 | `falcon_ws_protocol` | RFC 6455 帧编解码（websocket_frame，零外部依赖） | daemon rpc 两库 + `falcon-swarmd` 包 |
 | `falcon_daemon_core` | DaemonManager 生命周期/信号/停机排水（daemon.cpp） | main.cpp + swarmd main 形态参照 |
+| `falcon_daemon_mcp_stdio` | MCP stdio 桥层（mcp_stdio 行协议 + mcp_curl_post 传输；仅 nlohmann_json + CURL，不链 core） | `falcon-mcp` 可执行 + rpc_tests |
 
 ## 源码结构
 
@@ -337,6 +377,13 @@ packages/falcon-daemon/src/
 └── storage/
     ├── task_storage.hpp/.cpp         # SQLite 持久化（TaskRecord CRUD）
     └── task_storage_listener.hpp/.cpp # IEventListener → 实时落库
+
+packages/falcon-daemon/tools/          # MCP stdio 薄壳（falcon-mcp）
+├── mcp_stdio.hpp/.cpp                 # McpStdioBridge：stdin 行 → POST /mcp
+│                                      #   → stdout 行；会话捕获/附带/404 清除/
+│                                      #   EOF DELETE 拆除；传输失败信封
+├── mcp_curl_post.hpp/.cpp             # HttpPostFn 的 curl 实现（逐请求句柄）
+└── falcon-mcp.cpp                     # 主程序（--rpc-url/--secret/--version）
 ```
 
 ---
@@ -393,6 +440,21 @@ Windows Service Options（仅 Windows）:
   --install-service           安装为 Windows 服务
   --uninstall-service         卸载 Windows 服务
   --service-name <name>       服务名（默认 falcon-daemon）
+```
+
+### MCP stdio 薄壳（falcon-mcp，独立二进制）
+
+```bash
+falcon-mcp [OPTIONS]
+
+  --rpc-url URL   daemon 基址（默认 http://127.0.0.1:6800）
+  --secret TOKEN  Bearer 凭据（daemon rpc.secret；未配则不发 Authorization）
+  -h, --help      显示帮助
+  --version       显示版本（取本包 project VERSION）
+
+# MCP host（如 Claude Code）的 mcpServers 配置示例：
+#   {"command": "/usr/local/bin/falcon-mcp",
+#    "args": ["--rpc-url", "http://127.0.0.1:6800", "--secret", "YOUR_TOKEN"]}
 ```
 
 ### 配置文件（daemon.json）
@@ -542,8 +604,14 @@ Windows Service Options（仅 Windows）:
 | `falcon_set_global_option` | `aria2.changeGlobalOption`（`options` 对象透传；未知键/非法值由 daemon 侧业务错误 code 1 → isError） | — |
 | `falcon_stop_seeding` | `falcon.stopSeeding`（code 1 非做种/code 2 不存在 → isError） | — |
 
-- 阶段 2 排队（未实现）：stdio 薄壳、进度订阅（notifications/SSE）；
-  全局选项与做种工具已于 2026-10-08 增量 1 落地（13 工具）
+- **stdio 薄壳 `falcon-mcp`**（阶段 2 增量 2，2026-10-08 落地）：独立小
+  二进制，stdin 逐行 MCP JSON-RPC → POST `/mcp` → stdout 逐行响应；
+  `Mcp-Session-Id` 自动捕获/附带、404 自动清除（host 重新 initialize 即
+  恢复）、EOF 时 DELETE 拆除会话；Bearer 与 `--secret` 绑定；传输失败
+  （daemon 不可达）对带 id 消息回 -32603 信封、通知静默。不链
+  libfalcon-core——纯转发进程，零引擎形态；CURL 缺席时不构建
+- 阶段 2 排队（未实现）：进度订阅（notifications/SSE）；全局选项与做种
+  工具（增量 1）、stdio 薄壳（增量 2）已落地（13 工具）
 
 ### 查询的存储回落
 
@@ -566,6 +634,7 @@ Windows Service Options（仅 Windows）:
 | Falcon::core / Falcon::protocols | 下载引擎与协议 | 必选 |
 | nlohmann/json | JSON-RPC 编解码 | 必选 |
 | SQLite3 | 任务持久化 | 可选；无 SQLite 时 daemon 可运行但不持久化 |
+| libcurl | falcon-mcp stdio 薄壳转发 / json_rpc_client | 可选；CURL 缺席时 falcon-mcp 与 rpc_client 目标不构建 |
 
 SQLite 可用时 `falcon_daemon_storage` 定义 `FALCON_HAS_SQLITE3`，
 RPC 服务器的 storage 回落分支在该宏内。
@@ -598,7 +667,7 @@ RPC 的 `pauseAll`/`unpauseAll`/`removeDownloadResult`/`purgeDownloadResult`
 
 | 测试目标 | 文件 | 覆盖 |
 |----------|------|------|
-| `falcon_daemon_rpc_tests` | `json_rpc_server_test.cpp` `websocket_test.cpp` `mcp_server_test.cpp` | RPC 基础；WebSocket 帧协议/握手/通知/节流/停机；MCP 握手/会话/鉴权/版本协商/帧语义/工具翻译层 |
+| `falcon_daemon_rpc_tests` | `json_rpc_server_test.cpp` `websocket_test.cpp` `mcp_server_test.cpp` `mcp_stdio_test.cpp` | RPC 基础；WebSocket 帧协议/握手/通知/节流/停机；MCP 握手/会话/鉴权/版本协商/帧语义/工具翻译层；MCP stdio 薄壳桥逻辑（fake 传输 8 用例）+ 真 curl 回环 e2e |
 | `falcon_daemon_rpc_client_tests` | `json_rpc_client_test.cpp` `aria2_snapshots_test.cpp` `websocket_rpc_client_test.cpp` | 客户端 × 真实服务器回环 + 快照转换 + WS 客户端事件流 |
 | `falcon_daemon_rpc_coverage_tests` | `json_rpc_server_coverage_test.cpp` | HTTP 层 + 全方法 |
 | `falcon_daemon_rpc_storage_tests` | `json_rpc_storage_test.cpp` | RPC × storage 集成（回落/删除联动/批量落库/停机回调） |
