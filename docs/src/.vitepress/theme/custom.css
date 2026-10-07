@@ -53,21 +53,12 @@
   --vp-button-alt-active-text: #c2410c;
   --vp-button-alt-active-border: rgba(249, 115, 22, 0.6);
 
-  /* ---- hero ---- */
-  --vp-home-hero-name-color: transparent;
-  --vp-home-hero-name-background: linear-gradient(
-    118deg,
-    #c2410c 0%,
-    #f97316 52%,
-    #fb923c 100%
-  );
-  --vp-home-hero-image-background: radial-gradient(
-    circle,
-    rgba(255, 160, 122, 0.38) 0%,
-    rgba(249, 115, 22, 0.14) 45%,
-    transparent 68%
-  );
-  --vp-home-hero-image-filter: blur(52px);
+  /* ---- hero：名字纯品牌色，去渐变字与光斑背景（2026-10 主题审核批：
+     显式置空而非删除——删除会回落 VitePress 默认蓝紫渐变光斑） ---- */
+  --vp-home-hero-name-color: var(--vp-c-brand-1);
+  --vp-home-hero-name-background: transparent;
+  --vp-home-hero-image-background: transparent;
+  --vp-home-hero-image-filter: none;
 
   /* ---- 提示块：tip 归 brand 橙，info 中性，warning/danger 语义色 ---- */
   --vp-custom-block-info-border: rgba(41, 37, 36, 0.14);
@@ -151,18 +142,9 @@
   --vp-button-alt-active-text: #ffa07a;
   --vp-button-alt-active-border: rgba(255, 160, 122, 0.6);
 
-  --vp-home-hero-name-background: linear-gradient(
-    118deg,
-    #fdba74 0%,
-    #ffa07a 55%,
-    #fb923c 100%
-  );
-  --vp-home-hero-image-background: radial-gradient(
-    circle,
-    rgba(255, 160, 122, 0.3) 0%,
-    rgba(251, 146, 60, 0.1) 45%,
-    transparent 68%
-  );
+  /* 暗色 hero 同 :root——光斑去渐变置空（防回落 VitePress 默认渐变） */
+  --vp-home-hero-image-background: transparent;
+  --vp-home-hero-image-filter: none;
 
   --vp-custom-block-info-border: rgba(255, 255, 255, 0.14);
   --vp-custom-block-info-bg: #1d1917;
