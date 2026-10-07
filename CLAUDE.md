@@ -2,6 +2,16 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-07 - MCP server 阶段 1（daemon `/mcp` 端点 + 10 工具翻译层 + Bearer 鉴权/会话管理）
+- **形态**（设计文档 `docs/design/mcp_server_design.md` 阶段 1 落地，FlowDown 调研反向定位——falcon 做 MCP **server** 把自身暴露为工具，不做 host/客户端）：daemon 同端口新增 `POST /mcp` Streamable HTTP 路由；`mcp.enabled`（默认 false）或 `--enable-mcp`（隐含启用 RPC）开启；AI host（Claude Desktop/Cursor 等）经 10 个下载工具用自然语言驱动下载，tools/call 翻译到既有 aria2 RPC，**零新增业务逻辑**
+- **新文件** `mcp_server.{hpp,cpp}`（挂 `falcon_daemon_core`）：`initialize` 握手（忽略客户端会话头恒新建 32-hex 会话，`Mcp-Session-Id` 响应头；内存表上限 64 满逐最旧）+ 版本协商（`2025-06-18` 默认 + `2025-03-26`，更高回退默认）+ `tools/list` 静态 schema（10 工具全 `additionalProperties:false` + `title` + annotations：`falcon_remove_task`/`falcon_pause_all` 带 `destructiveHint:true`）+ `tools/call` 翻译层（`falcon_add_download` 的 output_dir/filename→dir/out 与 options 白名单 / `falcon_list_tasks` 的 status 聚合——all = tellActive 全量 + tellWaiting/tellStopped(0,100000) 合并统一切片，其余 8 工具直映射）+ `ping`→`{}`
+- **鉴权（与 `/jsonrpc` 的语义差）**：未配 `rpc.secret` 时 `/mcp` **整体 403**（/jsonrpc 未配是跳过校验——MCP 面向 AI host 无凭据不放行）；配了 secret 走 `Authorization: Bearer`，失败 401 + `WWW-Authenticate: Bearer`；鉴权先于方法路由（无凭据 GET 得 401 非 405）
+- **帧语义**：通知（id null）202 / DELETE 204 / GET 405 + `Allow: POST, DELETE`（SSE 响应流属阶段 2）/ 解析失败 400 + -32700 / 数组 batch 400 + -32600（2025-06-18 已移除 batch）/ 非 object 标量 200 + -32600 信封 / 未知方法 -32601；错误三层——协议层 -32602 → JSON-RPC error、业务错误 → `isError:true` + `content[0].text`、dispatch 抛异常 → -32603（json_rpc_server `/mcp` 路由 lambda 异常边界防 terminate）
+- **配置接线**：daemon.json `mcp` 节 + `--enable-mcp` flag + SIGHUP 对 mcp 变化告警 "restart required"（config 解析 → `rpc.mcp_enabled` → json_rpc_server 构造门控，全部 `mcp_enabled==false` 时零路由零开销）
+- **唯一产品缺陷（顺带修复）**：`new_session_id()` 初版循环 4 次产出 64 hex（256 bit）与自身注释「32 hex」矛盾——改 ×2 后 32 hex，测试按契约钉死
+- **测试**：新文件 `mcp_server_test.cpp` 20 用例挂 `falcon_daemon_rpc_tests`（54/54；握手往返/会话 404/鉴权三态/版本协商/全部帧语义/tools list schema 断言/翻译层参数往返与错误语义）+ config 3 用例（`falcon_daemon_config_tests` 31/31）+ daemon 全套件 304/304；真实二进制 curl 冒烟 9 项全过（initialize/tools list/structuredContent 往返/通知 202/DELETE 204/过期会话 404/鉴权 401/未配 secret 403/GET 405）——代替 MCP inspector（本机无该环境，设计文档 §8 对账如实披露）
+- **文档对账**：设计文档状态行改「阶段 1 已实现」+ 文末 §8 实现对账 8 条差异披露；daemon CLAUDE.md changelog/模块职责/CLI 参数/daemon.json schema/对外接口（MCP 工具端点子节 + 工具表）/测试表同步；README 双语 Advanced Features 增「MCP Tool Server/MCP 工具服务」接入片段（host 侧 mcpServers JSON，设计文档差距表 #4）+ 特性 bullet 与路线图；阶段 2（stdio 薄壳/进度订阅/全局选项与做种工具）排队中
+
 ### 2026-10-04 - B23 桌面复选框「隐形」修复（Qt QSS 不支持 data: URI → qrc SVG）+ 亮暗双主题 Xvfb 像素级复验
 - **根因**：`fluent_light.qss`/`fluent_dark.qss` 的 `QCheckBox::indicator` 用 `url(data:image/svg+xml;base64,…)`——**Qt QSS 不支持 data: URI**，图标加载失败零渲染，设置页全部复选框两态不可见（2026-09-28 warm console 批次「checkbox 内嵌 base64 SVG」引入，与「编译不查资源」同族的「加载失败仅 WARNING」静默缺陷；功能点击不受影响故长期未暴露，B21 Xvfb 走查发现）
 - **修法**：4 个 16×16 checkbox SVG（checked = accent 实底圆角方块 + 对比色勾 / unchecked = 中性描边空心框，light/dark 各一对）入 qrc alias，双 QSS 改 `image: url(:/icons/checkbox-*.svg)`；色值全部取既有 token（light #c2410c/#a29a92、dark #ffa07a/#6e665e，与 disabled 文字 token 同源零新 token）

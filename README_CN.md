@@ -44,7 +44,8 @@
   P2SP 分段下载,发布前整文件哈希校验
 - **守护进程与 RPC 服务** (`falcon-daemon`):aria2 兼容 JSON-RPC,同端口 HTTP +
   WebSocket(可直接对接 AriaNg),实时事件流(下载开始/暂停/完成/出错/进度),
-  SQLite 任务持久化与重启恢复,`daemon.json` 配置与 SIGHUP 热重载
+  SQLite 任务持久化与重启恢复,`daemon.json` 配置与 SIGHUP 热重载,
+  MCP 工具端点(`/mcp`,供 AI 助手调用)
 - **桌面应用** (Qt6):Fluent 设计语言、亮暗主题、无边框窗口、表格/网格双任务视图、
   云盘浏览、资源搜索、双后端(进程内引擎或 Daemon RPC + WebSocket 事件刷新)
 - **命令行工具** (`falcon-cli`):60+ 个 aria2 兼容参数、批量输入文件、JSON 配置
@@ -201,6 +202,29 @@ OSS、腾讯云 COS、七牛云 Kodo、又拍云：列举、树形视图、对�
 `libfalcon-storage` 实现 `ResourceBrowser` 接口，覆盖 FTP、SFTP、S3、OSS、COS、
 Kodo、又拍云——格式化树/表格列举、路径校验、递归操作。桌面云盘页面即基于它构建。
 
+### MCP 工具服务
+daemon 在 `POST /mcp` 暴露 MCP（Model Context Protocol）端点（Streamable HTTP，
+与 RPC 同端口）。Claude Desktop、Cursor 等 AI 宿主可以列出并调用 10 个下载工具
+（`falcon_add_download`、`falcon_list_tasks`、`falcon_get_task`、暂停/恢复/移除、
+全局暂停/恢复、全局统计、任务文件清单）——用自然语言说「把这个链接下下来」「下到
+哪一步了」即可驱动下载。以 `--enable-mcp` 或 `daemon.json` 的
+`"mcp": {"enabled": true}` 开启；鉴权复用 `rpc.secret`（`Authorization: Bearer`，
+未配置 secret 时端点拒绝一切请求）。宿主侧配置（Streamable HTTP）：
+
+```json
+{
+  "mcpServers": {
+    "falcon": {
+      "url": "http://127.0.0.1:6800/mcp",
+      "headers": { "Authorization": "Bearer <你的 rpc.secret>" }
+    }
+  }
+}
+```
+
+阶段 2（stdio 薄壳、进度订阅、做种工具）排队中；完整契约见
+`docs/design/mcp_server_design.md`。
+
 ## 界面原型
 
 桌面端主视图当前采用「warm console」主题（变体 A），另有一版「cold utility」
@@ -319,7 +343,7 @@ HTTP、FTP、BitTorrent、SFTP、WebDAV、Metalink、云存储、资源浏览/�
 - [x] HTTP/HTTPS、FTP/FTPS 插件
 - [x] Metalink 下载（多镜像 P2SP 分段 + 整文件哈希校验）
 - [x] 命令行工具（60+ aria2 兼容参数）
-- [x] Daemon：aria2 兼容 JSON-RPC（HTTP + WebSocket 事件流）、SQLite 持久化、SIGHUP 热重载
+- [x] Daemon：aria2 兼容 JSON-RPC（HTTP + WebSocket 事件流）、SQLite 持久化、SIGHUP 热重载、MCP 工具端点（10 下载工具）
 - [x] 桌面应用（Qt6，Fluent 设计、亮暗主题、云盘浏览）
 - [x] 私有协议支持（迅雷、QQDL、FlashGet、ED2K）
 - [x] SFTP、WebDAV 协议（libssh2 / libcurl 数据面）

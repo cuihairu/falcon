@@ -6,6 +6,54 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-07 - MCP server 阶段 1（/mcp 端点 + 10 工具翻译层 + Bearer 鉴权/会话管理）
+- **新文件 `src/rpc/mcp_server.{hpp,cpp}`**：MCP（Model Context Protocol）
+  Streamable HTTP 端点，与 `/jsonrpc` 同端口复用既有监听/token 配置——
+  `initialize` 握手（协议版本协商 2025-06-18 默认 / 2025-03-26，更高版本回退
+  默认；`capabilities.tools`；`serverInfo{falcon, version}`；忽略客户端会话头
+  恒新建 32-hex 会话回 `Mcp-Session-Id`）、会话表（进程内存，上限 64 满逐最旧，
+  无效/过期会话 404）、`tools/list`（10 工具静态 schema，`additionalProperties:
+  false`，annotations 与设计一致——`falcon_remove_task`/`falcon_pause_all` 标
+  `destructiveHint`）、`tools/call` 翻译层（工具名 → 既有 aria2 RPC 方法参数
+  翻译，零新增业务逻辑）、通知（无 id）202 / DELETE 204 / GET 405 +
+  `Allow: POST, DELETE`、解析失败 400+-32700、batch 数组 400+-32600（2025-06-18
+  已移除 batch）、非 object 标量 200+-32600
+- **鉴权**：`Authorization: Bearer <rpc.secret>`；**未配 secret 时 `/mcp` 整体
+  403**（比 `/jsonrpc` 未配 secret 跳过校验更严——MCP 是 AI host 驱动的工具面，
+  匿名暴露直接拒绝）；鉴权先于方法路由（无凭据 GET 得 401 而非 405）
+- **错误三层**：协议层 -32602（缺 name/urls/未知工具/参数形状）→ JSON-RPC error
+  形状；业务错误 dispatch 返回 `{error:{code,message}}` → `isError:true` +
+  `content[0].text="Error(<code>): <message>"`（不下发 structuredContent）；
+  dispatch 抛异常 → `/mcp` 路由的 lambda catch → -32603 "Internal error"
+  （异常边界，防 terminate 整个 daemon）
+- **翻译层语义**：`falcon_add_download`（`urls` 非空字符串数组 + `output_dir`/
+  `filename` → options `dir`/`out`，与 options 内同名键冲突或白名单外键 →
+  业务错误）经 `aria2.addUri`；`falcon_list_tasks`（status 白名单
+  active|waiting|stopped|all 默认 all，offset 默认 0 / limit 默认 50，
+  非 Negative；waiting/stopped 走 aria2 原生 `(offset,limit)` 分页，all =
+  `tellActive` 全量 + `tellWaiting(0,100000)` + `tellStopped(0,100000)` 三队列
+  合并后统一切片，任一队列 error 透传）；`falcon_get_task`/`pause_task`/
+  `resume_task`/`remove_task`（force → forceRemove）/`pause_all`/`resume_all`/
+  `get_global_stats`/`get_task_files` 直映射对应 aria2 方法
+- **配置接线**：daemon.json 新增 `"mcp":{"enabled":true}` 节（默认 false；
+  未知键告警、类型错误报错，与其余节一致）；CLI `--enable-mcp[=true|false]`
+  （启用时隐含启用 RPC）；SIGHUP 重载对 mcp 变化告警 "restart required"
+  （端点在服务器构造期装配，不热更）
+- **测试**：`mcp_server_test.cpp` 20 用例入 `falcon_daemon_rpc_tests`（54/54：
+  握手往返/会话忽略与新建/版本协商矩阵/过期会话 404/鉴权 401/未配 secret 403/
+  通知 202/DELETE 204/405/batch 拒绝/标量 body/未知方法/10 工具清单 schema 逐项
+  校验（additionalProperties/required/annotations）/翻译层参数往返与冲突/错误
+  三层/工具面最小化断言）；config_tests 3 用例（mcp 节 enabled 解析/未知键告警/
+  类型错误，31/31）；daemon 全套件 ctest 304/304；真实二进制 curl 冒烟 9 项
+  全过（initialize 200 + 32-hex 会话 + serverInfo、tools/list 恰 10 工具、
+  get_global_stats/list_tasks structuredContent 往返、通知 202、DELETE 204、
+  过期会话 404、无凭据 401、无凭据 GET 鉴权先行 401、带凭据 GET 405+Allow）
+- **修复（本批唯一产品缺陷，冒烟+测试钉出）**：`new_session_id()` 初版循环
+  4 次产出 64 hex（256 bit），与自身注释「32 hex（128 bit）」及设计契约矛盾
+  ——改 ×2 后 32 hex，测试按设计契约钉死
+- 设计文档 `docs/design/mcp_server_design.md` 状态行改「阶段 1 已实现」+ §8
+  实现对账（响应无 SSE/GET 405、list all 聚合形态、鉴权基线差异等逐条披露）
+
 ### 2026-10-01 - 任务进度持久化两处精度缺陷修复（98d1cf5）
 - **终态字节回退**：TaskStorageListener 落库进度按 1s 节流，任务在两次节流窗之间完成时库里最后一条记录缺最终字节——完成路径补终态字节写入（downloaded/total 以引擎终态值为准）
 - **totalLength 恒 0**：tellStatus/落库的 totalLength 字段在未知总长（chunked 等）路径恒 0——区分「未知」与「零」语义，落库改存引擎实际值
@@ -233,6 +281,9 @@
    Falcon 扩展进度通知
 4. **任务持久化**：SQLite 状态/进度实时落库，停机保存、重启恢复
 5. **多客户端支持**：无状态 HTTP 请求，天然支持多客户端并发
+6. **MCP 工具面**：同端口 `/mcp` 端点（Model Context Protocol，Streamable
+   HTTP，默认关），10 个下载工具暴露给 AI host（Claude Desktop/Code、Cursor
+   等），Bearer 鉴权 + 会话管理，`tools/call` 翻译到既有 aria2 RPC
 
 ### 包内静态库（2026-09-25 拆库，源零改动）
 
@@ -254,6 +305,10 @@ packages/falcon-daemon/src/
 ├── rpc/
 │   ├── json_rpc_server.hpp/.cpp  # aria2 兼容 JSON-RPC 2.0 服务器（28 个方法）
 │   │                             #   + WebSocket 升级与通知广播（RpcEventBridge）
+│   │                             #   + /mcp 路由（McpServer 委托 + 异常边界）
+│   ├── mcp_server.hpp/.cpp       # MCP Streamable HTTP 端点（initialize 握手/
+│   │                             #   会话表/tools/list 静态 schema/tools/call
+│   │                             #   翻译层；与 /jsonrpc 同端口同鉴权事实源）
 │   ├── websocket_frame.hpp/.cpp  # RFC 6455 帧编解码（握手应答/掩码/分片，
 │   │                             #   自实现 SHA1+base64，无 OpenSSL 依赖）
 │   ├── websocket_rpc_client.hpp/.cpp # WebSocket JSON-RPC 客户端（单连接
@@ -306,6 +361,10 @@ RPC Options:
   --rpc-allow-origin-all      附加 CORS 头（Access-Control-Allow-Origin: *）
   --rpc-listen-host <ip>      绑定地址（默认 127.0.0.1）
 
+MCP Options:
+  --enable-mcp[=true|false]   启用 MCP 端点 /mcp（默认 false；启用时隐含启用 RPC；
+                              未配 rpc.secret 时端点整体 403 拒绝）
+
 Daemon Options:
   -d, --daemon                后台守护进程模式（POSIX）
   --pid-file <path>           PID 文件路径
@@ -335,6 +394,9 @@ Windows Service Options（仅 Windows）:
     "secret": "YOUR_TOKEN",
     "allow_origin_all": false
   },
+  "mcp": {
+    "enabled": true
+  },
   "daemon": {
     "run_as_daemon": false,
     "pid_file": "/var/run/falcon-daemon.pid",
@@ -360,9 +422,10 @@ Windows Service Options（仅 Windows）:
 `ExecReload=/bin/kill -HUP $MAINPID`）会重读启动时实际生效的配置
 文件。可热更项立即生效：`rpc.secret`/`rpc.allow_origin_all`（已建立
 的连接不受影响）与 `download` 节（引擎 setter 运行时可调）；监听
-地址/端口、`storage.task_db_path`、`daemon` 节各项变化仅告警
-"restart required"。重载失败（文件缺失/JSON 非法）保持现有配置继续
-运行。`--no-conf` 启动时无文件可重载，SIGHUP 记日志跳过。
+地址/端口、`mcp.enabled`、`storage.task_db_path`、`daemon` 节各项
+变化仅告警"restart required"。重载失败（文件缺失/JSON 非法）保持
+现有配置继续运行。`--no-conf` 启动时无文件可重载，SIGHUP 记日志
+跳过。
 
 ---
 
@@ -423,6 +486,45 @@ Windows Service Options（仅 Windows）:
 - 对接示例（AriaNg：WebSocket 服务地址填同一 `host:port`、路径 `/jsonrpc`）；
   停机时服务器主动关闭全部订阅连接
 
+### MCP 工具端点（AI host 接入，设计文档 `docs/design/mcp_server_design.md`）
+
+- 端点：`http://<host>:<port>/mcp`（与 RPC 同端口），Streamable HTTP，
+  仅 POST/DELETE；`mcp.enabled`（默认 **false**）或 `--enable-mcp` 开启
+  （开启时隐含启用 RPC）
+- 鉴权：`Authorization: Bearer <rpc.secret>`；**未配置 secret 时端点整体
+  403**（与 `/jsonrpc` 未配 secret 跳过校验的语义不同——MCP 面向 AI host，
+  无凭据不放行）；凭据错误 401 + `WWW-Authenticate: Bearer`；鉴权先于
+  方法路由（无凭据 GET 得 401 而非 405）
+- 会话：`initialize` 忽略客户端会话头，恒新建 32-hex 会话经
+  `Mcp-Session-Id` 响应头返回；后续请求校验，无效/过期会话 404；内存表
+  上限 64（满逐最旧）；`DELETE /mcp` 释放会话回 204
+- 版本协商：支持 `2025-06-18`（默认）与 `2025-03-26`；客户端声明的更高
+  版本回退默认
+- 帧语义：通知（id null）回 202；`GET /mcp` 405 + `Allow: POST, DELETE`
+  （SSE 响应流属阶段 2）；解析失败 400 + -32700；数组 batch 400 + -32600
+  （2025-06-18 已移除 batch）；非 object 标量 body 200 + -32600 信封；
+  未知方法 -32601；`ping` → `{}`
+- 错误三层：协议层参数形状 → JSON-RPC error（-32602）；业务错误（gid
+  不存在等）→ `isError: true` + `content[0].text = "Error(<code>):
+  <message>"`；翻译层/分发抛异常 → -32603（异常边界防 terminate）
+- 工具清单（`tools/list` 静态 schema，全部 `additionalProperties:false` +
+  `title` + annotations；`tools/call` 翻译到既有 aria2 RPC，零新增业务
+  逻辑；成功结果 `structuredContent` 携带与 text 一致的结构体）：
+
+| 工具 | 映射 | annotations 要点 |
+|------|------|------------------|
+| `falcon_add_download` | `aria2.addUri`（`output_dir`/`filename`→`dir`/`out`；`options` 白名单外键报 Unsupported option；同名键冲突报 Conflicting arguments） | `readOnlyHint:false` |
+| `falcon_list_tasks` | `tellActive`+`tellWaiting`+`tellStopped` 聚合（`status` 默认 all：三队列合并后按 offset/limit 切片） | `readOnlyHint:true` |
+| `falcon_get_task` | `aria2.tellStatus`（含 BT 做种扩展字段） | `readOnlyHint:true` |
+| `falcon_pause_task` / `falcon_resume_task` | `aria2.pause` / `aria2.unpause` | — |
+| `falcon_remove_task` | `aria2.remove` / `forceRemove`（`force:true`） | `destructiveHint:true` |
+| `falcon_pause_all` / `falcon_resume_all` | `aria2.pauseAll` / `unpauseAll` | `pause_all` 带 `destructiveHint:true` |
+| `falcon_get_global_stats` | `aria2.getGlobalStat` | `readOnlyHint:true` |
+| `falcon_get_task_files` | `aria2.getFiles` | `readOnlyHint:true` |
+
+- 阶段 2 排队（未实现）：stdio 薄壳、进度订阅（notifications/SSE）、
+  全局选项与做种工具（`falcon.stopSeeding` 等）
+
 ### 查询的存储回落
 
 引擎内存态优先；`gid → TaskId` 在引擎查不到时回落 TaskStorage
@@ -476,7 +578,7 @@ RPC 的 `pauseAll`/`unpauseAll`/`removeDownloadResult`/`purgeDownloadResult`
 
 | 测试目标 | 文件 | 覆盖 |
 |----------|------|------|
-| `falcon_daemon_rpc_tests` | `json_rpc_server_test.cpp` `websocket_test.cpp` | RPC 基础；WebSocket 帧协议/握手/通知/节流/停机 |
+| `falcon_daemon_rpc_tests` | `json_rpc_server_test.cpp` `websocket_test.cpp` `mcp_server_test.cpp` | RPC 基础；WebSocket 帧协议/握手/通知/节流/停机；MCP 握手/会话/鉴权/版本协商/帧语义/工具翻译层 |
 | `falcon_daemon_rpc_client_tests` | `json_rpc_client_test.cpp` `aria2_snapshots_test.cpp` `websocket_rpc_client_test.cpp` | 客户端 × 真实服务器回环 + 快照转换 + WS 客户端事件流 |
 | `falcon_daemon_rpc_coverage_tests` | `json_rpc_server_coverage_test.cpp` | HTTP 层 + 全方法 |
 | `falcon_daemon_rpc_storage_tests` | `json_rpc_storage_test.cpp` | RPC × storage 集成（回落/删除联动/批量落库/停机回调） |

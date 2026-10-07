@@ -2,6 +2,8 @@
 
 #include <falcon/download_engine.hpp>
 
+#include <nlohmann/json.hpp>
+
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -22,12 +24,15 @@ namespace falcon::daemon::rpc {
 
 class RpcEventBridge;
 class WsClientState;
+class McpServer;
 
 struct JsonRpcServerConfig {
     uint16_t listen_port = 6800;
     std::string secret;
     bool allow_origin_all = false;
     std::string bind_address = "127.0.0.1";
+    /// MCP Streamable HTTP 端点（/mcp，与 JSON-RPC 同端口同进程）
+    bool mcp_enabled = false;
     /// Falcon 扩展通知 falcon.onProgress 的每任务推送节流间隔
     std::chrono::milliseconds progress_push_interval{1000};
 };
@@ -66,6 +71,12 @@ public:
     /// 运行时热更新认证配置（SIGHUP 配置重载用），线程安全；
     /// 对后续到达的请求立即生效，已建立的 WebSocket 会话不受影响。
     void update_auth(std::string secret, bool allow_origin_all);
+
+    /// aria2/system 方法分发（原 handle_jsonrpc 内联 lambda 提取），
+    /// MCP tools/call 翻译层复用同一方法面。params 为 JSON-RPC 形状
+    ///（token 剥离后原样进入各 handler，形状随方法而定）；返回
+    /// result，或 {"error":{code,message}} 形状的业务错误。
+    nlohmann::json dispatch_rpc(const std::string& method, nlohmann::json params);
 
 private:
     /// auth 配置的带锁读取（会被配置重载并发更新，禁止直读 config_）
@@ -109,6 +120,9 @@ private:
 
     // 引擎事件 → 通知广播桥（生命周期与 server 一致；start/stop 时挂接）
     std::unique_ptr<RpcEventBridge> event_bridge_;
+
+    // MCP Streamable HTTP 端点协议层（/mcp 路由；config_.mcp_enabled 门控）
+    std::unique_ptr<McpServer> mcp_;
 
     int listen_fd_ = -1;
 };

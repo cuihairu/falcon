@@ -15,10 +15,11 @@ endif()
 
 enable_testing()
 
-# RPC Tests（含 WebSocket 事件流订阅）
+# RPC Tests（含 WebSocket 事件流订阅 + MCP 端点）
 add_executable(falcon_daemon_rpc_tests
     json_rpc_server_test.cpp
     websocket_test.cpp
+    mcp_server_test.cpp
 )
 
 target_link_libraries(falcon_daemon_rpc_tests

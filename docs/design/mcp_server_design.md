@@ -1,6 +1,8 @@
 # Falcon MCP Server 设计（AI 助手驱动下载）
 
-状态：**设计稿，未实现**。本文档先落协议契约与工具清单，实现分阶段排队。
+状态：**阶段 1 已实现**（daemon `/mcp` 端点 + 10 工具翻译层 + Bearer 鉴权/会话管理，
+单测 + 真实二进制冒烟收口，实现对账见 §8）。阶段 2（stdio 薄壳/进度订阅/全局选项与
+做种工具）排队中。
 调研参考件：[Lakr233/FlowDown](https://github.com/Lakr233/FlowDown)（AGPL-3.0，★1.2k）。
 只参考接口设计与交互形态，不抄代码。
 
@@ -186,3 +188,33 @@ FlowDown 的方向：**让 AI 调用外部工具**。falcon 的方向相反：**
 - 明确不做：MCP 客户端、内建 AI 工具、GUI 内嵌对话界面。
 - 文档对账：实现落地时同步 daemon CLAUDE.md/README 标注「已实现」，本文档状态行改写；
   未实现前本文档保持「设计稿」字样（不写假文档）。
+
+---
+
+## 8. 实现对账（阶段 1，2026-10-07）
+
+阶段 1 落地与本文档契约的差异如实披露（未列处逐条一致）：
+
+- **响应形态**：阶段 1 只回 `application/json`，未实现 `text/event-stream` 响应流
+  （进度订阅属阶段 2）；`GET /mcp`（SSE 监听位）回 405 + `Allow: POST, DELETE`。
+- **协议版本**：支持 `2025-06-18`（默认）与 `2025-03-26`；客户端声明的更高版本
+  回退默认版本。
+- **`falcon_list_tasks` 聚合形态**：`status=waiting|stopped` 走 aria2 原生
+  `(offset, limit)` 分页；`all`（默认）= `tellActive`（全量）+ `tellWaiting(0,100000)`
+  + `tellStopped(0,100000)` 三队列合并后统一切片——aria2 的三个 tell* 队列没有
+  贯通的分页游标，聚合只能在翻译层切。
+- **鉴权基线**：`mcp.enabled` 且**未配 `rpc.secret` 时 `/mcp` 整体 403**（§5
+  「未配 secret 拒绝一切请求」的落地形态）；配了 secret 走
+  `Authorization: Bearer`，失败 401 + `WWW-Authenticate: Bearer`。注意与
+  `/jsonrpc` 的语义差：后者未配 secret 是跳过校验放行。鉴权先于方法路由
+  （无凭据 GET 得 401 而非 405）。
+- **会话表**：进程内存表，上限 64（满逐最旧）；`initialize` 忽略客户端携带的
+  会话头恒新建会话。
+- **batch 与标量**：数组 batch 回 400 + -32600（2025-06-18 已移除 batch）；
+  非 object 标量 body 回 200 + -32600 信封（落进 JSON-RPC 分发的请求形状校验）。
+- **冒烟形态**：设计写「MCP inspector 回环」，实际以 curl 回环 9 项代替
+  （initialize 握手 + tools/list 清单 + structuredContent 往返 + 通知 202 /
+  DELETE 204 / 过期会话 404 / 鉴权 401 / 未配 secret 403 / GET 405）——
+  本机无 inspector 运行环境。
+- **顺带修复的产品缺陷**：`new_session_id()` 初版循环 4 次产出 64 hex（256 bit），
+  与自身注释「32 hex（128 bit）」矛盾——改 ×2 后 32 hex，测试按本契约钉死。

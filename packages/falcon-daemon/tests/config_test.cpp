@@ -408,6 +408,40 @@ TEST(ConfigTest, DownloadHttpEngineTypeMismatchFails) {
 
 
 // 批次 Y：HOME 未设置时默认配置目录回落 /etc/falcon（而非崩溃或空串）
+// MCP 端点配置（daemon.json "mcp" 节）
+TEST(ConfigTest, McpSectionEnabledParses) {
+    const TempFile file(
+        write_config(R"({ "mcp": { "enabled": true } })"));
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    ASSERT_TRUE(result.ok) << result.error;
+    EXPECT_TRUE(result.warnings.empty());
+    EXPECT_TRUE(c.rpc.mcp_enabled);
+}
+
+TEST(ConfigTest, McpSectionUnknownKeyWarns) {
+    const TempFile file(write_config(
+        R"({ "mcp": { "enabled": true, "port": 1234 } })"));
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    ASSERT_TRUE(result.ok) << result.error;
+    ASSERT_EQ(result.warnings.size(), 1u);
+    EXPECT_NE(result.warnings[0].find("unknown key in 'mcp' section: port"),
+              std::string::npos)
+        << result.warnings[0];
+    EXPECT_TRUE(c.rpc.mcp_enabled);
+}
+
+TEST(ConfigTest, McpEnabledTypeMismatchFails) {
+    const TempFile file(
+        write_config(R"({ "mcp": { "enabled": "yes" } })"));
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    EXPECT_FALSE(result.ok);
+    EXPECT_NE(result.error.find("invalid type for key 'enabled'"),
+              std::string::npos);
+}
+
 TEST(ConfigTest, DefaultConfigDirFallsBackWithoutHome) {
 #ifdef _WIN32
     GTEST_SKIP() << "POSIX-only: unsetenv HOME 分支";

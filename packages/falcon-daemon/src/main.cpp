@@ -44,7 +44,9 @@ void show_help() {
         << "  --rpc-listen-port <port>    Listen port (default: 6800)\n"
         << "  --rpc-secret <token>        Require token:<token> in JSON-RPC params\n"
         << "  --rpc-allow-origin-all      Add CORS headers (Access-Control-Allow-Origin: *)\n"
-        << "  --rpc-listen-host <ip>      Bind address (default: 127.0.0.1)\n\n"
+        << "  --rpc-listen-host <ip>      Bind address (default: 127.0.0.1)\n"
+        << "  --enable-mcp[=true|false]   Enable MCP endpoint at /mcp (default: false;\n"
+        << "                              implies --enable-rpc; requires --rpc-secret)\n\n"
         << "Daemon Options:\n"
         << "  -d, --daemon                Run as background daemon\n"
         << "  --pid-file <path>           PID file path\n"
@@ -158,6 +160,14 @@ int main(int argc, char* argv[]) {
             rpc_config.bind_address = argv[++i];
             continue;
         }
+        if (arg == "--enable-mcp") {
+            rpc_config.mcp_enabled = true;
+            continue;
+        }
+        if (arg.rfind("--enable-mcp=", 0) == 0) {
+            rpc_config.mcp_enabled = parse_bool(arg.substr(std::strlen("--enable-mcp=")), true);
+            continue;
+        }
 
         // Daemon options
         if (arg == "-d" || arg == "--daemon") {
@@ -211,6 +221,12 @@ int main(int argc, char* argv[]) {
         std::cerr << "Unknown argument: " << arg << "\n";
         std::cerr << "Use --help to see options.\n";
         return 1;
+    }
+
+    // MCP 端点与 JSON-RPC 同端口同进程：启用 MCP 隐含启用 RPC
+    //（配置文件路径同样受益——mcp.enabled 已在上方的文件加载阶段写入）
+    if (rpc_config.mcp_enabled) {
+        enable_rpc = true;
     }
 
 #ifdef _WIN32
@@ -488,6 +504,10 @@ int main(int argc, char* argv[]) {
                 // 的续传布局恢复（V2 稀疏临时文件 vs V1 前缀布局）
                 if (new_download.http_engine != download_config.http_engine) {
                     FALCON_LOG_WARN_STREAM("Config reload: download.http_engine changed, "
+                                         "restart required to apply");
+                }
+                if (new_rpc.mcp_enabled != rpc_config.mcp_enabled) {
+                    FALCON_LOG_WARN_STREAM("Config reload: rpc mcp settings changed, "
                                          "restart required to apply");
                 }
                 if (new_task_db != task_db_path) {

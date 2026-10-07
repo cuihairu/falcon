@@ -121,7 +121,7 @@ ConfigLoadResult apply_config_file(const std::string& path,
     }
 
     // 允许的节与各节键集合（未知键告警不失败——向前兼容）
-    const std::string known_sections[] = {"rpc", "daemon", "storage", "download"};
+    const std::string known_sections[] = {"rpc", "daemon", "storage", "download", "mcp"};
 
     for (auto it = root.begin(); it != root.end(); ++it) {
         bool known = false;
@@ -231,6 +231,16 @@ ConfigLoadResult apply_config_file(const std::string& path,
                 download_config.http_engine = value;
             }
         }
+    }
+
+    if (root.contains("mcp")) {
+        const auto& mcp = root.at("mcp");
+        if (!mcp.is_object()) {
+            result.error = "'mcp' section must be an object";
+            return result;
+        }
+        warn_unknown_keys(mcp, {"enabled"}, "mcp", result.warnings);
+        if (!read_key(mcp, "enabled", rpc_config.mcp_enabled, result.error)) return result;
     }
 
     result.ok = true;

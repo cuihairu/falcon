@@ -50,7 +50,7 @@ lives in [docs/design/ui-sandbox/](docs/design/ui-sandbox/README.md).
 - **Daemon & RPC Service** (`falcon-daemon`): aria2-compatible JSON-RPC over HTTP +
   WebSocket on a single port (works with AriaNg), live event stream (download start /
   pause / complete / error / progress), SQLite task persistence with restart recovery,
-  `daemon.json` config with SIGHUP hot reload
+  `daemon.json` config with SIGHUP hot reload, MCP tool endpoint (`/mcp`) for AI hosts
 - **Desktop Application** (Qt6): Fluent-design UI, light/dark themes, frameless window,
   table & grid task views, cloud storage browsing, resource search, dual backend
   (in-process engine or daemon RPC with WebSocket event refresh)
@@ -212,6 +212,30 @@ library API for integration.
 `libfalcon-storage` implements the `ResourceBrowser` interface for FTP, SFTP, S3, OSS,
 COS, Kodo, and Upyun — format-tree/table listings, path validation, and recursive
 operations. The desktop cloud storage page is built on it.
+
+### MCP Tool Server
+The daemon exposes an MCP (Model Context Protocol) endpoint at `POST /mcp` (Streamable
+HTTP, same port as the RPC). AI hosts such as Claude Desktop or Cursor can list and call
+10 download tools (`falcon_add_download`, `falcon_list_tasks`, `falcon_get_task`,
+pause/resume/remove, pause_all/resume_all, global stats, task files) — add a URL and ask
+"what's the progress?" in natural language. Enable it with `--enable-mcp` or
+`daemon.json` `"mcp": {"enabled": true}`; auth reuses `rpc.secret` via
+`Authorization: Bearer` (the endpoint refuses all requests when no secret is configured).
+Host-side configuration (Streamable HTTP):
+
+```json
+{
+  "mcpServers": {
+    "falcon": {
+      "url": "http://127.0.0.1:6800/mcp",
+      "headers": { "Authorization": "Bearer <your rpc.secret>" }
+    }
+  }
+}
+```
+
+Stage 2 (stdio wrapper, progress subscription, seeding tools) is planned; see
+`docs/design/mcp_server_design.md` for the full contract.
 
 ## UI Prototypes
 
