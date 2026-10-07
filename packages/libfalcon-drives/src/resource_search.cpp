@@ -281,6 +281,12 @@ public:
     }
 
     std::string get(const std::string& url) {
+        // 状态与缓冲先清零：上次请求的残留不得混入本次
+        //（失败路径保留 response_ 的旧行为意味着部分数据会 prepend
+        // 到下一次成功响应前——一并修正）
+        last_status_ = 0;
+        response_.clear();
+
         curl_easy_setopt(curl_, CURLOPT_URL, url.c_str());
         curl_easy_setopt(curl_, CURLOPT_WRITEFUNCTION, WriteCallback);
         curl_easy_setopt(curl_, CURLOPT_WRITEDATA, &response_);
@@ -295,16 +301,25 @@ public:
             return "";
         }
 
+        long status = 0;
+        curl_easy_getinfo(curl_, CURLINFO_RESPONSE_CODE, &status);
+        last_status_ = status;
+
         std::string result = response_;
         response_.clear();
 
         return result;
     }
 
+    /// 最近一次 get() 的 HTTP 状态码（网络失败 = 0；供调用方区分
+    /// 「站点不存在」与「站点活着但内容不是预期」——比正文嗅探可靠）
+    long last_status() const { return last_status_; }
+
 private:
     CURL* curl_;
     curl_slist* headers_ = nullptr;
     std::string response_;
+    long last_status_ = 0;
 };
 
 /**
@@ -357,7 +372,24 @@ public:
     bool is_available() override {
         std::string test_url = config_.base_url;
         std::string response = crawler_->get(test_url);
-        return !response.empty() && response.find("404") == std::string::npos;
+        long status = crawler_->last_status();
+
+        // 可用性按 HTTP 状态判定，不再嗅探正文（旧实现「正文含 404
+        // 即不可用」会把根页提到 404 字样的正常站点误杀，且对根路径
+        // 真实 404 的 API 型站点反而放行）。
+        if (status == 0) {
+            FALCON_LOG_WARN_STREAM("Search engine " << config_.name
+                                 << " unreachable: " << config_.base_url);
+            return false;
+        }
+        if (status >= 400) {
+            FALCON_LOG_WARN_STREAM("Search engine " << config_.name
+                                 << " base_url returned HTTP " << status
+                                 << ", skipped: " << config_.base_url);
+            return false;
+        }
+        (void)response; // 正文不再参与判定（2xx/3xx 即视为可达）
+        return true;
     }
 
     int get_delay() const override {
@@ -474,64 +506,107 @@ private:
         return result;
     }
 
-    std::vector<SearchResult> parse_json_response(const std::string& json_str) {
+    // ---- 宽容取值助手：站点 JSON 字段类型不可控（字符串数字/浮点
+    // size/null 混杂常见），单个字段类型错误只损失该字段（落缺省值），
+    // 绝不连坐丢弃该引擎全部结果
+    static std::string json_str(const nlohmann::json& item, const char* key) {
+        if (!item.contains(key)) return {};
+        const auto& v = item[key];
+        if (v.is_string()) return v.get<std::string>();
+        if (v.is_number_unsigned()) return std::to_string(v.get<uint64_t>());
+        if (v.is_number_integer()) return std::to_string(v.get<long long>());
+        if (v.is_number_float()) return std::to_string(v.get<double>());
+        return {};
+    }
+
+    static int json_int(const nlohmann::json& item, const char* key) {
+        if (!item.contains(key)) return 0;
+        const auto& v = item[key];
+        try {
+            if (v.is_number_unsigned()) {
+                uint64_t n = v.get<uint64_t>();
+                return n <= 2147483647ull ? static_cast<int>(n) : 0;
+            }
+            if (v.is_number_integer()) return v.get<int>();
+            if (v.is_number_float()) return static_cast<int>(v.get<double>());
+            if (v.is_string()) return std::stoi(v.get<std::string>());
+        } catch (const std::exception&) {
+            // 垃圾文本 → 缺省 0
+        }
+        return 0;
+    }
+
+    static uint64_t json_size(const nlohmann::json& item, const char* key) {
+        if (!item.contains(key)) return 0;
+        const auto& v = item[key];
+        if (v.is_number_unsigned()) return v.get<uint64_t>();
+        if (v.is_number_integer()) {
+            long long n = v.get<long long>();
+            return n > 0 ? static_cast<uint64_t>(n) : 0;
+        }
+        if (v.is_number_float()) {
+            double n = v.get<double>();
+            return (n > 0 && n < 1.8e19) ? static_cast<uint64_t>(n) : 0;
+        }
+        // "1.2 GB" 类人类可读尺寸走 detail::parse_size（HTML 路径同款）
+        if (v.is_string()) return detail::parse_size(v.get<std::string>());
+        return 0;
+    }
+
+    static SearchResult extract_json_item(const nlohmann::json& item) {
+        SearchResult result;
+        result.title = json_str(item, "title");
+        result.url = json_str(item, "url");
+        result.hash = json_str(item, "hash");
+        result.size = json_size(item, "size");
+        result.seeds = json_int(item, "seeds");
+        result.peers = json_int(item, "leeches");
+        result.type = json_str(item, "type");
+        result.source = json_str(item, "source");
+
+        // magnet 覆盖 url，但仅当站点真给了非空 magnet——空串不得把
+        // 已解析的 url 打掉
+        const std::string magnet = json_str(item, "magnet");
+        if (!magnet.empty()) {
+            result.url = magnet;
+        }
+        return result;
+    }
+
+    std::vector<SearchResult> parse_json_response(const std::string& json_text) {
         std::vector<SearchResult> results;
 
         try {
-            nlohmann::json j = nlohmann::json::parse(json_str);
+            nlohmann::json j = nlohmann::json::parse(json_text);
 
-            // 尝试解析标准格式：{ "results": [...] }
+            // 三种站点形态同一条宽容提取路径：{"results":[...]} / 顶层
+            // 数组 / 单对象
+            const nlohmann::json* items = nullptr;
             if (j.contains("results") && j["results"].is_array()) {
-                for (const auto& item : j["results"]) {
-                    SearchResult result;
-                    if (item.contains("title")) result.title = item["title"].get<std::string>();
-                    if (item.contains("url")) result.url = item["url"].get<std::string>();
-                    if (item.contains("magnet")) result.url = item["magnet"].get<std::string>();
-                    if (item.contains("hash")) result.hash = item["hash"].get<std::string>();
-                    if (item.contains("size")) result.size = item["size"].get<uint64_t>();
-                    if (item.contains("seeds")) result.seeds = item["seeds"].get<int>();
-                    if (item.contains("leeches")) result.peers = item["leeches"].get<int>();
-                    if (item.contains("type")) result.type = item["type"].get<std::string>();
-                    if (item.contains("source")) result.source = item["source"].get<std::string>();
+                items = &j["results"];
+            } else if (j.is_array()) {
+                items = &j;
+            }
 
+            if (items != nullptr) {
+                for (const auto& item : *items) {
+                    SearchResult result = extract_json_item(item);
                     if (!result.title.empty() && !result.url.empty()) {
-                        results.push_back(result);
+                        results.push_back(std::move(result));
                     }
                 }
-            }
-            // 尝试解析数组格式：[...]
-            else if (j.is_array()) {
-                for (const auto& item : j) {
-                    SearchResult result;
-                    if (item.contains("title")) result.title = item["title"].get<std::string>();
-                    if (item.contains("url")) result.url = item["url"].get<std::string>();
-                    if (item.contains("magnet")) result.url = item["magnet"].get<std::string>();
-                    if (item.contains("hash")) result.hash = item["hash"].get<std::string>();
-                    if (item.contains("size")) result.size = item["size"].get<uint64_t>();
-                    if (item.contains("seeds")) result.seeds = item["seeds"].get<int>();
-                    if (item.contains("leeches")) result.peers = item["leeches"].get<int>();
-                    if (item.contains("type")) result.type = item["type"].get<std::string>();
-                    if (item.contains("source")) result.source = item["source"].get<std::string>();
-
-                    if (!result.title.empty() && !result.url.empty()) {
-                        results.push_back(result);
-                    }
-                }
-            }
-            // 尝试解析单个对象格式
-            else if (j.contains("title") && j.contains("url")) {
-                SearchResult result;
-                result.title = j["title"].get<std::string>();
-                result.url = j["url"].get<std::string>();
-                if (j.contains("hash")) result.hash = j["hash"].get<std::string>();
-                if (j.contains("size")) result.size = j["size"].get<uint64_t>();
-                if (j.contains("seeds")) result.seeds = j["seeds"].get<int>();
-                if (j.contains("leeches")) result.peers = j["leeches"].get<int>();
-                if (j.contains("type")) result.type = j["type"].get<std::string>();
-                if (j.contains("source")) result.source = j["source"].get<std::string>();
-
+            } else if (j.contains("title") && j.contains("url")) {
+                SearchResult result = extract_json_item(j);
                 if (!result.title.empty() && !result.url.empty()) {
-                    results.push_back(result);
+                    results.push_back(std::move(result));
+                }
+            }
+
+            // 来源缺省 = 引擎名（与 HTML 路径 result.source = config.name 同
+            // 语义——发现页「来源」列按引擎显示；站点自带 source 字段仍优先）
+            for (auto& r : results) {
+                if (r.source.empty()) {
+                    r.source = config_.name;
                 }
             }
         } catch (const nlohmann::json::parse_error& e) {

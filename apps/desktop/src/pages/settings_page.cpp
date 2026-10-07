@@ -7,8 +7,12 @@
 
 #include "settings_page.hpp"
 
+#include "../dialogs/search_engine_dialog.hpp"
 #include "../services/search_engine_catalog.hpp"
 #include "../services/update_checker.hpp"
+
+#include <QFontMetrics>
+#include <QMessageBox>
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -748,59 +752,210 @@ QWidget* SettingsPage::create_search_engines_section_widget()
 {
     auto* group = new QGroupBox(tr("资源搜索"), this);
 
-    auto* layout = new QFormLayout(group);
-    layout->setSpacing(16);
+    auto* layout = new QVBoxLayout(group);
+    layout->setSpacing(12);
     layout->setContentsMargins(16, 8, 16, 16);
-    layout->setLabelAlignment(Qt::AlignRight);
 
     // 首次使用生成全 disabled 示例模板（已有配置绝不覆盖）
-    const std::string config_path = SearchEngineCatalog::default_path();
-    SearchEngineCatalog::ensure_default(config_path);
+    search_config_path_ = SearchEngineCatalog::default_path();
+    SearchEngineCatalog::ensure_default(search_config_path_);
 
-    // 引擎勾选行：启停即时落盘（set_enabled 单键翻转，其余字段原样保留；
-    // 不存成员——勾选态以磁盘为准，重开页面重读即与发现页搜索一致）
-    SearchEngineCatalog catalog(config_path);
+    // 引擎行容器（rebuild_search_engine_rows 单点重建；勾选态以磁盘为准，
+    // 与发现页搜索同读一份文件）
+    search_engine_rows_host_ = new QWidget(this);
+    auto* rows_layout = new QVBoxLayout(search_engine_rows_host_);
+    rows_layout->setContentsMargins(0, 0, 0, 0);
+    rows_layout->setSpacing(8);
+    layout->addWidget(search_engine_rows_host_);
+    rebuild_search_engine_rows();
+
+    // 说明文字
+    auto* desc_label = new QLabel(
+        tr("搜索引擎由 engines.json 配置驱动（正则规则解析页面结果），Falcon 不内置任何第三方站点；此处增删改与勾选均即时生效（写盘 + 下次搜索生效）。"),
+        this);
+    desc_label->setWordWrap(true);
+    desc_label->setObjectName("cardInfoLabel");
+    layout->addWidget(desc_label);
+
+    // 操作行：添加引擎 + 配置路径（文本可选中，方便高级编辑）
+    auto* action_row = new QHBoxLayout;
+    auto* add_button = new QPushButton(tr("添加引擎"), this);
+    add_button->setObjectName("primaryButton");
+    connect(add_button, &QPushButton::clicked,
+            this, &SettingsPage::on_add_search_engine);
+    action_row->addWidget(add_button);
+    action_row->addStretch();
+    auto* path_label = new QLabel(
+        tr("配置文件: %1").arg(QString::fromStdString(search_config_path_)), this);
+    path_label->setWordWrap(true);
+    path_label->setObjectName("cardInfoLabel");
+    path_label->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    action_row->addWidget(path_label, 1);
+    layout->addLayout(action_row);
+
+    return group;
+}
+
+void SettingsPage::rebuild_search_engine_rows()
+{
+    if (!search_engine_rows_host_) {
+        return;
+    }
+    auto* rows_layout =
+        static_cast<QVBoxLayout*>(search_engine_rows_host_->layout());
+    while (auto* item = rows_layout->takeAt(0)) {
+        if (auto* widget = item->widget()) {
+            widget->deleteLater();
+        }
+        delete item;
+    }
+
+    SearchEngineCatalog catalog(search_config_path_);
     if (!catalog.load()) {
         auto* err_label = new QLabel(
-            tr("engines.json 无法解析（格式无效），请修正文件内容后重启应用。"),
+            tr("engines.json 无法解析（格式无效），请手工修正文件内容后重试（勾选/编辑等操作会给出提示）。"),
             this);
         err_label->setWordWrap(true);
         err_label->setObjectName("cardInfoLabel");
-        layout->addRow("", err_label);
-        return group;
+        rows_layout->addWidget(err_label);
+        return;
     }
 
+    if (catalog.engines().empty()) {
+        auto* empty_label = new QLabel(
+            tr("暂无搜索源——点下方「添加引擎」按表单填写，无需手工编辑配置文件。"),
+            this);
+        empty_label->setWordWrap(true);
+        empty_label->setObjectName("cardInfoLabel");
+        rows_layout->addWidget(empty_label);
+    }
+
+    const QFontMetrics metrics(font());
     for (const auto& engine : catalog.engines()) {
         const QString engine_name = QString::fromStdString(engine.name);
-        auto* box = new QCheckBox(engine_name, this);
+        auto* row = new QWidget(search_engine_rows_host_);
+        auto* row_layout = new QHBoxLayout(row);
+        row_layout->setContentsMargins(0, 0, 0, 0);
+        row_layout->setSpacing(8);
+
+        // 勾选 = 启停（set_enabled 单键翻转，其余字段原样保留）
+        auto* box = new QCheckBox(engine_name, row);
         box->setChecked(engine.enabled);
         box->setToolTip(tr("%1\n勾选即启用该引擎（即时生效，下次搜索可见）。")
                             .arg(QString::fromStdString(engine.base_url)));
         connect(box, &QCheckBox::toggled, this,
-                [config_path, engine_name](bool checked) {
-                    SearchEngineCatalog(config_path)
+                [path = search_config_path_, engine_name](bool checked) {
+                    SearchEngineCatalog(path)
                         .set_enabled(engine_name.toStdString(), checked);
                 });
-        layout->addRow(box);
+        row_layout->addWidget(box);
+
+        const QString base_url = QString::fromStdString(engine.base_url);
+        auto* url_label = new QLabel(
+            metrics.elidedText(base_url, Qt::ElideMiddle, 280), row);
+        url_label->setObjectName("cardInfoLabel");
+        url_label->setToolTip(base_url);
+        row_layout->addWidget(url_label, 1);
+
+        auto* edit_button = new QPushButton(tr("编辑"), row);
+        edit_button->setObjectName("rowActionButton");
+        connect(edit_button, &QPushButton::clicked, this,
+                [this, engine_name] { on_edit_search_engine(engine_name); });
+        row_layout->addWidget(edit_button);
+
+        auto* delete_button = new QPushButton(tr("删除"), row);
+        delete_button->setObjectName("rowActionButton");
+        connect(delete_button, &QPushButton::clicked, this,
+                [this, engine_name] { on_delete_search_engine(engine_name); });
+        row_layout->addWidget(delete_button);
+
+        rows_layout->addWidget(row);
     }
+    rows_layout->addStretch();
+}
 
-    // 说明文字
-    auto* desc_label = new QLabel(
-        tr("搜索引擎由 engines.json 配置驱动（正则规则解析页面结果），Falcon 不内置任何第三方站点；勾选即时生效，添加新引擎直接编辑该文件。"),
-        this);
-    desc_label->setWordWrap(true);
-    desc_label->setObjectName("cardInfoLabel");
-    layout->addRow("", desc_label);
+void SettingsPage::on_add_search_engine()
+{
+    SearchEngineCatalog catalog(search_config_path_);
+    QStringList existing_names;
+    if (catalog.load()) {
+        for (const auto& engine : catalog.engines()) {
+            existing_names << QString::fromStdString(engine.name);
+        }
+    }
+    SearchEngineDialog dialog(tr("添加搜索引擎"), CatalogEngine{},
+                              existing_names, this);
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    if (!SearchEngineCatalog(search_config_path_).upsert_engine(dialog.engine())) {
+        QMessageBox::warning(this, tr("添加失败"),
+                             tr("engines.json 无法解析或写入失败，请手工检查该文件。"));
+        return;
+    }
+    rebuild_search_engine_rows();
+}
 
-    // 配置路径（文本可选中，方便复制编辑）
-    auto* path_label = new QLabel(
-        tr("配置文件: %1").arg(QString::fromStdString(config_path)), this);
-    path_label->setWordWrap(true);
-    path_label->setObjectName("cardInfoLabel");
-    path_label->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    layout->addRow("", path_label);
+void SettingsPage::on_edit_search_engine(const QString& name)
+{
+    SearchEngineCatalog catalog(search_config_path_);
+    if (!catalog.load()) {
+        QMessageBox::warning(this, tr("编辑失败"),
+                             tr("engines.json 无法解析，请手工修正后再试。"));
+        return;
+    }
+    const CatalogEngine* found = nullptr;
+    for (const auto& engine : catalog.engines()) {
+        if (engine.name == name.toStdString()) {
+            found = &engine;
+            break;
+        }
+    }
+    if (!found) {
+        rebuild_search_engine_rows();
+        return;
+    }
+    const CatalogEngine original = *found;
+    QStringList existing_names;
+    for (const auto& engine : catalog.engines()) {
+        if (engine.name != original.name) {
+            existing_names << QString::fromStdString(engine.name);
+        }
+    }
+    SearchEngineDialog dialog(tr("编辑搜索引擎"), original, existing_names, this);
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    const CatalogEngine updated = dialog.engine();
+    if (updated.name != original.name
+        && !SearchEngineCatalog(search_config_path_).remove_engine(original.name)) {
+        QMessageBox::warning(this, tr("编辑失败"),
+                             tr("engines.json 无法解析或写入失败，请手工检查该文件。"));
+        return;
+    }
+    if (!SearchEngineCatalog(search_config_path_).upsert_engine(updated)) {
+        QMessageBox::warning(this, tr("编辑失败"),
+                             tr("engines.json 无法解析或写入失败，请手工检查该文件。"));
+        return;
+    }
+    rebuild_search_engine_rows();
+}
 
-    return group;
+void SettingsPage::on_delete_search_engine(const QString& name)
+{
+    const auto answer = QMessageBox::question(
+        this, tr("删除搜索引擎"),
+        tr("确定删除「%1」吗？将直接从 engines.json 移除该条目。").arg(name));
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+    if (!SearchEngineCatalog(search_config_path_).remove_engine(name.toStdString())) {
+        QMessageBox::warning(this, tr("删除失败"),
+                             tr("engines.json 无法解析、写入失败或条目已不存在，请手工检查该文件。"));
+        rebuild_search_engine_rows();
+        return;
+    }
+    rebuild_search_engine_rows();
 }
 
 QWidget* SettingsPage::create_completion_action_section_widget()

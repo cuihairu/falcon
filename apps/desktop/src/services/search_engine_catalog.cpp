@@ -71,11 +71,11 @@ std::string default_template_json()
     root["version"] = kCatalogVersion;
     // 文档键：drives load_config 静默忽略未知键，借位写给手工编辑者
     root["_usage"] = nlohmann::json{
-        {"how_to", "复制 example 条目并按目标站点修改；enabled 置 true 后在 Falcon 设置页启用，或直接在设置页勾选"},
+        {"how_to", "推荐在 Falcon 设置页「资源搜索」组点「添加引擎」按表单填写（校验 + 即时生效）；手工编辑可复制 example 条目按目标站点修改"},
         {"fields", nlohmann::json{
             {"name", "引擎唯一名（设置页显示）"},
             {"base_url", "站点根地址"},
-            {"search_path", "搜索路径，与 base_url 拼接；含 {query} 等占位符时优先按占位符替换"},
+            {"search_path", "搜索路径，与 base_url 拼接；关键词经 params 中留空的 q/search/keyword 键传入"},
             {"params", "查询参数；值留空的 q/search/keyword 键自动填入关键词"},
             {"selectors", "结果解析正则：item 匹配每条结果的起始（捕获组1=链接），title 捕获标题"},
             {"enabled", "是否启用（设置页可切换）"},
@@ -109,7 +109,88 @@ bool engine_from_json(const nlohmann::json& j, CatalogEngine& out)
     out.response_format = j.value("response_format", std::string{});
     out.enabled = j.value("enabled", true); // 与 manager 侧同缺省
     out.delay_ms = j.value("delay_ms", 2000);
+
+    const auto read_string_map = [&j](const char* key,
+                                      std::map<std::string, std::string>& out_map) {
+        const auto it = j.find(key);
+        if (it == j.end() || !it->is_object()) {
+            return;
+        }
+        for (auto const& [k, v] : it->items()) {
+            if (v.is_string()) {
+                out_map[k] = v.get<std::string>();
+            }
+        }
+    };
+    read_string_map("params", out.params);
+    read_string_map("selectors", out.selectors);
+    read_string_map("headers", out.headers);
     return true;
+}
+
+/// 读入完整 JSON 根对象（文件缺失 / 非 object / 解析失败返回 false——
+/// 与 load() 的损坏不写盘语义一致，写路径绝不在损坏文件上读改写）
+bool load_root(const std::string& path, nlohmann::json& out)
+{
+    std::ifstream in(path);
+    if (!in) {
+        return false;
+    }
+    try {
+        out = nlohmann::json::parse(in);
+    } catch (const std::exception&) {
+        return false;
+    }
+    return out.is_object();
+}
+
+nlohmann::json* find_search_engines(nlohmann::json& root)
+{
+    const auto arr = root.find("search_engines");
+    if (arr == root.end() || !arr->is_array()) {
+        return nullptr;
+    }
+    return &*arr;
+}
+
+nlohmann::json* find_engine_by_name(nlohmann::json& arr, const std::string& name)
+{
+    for (auto& item : arr) {
+        if (!item.is_object()) {
+            continue;
+        }
+        const auto it = item.find("name");
+        if (it != item.end() && it->is_string()
+            && it->get<std::string>() == name) {
+            return &item;
+        }
+    }
+    return nullptr;
+}
+
+/// 表单可见键写回引擎对象；params/selectors/headers 空表 = 移除键
+void apply_engine_fields(nlohmann::json& item, const CatalogEngine& engine)
+{
+    item["base_url"] = engine.base_url;
+    item["search_path"] = engine.search_path;
+    item["response_format"] = engine.response_format;
+    item["enabled"] = engine.enabled;
+    item["delay_ms"] = engine.delay_ms;
+
+    const auto write_string_map = [&item](
+        const char* key, const std::map<std::string, std::string>& map) {
+        item.erase(key);
+        if (!map.empty()) {
+            nlohmann::json obj = nlohmann::json::object();
+            for (const auto& [k, v] : map) {
+                obj[k] = v;
+            }
+            item[key] = std::move(obj);
+        }
+    };
+    write_string_map("params", engine.params);
+    write_string_map("selectors", engine.selectors);
+    write_string_map("headers", engine.headers);
 }
 
 } // namespace
@@ -192,14 +273,8 @@ bool SearchEngineCatalog::has_enabled() const
 
 bool SearchEngineCatalog::set_enabled(const std::string& name, bool enabled)
 {
-    std::ifstream in(path_);
-    if (!in) {
-        return false;
-    }
     nlohmann::json root;
-    try {
-        root = nlohmann::json::parse(in);
-    } catch (const std::exception&) {
+    if (!load_root(path_, root)) {
         return false;
     }
     const auto arr = root.find("search_engines");
@@ -221,6 +296,58 @@ bool SearchEngineCatalog::set_enabled(const std::string& name, bool enabled)
     if (!found) {
         return false;
     }
+    return atomic_write(path_, root.dump(2));
+}
+
+bool SearchEngineCatalog::upsert_engine(const CatalogEngine& engine)
+{
+    nlohmann::json root;
+    if (!load_root(path_, root)) {
+        return false;
+    }
+    auto* arr = find_search_engines(root);
+    if (!arr) {
+        return false;
+    }
+    if (auto* existing = find_engine_by_name(*arr, engine.name)) {
+        // 仅覆盖表单可见键——该引擎对象上的未知键原样保留
+        apply_engine_fields(*existing, engine);
+    } else {
+        nlohmann::json item = nlohmann::json::object();
+        item["name"] = engine.name;
+        apply_engine_fields(item, engine);
+        arr->push_back(std::move(item));
+    }
+    return atomic_write(path_, root.dump(2));
+}
+
+bool SearchEngineCatalog::remove_engine(const std::string& name)
+{
+    nlohmann::json root;
+    if (!load_root(path_, root)) {
+        return false;
+    }
+    auto* arr = find_search_engines(root);
+    if (!arr) {
+        return false;
+    }
+    bool found = false;
+    nlohmann::json kept = nlohmann::json::array();
+    for (auto& item : *arr) {
+        if (!found && item.is_object()) {
+            const auto it = item.find("name");
+            if (it != item.end() && it->is_string()
+                && it->get<std::string>() == name) {
+                found = true;
+                continue; // 只删第一个同名条目（name 是唯一键）
+            }
+        }
+        kept.push_back(std::move(item));
+    }
+    if (!found) {
+        return false;
+    }
+    *arr = std::move(kept);
     return atomic_write(path_, root.dump(2));
 }
 

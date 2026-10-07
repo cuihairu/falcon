@@ -2,6 +2,16 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-07 - B17 资源搜索配置界面化（表单对话框 + 配置模板 + 即时生效 + 走查 26 图）+ 附带修复 B26/B27 两 drives 缺陷
+- **四腿落地**：
+  - ① **表单对话框**（新 `search_engine_dialog.{hpp,cpp}`）：名称/站点地址/搜索路径/返回格式（html\|json）/请求间隔 ms/启用 + 查询参数多行「键=值」（值留空的 q/search/keyword 由 drives 侧自动填关键词）+ 5 个 HTML 正则选择器行（item/title/url/size/seeds），全字段 placeholder + tooltip；OK 前内联校验（名称必填/重名/http(s):// 前缀/参数行格式/item 选择器 html 必填/正则 ECMAScript 预检——与 drives 同方言，错误在表单期暴露不等搜索失败），失败红字错误标签不关框
+  - ② **engines.json 模板**：首次生成内置 `_usage`（how_to 指引 + 逐字段说明）+ `global_settings` + 全 disabled 的 `example` 条目（html 形态可复制改）+ version；UI 保存经「读盘 → 改数组 → 写盘」保留 `_usage`/`version`/未知键
+  - ③ **即时生效**：设置页增删改/启用开关即时写盘；`SearchService::run_search` 每次搜索重载目录 + `ResourceSearchManager::load_config`（手改 engines.json 同样免重启）
+  - ④ **真实走查**（Xvfb :96 + 本地 JSON 搜索服务器 127.0.0.1:18097，26 图 `/home/cui/fb-shots/b17/04-26`）：首启模板生成 04 → 表单校验错误示例 06 → 保存后设置页列表 08/09 → 发现页搜索命中且「来源」列显引擎名 15/18 → 编辑改名即时生效 19-23 → 删除后设置页空 + 发现页提示「未启用任何搜索引擎…」（24-26）
+- **验证**：build-desktop 增量零告警 + desktop 全部 8 二进制 112/112 + drives 168→169
+- **附带 B26（drives，同批修复）**：`is_available` 原为正文嗅探 `find("404")` 子串——根页提到 404 字样的正常站点被误杀、真实 404 的 API 站点反放行，且 `search_all` 静默跳过零日志；改 `WebCrawler::get` 记录 `CURLINFO_RESPONSE_CODE`（新增 `last_status()`；顺带修 get() 入口不清 response_ 的残留 prepend 隐患），按状态码判定（0=unreachable WARN / ≥400=WARN+跳过 / 2xx-3xx 可达），不可用判定全部带引擎名 WARN
+- **附带 B27（drives，同批修复）**：`parse_json_response` 三形态三份复制的裸 `get<T>()` 共享一个 try/catch——单字段类型错误（size 给成字符串）丢弃该引擎全部结果；改宽容提取 `json_str`/`json_int`/`json_size`（数字字符串经 stoi、"1.5 GB" 经 `detail::parse_size`、浮点守卫）+ 共享 `extract_json_item`：单字段错误只损失该字段；magnet 仅非空才覆盖 url。TypeErrorEngine 断言按新语义翻转 + 新增 /strsize 用例（净增 1）
+
 ### 2026-10-07 - B16 批量操作菜单按 tab 区分（下载中/已完成双菜单 + 逐项真实走查 17 图）
 - **根因**：批量操作菜单未按视图区分——两个 tab 弹同一个菜单（含对当前 tab 无意义的项，如已完成的「全部暂停」、下载中的「清空完成记录」）
 - **修法**（`download_page.cpp` `on_more_options_clicked`）：菜单在每次点击时现建，按 `view_mode_` 分支——**切 tab 菜单实时换**（同一按钮两 tab 菜单不同，走查实证）

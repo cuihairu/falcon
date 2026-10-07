@@ -410,9 +410,21 @@ const char* kJsonArrayBody = R"([
 
 const char* kJsonSingleBody = R"({"title":"Single Object Item","url":"https://single.example/s.iso","hash":"hashSSSS","size":4096,"seeds":9,"leeches":3,"type":"iso","source":"LocalSingle"})";
 
+// 条目不带 source 字段的形态——来源应缺省为引擎名（B17 走查曝光）
+const char* kJsonNoSourceBody = R"([
+    {"title":"No Source One","url":"https://ns.example/one.bin","size":1288490188,"seeds":42,"type":"video"},
+    {"title":"No Source Two","url":"https://ns.example/two.bin","size":838860800,"seeds":17,"type":"music"}
+])";
+
 const char* kBadJsonBody = "this is definitely { not valid json";
 
 const char* kTypeErrBody = R"({"results":[{"title":"BadType","url":"magnet:?xt=urn:btih:eeee","size":"not-a-number"}]})";
+
+// 字段类型混乱形态：size/seeds 以字符串给出（"1.5 GB" 人类可读尺寸
+// + 纯数字字符串 seeds）——宽容提取应解析而非丢弃（B17 走查曝光）
+const char* kStringSizeBody = R"({"results":[
+    {"title":"String Size Item","url":"https://ss.example/one.bin","size":"1.5 GB","seeds":"42","type":"video"}
+]})";
 
 const char* kHtmlItemsBody = R"(<ul>
 <li><b>Cov Title One</b> <span class="sz">2GB</span> <span class="sd">77</span> <a href="magnet:?xt=urn:btih:cov1">get</a></li>
@@ -747,8 +759,10 @@ protected:
         if (req.path == "/search") return kJsonResultsBody;
         if (req.path == "/array") return kJsonArrayBody;
         if (req.path == "/single") return kJsonSingleBody;
+        if (req.path == "/nosource") return kJsonNoSourceBody;
         if (req.path == "/badjson") return kBadJsonBody;
         if (req.path == "/typeerr") return kTypeErrBody;
+        if (req.path == "/strsize") return kStringSizeBody;
         if (req.path == "/empty") return "";
         if (req.path == "/items") return kHtmlItemsBody;
         if (req.path.rfind("/find/", 0) == 0) return kJsonArrayBody;
@@ -854,7 +868,25 @@ TEST_F(ResourceSearchCovNetTest, SearchParsesSingleObjectResponse) {
     EXPECT_EQ(results[0].source, "LocalSingle");
 }
 
+TEST_F(ResourceSearchCovNetTest, SearchJsonWithoutSourceFieldDefaultsToEngineName) {
+    // 条目无 source 字段 → 来源缺省 = 引擎名（HTML 路径同语义）；
+    // 发现页「来源」列不因站点省略该字段而空白
+    TempFile config(build_engine_config(server_.base_url(), "/nosource", "json", {}));
+    ResourceSearchManager manager;
+    ASSERT_TRUE(manager.load_config(config.path()));
+
+    SearchQuery query;
+    query.keyword = "ns";
+    auto results = manager.search_all(query);
+    ASSERT_EQ(results.size(), 2u);
+    for (const auto& r : results) {
+        EXPECT_EQ(r.source, "LocalEngine");
+    }
+}
+
 TEST_F(ResourceSearchCovNetTest, SearchHandlesBadJsonAndTypeErrorResponses) {
+    // 整体非 JSON → 解析失败该引擎 0 结果；单字段类型错误 → 宽容提取
+    // 只损失该字段（垃圾 size 文本落 0），结果保留不再连坐丢弃
     nlohmann::json bad;
     bad["name"] = "BadJsonEngine";
     bad["base_url"] = server_.base_url();
@@ -879,7 +911,29 @@ TEST_F(ResourceSearchCovNetTest, SearchHandlesBadJsonAndTypeErrorResponses) {
     SearchQuery query;
     query.keyword = "x";
     auto results = manager.search_all(query);
-    EXPECT_TRUE(results.empty());
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_EQ(results[0].title, "BadType");
+    EXPECT_EQ(results[0].url, "magnet:?xt=urn:btih:eeee");
+    EXPECT_EQ(results[0].size, 0u);
+    EXPECT_EQ(results[0].source, "TypeErrorEngine");
+}
+
+TEST_F(ResourceSearchCovNetTest, SearchToleratesStringSizesAndSeeds) {
+    // "1.5 GB" 人类可读 size 经 detail::parse_size 落成字节数；数字
+    // 字符串 seeds 经 stoi 解析——站点字段类型混乱不再丢结果
+    TempFile config(build_engine_config(server_.base_url(), "/strsize",
+                                        "json", {}));
+    ResourceSearchManager manager;
+    ASSERT_TRUE(manager.load_config(config.path()));
+
+    SearchQuery query;
+    query.keyword = "ss";
+    auto results = manager.search_all(query);
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_EQ(results[0].title, "String Size Item");
+    EXPECT_EQ(results[0].size, 1610612736ULL);
+    EXPECT_EQ(results[0].seeds, 42);
+    EXPECT_EQ(results[0].source, "LocalEngine");
 }
 
 TEST_F(ResourceSearchCovNetTest, SearchParsesHtmlWithSelectors) {

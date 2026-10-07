@@ -8,6 +8,8 @@
 #pragma once
 
 #include <QWidget>
+
+#include <string>
 #include <QCheckBox>
 #include <QDoubleSpinBox>
 #include <QSpinBox>
@@ -215,6 +217,11 @@ private:
     QWidget* create_seeding_section_widget();
     QWidget* create_trash_section_widget();
     QWidget* create_search_engines_section_widget();
+    /// 重读 engines.json 重建引擎行（增删改后的单点刷新；勾选态以磁盘为准）
+    void rebuild_search_engine_rows();
+    void on_edit_search_engine(const QString& name);
+    void on_delete_search_engine(const QString& name);
+    void on_add_search_engine();
     QWidget* create_completion_action_section_widget();
     QWidget* create_connection_section_widget();
     QWidget* create_notification_section_widget();
@@ -224,6 +231,10 @@ private:
     QLayout* create_action_buttons_layout();
 
     void on_theme_button_clicked();
+
+    // 资源搜索引擎行容器（engines.json 的只读投影 + 增删改入口）
+    QWidget* search_engine_rows_host_ = nullptr;
+    std::string search_config_path_;
 
     // Clipboard settings
     QCheckBox* clipboard_monitoring_checkbox_;

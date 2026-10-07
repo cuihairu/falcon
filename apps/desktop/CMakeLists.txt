@@ -51,6 +51,7 @@ set(SOURCES
     src/pages/trash_page.cpp
     src/pages/settings_page.cpp
     src/dialogs/add_download_dialog.cpp
+    src/dialogs/search_engine_dialog.cpp
     src/utils/url_detector.cpp
     src/utils/clipboard_monitor.cpp
     src/utils/theme_manager.cpp
@@ -80,6 +81,7 @@ set(HEADERS
     src/pages/trash_page.hpp
     src/pages/settings_page.hpp
     src/dialogs/add_download_dialog.hpp
+    src/dialogs/search_engine_dialog.hpp
     src/utils/url_detector.hpp
     src/utils/clipboard_monitor.hpp
     src/utils/theme_manager.hpp
