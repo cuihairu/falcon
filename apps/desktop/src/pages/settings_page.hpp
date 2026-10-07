@@ -56,6 +56,9 @@ public:
     void set_trash_retention_days(int days);
     void set_open_file_when_completed(bool enabled);
     void set_action_when_completed(int action);
+    /// B18: 已完成任务双击行为（0=打开文件默认 / 1=打开所在文件夹）
+    void set_completed_double_click_action(int action);
+    int get_completed_double_click_action() const;
     void set_theme_display(bool dark_mode);
     /// 任务列表视图（true=卡片视图，默认；与顶栏/页内切换共用同一份记忆）
     void set_task_view_grid(bool grid_view);
@@ -192,6 +195,12 @@ signals:
      */
     void task_view_grid_changed(bool grid_view);
 
+    /**
+     * @brief B18: 已完成任务双击行为变更（即时落盘由 MainWindow 处理）
+     * @param action 0=打开文件（默认） / 1=打开所在文件夹
+     */
+    void completed_double_click_changed(int action);
+
 private slots:
     /**
      * @brief Browse for default download directory
@@ -267,6 +276,7 @@ private:
 
     // Completion action settings
     QComboBox* completion_action_combo_;
+    QComboBox* completed_double_click_combo_;
 
     // Notification settings
     QCheckBox* notifications_checkbox_;

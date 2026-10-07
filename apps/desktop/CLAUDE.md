@@ -2,6 +2,11 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-07 - B18 已完成任务双击打开文件（双击行为可配 + 右键菜单「打开文件」+ 缺文件不静默 + 走查 19 图）
+- **修法**（`download_page.{hpp,cpp}` + `settings_page.{hpp,cpp}` + `main_window.cpp`）：双击门控 Completed 视图——表格走既有 `cellDoubleClicked` 连接（加 `view_mode_==Completed` 判定），网格卡片 `installEventFilter` 捕 `QEvent::MouseButtonDblClick`（QTableWidget 默认吃双击，卡片无此信号）；行为按 QSettings `desktop/completed_double_click_action`（0=打开文件默认 / 1=打开所在文件夹）`QDesktopServices::openUrl`，**每次双击即时重读**（切换免重启）；两视图右键菜单补「打开文件」+「打开文件夹」（值捕获选中项 save_path）；文件不存在/被移动 → 警告框明示路径 + 「打开所在文件夹」回退钮（复用同一 open 入口，非静默调用 xdg-open），`openUrl` 失败 → 「系统没有找到能打开「%1」的程序」。设置页「下载完成后」组增下拉框，`completed_double_click_changed` → MainWindow 即时写 QSettings（不等「应用」），`reset_to_defaults` 回 0
+- **真实走查**（Xvfb :96 + openbox + xdg-open 探针 stub，19 图 `/home/cui/fb-shots/b18/`）：默认表格双击 → log1 文件 URL / 网格卡片双击 → log2 同 URL → 设置页切换 → conf 即时 =1（不点应用）→ 双击 → log3 目录 URL → 切回 conf=0 → 移走文件双击 → 零新增 xdg-open 调用（警告框接管，17 图）→ 回退钮 → log4 目录 URL → 右键菜单两视图在位（18/19 图）
+- **验证**：desktop 全部 8 二进制 112/112；设置项纯 UI getter/setter 无独立单测（沿 settings_page 既有分工），行为面以走查截图 + xdg-open 日志为准
+
 ### 2026-10-07 - B17 资源搜索配置界面化（表单对话框 + 配置模板 + 即时生效 + 走查 26 图）+ 附带修复 B26/B27 两 drives 缺陷
 - **四腿落地**：
   - ① **表单对话框**（新 `search_engine_dialog.{hpp,cpp}`）：名称/站点地址/搜索路径/返回格式（html\|json）/请求间隔 ms/启用 + 查询参数多行「键=值」（值留空的 q/search/keyword 由 drives 侧自动填关键词）+ 5 个 HTML 正则选择器行（item/title/url/size/seeds），全字段 placeholder + tooltip；OK 前内联校验（名称必填/重名/http(s):// 前缀/参数行格式/item 选择器 html 必填/正则 ECMAScript 预检——与 drives 同方言，错误在表单期暴露不等搜索失败），失败红字错误标签不关框

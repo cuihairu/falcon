@@ -642,6 +642,15 @@ void MainWindow::create_pages()
                         grid_view ? TaskDisplayStyle::Grid : TaskDisplayStyle::Table);
                 }
             });
+    // B18: 「已完成双击行为」即时落盘（沿 clipboard/浮窗范式）；下载页在
+    // 双击事件时即时读取 QSettings，无需向下载页回写
+    connect(settings_page_, &SettingsPage::completed_double_click_changed, this,
+            [this](int action) {
+                QSettings settings;
+                settings.beginGroup("desktop");
+                settings.setValue("completed_double_click_action", action);
+                settings.endGroup();
+            });
     if (theme_manager_) {
         settings_page_->set_theme_display(theme_manager_->current_theme() == ThemeType::Dark);
         connect(theme_manager_, &ThemeManager::theme_changed, settings_page_, [this](ThemeType theme) {
@@ -757,6 +766,8 @@ void MainWindow::load_settings()
         settings.value("seed_time_minutes", 0).toInt());
     settings_page_->set_action_when_completed(
         settings.value("action_when_completed", 0).toInt());
+    settings_page_->set_completed_double_click_action(
+        settings.value("completed_double_click_action", 0).toInt());
     settings_page_->set_notifications_enabled(
         settings.value("notifications_enabled", true).toBool());
     settings_page_->set_sound_notifications_enabled(
@@ -823,6 +834,8 @@ void MainWindow::save_settings() const
     settings.setValue("seed_ratio", settings_page_->get_seed_ratio());
     settings.setValue("seed_time_minutes", settings_page_->get_seed_time_minutes());
     settings.setValue("action_when_completed", settings_page_->get_action_when_completed());
+    settings.setValue("completed_double_click_action",
+                      settings_page_->get_completed_double_click_action());
     settings.setValue("notifications_enabled", settings_page_->is_notifications_enabled());
     settings.setValue("sound_notifications_enabled", settings_page_->is_sound_notifications_enabled());
     settings.setValue("daemon_mode_enabled", settings_page_->is_daemon_mode_enabled());

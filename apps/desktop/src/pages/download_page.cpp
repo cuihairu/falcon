@@ -25,6 +25,9 @@
 #include <QFileInfo>
 #include <QSet>
 #include <QStringList>
+#include <QSettings>
+#include <QMessageBox>
+#include <QPushButton>
 #include <QToolButton>
 #include <algorithm>
 #include <limits>
@@ -305,6 +308,17 @@ void DownloadPage::create_task_table()
     task_table_->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(task_table_, &QTableWidget::customContextMenuRequested,
             this, &DownloadPage::show_context_menu);
+
+    // B18: 已完成任务双击 = 打开文件（迅雷语义；下载中视图双击无动作不变）
+    connect(task_table_, &QTableWidget::cellDoubleClicked, this,
+            [this](int row, int) {
+                if (view_mode_ != DownloadViewMode::Completed) {
+                    return;
+                }
+                if (const auto* record = record_at_row(row)) {
+                    handle_completed_double_click(*record);
+                }
+            });
 
     // 拖拽排序：落定换位 + 会话期间挂起快照刷新
     connect(task_table_, &TaskTableWidget::reorderRequested,
@@ -786,6 +800,76 @@ const DownloadPage::TaskRecord* DownloadPage::record_at_row(int row) const
     return record_by_id(item->data(Qt::UserRole).toULongLong());
 }
 
+bool DownloadPage::eventFilter(QObject* watched, QEvent* event)
+{
+    // B18: 网格卡片双击——卡片本体是普通 QWidget（taskId 属性在卡上，
+    // 子控件忽略鼠标事件后冒泡回卡片），只在已完成视图响应
+    if (event->type() == QEvent::MouseButtonDblClick &&
+        view_mode_ == DownloadViewMode::Completed) {
+        if (auto* card = qobject_cast<QWidget*>(watched)) {
+            const QVariant task_id_var = card->property("taskId");
+            if (task_id_var.isValid()) {
+                if (const auto* record = record_by_id(task_id_var.toULongLong())) {
+                    handle_completed_double_click(*record);
+                    return true;
+                }
+            }
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void DownloadPage::handle_completed_double_click(const TaskRecord& record)
+{
+    // 双击行为每次事件时即时读取设置（设置页改动即时落盘，无需额外接线）：
+    // 0 = 打开文件（默认） / 1 = 打开所在文件夹
+    QSettings settings;
+    const int action =
+        settings.value("desktop/completed_double_click_action", 0).toInt();
+    open_completed_target(record.save_path, action == 1);
+}
+
+void DownloadPage::open_completed_target(const QString& save_path, bool open_folder)
+{
+    if (save_path.isEmpty()) {
+        QMessageBox::warning(this, tr("无法打开"),
+                             tr("无法确定该任务的文件位置。"));
+        return;
+    }
+
+    const QFileInfo file_info(save_path);
+    const QString target = open_folder ? file_info.absolutePath()
+                                       : file_info.absoluteFilePath();
+    const QString target_kind = open_folder ? tr("文件夹") : tr("文件");
+
+    if (!QFileInfo::exists(target)) {
+        // B18: 文件/文件夹不存在或已被移动时明确提示（不静默），顺带给
+        // 「打开所在文件夹」出口
+        QMessageBox box(QMessageBox::Warning, tr("%1不存在").arg(target_kind),
+                        tr("%1不存在或已被移动：\n%2").arg(target_kind, target),
+                        QMessageBox::Close, this);
+        QPushButton* open_dir_btn =
+            box.addButton(tr("打开所在文件夹"), QMessageBox::ActionRole);
+        box.exec();
+        if (box.clickedButton() == open_dir_btn) {
+            const QString dir = file_info.absolutePath();
+            if (QFileInfo::exists(dir)) {
+                QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+            } else {
+                QMessageBox::warning(
+                    this, tr("文件夹不存在"),
+                    tr("文件夹不存在或已被移动：\n%1").arg(dir));
+            }
+        }
+        return;
+    }
+
+    if (!QDesktopServices::openUrl(QUrl::fromLocalFile(target))) {
+        QMessageBox::warning(this, tr("打开失败"),
+                             tr("系统没有找到能打开「%1」的程序。").arg(target));
+    }
+}
+
 void DownloadPage::update_summary_cards()
 {
     int active_count = 0;
@@ -1141,15 +1225,22 @@ void DownloadPage::show_context_menu(const QPoint& pos)
 
     menu.addSeparator();
 
-    // 打开文件夹与复制链接按值捕获快照内容：菜单 exec 期间任务表可能被
+    // 打开文件/文件夹与复制链接按值捕获快照内容：菜单 exec 期间任务表可能被
     // update_tasks 整体重建，不能捕获指向 task_records_ 的指针
-    const QString dir_for_open = QFileInfo(
-        record->save_path.isEmpty() ? QString::fromStdString(record->snapshot.url)
-                                    : record->save_path).absolutePath();
+    const QString save_path_for_open = record->save_path;
+    if (record->snapshot.status == falcon::TaskStatus::Completed) {
+        // B18: 已完成任务右键补「打开文件」（系统默认程序）
+        auto* open_file_action = menu.addAction(tr("打开文件"));
+        connect(open_file_action, &QAction::triggered, this,
+                [this, save_path_for_open]() {
+                    open_completed_target(save_path_for_open, false);
+                });
+    }
     auto* open_dir_action = menu.addAction(tr("打开文件夹"));
-    connect(open_dir_action, &QAction::triggered, this, [dir_for_open]() {
-        QDesktopServices::openUrl(QUrl::fromLocalFile(dir_for_open));
-    });
+    connect(open_dir_action, &QAction::triggered, this,
+            [this, save_path_for_open]() {
+                open_completed_target(save_path_for_open, true);
+            });
 
     const QString url_for_copy = QString::fromStdString(record->snapshot.url);
     auto* copy_url_action = menu.addAction(tr("复制下载链接"));
@@ -1322,14 +1413,21 @@ void DownloadPage::show_grid_context_menu(const QPoint& pos)
 
     menu.addSeparator();
 
-    // 按值捕获快照内容，理由同 show_context_menu
-    const QString dir_for_open = QFileInfo(
-        record->save_path.isEmpty() ? QString::fromStdString(record->snapshot.url)
-                                    : record->save_path).absolutePath();
+    // 按值捕获快照内容，理由同 show_context_menu（B18: 打开文件/文件夹
+    // 统一走 open_completed_target，路径缺失明确提示）
+    const QString save_path_for_open = record->save_path;
+    if (snapshot.status == falcon::TaskStatus::Completed) {
+        auto* open_file_action = menu.addAction(tr("打开文件"));
+        connect(open_file_action, &QAction::triggered, this,
+                [this, save_path_for_open]() {
+                    open_completed_target(save_path_for_open, false);
+                });
+    }
     auto* open_dir_action = menu.addAction(tr("打开文件夹"));
-    connect(open_dir_action, &QAction::triggered, this, [dir_for_open]() {
-        QDesktopServices::openUrl(QUrl::fromLocalFile(dir_for_open));
-    });
+    connect(open_dir_action, &QAction::triggered, this,
+            [this, save_path_for_open]() {
+                open_completed_target(save_path_for_open, true);
+            });
 
     const QString url_for_copy = QString::fromStdString(record->snapshot.url);
     auto* copy_url_action = menu.addAction(tr("复制下载链接"));
@@ -1504,6 +1602,10 @@ QWidget* DownloadPage::create_task_card(const TaskRecord& record)
 
     actions_layout->addStretch();
     card_layout->addLayout(actions_layout);
+
+    // B18: 双击卡片 = 已完成任务的「打开文件」语义（事件过滤器捕获；
+    // taskId 属性由 sync_task_grid 在装卡时打上，事件时读取）
+    card->installEventFilter(this);
 
     return card;
 }

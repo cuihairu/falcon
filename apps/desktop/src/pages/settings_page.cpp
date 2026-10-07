@@ -46,6 +46,7 @@ SettingsPage::SettingsPage(QWidget* parent)
     , task_speed_limit_spin_(nullptr)
     , global_speed_limit_spin_(nullptr)
     , completion_action_combo_(nullptr)
+    , completed_double_click_combo_(nullptr)
     , notifications_checkbox_(nullptr)
     , sound_notification_checkbox_(nullptr)
     , float_enabled_checkbox_(nullptr)
@@ -170,6 +171,14 @@ void SettingsPage::set_action_when_completed(int action)
 {
     if (completion_action_combo_) {
         completion_action_combo_->setCurrentIndex(action);
+    }
+}
+
+void SettingsPage::set_completed_double_click_action(int action)
+{
+    if (completed_double_click_combo_) {
+        completed_double_click_combo_->setCurrentIndex(
+            qBound(0, action, completed_double_click_combo_->count() - 1));
     }
 }
 
@@ -331,6 +340,11 @@ int SettingsPage::get_action_when_completed() const
     return completion_action_combo_ ? completion_action_combo_->currentIndex() : 0;
 }
 
+int SettingsPage::get_completed_double_click_action() const
+{
+    return completed_double_click_combo_ ? completed_double_click_combo_->currentIndex() : 0;
+}
+
 bool SettingsPage::is_daemon_mode_enabled() const
 {
     return daemon_enabled_checkbox_ ? daemon_enabled_checkbox_->isChecked() : false;
@@ -396,6 +410,9 @@ void SettingsPage::reset_to_defaults()
 
     // Completion action settings (0 = do nothing)
     completion_action_combo_->setCurrentIndex(0);
+
+    // B18: 已完成双击行为（默认打开文件）
+    completed_double_click_combo_->setCurrentIndex(0);
 
     // Connection settings
     default_connections_spin_->setValue(4);
@@ -983,14 +1000,34 @@ QWidget* SettingsPage::create_completion_action_section_widget()
     action_layout->addStretch();
     layout->addLayout(action_layout);
 
+    // B18: 已完成任务双击行为（默认打开文件，可切换为打开所在文件夹）
+    auto* dbl_layout = new QHBoxLayout();
+    dbl_layout->setSpacing(12);
+
+    auto* dbl_label = new QLabel(tr("已完成双击:"), this);
+    dbl_layout->addWidget(dbl_label);
+
+    completed_double_click_combo_ = new QComboBox(this);
+    completed_double_click_combo_->addItem(tr("打开文件（默认）"));
+    completed_double_click_combo_->addItem(tr("打开所在文件夹"));
+    dbl_layout->addWidget(completed_double_click_combo_);
+
+    dbl_layout->addStretch();
+    layout->addLayout(dbl_layout);
+
     // 说明文字
     auto* desc_label = new QLabel(
-        tr("选择下载完成后的动作；多文件任务仅显示通知。"),
+        tr("选择下载完成后的动作；多文件任务仅显示通知。「已完成双击」决定在下载页双击已完成任务时打开文件还是所在文件夹，改动立即生效。"),
         this
     );
     desc_label->setWordWrap(true);
     desc_label->setObjectName("cardInfoLabel");
     layout->addWidget(desc_label);
+
+    // B18: 双击行为变更即时上抛（MainWindow 落 QSettings；下载页双击时
+    // 即时读取，无需向下载页回写）
+    connect(completed_double_click_combo_, &QComboBox::currentIndexChanged,
+            this, [this](int index) { emit completed_double_click_changed(index); });
 
     return group;
 }

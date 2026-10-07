@@ -140,6 +140,16 @@ private:
     // 拖拽会话开始/结束（结束时补刷会话期间挂起的快照）
     void on_drag_session(bool active);
 
+protected:
+    // B18: 网格卡片双击（卡片是普通 QWidget，经事件过滤器捕获双击）
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
+private:
+    // B18: 已完成任务双击 → 按设置页「双击行为」打开文件/所在文件夹
+    void handle_completed_double_click(const TaskRecord& record);
+    // B18: 打开成品文件/所在文件夹；不存在或被移动时明确提示不静默
+    void open_completed_target(const QString& save_path, bool open_folder);
+
     const TaskRecord* record_by_id(qulonglong key) const;
     const TaskRecord* record_from_sender() const;
     const TaskRecord* selected_record() const;
