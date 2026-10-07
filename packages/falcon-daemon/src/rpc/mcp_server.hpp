@@ -7,6 +7,7 @@
 #include <functional>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <string>
 
 namespace falcon::daemon::rpc {
@@ -20,10 +21,11 @@ namespace falcon::daemon::rpc {
 /// {"error":{code,message}} 映射为 MCP result.isError 形状，
 /// 不占用 JSON-RPC 协议错误码。
 ///
-/// 阶段边界：GET（SSE）不支持（回 405，阶段 2 进度订阅落地时接入）；
-/// 批量请求不支持（回 400）；工具面为设计文档 §3 的 13 个只读+控制
-/// 工具（阶段 1 的 10 个 + 阶段 2 增量 1 的全局选项 2 个与做种 1 个），
-/// 无资源/提示词面。
+/// 阶段边界：GET（SSE 服务器→客户端通知流）经 validate_sse_request
+/// 准入、流本体由 JsonRpcServer 连接线程承载（通知扇出复用
+/// broadcast_notification，阶段 2 增量 3）；批量请求不支持（回 400）；
+/// 工具面为设计文档 §3 的 13 个只读+控制工具（阶段 1 的 10 个 +
+/// 阶段 2 增量 1 的全局选项 2 个与做种 1 个），无资源/提示词面。
 class McpServer {
 public:
     struct Request {
@@ -49,7 +51,20 @@ public:
     Response handle_request(const Request& req, const std::string& auth_secret,
                             const DispatchFn& dispatch);
 
+    /// GET /mcp（SSE 服务器→客户端通知流）准入校验：认证与会话校验
+    /// 与 POST/DELETE 同语义（未配 secret 403 / Bearer 失败 401 +
+    /// WWW-Authenticate / 会话缺失或过期 404）。通过时返回
+    /// status_code==200 的空响应，SSE 响应头与会话循环由
+    /// JsonRpcServer 连接线程直写——Response 形状无法表达无界流。
+    Response validate_sse_request(const Request& req,
+                                  const std::string& auth_secret);
+
 private:
+    /// 认证分级检查（handle_request 与 validate_sse_request 共用）；
+    /// 通过返回 nullopt，否则返回应回发的错误响应。
+    static std::optional<Response> check_auth(const Request& req,
+                                              const std::string& auth_secret);
+
     bool session_valid(const std::string& session_id);
     void insert_session(std::string session_id);
     void remove_session(const std::string& session_id);

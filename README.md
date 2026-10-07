@@ -234,7 +234,8 @@ Host-side configuration (Streamable HTTP):
 }
 ```
 
-Stage 2 (stdio wrapper, progress subscription, seeding tools) is planned; see
+Stage 2 is complete (stdio wrapper `falcon-mcp`, SSE progress subscription via
+`GET /mcp`, global-option and seeding tools); see
 `docs/design/mcp_server_design.md` for the full contract.
 
 ## UI Prototypes

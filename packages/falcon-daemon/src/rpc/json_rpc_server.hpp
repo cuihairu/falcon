@@ -23,7 +23,7 @@ namespace falcon::daemon {
 namespace falcon::daemon::rpc {
 
 class RpcEventBridge;
-class WsClientState;
+class StreamClientState;
 class McpServer;
 
 struct JsonRpcServerConfig {
@@ -59,14 +59,17 @@ public:
     /// 回调在 RPC 工作线程上执行，实现方需能从任意线程安全地请求停机。
     void set_shutdown_handler(std::function<void()> handler);
 
-    /// 向所有 WebSocket 订阅者广播一条 JSON-RPC 通知。
-    /// params_json 必须是已序列化的 JSON 数组文本（如 `[{"gid":"..."}]`），
-    /// 与 HTTP 端口的 WebSocket 升级订阅者共享（aria2.onDownloadStart 等）。
+    /// 向所有 WebSocket 订阅者与 MCP SSE 订阅者广播一条 JSON-RPC 通知。
+    /// params_json 必须是已序列化的 JSON 数组文本（如 `[{"gid":"..."}]`）；
+    /// WS 走 TEXT 帧，SSE 走 `data: <信封>\n\n` 行（同一信封两种帧装）。
     void broadcast_notification(const std::string& method,
                                 const std::string& params_json);
 
     /// 当前 WebSocket 订阅者数量（测试与监控用）
     std::size_t websocket_client_count();
+
+    /// 当前 MCP SSE 订阅者数量（测试与监控用）
+    std::size_t sse_client_count();
 
     /// 运行时热更新认证配置（SIGHUP 配置重载用），线程安全；
     /// 对后续到达的请求立即生效，已建立的 WebSocket 会话不受影响。
@@ -97,6 +100,11 @@ private:
     /// 向单个已注册的 WebSocket 连接发送一帧（串行化于该连接的写互斥）
     bool ws_send_frame(int client_fd, std::uint8_t opcode,
                        const std::string& payload);
+    /// GET /mcp：MCP SSE 通知流。先经 McpServer::validate_sse_request
+    /// 准入（403/401/404 错误形状照常回发），通过后写流式响应头并
+    /// 注册进 sse_clients_，阻塞等对端断开或服务器停止。连接 fd 的
+    /// 所有权由本函数接管（返回后由 ScopedFd 关闭）。
+    void handle_mcp_sse(int client_fd, const HttpRequest& req);
 
     falcon::DownloadEngine* engine_ = nullptr;
     TaskStorage* storage_ = nullptr;
@@ -113,10 +121,16 @@ private:
     std::mutex worker_threads_mutex_;
     std::vector<std::thread> worker_threads_;
 
-    // WebSocket 订阅者注册表：fd → 每连接写互斥。广播线程与连接线程共享；
-    // 持 shared_ptr 使广播快照在连接注销后仍可安全完成发送。
+    // 订阅者注册表（WS 与 MCP SSE 各一张，同一状态形状）：fd → 每连接
+    // 写互斥。广播线程与连接线程共享；持 shared_ptr 使广播快照在连接
+    // 注销后仍可安全完成发送。
     std::mutex ws_clients_mutex_;
-    std::map<int, std::shared_ptr<WsClientState>> ws_clients_;
+    std::map<int, std::shared_ptr<StreamClientState>> ws_clients_;
+
+    // MCP SSE 订阅者（GET /mcp 通知流）；生命周期纪律与 WS 一致：
+    // 广播失败只 shutdown 唤醒会话线程，注销由会话线程自身完成。
+    std::mutex sse_clients_mutex_;
+    std::map<int, std::shared_ptr<StreamClientState>> sse_clients_;
 
     // 引擎事件 → 通知广播桥（生命周期与 server 一致；start/stop 时挂接）
     std::unique_ptr<RpcEventBridge> event_bridge_;

@@ -349,9 +349,8 @@ std::string McpServer::new_session_id() {
 
 // ---- 请求处理 ----
 
-McpServer::Response McpServer::handle_request(const Request& req,
-                                              const std::string& auth_secret,
-                                              const DispatchFn& dispatch) {
+std::optional<McpServer::Response> McpServer::check_auth(
+    const Request& req, const std::string& auth_secret) {
     // 认证先于一切路由：未配 secret 时认证不可能成立，端点整体拒绝；
     // 配置了 secret 时要求 Authorization: Bearer <secret>。
     if (auth_secret.empty())
@@ -370,9 +369,30 @@ McpServer::Response McpServer::handle_request(const Request& req,
         r.headers["WWW-Authenticate"] = "Bearer";
         return r;
     }
+    return std::nullopt;
+}
 
-    // HTTP 方法路由：POST（JSON-RPC 请求/通知）与 DELETE（会话拆除）；
-    // 阶段 1 无 GET/SSE 面。
+McpServer::Response McpServer::validate_sse_request(
+    const Request& req, const std::string& auth_secret) {
+    if (auto denied = check_auth(req, auth_secret))
+        return std::move(*denied);
+    // 会话校验与 POST/DELETE 同语义：缺失/未知/过期一律 404（host 侧
+    // 收到后重新 initialize）
+    auto sid = req.headers.find("mcp-session-id");
+    if (sid == req.headers.end() || !session_valid(sid->second))
+        return session_not_found();
+    return McpServer::Response{};  // 准入；流式响应头由 JsonRpcServer 直写
+}
+
+McpServer::Response McpServer::handle_request(const Request& req,
+                                              const std::string& auth_secret,
+                                              const DispatchFn& dispatch) {
+    if (auto denied = check_auth(req, auth_secret))
+        return std::move(*denied);
+
+    // HTTP 方法路由：POST（JSON-RPC 请求/通知）与 DELETE（会话拆除）。
+    // GET（SSE 流）在进入本函数之前由 JsonRpcServer 拦截走
+    // validate_sse_request 准入 + 连接线程流循环；其余方法仍拒绝。
     if (req.method != "POST" && req.method != "DELETE")
         return method_not_allowed();
 

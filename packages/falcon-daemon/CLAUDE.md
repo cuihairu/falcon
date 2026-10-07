@@ -6,6 +6,37 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-08 - MCP server 阶段 2 增量 3（GET /mcp SSE 进度订阅通知流，阶段 2 收口）
+- **GET /mcp 从 405 占位改为 SSE 通知流**：鉴权与会话准入与 POST/DELETE 同语义
+  （未配 secret 403 / Bearer 失败 401 + `WWW-Authenticate` / 会话缺失或过期
+  404——`McpServer::check_auth` 提取为共享入口，`validate_sse_request` 复用）；
+  通过后 JsonRpcServer 连接线程直写流式响应头（200 `text/event-stream` +
+  `Cache-Control: no-cache`，无 Content-Length；初始注释行 `: falcon mcp
+  stream` 供客户端确认流开通），注册进 `sse_clients_`（与 ws_clients_ 同形状
+  shared_ptr 台账）阻塞等断开/停机。成功路径不关连接；通知扇出复用
+  `broadcast_notification`——同一 JSON-RPC 信封两种帧装（WS TEXT 帧 / SSE
+  `data: <信封>\n\n` 行），引擎事件经既有 RpcEventBridge 直达。注销纪律与
+  WS 一致（连接 fd 的注销统一由本线程完成，广播失败只 shutdown 唤醒，避免
+  跨线程 close 的 fd 复用竞争）；`stop()` shutdown 两张订阅表。PUT 等未知
+  方法 405 保留（`Allow: POST, DELETE`）
+- **测试**：`mcp_server_test.cpp` 22 → 31 用例（`falcon_daemon_rpc_tests`
+  65 → 74）：SSE 准入三态（未配 secret 403 / 缺 Bearer 与错 Bearer 401 /
+  无会话与非法会话与 DELETE 后重开流 404）+ 主链路（裸 socket 开流 → 注释
+  行 → 广播扇出 data 行逐字段断言 → stop() EOF 收尾）/ 客户端断开自注销 /
+  CORS 回显（allow_origin_all=true）；405 用例 GET→PUT 换形（GET 语义归
+  SSE）；测试基建 `set_recv_timeout`（Winsock DWORD ms / POSIX timeval）+
+  `recv_until`（分隔符读取，跨调用累积残段）+ `wait_for` 谓词轮询
+- **验证**：daemon 门禁全套件 482/482；真实二进制冒烟（curl `-N` 200 +
+  event-stream 头 + 注释行 + `timeout 3` 退出码 124 证明流不自关；e2e
+  addUri → onDownloadStart/onDownloadError data 行到达）——代替 MCP
+  inspector（本机无该环境，与阶段 1 同姿态）
+- 覆盖率定性：SSE 流式响应头 send 失败早退分支不可锚（accept→写头微秒竞速
+  窗，与 WS 侧同类）；其余新代码（准入/流开通/注册/扇出/停机唤醒/断开注销/
+  CORS）全部覆盖
+- **阶段 2 收口**：三增量（全局选项与做种工具 / stdio 薄壳 / 进度订阅）全部
+  落地；已知遗留：serverInfo.version 上报 FALCON_VERSION_STRING "0.1.0"
+  （未对齐本包 project VERSION 0.2.0，非本阶段范围）
+
 ### 2026-10-08 - MCP server 阶段 2 增量 2（stdio 薄壳 falcon-mcp）
 - **新目录 `tools/` 三件**（设计文档 §4 薄壳原则）：
   - `tools/mcp_stdio.{hpp,cpp}`（`falcon_daemon_mcp_stdio` 静态库）：
@@ -339,7 +370,8 @@
    HTTP，默认关），13 个下载工具暴露给 AI host（Claude Desktop/Code、Cursor
    等），Bearer 鉴权 + 会话管理，`tools/call` 翻译到既有 aria2 RPC；
    另附 stdio 薄壳 `falcon-mcp`（stdin/stdout 行协议转发 `/mcp`，供假设
-   stdio 传输的 AI 编码工具接入）
+   stdio 传输的 AI 编码工具接入）；`GET /mcp` SSE 通知流推送任务状态/进度
+   （阶段 2 增量 3，见「对外接口」小节）
 
 ### 包内静态库（2026-09-25 拆库，源零改动）
 
@@ -579,10 +611,10 @@ falcon-mcp [OPTIONS]
   上限 64（满逐最旧）；`DELETE /mcp` 释放会话回 204
 - 版本协商：支持 `2025-06-18`（默认）与 `2025-03-26`；客户端声明的更高
   版本回退默认
-- 帧语义：通知（id null）回 202；`GET /mcp` 405 + `Allow: POST, DELETE`
-  （SSE 响应流属阶段 2）；解析失败 400 + -32700；数组 batch 400 + -32600
-  （2025-06-18 已移除 batch）；非 object 标量 body 200 + -32600 信封；
-  未知方法 -32601；`ping` → `{}`
+- 帧语义：通知（id null）回 202；`GET /mcp` 为 SSE 通知流（见下小节）；
+  PUT 等未知方法 405 + `Allow: POST, DELETE`；解析失败 400 + -32700；数组
+  batch 400 + -32600（2025-06-18 已移除 batch）；非 object 标量 body
+  200 + -32600 信封；未知方法 -32601；`ping` → `{}`
 - 错误三层：协议层参数形状 → JSON-RPC error（-32602）；业务错误（gid
   不存在等）→ `isError: true` + `content[0].text = "Error(<code>):
   <message>"`；翻译层/分发抛异常 → -32603（异常边界防 terminate）
@@ -610,8 +642,23 @@ falcon-mcp [OPTIONS]
   恢复）、EOF 时 DELETE 拆除会话；Bearer 与 `--secret` 绑定；传输失败
   （daemon 不可达）对带 id 消息回 -32603 信封、通知静默。不链
   libfalcon-core——纯转发进程，零引擎形态；CURL 缺席时不构建
-- 阶段 2 排队（未实现）：进度订阅（notifications/SSE）；全局选项与做种
-  工具（增量 1）、stdio 薄壳（增量 2）已落地（13 工具）
+
+### MCP SSE 通知流（阶段 2 增量 3，2026-10-08 落地）
+
+- 端点：`GET http://<host>:<port>/mcp`，头带 `Authorization: Bearer
+  <rpc.secret>` + `Mcp-Session-Id`（先 initialize 取会话）；准入语义与
+  POST/DELETE 一致（未配 secret 403 / 凭据失败 401 / 会话缺失或过期
+  404，错误形状照常回发）
+- 响应：200 `text/event-stream` + `Cache-Control: no-cache`，无
+  Content-Length；初始注释行 `: falcon mcp stream` 后挂起——成功路径
+  不关连接（断开感知靠客户端 recv：对端 EOF / 服务器停机 shutdown）
+- 通知：与 WS 订阅同源（同一 `broadcast_notification`，引擎事件经
+  RpcEventBridge），每条通知一行 `data: <JSON-RPC 通知信封>\n\n`；
+  通知清单同 WS 表（`aria2.onDownload*` 五种 + `falcon.onProgress`）
+- 断开与重连：客户端断开或服务器停机时流拆除；host 侧重连 = 重新 GET
+  （会话仍有效时无需重新 initialize；准入仅发生在开流时刻）
+- 阶段 2 三增量全部落地（2026-10-08 收口）：全局选项与做种工具（13 工具）、
+  stdio 薄壳（`falcon-mcp`）、SSE 进度订阅（本节）
 
 ### 查询的存储回落
 
@@ -667,7 +714,7 @@ RPC 的 `pauseAll`/`unpauseAll`/`removeDownloadResult`/`purgeDownloadResult`
 
 | 测试目标 | 文件 | 覆盖 |
 |----------|------|------|
-| `falcon_daemon_rpc_tests` | `json_rpc_server_test.cpp` `websocket_test.cpp` `mcp_server_test.cpp` `mcp_stdio_test.cpp` | RPC 基础；WebSocket 帧协议/握手/通知/节流/停机；MCP 握手/会话/鉴权/版本协商/帧语义/工具翻译层；MCP stdio 薄壳桥逻辑（fake 传输 8 用例）+ 真 curl 回环 e2e |
+| `falcon_daemon_rpc_tests` | `json_rpc_server_test.cpp` `websocket_test.cpp` `mcp_server_test.cpp` `mcp_stdio_test.cpp` | RPC 基础；WebSocket 帧协议/握手/通知/节流/停机；MCP 握手/会话/鉴权/版本协商/帧语义/工具翻译层；MCP stdio 薄壳桥逻辑（fake 传输 8 用例）+ 真 curl 回环 e2e；MCP SSE 通知流（准入三态/扇出/停机/断开/CORS） |
 | `falcon_daemon_rpc_client_tests` | `json_rpc_client_test.cpp` `aria2_snapshots_test.cpp` `websocket_rpc_client_test.cpp` | 客户端 × 真实服务器回环 + 快照转换 + WS 客户端事件流 |
 | `falcon_daemon_rpc_coverage_tests` | `json_rpc_server_coverage_test.cpp` | HTTP 层 + 全方法 |
 | `falcon_daemon_rpc_storage_tests` | `json_rpc_storage_test.cpp` | RPC × storage 集成（回落/删除联动/批量落库/停机回调） |

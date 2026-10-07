@@ -222,8 +222,8 @@ daemon 在 `POST /mcp` 暴露 MCP（Model Context Protocol）端点（Streamable
 }
 ```
 
-阶段 2（stdio 薄壳、进度订阅、做种工具）排队中；完整契约见
-`docs/design/mcp_server_design.md`。
+阶段 2 已落地（stdio 薄壳 `falcon-mcp`、`GET /mcp` SSE 进度订阅、全局选项
+与做种工具）；完整契约见 `docs/design/mcp_server_design.md`。
 
 ## 界面原型
 

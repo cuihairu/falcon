@@ -1,10 +1,8 @@
 # Falcon MCP Server 设计（AI 助手驱动下载）
 
-状态：**阶段 1 已实现**（daemon `/mcp` 端点 + 10 工具翻译层 + Bearer 鉴权/会话管理，
-单测 + 真实二进制冒烟收口，实现对账见 §8）。**阶段 2 实施中（2026-10-08 巡检开工）**：
-增量 1 全局选项与做种工具（13 工具）与增量 2 stdio 薄壳（`falcon-mcp`）**已实现**；
-剩余增量：进度订阅（notifications/resource），按 §7 逐项实施（进度见 daemon
-CLAUDE.md 变更记录）。
+状态：**阶段 2 已实现**（2026-10-08 收口——增量 1 全局选项与做种工具（13 工具）、
+增量 2 stdio 薄壳（`falcon-mcp`）、增量 3 进度订阅（`GET /mcp` SSE 通知流）；
+单测 + 真实二进制冒烟收口，阶段 2 对账见 §8，阶段 1 对账保留存档）。
 调研参考件：[Lakr233/FlowDown](https://github.com/Lakr233/FlowDown)（AGPL-3.0，★1.2k）。
 只参考接口设计与交互形态，不抄代码。
 
@@ -124,10 +122,12 @@ FlowDown 的方向：**让 AI 调用外部工具**。falcon 的方向相反：**
 |---|---|---|
 | `falcon_set_global_option` / `falcon_get_global_option` | 全局限速/并发等 | `changeGlobalOption`/`getGlobalOption`（**已实现，2026-10-08 增量 1**——键位白名单不在 MCP 层重复，daemon 侧业务错误经 isError 映射） |
 | `falcon_stop_seeding` | BT 手动停止做种 | `falcon.stopSeeding`（**已实现，2026-10-08 增量 1**——code 1/2 → isError） |
-| 进度订阅 | 进度通知经 MCP `notifications`/resource 推送，替代模型轮询 | 复用既有 WS 事件桥（未实现） |
+| 进度订阅 | 进度/状态通知经 `GET /mcp` SSE 通知流推送（每条通知一行 `data: <JSON-RPC 信封>\n\n`，与 WS 广播同一信封体），替代模型轮询（**已实现，2026-10-08 增量 3**——鉴权/会话准入与 POST/DELETE 同语义；对账见 §8 阶段 2 节） | 复用既有 RpcEventBridge |
 
-**轮询指引写进工具描述**：MCP 无推送（阶段 2 前），`falcon_add_download` 的返回描述明确
+**轮询指引写进工具描述**：`falcon_add_download` 的返回描述明确
 「用 falcon_get_task(gid) 轮询 status==complete」——模型自行决定节奏，host 侧有超时兜底。
+阶段 2 增量 3 起 `GET /mcp` SSE 通知流可主动推送（见上表），轮询指引保留给
+不支持流式订阅的 host。
 
 **破坏性标注**：`falcon_remove_task`/`falcon_pause_all` 标 `annotations: { destructiveHint: true }`；
 `falcon_add_download` 标 `readOnlyHint: false, openWorldHint: false`。确认交互交给 host
@@ -188,10 +188,10 @@ FlowDown 的方向：**让 AI 调用外部工具**。falcon 的方向相反：**
 - **阶段 1**（一次增量）：daemon `/mcp` 路由 + initialize/握手/会话 + `tools/list`（10 工具）
   + `tools/call` 翻译层 + daemon.json `mcp` 节 + 单测（握手往返/清单 schema 校验/翻译表
   参数往返/错误语义）+ 真实 host 冒烟（MCP inspector 回环）。README 补接入片段（差距表 #4）。
-- **阶段 2**（已开工，2026-10-08）：增量 1 全局选项与做种工具**已实现**
+- **阶段 2**（2026-10-08 收口）：增量 1 全局选项与做种工具**已实现**
   （13 工具，见 §3 追加表标注）；增量 2 stdio 薄壳 **已实现**（`falcon-mcp`
-  + `falcon_daemon_mcp_stdio` 桥库，见 §2.1/§4 标注）；剩余增量：进度订阅
-  （notifications/resource）。
+  + `falcon_daemon_mcp_stdio` 桥库，见 §2.1/§4 标注）；增量 3 进度订阅
+  **已实现**（`GET /mcp` SSE 通知流，见 §3 与 §8 阶段 2 对账）。
 - 明确不做：MCP 客户端、内建 AI 工具、GUI 内嵌对话界面。
 - 文档对账：实现落地时同步 daemon CLAUDE.md/README 标注「已实现」，本文档状态行改写；
   未实现前本文档保持「设计稿」字样（不写假文档）。
@@ -204,6 +204,7 @@ FlowDown 的方向：**让 AI 调用外部工具**。falcon 的方向相反：**
 
 - **响应形态**：阶段 1 只回 `application/json`，未实现 `text/event-stream` 响应流
   （进度订阅属阶段 2）；`GET /mcp`（SSE 监听位）回 405 + `Allow: POST, DELETE`。
+  （405 形态随阶段 2 增量 3 的 SSE 通知流落地而取消——GET 之外的未知方法仍 405。）
 - **协议版本**：支持 `2025-06-18`（默认）与 `2025-03-26`；客户端声明的更高版本
   回退默认版本。
 - **`falcon_list_tasks` 聚合形态**：`status=waiting|stopped` 走 aria2 原生
@@ -225,3 +226,23 @@ FlowDown 的方向：**让 AI 调用外部工具**。falcon 的方向相反：**
   本机无 inspector 运行环境。
 - **顺带修复的产品缺陷**：`new_session_id()` 初版循环 4 次产出 64 hex（256 bit），
   与自身注释「32 hex（128 bit）」矛盾——改 ×2 后 32 hex，测试按本契约钉死。
+
+### 阶段 2 对账（2026-10-08，增量 3 SSE 通知流）
+
+- **流形态**：`GET /mcp` 经鉴权与会话准入（与 POST/DELETE 同语义：未配 secret
+  403 / Bearer 失败 401 + `WWW-Authenticate` / 会话缺失或过期 404——
+  `McpServer::check_auth` 提取为共享入口）后回 200 `text/event-stream` +
+  `Cache-Control: no-cache`，无 Content-Length（无界流）；写初始注释行
+  `: falcon mcp stream` 供客户端在首个通知前确认流已开通。成功路径不关
+  连接——断开感知靠客户端 recv（对端 EOF / 服务器 stop() shutdown）。
+- **通知扇出**：`broadcast_notification` 同一 JSON-RPC 通知信封两种帧装
+  （WS TEXT 帧 / SSE `data: <信封>\n\n` 行）；引擎事件经既有 RpcEventBridge
+  直达 SSE 流（真实 daemon e2e：addUri → onDownloadStart/onDownloadError
+  到达）。准入仅发生在开流时刻，已建立的流不随会话过期重校验（与 WS
+  握手不鉴权、会话内逐请求鉴权的形态不同——SSE 是单向只写流，无请求面）。
+- **可测性边界**：SSE 流式响应头 send 失败的早退分支不可锚（accept 与写头
+  之间的微秒竞速窗，无同步点；与 WS 侧同类定性）；其余新代码（准入/流
+  开通/注册/扇出/停机唤醒/客户端断开注销/CORS 回显）全部测试覆盖。
+- **冒烟形态**：curl 回环 + 真实 daemon e2e（`curl -N` 超时 124 证明流不
+  自关；engine 事件穿桥到达 data 行）——代替 MCP inspector（本机无该
+  环境，与阶段 1 同姿态）。

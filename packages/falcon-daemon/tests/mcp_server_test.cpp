@@ -1,8 +1,10 @@
 /// MCP Streamable HTTP 端点测试（协议契约 + 工具翻译层）。
 /// 设计文档 docs/design/mcp_server_design.md §2 契约逐条钉住：
 /// 认证分级（403/401）、initialize 会话握手、会话校验 404、
-/// 通知 202、DELETE 拆除 204、HTTP 方法 405、解析/批量错误分级、
-/// tools/list 清单 schema、tools/call 翻译与 isError 映射。
+/// 通知 202、DELETE 拆除 204、未知方法 405、GET/SSE 通知流
+///（认证与会话准入 + data 行扇出 + 停机/断开收尾，阶段 2 增量 3）、
+/// 解析/批量错误分级、tools/list 清单 schema、tools/call 翻译与
+/// isError 映射。
 
 #include "rpc/json_rpc_server.hpp"
 #include "rpc/mcp_server.hpp"
@@ -24,6 +26,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 #endif
 
@@ -116,6 +119,50 @@ static std::optional<std::string> recv_all(int fd) {
     return buf;
 }
 
+/// SSE 流测试用：recv 不再无限阻塞（超时报错 → recv_until 返回 nullopt）
+static void set_recv_timeout(int fd, unsigned seconds) {
+#ifdef _WIN32
+    DWORD ms = seconds * 1000;
+    ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO,
+                 reinterpret_cast<const char*>(&ms), sizeof(ms));
+#else
+    timeval tv{};
+    tv.tv_sec = seconds;
+    ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+#endif
+}
+
+/// 读到出现 delim（含）为止；已读字节累积在 buf（跨调用保留残段），
+/// 命中后从 buf 头部截出返回。对端断开或读超时返回 nullopt。
+static std::optional<std::string> recv_until(int fd, const std::string& delim,
+                                             std::string& buf) {
+    while (true) {
+        auto pos = buf.find(delim);
+        if (pos != std::string::npos) {
+            std::string out = buf.substr(0, pos + delim.size());
+            buf.erase(0, pos + delim.size());
+            return out;
+        }
+        char tmp[1024];
+        recv_send_size_t n = ::recv(fd, tmp, sizeof(tmp), 0);
+        if (n <= 0) return std::nullopt;
+        buf.append(tmp, tmp + n);
+        if (buf.size() > 1024 * 1024) return std::nullopt;
+    }
+}
+
+template <typename Pred>
+static bool wait_for(
+    Pred&& pred,
+    std::chrono::milliseconds budget = std::chrono::milliseconds(5000)) {
+    const auto deadline = std::chrono::steady_clock::now() + budget;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (pred()) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return pred();
+}
+
 static ScopedFd connect_loopback(uint16_t port) {
     ensure_winsock_started();
     sockaddr_in addr{};
@@ -203,11 +250,12 @@ constexpr const char* kSecret = "s3cr3t";
 
 static std::unique_ptr<JsonRpcServer> make_server(
     falcon::DownloadEngine& engine, bool mcp_enabled = true,
-    const std::string& secret = kSecret) {
+    const std::string& secret = kSecret, bool allow_origin_all = false) {
     JsonRpcServerConfig cfg;
     cfg.listen_port = 0;
     cfg.secret = secret;
     cfg.mcp_enabled = mcp_enabled;
+    cfg.allow_origin_all = allow_origin_all;
     auto server = std::make_unique<JsonRpcServer>(&engine, cfg);
     EXPECT_TRUE(server->start());
     EXPECT_NE(server->port(), 0);
@@ -395,17 +443,195 @@ TEST(McpServerHttpTest, DeleteTeardownThenSessionInvalid) {
 }
 
 // ---- HTTP 方法路由 ----
+// GET /mcp 自阶段 2 增量 3 起被 JsonRpcServer 拦截为 SSE 通知流（见下节）；
+// 405 形状仍服务于 GET 之外的未知方法（PUT 等）。
 
-TEST(McpServerHttpTest, GetMethodNotAllowed) {
+TEST(McpServerHttpTest, PutMethodNotAllowed) {
     falcon::DownloadEngine engine;
     auto server = make_server(engine);
-    auto resp = mcp_request(server->port(), "GET", kSecret, "", "");
+    auto resp = mcp_request(server->port(), "PUT", kSecret, "", "{}");
     ASSERT_TRUE(resp.has_value());
     EXPECT_EQ(resp->status, 405);
     auto allow = resp->headers.find("allow");
     ASSERT_TRUE(allow != resp->headers.end());
     EXPECT_EQ(allow->second, "POST, DELETE");
 }
+
+// ---- GET /mcp SSE 通知流（阶段 2 增量 3）----
+// 流本体无 Content-Length 且成功路径不关连接——错误形状（403/401/404）
+// 仍走普通响应（Connection: close + EOF），用 http_exchange；成功流用
+// 裸 socket + recv_until。
+
+// 准入与 POST/DELETE 同语义：未配 secret 整体 403（无凭据不放行）。
+TEST(McpServerSseTest, GetSseUnconfiguredSecretReturns403) {
+    falcon::DownloadEngine engine;
+    auto server = make_server(engine, true, "");
+    auto resp = mcp_request(server->port(), "GET", "", "", "");
+    ASSERT_TRUE(resp.has_value());
+    EXPECT_EQ(resp->status, 403);
+}
+
+// 认证先于会话校验：缺 Bearer → 401 + WWW-Authenticate。
+TEST(McpServerSseTest, GetSseMissingBearerReturns401) {
+    falcon::DownloadEngine engine;
+    auto server = make_server(engine);
+    auto resp = mcp_request(server->port(), "GET", "", "", "");
+    ASSERT_TRUE(resp.has_value());
+    EXPECT_EQ(resp->status, 401);
+    auto auth = resp->headers.find("www-authenticate");
+    ASSERT_TRUE(auth != resp->headers.end());
+    EXPECT_EQ(auth->second, "Bearer");
+}
+
+TEST(McpServerSseTest, GetSseWrongBearerReturns401) {
+    falcon::DownloadEngine engine;
+    auto server = make_server(engine);
+    auto resp = mcp_request(server->port(), "GET", "wrong", "", "");
+    ASSERT_TRUE(resp.has_value());
+    EXPECT_EQ(resp->status, 401);
+}
+
+// 会话缺失/过期 → 404 + re-initialize 指引（与 POST 同语义）。
+TEST(McpServerSseTest, GetSseWithoutSessionReturns404) {
+    falcon::DownloadEngine engine;
+    auto server = make_server(engine);
+    auto resp = mcp_request(server->port(), "GET", kSecret, "", "");
+    ASSERT_TRUE(resp.has_value());
+    EXPECT_EQ(resp->status, 404);
+    EXPECT_NE(resp->body.find("re-initialize"), std::string::npos);
+}
+
+TEST(McpServerSseTest, GetSseWithInvalidSessionReturns404) {
+    falcon::DownloadEngine engine;
+    auto server = make_server(engine);
+    auto resp = mcp_request(server->port(), "GET", kSecret, "deadbeef", "");
+    ASSERT_TRUE(resp.has_value());
+    EXPECT_EQ(resp->status, 404);
+}
+
+// DELETE 拆除后的会话再开流同样 404（流准入读同一会话表）。
+TEST(McpServerSseTest, GetSseAfterDeleteSessionReturns404) {
+    falcon::DownloadEngine engine;
+    auto server = make_server(engine);
+    auto sid = open_session(server->port(), kSecret);
+    ASSERT_FALSE(sid.empty());
+    auto resp = mcp_request(server->port(), "DELETE", kSecret, sid, "");
+    ASSERT_TRUE(resp.has_value());
+    EXPECT_EQ(resp->status, 204);
+    auto stream = mcp_request(server->port(), "GET", kSecret, sid, "");
+    ASSERT_TRUE(stream.has_value());
+    EXPECT_EQ(stream->status, 404);
+}
+
+// 主链路：合法会话开流 → 200 text/event-stream + 初始注释行 →
+// broadcast_notification 扇出 `data: <JSON-RPC 信封>\n\n` → stop() 拆流。
+TEST(McpServerSseTest, GetSseStreamOpensAndReceivesNotificationFanout) {
+    falcon::DownloadEngine engine;
+    auto server = make_server(engine);
+    auto sid = open_session(server->port(), kSecret);
+    ASSERT_FALSE(sid.empty());
+
+    std::string http = "GET /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\n";
+    http += "Authorization: Bearer " + std::string(kSecret) + "\r\n";
+    http += "Mcp-Session-Id: " + sid + "\r\n\r\n";
+    ScopedFd fd = connect_loopback(server->port());
+    ASSERT_GE(fd.fd, 0);
+    ASSERT_TRUE(send_all(fd.fd, http));
+    set_recv_timeout(fd.fd, 10);
+
+    std::string buf;
+    // 流式响应头：200 + text/event-stream，且无 Content-Length（无界流）。
+    auto head = recv_until(fd.fd, "\r\n\r\n", buf);
+    ASSERT_TRUE(head.has_value());
+    EXPECT_NE(head->find("200"), std::string::npos);
+    EXPECT_NE(head->find("text/event-stream"), std::string::npos);
+    EXPECT_EQ(head->find("Content-Length"), std::string::npos);
+    // 初始注释行（`: falcon mcp stream`）——客户端确认流已开的锚点。
+    auto comment = recv_until(fd.fd, "\r\n\r\n", buf);
+    ASSERT_TRUE(comment.has_value());
+    EXPECT_NE(comment->find(": falcon mcp stream"), std::string::npos);
+
+    // 等连接线程完成注册，再从测试线程广播。
+    ASSERT_TRUE(wait_for([&] { return server->sse_client_count() >= 1; }));
+    server->broadcast_notification("aria2.onDownloadStart",
+                                   R"([{"gid":"testgid"}])");
+    auto line = recv_until(fd.fd, "\n\n", buf);
+    ASSERT_TRUE(line.has_value());
+    ASSERT_TRUE(line->rfind("data: ", 0) == 0)
+        << "SSE 行必须以 data: 开头: " << *line;
+    json notif = json::parse(line->substr(6));
+    EXPECT_EQ(notif.at("jsonrpc"), "2.0");
+    EXPECT_EQ(notif.at("method"), "aria2.onDownloadStart");
+    EXPECT_EQ(notif.at("params").at(0).at("gid"), "testgid");
+
+    // 第二条通知照常到达同一流（进度扩展通知同信封形状）。
+    server->broadcast_notification(
+        "falcon.onProgress",
+        R"([{"gid":"testgid","completedLength":"1","totalLength":"2","speed":"0"}])");
+    auto line2 = recv_until(fd.fd, "\n\n", buf);
+    ASSERT_TRUE(line2.has_value());
+    json notif2 = json::parse(line2->substr(6));
+    EXPECT_EQ(notif2.at("method"), "falcon.onProgress");
+
+    // 停机收口：stop() shutdown 唤醒，客户端读到 EOF，槽位归零。
+    server->stop();
+    char tmp[64];
+    recv_send_size_t n = ::recv(fd.fd, tmp, sizeof(tmp), 0);
+    EXPECT_TRUE(n <= 0);
+    EXPECT_EQ(server->sse_client_count(), 0u);
+}
+
+// 客户端单方面断开：会话线程 recv 到 EOF 自行注销，不依赖 stop()。
+TEST(McpServerSseTest, GetSseClientDisconnectReleasesSlot) {
+    falcon::DownloadEngine engine;
+    auto server = make_server(engine);
+    auto sid = open_session(server->port(), kSecret);
+    ASSERT_FALSE(sid.empty());
+
+    // ScopedFd 无移交接口，裸 fd 手动管理（本用例自收尾）。
+    int cfd = -1;
+    {
+        ScopedFd tmp = connect_loopback(server->port());
+        cfd = tmp.fd;
+        tmp.fd = -1;
+    }
+    ASSERT_GE(cfd, 0);
+    std::string http = "GET /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\n";
+    http += "Authorization: Bearer " + std::string(kSecret) + "\r\n";
+    http += "Mcp-Session-Id: " + sid + "\r\n\r\n";
+    ASSERT_TRUE(send_all(cfd, http));
+    set_recv_timeout(cfd, 5);
+    std::string buf;
+    ASSERT_TRUE(recv_until(cfd, "\r\n\r\n", buf).has_value());
+    ASSERT_TRUE(wait_for([&] { return server->sse_client_count() >= 1; }));
+
+    socket_close(cfd);
+    ASSERT_TRUE(wait_for([&] { return server->sse_client_count() == 0; }));
+}
+
+// CORS 放开时 SSE 流式响应头同样回显 Access-Control-Allow-Origin
+// （与 WS 握手回显同语义）。
+TEST(McpServerSseTest, GetSseCorsHeaderEchoedWhenAllowed) {
+    falcon::DownloadEngine engine;
+    auto server = make_server(engine, true, kSecret, /*allow_origin_all=*/true);
+    auto sid = open_session(server->port(), kSecret);
+    ASSERT_FALSE(sid.empty());
+
+    std::string http = "GET /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\n";
+    http += "Origin: http://example.com\r\n";
+    http += "Authorization: Bearer " + std::string(kSecret) + "\r\n";
+    http += "Mcp-Session-Id: " + sid + "\r\n\r\n";
+    ScopedFd fd = connect_loopback(server->port());
+    ASSERT_GE(fd.fd, 0);
+    ASSERT_TRUE(send_all(fd.fd, http));
+    set_recv_timeout(fd.fd, 10);
+
+    std::string buf;
+    auto head = recv_until(fd.fd, "\r\n\r\n", buf);
+    ASSERT_TRUE(head.has_value());
+    EXPECT_NE(head->find("Access-Control-Allow-Origin: *"), std::string::npos);
+}
+
 
 // ---- JSON-RPC 解析分级 ----
 

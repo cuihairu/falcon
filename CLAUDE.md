@@ -2,6 +2,13 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-08 - MCP server 阶段 2 收口（全局选项与做种工具 13 个 + stdio 薄壳 `falcon-mcp` + `GET /mcp` SSE 进度订阅）
+- **三增量全部落地**（设计文档 `docs/design/mcp_server_design.md` 阶段 2，2026-10-08 收口）：① 增量 1 全局选项与做种工具——tools 10 → 13（`falcon_get_global_option`/`falcon_set_global_option`/`falcon_get_seeding_status`，翻译层零新增业务逻辑）；② 增量 2 stdio 薄壳——独立小二进制 `falcon-mcp`（stdin 逐行 MCP JSON-RPC → POST `/mcp` → stdout 逐行响应，`Mcp-Session-Id` 自动捕获/404 自动清除/EOF DELETE 拆会话，不链 libfalcon-core 纯转发，CURL 缺席不构建）；③ 增量 3 SSE 进度订阅——`GET /mcp` 通知流
+- **增量 3 SSE 数据面**：JsonRpcServer::handle_connection 拦截 GET /mcp → `McpServer::validate_sse_request` 准入（check_auth 提取共用：未配 secret 403 / Bearer 失败 401 + `WWW-Authenticate` / 会话缺失或过期 404）→ 200 `text/event-stream` + `Cache-Control: no-cache` 无 Content-Length，初始注释行 `: falcon mcp stream` → 注册进 `sse_clients_` 台账（与 ws_clients_ 同形状）→ 阻塞等对端断开/停机；通知扇出复用既有 `broadcast_notification`——同一 JSON-RPC 信封 WS 走 TEXT 帧、SSE 走 `data: <信封>\n\n` 行，引擎事件经 RpcEventBridge 天然双路；stop() 对两张表统一 shutdown 唤醒；注销纪律与 WS 一致（广播失败只 shutdown，注销由会话线程自身完成）；成功路径不关连接，准入仅发生在开流时刻（SSE 单向只写流无请求面）
+- **测试**：`mcp_server_test.cpp` 22 → 31 用例（SSE 准入三态/会话三态/扇出真到达/断开释放槽位/CORS 回显 9 用例，`falcon_daemon_rpc_tests` 65 → 74）+ daemon 全套件 482/482；真实二进制 curl 冒烟——`curl -N` 挂流 + 引擎加任务后 `data:` 行内收到 aria2.onDownloadStart/falcon.onProgress 信封、timeout 124 证流保持打开；代替 MCP inspector（本机无该环境）
+- **覆盖率定性**：SSE 区域全部覆盖，唯一 miss = 流式响应头 send_all 失败早退行（accept→write 微秒竞速窗，与 WS 侧 send-fail 行同族不可锚），已写进设计文档 §8 阶段 2 对账
+- **文档对账**：设计文档状态行改「阶段 2 已实现」+ §8 新增阶段 2 对账（流形态/通知扇出/可测性边界/冒烟形态）；daemon CLAUDE.md changelog/模块职责/对外接口（SSE 通知流小节）/测试表同步；README 双语 Advanced Features 更新为阶段 2 已落地。已知遗留（非本批范围）：serverInfo.version 报 FALCON_VERSION_STRING "0.1.0"（daemon project VERSION 已是 0.2.0），单一事实源接线另行收口
+
 ### 2026-10-07 - MCP server 阶段 1（daemon `/mcp` 端点 + 10 工具翻译层 + Bearer 鉴权/会话管理）
 - **形态**（设计文档 `docs/design/mcp_server_design.md` 阶段 1 落地，FlowDown 调研反向定位——falcon 做 MCP **server** 把自身暴露为工具，不做 host/客户端）：daemon 同端口新增 `POST /mcp` Streamable HTTP 路由；`mcp.enabled`（默认 false）或 `--enable-mcp`（隐含启用 RPC）开启；AI host（Claude Desktop/Cursor 等）经 10 个下载工具用自然语言驱动下载，tools/call 翻译到既有 aria2 RPC，**零新增业务逻辑**
 - **新文件** `mcp_server.{hpp,cpp}`（挂 `falcon_daemon_core`）：`initialize` 握手（忽略客户端会话头恒新建 32-hex 会话，`Mcp-Session-Id` 响应头；内存表上限 64 满逐最旧）+ 版本协商（`2025-06-18` 默认 + `2025-03-26`，更高回退默认）+ `tools/list` 静态 schema（10 工具全 `additionalProperties:false` + `title` + annotations：`falcon_remove_task`/`falcon_pause_all` 带 `destructiveHint:true`）+ `tools/call` 翻译层（`falcon_add_download` 的 output_dir/filename→dir/out 与 options 白名单 / `falcon_list_tasks` 的 status 聚合——all = tellActive 全量 + tellWaiting/tellStopped(0,100000) 合并统一切片，其余 8 工具直映射）+ `ping`→`{}`

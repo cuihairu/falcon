@@ -327,9 +327,10 @@ static void maybe_strip_token(json& params, const std::string& secret) {
 
 } // namespace
 
-/// 每连接写互斥。广播线程与该连接的会话线程经 shared_ptr 共享，
+/// 每连接写互斥（WebSocket 与 MCP SSE 订阅者共用同一形状）。
+/// 广播线程与该连接的会话线程经 shared_ptr 共享，
 /// 保证注销后仍在途的广播发送可以安全完成。
-struct WsClientState {
+struct StreamClientState {
     std::mutex send_mutex;
 };
 
@@ -622,6 +623,19 @@ void JsonRpcServer::stop() {
         socket_shutdown(fd);
     }
 
+    // MCP SSE 流会话同样阻塞在 recv，单独唤醒
+    std::vector<int> sse_fds;
+    {
+        std::lock_guard<std::mutex> lock(sse_clients_mutex_);
+        sse_fds.reserve(sse_clients_.size());
+        for (const auto& [fd, state] : sse_clients_) {
+            sse_fds.push_back(fd);
+        }
+    }
+    for (int fd : sse_fds) {
+        socket_shutdown(fd);
+    }
+
     if (listen_fd_ >= 0) {
         socket_shutdown(listen_fd_);
         socket_close(listen_fd_);
@@ -779,6 +793,14 @@ void JsonRpcServer::handle_connection(int client_fd) {
         return;
     }
 
+    // MCP SSE 通知流（GET /mcp）：接管连接进入流循环（阶段 2 增量 3）。
+    // 与 WS 同端口不同路径；准入校验（403/401/404）在 handle_mcp_sse 内
+    // 经 McpServer 完成，错误形状照常回发。
+    if (config_.mcp_enabled && req->method == "GET" && req->path == "/mcp") {
+        handle_mcp_sse(fd.fd, *req);
+        return;
+    }
+
     auto resp = handle_http_request(*req);
     const std::string out = format_http_response(resp);
     send_all(fd.fd, out);
@@ -797,7 +819,7 @@ bool JsonRpcServer::is_websocket_upgrade(const HttpRequest& req) const {
 
 bool JsonRpcServer::ws_send_frame(int client_fd, std::uint8_t opcode,
                                   const std::string& payload) {
-    std::shared_ptr<WsClientState> state;
+    std::shared_ptr<StreamClientState> state;
     {
         std::lock_guard<std::mutex> lock(ws_clients_mutex_);
         auto it = ws_clients_.find(client_fd);
@@ -837,7 +859,7 @@ void JsonRpcServer::handle_websocket(int client_fd, const HttpRequest& req) {
 
     // 注册为订阅者；连接 fd 的注销统一由本线程完成（广播失败只 shutdown
     // 唤醒本线程，避免跨线程 close 引发 fd 复用竞争）
-    auto state = std::make_shared<WsClientState>();
+    auto state = std::make_shared<StreamClientState>();
     {
         std::lock_guard<std::mutex> lock(ws_clients_mutex_);
         ws_clients_[fd.fd] = state;
@@ -891,6 +913,68 @@ void JsonRpcServer::handle_websocket(int client_fd, const HttpRequest& req) {
     }
 }
 
+void JsonRpcServer::handle_mcp_sse(int client_fd, const HttpRequest& req) {
+    ScopedFd fd(client_fd);
+
+    // 准入校验经 McpServer（与 POST/DELETE 同语义：未配 secret 403 /
+    // Bearer 失败 401 / 会话缺失或过期 404）；错误形状照常回发
+    McpServer::Request mreq;
+    mreq.method = req.method;
+    for (const auto& [key, value] : req.headers)
+        mreq.headers[key] = value;
+    McpServer::Response gate =
+        mcp_->validate_sse_request(mreq, auth_secret());
+    if (gate.status_code != 200) {
+        HttpResponse resp;
+        resp.status_code = gate.status_code;
+        resp.status_text = gate.status_text;
+        resp.body = std::move(gate.body);
+        for (auto& [key, value] : gate.headers)
+            resp.headers[key] = std::move(value);
+        resp.headers["Server"] = "falcon-daemon";
+        resp.headers["Content-Type"] = "application/json";
+        resp.headers["Connection"] = "close";
+        send_all(fd.fd, format_http_response(resp));
+        return;
+    }
+
+    // 流式响应头（无 Content-Length；SSE 单向服务器→客户端）。注释行
+    // 让客户端与测试在首个通知到达前即可确认流已开通。
+    std::ostringstream oss;
+    oss << "HTTP/1.1 200 OK\r\n"
+        << "Content-Type: text/event-stream\r\n"
+        << "Cache-Control: no-cache\r\n";
+    if (auth_allow_origin_all()) {
+        oss << "Access-Control-Allow-Origin: *\r\n";
+    }
+    oss << "\r\n: falcon mcp stream\r\n\r\n";
+    if (!send_all(fd.fd, oss.str())) {
+        return;
+    }
+
+    // 注册为订阅者；连接 fd 的注销统一由本线程完成（广播失败只 shutdown
+    // 唤醒本线程，避免跨线程 close 引发 fd 复用竞争）——与 WS 会话同一纪律
+    auto state = std::make_shared<StreamClientState>();
+    {
+        std::lock_guard<std::mutex> lock(sse_clients_mutex_);
+        sse_clients_[fd.fd] = state;
+    }
+
+    // SSE 是单向流：客户端协议上不发送数据。阻塞 recv 只为感知对端
+    // 断开（EOF/ECONNRESET）与 stop()（shutdown 唤醒）；收到的任何
+    // 字节忽略。
+    char tmp[256];
+    while (!stop_requested_.load()) {
+        recv_send_size_t n = ::recv(fd.fd, tmp, sizeof(tmp), 0);
+        if (n <= 0) break;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(sse_clients_mutex_);
+        sse_clients_.erase(fd.fd);
+    }
+}
+
 void JsonRpcServer::broadcast_notification(const std::string& method,
                                            const std::string& params_json) {
     // JSON-RPC 通知：无 id 字段
@@ -903,9 +987,11 @@ void JsonRpcServer::broadcast_notification(const std::string& method,
     body += "}";
 
     const std::string frame = ws_encode_frame(WS_OP_TEXT, body);
+    // SSE 帧：同一 JSON-RPC 通知信封装进 data 行
+    const std::string sse_line = "data: " + body + "\n\n";
 
     // 快照后逐连接发送，避免持注册锁做 I/O
-    std::vector<std::pair<int, std::shared_ptr<WsClientState>>> snapshot;
+    std::vector<std::pair<int, std::shared_ptr<StreamClientState>>> snapshot;
     {
         std::lock_guard<std::mutex> lock(ws_clients_mutex_);
         snapshot.assign(ws_clients_.begin(), ws_clients_.end());
@@ -918,11 +1004,28 @@ void JsonRpcServer::broadcast_notification(const std::string& method,
             socket_shutdown(fd);
         }
     }
+
+    std::vector<std::pair<int, std::shared_ptr<StreamClientState>>> sse_snapshot;
+    {
+        std::lock_guard<std::mutex> lock(sse_clients_mutex_);
+        sse_snapshot.assign(sse_clients_.begin(), sse_clients_.end());
+    }
+    for (const auto& [fd, state] : sse_snapshot) {
+        std::lock_guard<std::mutex> send_lock(state->send_mutex);
+        if (!send_all(fd, sse_line)) {
+            socket_shutdown(fd);
+        }
+    }
 }
 
 std::size_t JsonRpcServer::websocket_client_count() {
     std::lock_guard<std::mutex> lock(ws_clients_mutex_);
     return ws_clients_.size();
+}
+
+std::size_t JsonRpcServer::sse_client_count() {
+    std::lock_guard<std::mutex> lock(sse_clients_mutex_);
+    return sse_clients_.size();
 }
 
 JsonRpcServer::HttpResponse JsonRpcServer::handle_http_request(const HttpRequest& req) {
