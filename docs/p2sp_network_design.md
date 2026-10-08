@@ -4,6 +4,9 @@
 > 本文档为设计材料,全部内容尚未进入当前公开 API。本文承接 `todo.md` 中
 > 「P2SP 共享网络路线讨论(立项备忘)」的路线论证,将其推进为可指导实现的设计。
 
+> **状态**:阶段 0 已实现(2026-09-25,`falcon-swarmd` 包,见该包 CLAUDE.md);
+> **阶段 1 设计已收口(§16,2026-10-08),实现进行中**;阶段 2/3 未开工。
+
 ## 1. 问题陈述与目标
 
 Falcon 今天已有的能力(2026-09 现状):
@@ -626,3 +629,112 @@ mDNS 局域网发现、R3 元数据消费(daemon 扩展方法 + 桌面去重提�
 **路线图**:阶段 0(Rendezvous + 身份)→ 阶段 1(公告/查询 + 完成钩子,下载面零改动)→ 阶段 2(数据面打通,混合源分段拉取)→ 阶段 3(按需)。每阶段独立验收,阶段 1 的"Rendezvous 杀死下载无感"与"默认 off 全量测试零变化"是本设计两条不可妥协的验收铁律。
 
 与 todo.md 备忘的对账:路线 C 的"中央索引"以**自托管私有**形态落地(避开其法务与运营定性的适用前提);备忘三件事中"索引公告"与"上传策略(默认关)"在本文完整设计,"入站监听"细化为阶段 2 的内嵌只读数据服务;备忘的 NAT 穿透评估(§5)与冷启动定性(§3.2)分别给出结论。
+
+---
+
+## 16. 阶段 1 实现设计(2026-10-08 收口)
+
+本节把 §12 阶段 1 范围(`SwarmAnnouncer` + 配置面全链 + `retract` + TTL 续租)落成可指导实现的设计,并裁决 §14 两个开放问题。实现按增量推进,每增量全绿后提交。
+
+### 16.1 开放问题裁决(§14 → 定案)
+
+1. **R2 镜像 URL 隐私 = query/fragment 一刀切过滤**。镜像 URL 含签名 token 时 token 几乎总在 query(S3 预签名/OSS 签名/Kodo token 均如此)——公告侧对 R2 URL 做**最小卫生检查:URL 含 `?` 或 `#` 即丢弃该 R2 条目(计入 rejected),只保留 R1**;scheme 非 http/https 同样丢弃。不做正则白名单(维护成本高、误杀难排查)。局域网地址(RFC 1918)不过滤——P2SP 主场景就是局域网/小圈子,内网可达地址恰是合法公告内容。`share.announce_mirrors: false` 可整体关闭 R2 公告。
+2. **session 凭据不持久化**。重注册协议本身是幂等自愈路径(Rendezvous 重启 → 全群 -32003 → 重注册),公告状态机以**本地意图表**(内存)为准:重注册成功后全量重公告补差。密钥文件即身份,session 只是租约。
+
+### 16.2 服务端(falcon-swarmd):announce/retract 语义
+
+**签名形态(与 register 挑战式的分叉)**:announce/retract 高频(60/min)且副作用幂等(upsert),不值得每请求一次挑战往返。签名 payload 沿 §8.1 公式,**nonce 语义位填 session**:
+
+```
+payload = method + "\n" + session + "\n" + sha256_hex(canonical_params_without_sig)
+```
+
+参数完整性由 sha256(params) 绑定(防偷换——与 register step2 同一机制),身份由 Ed25519 保证;重放窗口 = 重复 upsert 同一资源,无安全后果(幂等)。
+
+**announce(params = {session, sig, resources:[...]})**:
+- 鉴权链:Bearer(传输层)→ session 有效性(-32003)→ 验签(-32005)。验签失败同 register 惯例。
+- params 校验:resources 必须为数组且 ≤256 条(§9.5),超限 -32602;每条严格 schema(未知字段拒绝):`kind` ∈ {`file`,`mirror`};file 必带 sha256(64 hex 小写);mirror 必带 url(http/https)+sha256;`ttl_s` 缺省 86400,钳 [3600, 604800](1h..7d)。
+- **归并语义**(§8.3):同 sha256 → 同资源。file 条目 upsert node 源(node_id = session 所属节点,direct/addr/agent 取注册态);mirror 条目 upsert url 源(etag/last_modified/accept_ranges 可选)。**url 源的归属者记为公告者**(SwarmResourceSource.node_id 复用为归属者字段)——retract 与节点摘除联动靠它。
+- name/size:资源级单值,**非空值后写胜出**(确定性;hash_only 公告 name 缺省不覆盖已有 name)。
+- expires_at:**max(现值, now + ttl_s)**——多公告者共存时短 ttl 公告者不得缩短他人续租;单公告者自续租语义不变。
+- result = `{accepted, rejected, expires_at}`(资源级 expires_at,max(各命中资源);空 resources 数组合法,accepted=0)。单条资源非法(哈希形态错/URL 被隐私过滤)计入 rejected 不失败整请求;params 级错误才 -32602。
+- **onResourceAdded 触发:资源首次出现才广播**(params object,沿 §8.5);已有资源追加来源不广播(增量语义 = 新资源;来源变更由查询面覆盖)。
+
+**retract(params = {session, sig, sha256s:[64hex,...]})**:
+- 语义:摘除本节点在该资源上的**全部来源**(node 源 + 本节点公告的 url 源)。
+- 资源 sources 清空 → 删资源 + 广播 `onResourceExpired`(§7.3 触发表:TTL 到期/持有者下线——显式 retract 清空同属此语义);sources 未空(他节点仍持有)→ 不广播。未知 sha256 计入 unknown 不报错。
+- result = `{removed, unknown}`。
+
+**TTL 到期与节点摘除联动(更正阶段 0 裁决)**:sweep 扫 `resources_`,`expires_at <= now` → 删资源 + onResourceExpired(阶段 0 的「过期资源无通知」是表恒空占位,阶段 1 按 §7.3 触发表生效)。sweep/unsubscribe 摘节点 → 连带摘其全部来源;资源 sources 空 → 删资源 + onResourceExpired。
+
+**限频/配额**:RateLimiter 第三实例(announce 60/min per **node_id**——与 register/query 的 per-IP 键不同,公告配额按身份计);每节点活跃公告 ≤10k 条(按来源归属计数),超配额整请求拒绝 -32002(429 同发,沿既有形态)。
+
+### 16.3 节点侧(falcon-swarmd client):SwarmClient 扩展
+
+- `SwarmError announce(const std::vector<AnnounceResource>&)` / `SwarmError retract(const std::vector<std::string>& sha256s)`;`AnnounceResource{kind, sha256, name, size, url, etag, last_modified, accept_ranges, ttl_s}`。
+- 签名 nonce 位填当前 session;非 0 result 的 rejected/unknown 交调用方解读,网络/协议失败走 SwarmError。
+
+### 16.4 SwarmAnnouncer(daemon 侧新组件)
+
+新文件 `packages/falcon-daemon/src/daemon/swarm_announcer.{hpp,cpp}`,**编进 falcon-daemon 可执行 target**(依赖 falcon_swarm_client→CURL;falcon_daemon_core 不链 CURL,不进该库)。生命周期走 main.cpp 监听者注册区既有形态(`TaskStorageListener` + `ListenerDetacher` RAII 同款,main.cpp:374-389 先例)。
+
+**完成钩子(D10)**:实现 `IEventListener::on_completed(task_id, output_path, total)` → 入后台哈希队列;哈希(`FileHasher::calculate_streaming`,SHA-256)与网络全部在 announcer 工作线程,**完成回调路径零新增延迟**。可选 `share.hash_delay_s` 错峰。
+
+**过滤链(顺序)**:
+1. `share.enabled` 为假或 `one_way`(只消费)为真 → 不公告;
+2. per-download 覆盖:options `p2sp_share`(三态 ""/"true"/"false","" = 跟全局);
+3. `magnet:` 前缀任务不公告(BT 资源走 BT 网络自身发现面;`.torrent` 文件任务按普通文件公告语义自洽——他人可经 P2SP 拿到种子文件,不误伤);
+4. 哈希失败(文件消失/读错误)→ 放弃本条,不重试不告警升级(WARN 一次)。
+
+**公告内容**:R1(file, sha256, name/size 按 mode)+ 任务 URL 为 http(s) 且通过隐私过滤(16.1)时附 R2(mirror, url=任务 URL;etag/last_modified 任务层无,缺省;accept_ranges 缺省不公告)。`share.mode: "standard"` 公告 name+size,`"hash_only"` 连 size 一起省(size 侧信道可猜内容)。
+
+**TTL 续租循环(announcer 线程)**:周期 = min(5min, ttl/3)。每轮对每条活跃公告:
+- 文件存在且 (mtime,size) 与公告时一致 → announce 重发(续租);
+- 文件消失 → retract + 移出活跃表(e2e 验收铁律 (a) 的 retract 入口);
+- (mtime,size) 变化 → retract 旧哈希 + 重哈希公告新哈希(旧资源不 dangling);
+- `SwarmClient::session()` 变化(检测于续租循环)→ **全量重公告**(§16.1 裁决 2 的补差路径);
+- announce 失败 → 指数退避(1s 起 ×2,上限 5min,加抖动),-32003 无需特殊处理(SwarmClient 心跳线程自动重注册,自愈后 announce 自然成功)。
+
+**停机语义**:stop() 停哈希队列与续租循环,**不 retract**——停机不等于删文件,重注册后全量重公告补差;异常停机泄漏的公告由 TTL 上界(7d)自愈。`share.enabled` 热更关 → 全量 retract 后停(§11「优雅撤回」)。
+
+**私钥**:`~/.config/falcon/swarm_key.pem` 0600,`SwarmKeyStore` 既有 load_or_create;同机 daemon+CLI 共用密钥会互踢 session(各自心跳 -32003 往复),自愈无损害,文档披露为已知行为。
+
+### 16.5 配置面全链
+
+**daemon(daemon.json `p2sp` 节,默认整体缺省 = 共享关)**:
+
+```jsonc
+{
+  "p2sp": {
+    "share": { "enabled": false, "mode": "standard", "one_way": false,
+               "ttl_s": 86400, "hash_delay_s": 0, "announce_mirrors": true },
+    "rendezvous": { "host": "127.0.0.1", "port": 7800,
+                    "server_token": "", "group_token": "",
+                    "advertise_addr": "", "advertise_direct": true }
+  }
+}
+```
+
+- 类型错误报错退出(daemonize 前),未知键告警——沿 config 既有分型;`mode` 非法值告警保留 standard(对齐 http_engine 先例)。
+- SIGHUP:`share.*` 全部热更(enabled 变 false → 全量 retract);`rendezvous.*` 变化 → "restart required" 告警。
+
+**RPC(阶段 1 增量 4)**:`falcon.swarm.status`(announcer 状态快照:enabled/registered/node_id/session/announced_count/queue_depth)+ `falcon.swarm.setShare`(params {enabled},运行时开关同热更语义);addUri per-download 选项 `p2sp-share`("true"/"false" 字符串,aria2 风格),消费点 = announcer 过滤链,持久化随 TaskStorage options JSON 尾字段。
+
+**CLI(阶段 1 增量 4)**:`--p2sp-share` / `--swarm-server host:port` / `--p2sp-advertise addr` 接 config_loader 三件套;`--swarm-fingerprint` 解析但启动 WARN 忽略(阶段 0 client 无 TLS,前向声明);CLI 单发形态**无续租无数据服务**——下载完成后同步哈希(阻塞,CLI 无后台宿主)→ announce 一次 → 退出,announce 失败 WARN 不失败下载;资源可用窗口 = min(TTL, 退出前),如实披露。daemon 是共享的一等形态,CLI 公告属尽力而为。
+
+### 16.6 测试设计(防同一 bug 自我印证)
+
+- **服务端纯单元**(虚拟时钟):announce upsert 归并/node-url 源归属/expires_at max 语义/name 后写胜出/ttl 钳制/rejected vs -32602 分型/retract 部分摘除与清空删资源/摘节点联动/TTL sweep 通知/限频 per-node/配额 10k/签名失败 -32005/nonce=session payload 对拍。
+- **回环线协议**:真 socket announce→query 命中元数据一致(铁律 a 前半)/retract→落空/announce 通知真到达 WS/onResourceExpired 两触发面/429 与 -32002 同发。
+- **client**:SwarmClient announce/retract × 回环 Rendezvous(签名往返真实验签)。
+- **announcer**:哈希队列(伪 Hasher 注入)/过滤链全分支/mtime+size 变化三分支(续租/retract/重公告)/session 变化全量补差/退避(虚拟时钟或短间隔)/停机不 retract。
+- **e2e 验收(铁律,增量 4 收口)**:(a) A 完成 → B query 命中(元数据一致)→ A 删文件 → retract → B 落空;(b) Rendezvous 进程杀死,A/B 下载任务(含进行中)全程无感,成品逐字节一致;(c) 默认 off 全量既有 ctest 套件零变化。
+
+### 16.7 增量切分
+
+| 增量 | 内容 | 门禁 |
+|---|---|---|
+| 1 | 本节设计落文档(已完成)+ swarmd 服务端 announce/retract/sweep 联动/通知/限频/配额 | swarmd 单元+回环全绿 |
+| 2 | SwarmClient announce/retract + 测试 | swarmd 四 target 全绿 |
+| 3 | SwarmAnnouncer + daemon p2sp 配置节 + main 接线 + SIGHUP | daemon 全套件 + swarmd 全绿 |
+| 4 | RPC falcon.swarm.status/setShare + addUri p2sp-share + CLI 参数链 + e2e 验收四条 + 文档对账(daemon/swarmd CLAUDE.md、README) | 全仓 ctest 全绿 + e2e 铁律 |
