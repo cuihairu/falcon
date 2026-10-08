@@ -1,7 +1,5 @@
 #include "rpc/mcp_server.hpp"
 
-#include <falcon/version.hpp>
-
 #include <algorithm>
 #include <iomanip>
 #include <random>
@@ -446,7 +444,7 @@ McpServer::Response McpServer::handle_request(const Request& req,
         caps["tools"] = json::object();
         json info = json::object();
         info["name"] = "falcon";
-        info["version"] = FALCON_VERSION_STRING;
+        info["version"] = mcp_server_version();
         json result = json::object();
         result["protocolVersion"] = negotiated;
         result["capabilities"] = std::move(caps);
@@ -699,6 +697,12 @@ nlohmann::json mcp_tools_manifest() {
                  {"readOnlyHint", false},
                  {"openWorldHint", false}}),
     });
+}
+
+std::string mcp_server_version() {
+    // 构建期注入（daemon CMakeLists，源 = 本包 project(VERSION)）；无注入
+    // 即编译错误——版本上报不允许回落到任何硬编码字面量。
+    return FALCON_DAEMON_VERSION;
 }
 
 } // namespace falcon::daemon::rpc

@@ -363,7 +363,12 @@ TEST(McpServerHttpTest, InitializeHandshakeRoundTrip) {
     EXPECT_EQ(result.at("protocolVersion"), "2025-06-18");
     ASSERT_TRUE(result.at("capabilities").contains("tools"));
     EXPECT_EQ(result.at("serverInfo").at("name"), "falcon");
-    EXPECT_FALSE(result.at("serverInfo").at("version").get<std::string>().empty());
+    // 版本一致性钉子：上报值必须等于构建注入值（源 = 本包 project(VERSION)，
+    // 与 falcon-mcp --version 的 FALCON_MCP_VERSION 同源）。回改任何硬编码
+    // 字面量（如 core 的 FALCON_VERSION_STRING "0.1.0"）即红。
+    EXPECT_EQ(result.at("serverInfo").at("version").get<std::string>(),
+              falcon::daemon::rpc::mcp_server_version());
+    EXPECT_EQ(result.at("serverInfo").at("version").get<std::string>(), "0.2.0");
 }
 
 TEST(McpServerHttpTest, InitializeIgnoresClientSessionHeaderAndCreatesNew) {

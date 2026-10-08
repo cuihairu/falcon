@@ -114,6 +114,15 @@ if(nlohmann_json_FOUND)
         src/rpc/websocket_rpc_client.hpp
     )
 
+    # MCP initialize serverInfo.version 单一事实源 = 本包 project(VERSION)：
+    # 构建期注入（沿 falcon-cli FALCON_CLI_VERSION / falcon-mcp
+    # FALCON_MCP_VERSION 先例；选注入而非生成头文件——同款机制仓内已有
+    # 两处，免新增 configure_file 模板与生成目录 include 路径）。经
+    # mcp_server_version() 访问器暴露，测试引用同一访问器做一致性钉子。
+    target_compile_definitions(falcon_daemon_rpc PRIVATE
+        FALCON_DAEMON_VERSION="${PROJECT_VERSION}"
+    )
+
     # Task storage library (requires SQLite3)
     if(SQLite3_FOUND)
         add_library(falcon_daemon_storage STATIC

@@ -2,6 +2,12 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-08 - daemon serverInfo.version 单一事实源收口（FALCON_DAEMON_VERSION 构建期注入）
+- **漂移面消除**：MCP initialize 的 `serverInfo.version` 从 core 头文件硬编码 `FALCON_VERSION_STRING "0.1.0"` 改接 `mcp_server_version()` 访问器——构建期注入宏 `FALCON_DAEMON_VERSION`（`falcon_daemon_rpc` target_compile_definitions，源 = 本包 `project(VERSION)` 0.2.0）。**机制选型**：构建期注入而非生成头文件——falcon-cli `FALCON_CLI_VERSION` / falcon-mcp `FALCON_MCP_VERSION` 同款先例已有两处，免新增 configure_file 模板与生成目录 include 路径；宏缺失即编译错误，版本上报不允许回落到任何硬编码字面量。core 的 `falcon/version.hpp`（仍 "0.1.0"，core/desktop 消费方不在本批范围）include 一并移除
+- **测试钉子（双保险）**：`InitializeHandshakeRoundTrip` 断言 `serverInfo.version == mcp_server_version()`（防回改任何硬编码字面量）+ `== "0.2.0"`（字面钉死，沿 cli_main_integration_test "v0.2.0" 先例——升版本必须同步改测试，漂移必红）。**为什么经访问器而非测试侧同款注入**：tests/CMakeLists.txt 有自己的 `project(falcon_daemon_tests VERSION 0.1.0)`，子目录 `${PROJECT_VERSION}` 解析为 0.1.0，测试 TU 注入会注入错值——访问器让两侧共享同一编译单元的宏
+- **验证**：daemon 门禁全套件 482/482；gcov 对象级核对新行全命中（mcp_server.cpp:447 调用点 96 hits / :702 访问器 97 hits）；README/设计文档核对零版本口径需同步。**测量级教训**：改生产源码后只重建测试 target 不够——共享该 TU 的全部二进制（falcon-daemon exe、rpc_storage/rpc_client/config/coverage 测试）都持旧 stamp 对象，旧 gcda 合流即 "stamp mismatch with notes file"（gcov 报 0.00%），必须全量重建 + 清 gcda + 全套件重跑
+- W1 与 B14-b 维持挂起待拍板（不动）
+
 ### 2026-10-08 - MCP server 阶段 2 收口（全局选项与做种工具 13 个 + stdio 薄壳 `falcon-mcp` + `GET /mcp` SSE 进度订阅）
 - **三增量全部落地**（设计文档 `docs/design/mcp_server_design.md` 阶段 2，2026-10-08 收口）：① 增量 1 全局选项与做种工具——tools 10 → 13（`falcon_get_global_option`/`falcon_set_global_option`/`falcon_get_seeding_status`，翻译层零新增业务逻辑）；② 增量 2 stdio 薄壳——独立小二进制 `falcon-mcp`（stdin 逐行 MCP JSON-RPC → POST `/mcp` → stdout 逐行响应，`Mcp-Session-Id` 自动捕获/404 自动清除/EOF DELETE 拆会话，不链 libfalcon-core 纯转发，CURL 缺席不构建）；③ 增量 3 SSE 进度订阅——`GET /mcp` 通知流
 - **增量 3 SSE 数据面**：JsonRpcServer::handle_connection 拦截 GET /mcp → `McpServer::validate_sse_request` 准入（check_auth 提取共用：未配 secret 403 / Bearer 失败 401 + `WWW-Authenticate` / 会话缺失或过期 404）→ 200 `text/event-stream` + `Cache-Control: no-cache` 无 Content-Length，初始注释行 `: falcon mcp stream` → 注册进 `sse_clients_` 台账（与 ws_clients_ 同形状）→ 阻塞等对端断开/停机；通知扇出复用既有 `broadcast_notification`——同一 JSON-RPC 信封 WS 走 TEXT 帧、SSE 走 `data: <信封>\n\n` 行，引擎事件经 RpcEventBridge 天然双路；stop() 对两张表统一 shutdown 唤醒；注销纪律与 WS 一致（广播失败只 shutdown，注销由会话线程自身完成）；成功路径不关连接，准入仅发生在开流时刻（SSE 单向只写流无请求面）

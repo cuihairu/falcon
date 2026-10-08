@@ -6,6 +6,30 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-08 - serverInfo.version 单一事实源收口（构建期注入 FALCON_DAEMON_VERSION）
+- **漂移面消除**：`mcp_server.cpp` initialize 的 `serverInfo.version` 从
+  `FALCON_VERSION_STRING`（core 头文件硬编码 "0.1.0"）改接
+  `mcp_server_version()` 访问器——返回构建期注入宏
+  `FALCON_DAEMON_VERSION`（`falcon_daemon_rpc` target_compile_definitions，
+  源 = 本包 `project(VERSION)` 0.2.0）；core 的 `falcon/version.hpp`
+  include 一并移除。**机制选型**：构建期注入而非生成头文件——同款机制
+  仓内已有两处先例（falcon-cli `FALCON_CLI_VERSION`、falcon-mcp
+  `FALCON_MCP_VERSION`），免新增 configure_file 模板与生成目录 include
+  路径；宏缺失即编译错误，版本上报不允许回落到任何硬编码字面量
+- **测试钉子（双保险）**：`InitializeHandshakeRoundTrip` 断言
+  `serverInfo.version == mcp_server_version()`（防回改任何硬编码字面量）
+  + `== "0.2.0"`（字面钉死，沿 cli_main_integration_test "v0.2.0" 先例
+  ——升版本必须同步改测试，漂移必红）。**为什么经访问器而非测试侧同款
+  注入**：tests/CMakeLists.txt 有自己的 `project(falcon_daemon_tests
+  VERSION 0.1.0)`，子目录 `${PROJECT_VERSION}` 解析为 0.1.0——测试 TU
+  注入会注入错值；访问器让两侧共享同一编译单元的宏
+- **验证**：daemon 门禁全套件 482/482；gcov 对象级核对新行全命中
+  （mcp_server.cpp:447 调用点 96 hits / :702 访问器 97 hits）；
+  **测量级教训**：改生产源码后只重建测试 target 不够——共享该 TU 的
+  全部二进制（falcon-daemon exe、rpc_storage/rpc_client/config/coverage
+  测试）都持旧 stamp 对象，旧 gcda 合流即 "stamp mismatch with notes
+  file"（gcov 报 0.00%）；必须全量重建 + 清 gcda + 全套件重跑
+
 ### 2026-10-08 - MCP server 阶段 2 增量 3（GET /mcp SSE 进度订阅通知流，阶段 2 收口）
 - **GET /mcp 从 405 占位改为 SSE 通知流**：鉴权与会话准入与 POST/DELETE 同语义
   （未配 secret 403 / Bearer 失败 401 + `WWW-Authenticate` / 会话缺失或过期
@@ -35,7 +59,9 @@
   CORS）全部覆盖
 - **阶段 2 收口**：三增量（全局选项与做种工具 / stdio 薄壳 / 进度订阅）全部
   落地；已知遗留：serverInfo.version 上报 FALCON_VERSION_STRING "0.1.0"
-  （未对齐本包 project VERSION 0.2.0，非本阶段范围）
+  （未对齐本包 project VERSION 0.2.0，非本阶段范围）——已于 2026-10-08
+  收口：`mcp_server_version()` 接构建期注入 `FALCON_DAEMON_VERSION`
+  （见顶部 changelog）
 
 ### 2026-10-08 - MCP server 阶段 2 增量 2（stdio 薄壳 falcon-mcp）
 - **新目录 `tools/` 三件**（设计文档 §4 薄壳原则）：

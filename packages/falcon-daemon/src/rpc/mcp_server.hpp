@@ -78,4 +78,10 @@ private:
 /// 防提示注入放大）。独立自由函数便于单测直接断言 schema 形状。
 nlohmann::json mcp_tools_manifest();
 
+/// initialize serverInfo.version 上报值。单一事实源 = 本包 project(VERSION)
+/// （构建期经 FALCON_DAEMON_VERSION 注入，沿 falcon-cli FALCON_CLI_VERSION /
+/// falcon-mcp FALCON_MCP_VERSION 注入先例）。独立自由函数便于一致性
+/// 钉子断言（响应值 == 注入值，回改任何硬编码字面量即红）。
+std::string mcp_server_version();
+
 } // namespace falcon::daemon::rpc
