@@ -258,6 +258,91 @@ SwarmError SwarmClient::query(const std::string& sha256_hex,
                     result);
 }
 
+namespace {
+
+// AnnounceResource → 线上条目 JSON（§16.2 条目形状）。可选字段空/缺省
+// 不上线——与服务器「缺省即默认值」语义逐键对齐。
+nlohmann::json announce_resource_to_json(const AnnounceResource& r) {
+    nlohmann::json e{{kFieldKind, r.kind}, {kFieldSha256, r.sha256}};
+    if (r.kind == "mirror") {
+        e[kFieldUrl] = r.url;
+        if (!r.etag.empty()) e[kFieldEtag] = r.etag;
+        if (!r.last_modified.empty()) e[kFieldLastModified] = r.last_modified;
+        if (r.accept_ranges) e[kFieldAcceptRanges] = true;
+    } else {
+        if (!r.name.empty()) e[kFieldName] = r.name;
+        if (r.has_size) e[kFieldSize] = r.size;
+    }
+    if (r.ttl_s.count() > 0) e[kFieldTtlS] = r.ttl_s.count();
+    return e;
+}
+
+}  // namespace
+
+SwarmError SwarmClient::announce(
+    const std::vector<AnnounceResource>& resources, nlohmann::json* result) {
+    std::string session;
+    {
+        std::lock_guard<std::mutex> lock(session_mutex_);
+        session = session_;
+    }
+    if (session.empty()) {
+        SwarmError err;
+        err.code = kErrUnknownSession;
+        err.message = "no active session";
+        return err;
+    }
+
+    nlohmann::json arr = nlohmann::json::array();
+    for (const AnnounceResource& r : resources) {
+        arr.push_back(announce_resource_to_json(r));
+    }
+    nlohmann::json params{{kFieldSession, session},
+                          {kFieldResources, std::move(arr)}};
+
+    // 签名覆盖去 sig 后 canonical（nonce 槽位 = session，无逐次挑战 §16.2）
+    const std::string payload = signing_payload(
+        kMethodAnnounce, session, canonical_json(params));
+    const std::string sig = SwarmCrypto::sign(key_.private_seed, payload);
+    if (sig.empty()) {
+        SwarmError err;
+        err.code = kJsonRpcInternalFallback;
+        err.message = "announce signing failed";
+        return err;
+    }
+    params[kFieldSig] = sig;
+    return rpc_call(kMethodAnnounce, params, result);
+}
+
+SwarmError SwarmClient::retract(const std::vector<std::string>& sha256s,
+                                nlohmann::json* result) {
+    std::string session;
+    {
+        std::lock_guard<std::mutex> lock(session_mutex_);
+        session = session_;
+    }
+    if (session.empty()) {
+        SwarmError err;
+        err.code = kErrUnknownSession;
+        err.message = "no active session";
+        return err;
+    }
+
+    nlohmann::json params{{kFieldSession, session},
+                          {kFieldSha256s, sha256s}};
+    const std::string payload = signing_payload(
+        kMethodRetract, session, canonical_json(params));
+    const std::string sig = SwarmCrypto::sign(key_.private_seed, payload);
+    if (sig.empty()) {
+        SwarmError err;
+        err.code = kJsonRpcInternalFallback;
+        err.message = "retract signing failed";
+        return err;
+    }
+    params[kFieldSig] = sig;
+    return rpc_call(kMethodRetract, params, result);
+}
+
 void SwarmClient::detach() {
     {
         std::lock_guard<std::mutex> lock(hb_mutex_);

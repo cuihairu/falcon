@@ -27,6 +27,7 @@
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <vector>
 
 namespace falcon::swarm {
 
@@ -51,6 +52,23 @@ struct SwarmError {
     bool ok() const { return code == 0; }
 };
 
+/// announce 公告条目（§16.3）。kind = "file"（本机源：advertise 注册态
+/// 承载，name/size 资源级元数据）或 "mirror"（url 源：etag/last_modified/
+/// accept_ranges 归并后写胜出）。可选字段空/缺省不上线。
+struct AnnounceResource {
+    std::string kind;              // "file" | "mirror"
+    std::string sha256;            // 64 位小写 hex（非此形态服务器计 rejected）
+    std::string name;              // file：资源名（空 = 不上送）
+    bool has_size = false;
+    uint64_t size = 0;             // file：资源尺寸（has_size 才上送）
+    std::string url;               // mirror：必填（非 http(s) 计 rejected）
+    std::string etag;              // mirror：空 = 不上送
+    std::string last_modified;     // mirror：空 = 不上送
+    bool accept_ranges = false;    // mirror：false = 不上送（与服务器缺省同义）
+    std::chrono::seconds ttl_s{0}; // <=0 = 不上送（服务器缺省 86400，钳
+                                   // [3600, 604800]）
+};
+
 class SwarmClient {
 public:
     SwarmClient(SwarmClientConfig cfg, SwarmKeyMaterial key);
@@ -70,6 +88,19 @@ public:
 
     /// 查询资源来源（阶段 0 空表：合法 session → sha256 回显 + 空数组）。
     SwarmError query(const std::string& sha256_hex, nlohmann::json* result);
+
+    /// 公告资源（§16.2/§16.3）：批量 file/mirror 条目，签名 nonce 槽位 =
+    /// 当前 session。成功（err.ok）时 result = {accepted, rejected,
+    /// expires_at}——非 0 的 rejected 交调用方解读，不是错误；网络/协议
+    /// 失败走 SwarmError。会话读取与签名/发送之间心跳线程可能重注册换
+    /// session（→ -32003），调用方按可重试错误处理。
+    SwarmError announce(const std::vector<AnnounceResource>& resources,
+                        nlohmann::json* result);
+
+    /// 摘除名下公告（按哈希整批）。成功时 result = {removed, unknown}——
+    /// 表中无该哈希计 unknown；表中有但名下无源两边都不计（§16.2）。
+    SwarmError retract(const std::vector<std::string>& sha256s,
+                       nlohmann::json* result);
 
     // ---- 观测（线程安全）---------------------------------------------
     std::string node_id() const;

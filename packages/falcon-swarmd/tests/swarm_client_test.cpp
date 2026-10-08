@@ -10,8 +10,12 @@
 //   - 注入面：死端口传输失败干净收口 / 错 server_token -32001 /
 //     错群组令牌 -32004
 //   - 未命中查询往返：合法 session → sha256 回显 + sources 空数组
-//     （server 侧 announce/retract 已随阶段 1 增量 1 落地；client 侧
-//      公告面属增量 2——本文件暂只覆盖查询）
+//   - 公告面（阶段 1 增量 2 §16.3）：announce/retract × 回环 Rendezvous
+//     ——client 侧真实签名经服务器真实验签（防同一 bug 自我印证的
+//      反向路径：这里验证的是 client 签名链与 handler 验签的互操作）；
+//      file/mirror 归并 + 资源级 expires_at max / retract 计数语义
+//      （removed/unknown/「有表无名下源两边不计」）/ 语义 rejected
+//      不失败整请求 / 无会话本地快速失败
 // ============================================================================
 
 #include "client/swarm_client.hpp"
@@ -195,6 +199,183 @@ TEST(SwarmClientTest, QueryEmptySourcesViaClient) {
     EXPECT_EQ(sources->size(), 0u);
 
     client.stop();
+}
+
+// ===========================================================================
+// 公告面（阶段 1 增量 2，§16.3）：签名往返 × 真实验签
+// ===========================================================================
+
+TEST(SwarmClientTest, AnnounceRoundTripMergesFileAndMirror) {
+    SwarmRendezvousHarness h;
+    ASSERT_TRUE(h.ok());
+
+    auto key = load_or_create_swarm_key(make_temp_pem_path("ann"));
+    ASSERT_TRUE(key.valid());
+
+    SwarmClient client(make_client_config(h.port()), key);
+    std::string error;
+    ASSERT_TRUE(client.start(&error)) << error;
+
+    const std::string sha(64, 'c');
+
+    // 同批 file + mirror 命中同一资源：node 源 + url 源并列（§8.3 归并）；
+    // file ttl 7200 / mirror 缺省 86400 → 资源级 expires_at = max = 86400
+    AnnounceResource file_entry;
+    file_entry.kind = "file";
+    file_entry.sha256 = sha;
+    file_entry.name = "falcon-test.bin";
+    file_entry.has_size = true;
+    file_entry.size = 65536;
+    file_entry.ttl_s = std::chrono::seconds(7200);
+
+    AnnounceResource mirror_entry;
+    mirror_entry.kind = "mirror";
+    mirror_entry.sha256 = sha;
+    mirror_entry.url = "https://mirror.example/falcon-test.bin";
+    mirror_entry.etag = "\"v1\"";
+    mirror_entry.accept_ranges = true;
+
+    nlohmann::json result;
+    const SwarmError err =
+        client.announce({file_entry, mirror_entry}, &result);
+    ASSERT_TRUE(err.ok()) << err.message;
+    EXPECT_EQ(result.value(kFieldAccepted, 0u), 2u);
+    EXPECT_EQ(result.value(kFieldRejected, 0u), 0u);
+    EXPECT_EQ(result.value(kFieldExpiresAt, 0u), 86400u);  // 资源级 max
+
+    // 查询回读：name/size 资源级 + 两路来源（node 携注册态 / url 携元数据）
+    nlohmann::json q;
+    ASSERT_TRUE(client.query(sha, &q).ok());
+    EXPECT_EQ(q.value(kFieldName, std::string()), "falcon-test.bin");
+    EXPECT_EQ(q.value(kFieldSize, 0u), 65536u);
+    const auto sources = q.find(kFieldSources);
+    ASSERT_NE(sources, q.end());
+    ASSERT_TRUE(sources->is_array());
+    ASSERT_EQ(sources->size(), 2u);
+    bool saw_node = false, saw_url = false;
+    for (const auto& src : *sources) {
+        const std::string type = src.value(kFieldSourceNodeType, "");
+        if (type == "node") {
+            saw_node = true;
+            EXPECT_EQ(src.value(kFieldNodeId, std::string()),
+                      client.node_id());
+        } else if (type == "url") {
+            saw_url = true;
+            EXPECT_EQ(src.value(kFieldUrl, std::string()),
+                      "https://mirror.example/falcon-test.bin");
+            EXPECT_EQ(src.value(kFieldEtag, std::string()), "\"v1\"");
+            EXPECT_TRUE(src.value(kFieldAcceptRanges, false));
+        }
+    }
+    EXPECT_TRUE(saw_node);
+    EXPECT_TRUE(saw_url);
+
+    client.stop();
+}
+
+TEST(SwarmClientTest, RetractRemovesOwnSourcesWithCounting) {
+    SwarmRendezvousHarness h;
+    ASSERT_TRUE(h.ok());
+
+    auto key_a = load_or_create_swarm_key(make_temp_pem_path("ret_a"));
+    auto key_b = load_or_create_swarm_key(make_temp_pem_path("ret_b"));
+    ASSERT_TRUE(key_a.valid() && key_b.valid());
+
+    SwarmClient a(make_client_config(h.port()), key_a);
+    SwarmClient b(make_client_config(h.port()), key_b);
+    std::string error;
+    ASSERT_TRUE(a.start(&error)) << error;
+    ASSERT_TRUE(b.start(&error)) << error;
+
+    const std::string sha(64, 'd');
+    AnnounceResource file_entry;
+    file_entry.kind = "file";
+    file_entry.sha256 = sha;
+    file_entry.name = "own.bin";
+    nlohmann::json result;
+    ASSERT_TRUE(a.announce({file_entry}, &result).ok());
+    EXPECT_EQ(result.value(kFieldAccepted, 0u), 1u);
+
+    // B 摘 A 的哈希：表中有但名下无源 → removed/unknown 两边都不计（§16.2）
+    result = nlohmann::json();
+    ASSERT_TRUE(b.retract({sha}, &result).ok());
+    EXPECT_EQ(result.value(kFieldRemoved, 0u), 0u);
+    EXPECT_EQ(result.value(kFieldUnknown, 0u), 0u);
+    // A 的源不受 B 的 retract 影响
+    nlohmann::json q;
+    ASSERT_TRUE(b.query(sha, &q).ok());
+    EXPECT_EQ(q.find(kFieldSources)->size(), 1u);
+
+    // 表中无该哈希 → unknown 计数
+    result = nlohmann::json();
+    ASSERT_TRUE(b.retract({std::string(64, 'e')}, &result).ok());
+    EXPECT_EQ(result.value(kFieldRemoved, 0u), 0u);
+    EXPECT_EQ(result.value(kFieldUnknown, 0u), 1u);
+
+    // A 摘自己的源 → removed=1，资源清空删除 → 查询空数组
+    result = nlohmann::json();
+    ASSERT_TRUE(a.retract({sha}, &result).ok());
+    EXPECT_EQ(result.value(kFieldRemoved, 0u), 1u);
+    EXPECT_EQ(result.value(kFieldUnknown, 0u), 0u);
+    ASSERT_TRUE(a.query(sha, &q).ok());
+    EXPECT_EQ(q.find(kFieldSources)->size(), 0u);
+
+    a.stop();
+    b.stop();
+}
+
+TEST(SwarmClientTest, AnnounceCountsRejectedWithoutFailing) {
+    SwarmRendezvousHarness h;
+    ASSERT_TRUE(h.ok());
+
+    auto key = load_or_create_swarm_key(make_temp_pem_path("rej"));
+    ASSERT_TRUE(key.valid());
+
+    SwarmClient client(make_client_config(h.port()), key);
+    std::string error;
+    ASSERT_TRUE(client.start(&error)) << error;
+
+    // 语义失败（哈希非 64 hex / url 非 http(s)）计 rejected 不失败整请求
+    AnnounceResource bad_hash;
+    bad_hash.kind = "file";
+    bad_hash.sha256 = "XYZ";  // 畸形哈希
+    bad_hash.name = "bad.bin";
+
+    AnnounceResource bad_url;
+    bad_url.kind = "mirror";
+    bad_url.sha256 = std::string(64, 'f');
+    bad_url.url = "ftp://not-http.example/x.bin";  // 非 http(s)
+
+    nlohmann::json result;
+    const SwarmError err = client.announce({bad_hash, bad_url}, &result);
+    ASSERT_TRUE(err.ok()) << err.message;  // 非 SwarmError——交调用方解读
+    EXPECT_EQ(result.value(kFieldAccepted, 0u), 0u);
+    EXPECT_EQ(result.value(kFieldRejected, 0u), 2u);
+    EXPECT_EQ(result.value(kFieldExpiresAt, 0u), 0u);
+
+    client.stop();
+}
+
+TEST(SwarmClientTest, AnnounceWithoutSessionFailsClean) {
+    SwarmRendezvousHarness h;
+    ASSERT_TRUE(h.ok());
+
+    auto key = load_or_create_swarm_key(make_temp_pem_path("nosess"));
+    ASSERT_TRUE(key.valid());
+
+    SwarmClient client(make_client_config(h.port()), key);
+    // 未 start：本地快速失败，不上线（与 query 同门）
+    AnnounceResource file_entry;
+    file_entry.kind = "file";
+    file_entry.sha256 = std::string(64, 'a');
+    nlohmann::json result;
+    SwarmError err = client.announce({file_entry}, &result);
+    EXPECT_EQ(err.code, kErrUnknownSession);
+    EXPECT_EQ(err.message, "no active session");
+
+    err = client.retract({std::string(64, 'a')}, &result);
+    EXPECT_EQ(err.code, kErrUnknownSession);
+    EXPECT_EQ(err.message, "no active session");
 }
 
 // ===========================================================================

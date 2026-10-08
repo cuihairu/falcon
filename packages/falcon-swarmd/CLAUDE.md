@@ -8,6 +8,12 @@ P2SP 共享网络的 **Rendezvous Service**（会合/发现服务，俗称 track
 
 ## 变更记录 (Changelog)
 
+### 2026-10-09 - P2SP 阶段 1 增量 2：SwarmClient announce/retract（§16.3）
+- **client 侧公告面**：`AnnounceResource{kind, sha256, name, size, url, etag, last_modified, accept_ranges, ttl_s}`（kind = "file"/"mirror"；可选字段空/缺省不上线，与服务器「缺省即默认值」语义逐键对齐）+ `SwarmClient::announce/retract`——签名 nonce 槽位填当前 session（无逐次挑战），签名覆盖去 sig 后 canonical（`{session, resources}` / `{session, sha256s}`），与 server 验签链互操作（§16.2 真实验签往返）
+- **错误语义**：成功（HTTP 200）时 result = `{accepted, rejected, expires_at}` / `{removed, unknown}`——非 0 rejected/unknown 交调用方解读不是错误；网络/协议失败走 SwarmError（本地合成码 -1 / 服务器 error code）；无 session 本地快速失败 kErrUnknownSession "no active session"（不上线）；签名失败 kJsonRpcInternalFallback
+- **会话竞速如实披露**：会话读取与签名发送之间心跳线程可能重注册换 session（→ 服务器 -32003），头文件注明调用方按可重试错误处理——announcer（增量 3）按退避重试消化
+- **测试 10 → 14**（SwarmClientTest +4：file+mirror 同 sha 归并往返（accepted=2/expires_at=86400 资源级 max）+ 查询回读两路来源、retract 计数语义三态（B 摘 A 的哈希 removed/unknown 两边不计 → 表外哈希 unknown=1 → A 摘己 removed=1 资源清空）、语义 rejected 不失败整请求（畸形哈希 + 非 http url → rejected=2 accepted=0）、无会话本地门）
+
 ### 2026-10-09 - P2SP 阶段 1 增量 1：swarmd 服务端 announce/retract 全链（§16.2）
 - **公告面**：`falcon.swarm.announce`（file/mirror 条目批量归并）+ `falcon.swarm.retract`（按哈希摘源）服务端实现——验签链 = session 有效性（-32003）→ Ed25519 验签（签名覆盖 `{session, resources}`/`{session, sha256s}` canonical，nonce 槽位填 session 无逐次挑战，-32005）；条目形状门（缺 sha256/kind 非法）→ -32602 整请求，条目语义失败（哈希非 64 小写 hex / url 非 http(s)）→ 计 rejected 不失败整请求
 - **归并语义（§8.3）**：同 sha256 同资源——file 条目 upsert node 源（owner 幂等）、mirror 条目 upsert (owner,url) 键控 url 源（etag/last_modified/accept_ranges 后写胜出）；name 非空 / has_size 后写胜出；**expires_at = max(现值, now+clamp(ttl))**（ttl 钳 [3600, 604800]，缺省 86400），短 ttl 重公告不缩短他人续租；result.expires_at = **资源级归并后剩余整秒** max(各命中资源)——实现初版误报本批 ttl，单测钉死改回（设计 §16.2「资源级 expires_at」）
@@ -79,6 +85,7 @@ P2SP 共享网络的 **Rendezvous Service**（会合/发现服务，俗称 track
 - **准入分叉**：swarmd 用 `Authorization: Bearer`（daemon JSON-RPC 用 `token:` 首参——两者不兼容，测试钉死）
 - **start() 内 POSIX `signal(SIGPIPE, SIG_IGN)`** + Windows call_once Winsock；WS 服务器停机先 shutdown 全部 fd 再 join（daemon 先例）
 - **SwarmClient 心跳自愈**：心跳线程对 `-32003` 自动重注册换新 session（Rendezvous sweep 摘除后节点无感恢复）；`detach()` = 停心跳保注册（模拟进程崩溃，e2e 心跳超时用例的客户端侧入口）
+- **SwarmClient announce/retract 签名**（阶段 1 增量 2，§16.3）：nonce 槽位 = 当前 session，签名覆盖去 sig 后 canonical；与 query 同门——空 session 本地快速失败不上线；可选字段（name/size/etag/last_modified/accept_ranges/ttl_s）空/缺省不上线
 - **announce/retract 归并**（阶段 1，§8.3/§16.2）：资源表按 sha256 键——file 条目 upsert node 源（owner 幂等）、mirror 条目 upsert (owner,url) 键控源（元数据后写胜出）；expires_at = max(现值, now+clamp(ttl)) 短公告不缩短他人续租；retract 只摘本节点源，摘空才删资源；announce 签名 nonce 槽位 = session（无逐次挑战）
 
 ## 测试（141 用例四 target）
@@ -87,7 +94,7 @@ P2SP 共享网络的 **Rendezvous Service**（会合/发现服务，俗称 track
 |---|---|---|
 | `falcon_swarm_unit_tests` | 67 | canonical JSON/签名 payload 对拍（RFC 8032 TEST1/TEST2 向量 + 指纹推导）/限频器虚拟时钟/状态过期注入 now/密钥往返/**SwarmAnnounce 簇 25 用例**（归并/expires_at max 与钳制/rejected 分型/retract 计数/摘节点联动/TTL sweep 通知/per-session 限频/配额——虚拟时钟零竞速）/**swarm.json 配置 14 用例**（往返/错误路径六类/告警/~/默认保留） |
 | `falcon_swarm_loopback_tests` | 56 | 真 socket 回环：HTTP/WS 握手/通知帧形制/错误路径全集（-32001..-32005、-32600/1/2、429）/限频/**announce/retract HTTP 全链 6 用例**（2026-10-09：往返/归并/retract/WS 通知/Expired 双触发面/限频配额）/注入点/传输层边界 21 用例 |
-| `falcon_swarm_client_tests` | 10 | SwarmClient × 回环 Rendezvous：注册往返/心跳存活/退订摘除/会话过期自愈/查询往返/传输失败/错令牌双路径/密钥往返/0600 |
+| `falcon_swarm_client_tests` | 14 | SwarmClient × 回环 Rendezvous：注册往返/心跳存活/退订摘除/会话过期自愈/查询往返/传输失败/错令牌双路径/密钥往返/0600/**announce/retract 4 用例（§16.3：归并往返真实验签/retract 计数三态/语义 rejected/无会话门）** |
 | `falcon_swarm_e2e_tests` | 8 | 真二进制 fork+execv（POSIX-only）：全流程含通知到达、心跳超时摘除、坏配置非零退出 + SIGTERM exit 0（gcda 铁律） |
 
 防「同一 bug 自我印证」：回环测试侧用 SwarmCrypto 独立重导 canonical→payload→verify（s3_browser_auth_test 惯例）；RFC 向量独立生成。
