@@ -4,8 +4,9 @@
 // SwarmRateLimiter：per-key 滑动窗口限频器（设计文档 §9.1 限频配额防线）
 //
 // 命中判定纯内存零 I/O；`now` 显式入参——单测以虚拟时钟推进窗口，
-// 零 sleep 零真实时间依赖。server 侧实例化两个：register-per-IP 与
-// query-per-IP；命中后 HTTP 层回 429 + JSON-RPC -32002。
+// 零 sleep 零真实时间依赖。server 侧实例化三个：register-per-IP、
+// query-per-IP 与 announce-per-session（session 不可得回落 IP）；命中后
+// HTTP 层回 429 + JSON-RPC -32002。
 //
 // 语义：
 //   - 滑动窗口 [now - window, now]：过期时间戳先淘汰再计数；

@@ -303,6 +303,22 @@ public:
         return SwarmCrypto::sign(seed_, payload);
     }
 
+    // announce/retract 签名（§16.2：nonce 语义位填 session；payload 组装
+    // 独立重导，防同一 bug 自我印证）。
+    std::string sign_announce(const std::string& session,
+                              const std::string& canonical_params) const {
+        const std::string payload =
+            signing_payload(kMethodAnnounce, session, canonical_params);
+        return SwarmCrypto::sign(seed_, payload);
+    }
+
+    std::string sign_retract(const std::string& session,
+                             const std::string& canonical_params) const {
+        const std::string payload =
+            signing_payload(kMethodRetract, session, canonical_params);
+        return SwarmCrypto::sign(seed_, payload);
+    }
+
     // step2 params = step1 + challenge_sig
     static nlohmann::json step2_params(const nlohmann::json& step1,
                                        const std::string& challenge_sig) {
@@ -513,6 +529,8 @@ struct HarnessConfig {
     std::chrono::milliseconds sweep_interval{50};
     std::size_t rate_register_per_min = 0;  // 默认不限（无关用例不互染）
     std::size_t rate_query_per_min = 0;
+    std::size_t rate_announce_per_min = 0;
+    std::size_t max_sources_per_node = 0;  // 0 = 状态默认（10000）
 };
 
 class SwarmRendezvousHarness {
@@ -524,6 +542,9 @@ public:
         state_cfg.heartbeat_interval = cfg.heartbeat_interval;
         state_cfg.heartbeat_timeout = cfg.heartbeat_timeout;
         state_cfg.challenge_ttl = cfg.challenge_ttl;
+        if (cfg.max_sources_per_node > 0) {
+            state_cfg.max_sources_per_node = cfg.max_sources_per_node;
+        }
         state_ = std::make_unique<SwarmRendezvousState>(state_cfg);
 
         SwarmRendezvousOptions opts;
@@ -533,6 +554,7 @@ public:
         opts.sweep_interval = cfg.sweep_interval;
         opts.rate_register_per_min = cfg.rate_register_per_min;
         opts.rate_query_per_min = cfg.rate_query_per_min;
+        opts.rate_announce_per_min = cfg.rate_announce_per_min;
         server_ = std::make_unique<SwarmRendezvousServer>(opts, *state_);
         started_ = server_->start();
     }

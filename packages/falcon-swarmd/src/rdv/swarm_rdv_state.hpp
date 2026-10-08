@@ -9,8 +9,8 @@
 //
 // 通知纪律（锁外派发）：方法在锁内完成状态变更并组装通知，随返回值
 // 带出（SwarmReply::notifications），由传输层锁外广播——状态锁内绝不
-// 调用网络回调。阶段 0 触发面仅 onPeerJoined/onPeerLeft（onResource*
-// 常量已定，触发路径随阶段 1 announce 落地）。
+// 调用网络回调。触发面：onPeerJoined/onPeerLeft/onResourceAdded/
+// onResourceExpired（§16.2）。
 //
 // 身份规则（§9.2）：指纹 = sha256_hex(DER(SPKI)) 前 32 字符；注册第
 // 一步即校验 node_id == fingerprint(pubkey)——ID 抢注（自报他人指纹
@@ -32,8 +32,8 @@
 namespace falcon::swarm {
 
 // 单资源来源：node 源（R1，持有节点）或 url 源（R2，镜像 URL）。
-// 阶段 0 无 announce 写入路径，表恒空；结构 + 读取随 query 在位，
-// 阶段 1 加写入即通（§8.3 归并语义：同 sha256 多路来源）。
+// 写入路径 = announce（§16.2，阶段 1 落地）；§8.3 归并语义：同 sha256
+// 多路来源（file 条目 upsert node 源、mirror 条目 upsert url 源）。
 struct SwarmResourceSource {
     bool is_node = true;      // true=node 源，false=url 源
     std::string node_id;      // node 源：持有者指纹
@@ -74,6 +74,22 @@ struct SwarmChallenge {
     std::chrono::steady_clock::time_point expires_at{};
 };
 
+// announce 条目的 handlers 层解析产物（§16.2）：形状校验（必填/类型/
+// 未知字段/kind 枚举）由 swarm_rpc_handlers 收口，state 只做验签 + 归并
+// + 语义配额。ttl 在 state 钳制（wire 行为与设计一致：钳 [3600, 604800]）。
+struct SwarmAnnounceEntry {
+    bool is_file = true;      // true=file（节点持有），false=mirror（url 源）
+    std::string sha256;       // 64 小写 hex（handlers 已过形状门；此处仍复核）
+    std::string name;         // file 条目可选
+    bool has_size = false;    // 区分「未报 size」与「报 0」
+    uint64_t size = 0;
+    std::string url;          // mirror 条目必填（scheme 门在 handlers）
+    std::string etag;         // mirror 条目可选
+    std::string last_modified;
+    bool accept_ranges = false;
+    std::chrono::seconds ttl{86400};  // 缺省 86400，state 侧钳制
+};
+
 class SwarmRendezvousState {
 public:
     using Clock = std::chrono::steady_clock;
@@ -84,6 +100,9 @@ public:
         std::chrono::seconds heartbeat_timeout{180};
         std::chrono::seconds challenge_ttl{60};
         std::chrono::seconds heartbeat_interval{60};  // 注册 result 回显
+        // 单节点活跃源配额（§16.2）：owned（node 源 + 名下 url 源）与
+        // 本批条目数之和超限 → 整批 -32002（保守多计，宁可拒绝）。
+        std::size_t max_sources_per_node = 10000;
     };
 
     // 通知：method = falcon.swarm.onXxx，params = object（与 daemon
@@ -134,7 +153,7 @@ public:
 
     // ---- 查询（§8.4）------------------------------------------------------
     // session 无效 → -32003；命中返回 {sha256,name,size,sources:[...]}，
-    // 未命中返回 {sha256, sources:[]}（阶段 0 表恒空 = 恒未命中分支）。
+    // 未命中返回 {sha256, sources:[]}。
     SwarmReply query(const std::string& session, const std::string& sha256,
                      Clock::time_point now);
 
@@ -142,11 +161,33 @@ public:
     // 摘节点 + 会话 → onPeerLeft；session 无效 → -32003。
     SwarmReply unsubscribe(const std::string& session, Clock::time_point now);
 
-    // announce/retract 阶段 0 不实现：方法未注册，分发层回 -32601。
+    // ---- 公告（§16.2）------------------------------------------------------
+    // 验签（payload = method + "\n" + session + "\n" + sha256_hex(去 sig 后
+    // canonical params)）→ 配额（名下源 + 本批 > 上限整批 -32002）→ 逐条
+    // 归并：同 sha256 同资源；file 条目 upsert 名下 node 源（owner=会话
+    // 节点），mirror 条目 upsert url 源（key = (owner, url)）；name/size
+    // 非空后写胜出；expires_at = max(现值, now+ttl)。资源首次出现才广播
+    // onResourceAdded（§8.5 params 形态）。
+    SwarmReply announce(const std::string& session,
+                        const std::string& canonical_params_no_sig,
+                        const std::string& sig,
+                        const std::vector<SwarmAnnounceEntry>& entries,
+                        std::size_t rejected_precount,
+                        Clock::time_point now);
+
+    // ---- 撤回（§16.2）------------------------------------------------------
+    // 摘该节点名下的全部源（node 源 + 名下 url 源）；资源源清空 → 删除 +
+    // onResourceExpired。removed = ≥1 个源被摘的哈希数；unknown = 表中无
+    // 该哈希；表中有但该节点名下无源 → 两边都不计。
+    SwarmReply retract(const std::string& session,
+                       const std::string& canonical_params_no_sig,
+                       const std::string& sig,
+                       const std::vector<std::string>& sha256s,
+                       Clock::time_point now);
 
     // ---- 周期清扫（心跳超时摘除）------------------------------------------
-    // 摘过期挑战（无通知）、过期资源（无通知，阶段 0 裁决）、过期会话
-    // （摘节点 → onPeerLeft 通知）。
+    // 摘过期挑战（无通知）、过期资源（→ onResourceExpired，§16.2 sweep
+    // 联动）、过期会话（摘节点 → onPeerLeft 通知；名下源随节点摘除）。
     std::vector<Notification> sweep(Clock::time_point now);
 
     // ---- 观测（健康面/测试）-----------------------------------------------
@@ -157,6 +198,10 @@ private:
     // 锁内助手（调用方持锁）
     void erase_peer_locked(const std::string& node_id,
                            std::vector<Notification>& out);
+    // 源数组 → 线形态（query 命中分支与 onResourceAdded 通知共用）：
+    // node 源按注册态实时渲染（agent/advertise/last_seen—— advertise
+    // 变更随重注册生效，公告不冻结快照）；url 源渲染公告元数据。
+    nlohmann::json render_sources_locked(const SwarmResource& res) const;
 
     Config cfg_;
     std::unordered_set<std::string> blacklist_;

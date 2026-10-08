@@ -76,6 +76,19 @@ inline constexpr char kFieldUrl[] = "url";
 inline constexpr char kFieldEtag[] = "etag";
 inline constexpr char kFieldLastModified[] = "last_modified";
 
+// ---- announce/retract 线字段（§16.2，阶段 1 写入路径）--------------------
+inline constexpr char kFieldSig[] = "sig";            // 公告/撤回 Ed25519 签名
+inline constexpr char kFieldResources[] = "resources";  // announce 资源条目数组
+inline constexpr char kFieldKind[] = "kind";          // "file" | "mirror"
+inline constexpr char kFieldTtlS[] = "ttl_s";         // 条目存活秒数（钳 [3600,604800]）
+inline constexpr char kFieldSha256s[] = "sha256s";    // retract 待撤回哈希数组
+inline constexpr char kFieldAccepted[] = "accepted";  // announce 接纳条目数
+inline constexpr char kFieldRejected[] = "rejected";  // 语义非法被拒条目数
+inline constexpr char kFieldExpiresAt[] = "expires_at";  // 命中资源最长剩余秒数
+inline constexpr char kFieldRemoved[] = "removed";    // retract 摘除源数
+inline constexpr char kFieldUnknown[] = "unknown";    // retract 未知哈希数
+inline constexpr char kFieldAcceptRanges[] = "accept_ranges";  // url 源能力位
+
 // 挑战值 / 会话凭据生成（服务端侧；RAND_bytes 失败返回空串，调用方
 // 判空走内部错误收口）。挑战 = hex(32)；session = "s-" + hex(32)（§9.3
 // 随机 128b+，前缀用于线上形态肉眼区分）。

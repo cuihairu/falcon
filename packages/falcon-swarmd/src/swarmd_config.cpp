@@ -139,7 +139,7 @@ ConfigLoadResult apply_config_file(const std::string& path,
                            "heartbeat_interval_s", "heartbeat_timeout_s",
                            "challenge_ttl_s", "sweep_interval_ms",
                            "rate_register_per_min", "rate_query_per_min",
-                           "blacklist"},
+                           "rate_announce_per_min", "blacklist"},
                           "swarm", result.warnings);
         if (!read_key(swarm, "host", config.host, result.error)) return result;
         if (!read_key(swarm, "port", config.port, result.error)) return result;
@@ -171,6 +171,10 @@ ConfigLoadResult apply_config_file(const std::string& path,
         }
         if (!read_key(swarm, "rate_query_per_min", config.rate_query_per_min,
                       result.error)) {
+            return result;
+        }
+        if (!read_key(swarm, "rate_announce_per_min",
+                      config.rate_announce_per_min, result.error)) {
             return result;
         }
         if (!read_key(swarm, "blacklist", config.blacklist, result.error)) {

@@ -1,20 +1,22 @@
 // ============================================================================
-// falcon-swarmd 服务器回环测试：真 socket HTTP/WS 全链（阶段 0 传输层验收）
+// falcon-swarmd 服务器回环测试：真 socket HTTP/WS 全链（传输层验收）
 //
 // 覆盖面（plan 验收 ①②）：
 //   - 健康端点（无鉴权 GET /v1/health）
 //   - Bearer 门（缺/错 → 401 + -32001；HTTP 与 WS 升级两处）
 //   - JSON-RPC 层错误分形（-32700/-32600/-32601/-32602 按层归属——
 //     params 非 object 是传输层 -32600 而非 handler -32602，钉死）
-//   - 阶段 0 边界（announce/retract 未实现 -32601；非 /jsonrpc 404；
-//     非 POST 405）
+//   - 非 /jsonrpc 404；非 POST 405
 //   - 注册两步往返（HTTP 全链）+ 群令牌/黑名单/指纹抢注/坏签名/快照重放
 //     五条拒绝路径（-32004/-32005）
-//   - 心跳/查询/注销（-32003 与空表往返——用户裁决「空表往返」：
-//     合法 session → sha256 回显 + sources 空数组）
+//   - 心跳/查询/注销（-32003 与未命中查询：合法 session → sha256 回显 +
+//     sources 空数组）
+//   - announce/retract 全链（§16.2）：file/mirror 公告 → 查询命中多路
+//     来源、retract 摘源/清空删除、WS onResourceAdded/onResourceExpired
+//     通知、per-session 限频与源配额（429 + -32002）
 //   - WS：ping→pong、onPeerJoined 广播帧形制（object params、无 id）、
 //     心跳超时 sweep → onPeerLeft 广播
-//   - 限频（register/query 独立阈值 → 429 + -32002）
+//   - 限频（register/query/announce 独立阈值 → 429 + -32002）
 //
 // 通知帧形制钉子：{"jsonrpc","2.0"},{"method",m},{"params",object} 无 id
 // （swarm_rpc_server.cpp 通知构造实锤，与 daemon 数组式 params 分叉）。
@@ -57,6 +59,65 @@ std::optional<nlohmann::json> read_until_method(SwarmWsClient& client,
         }
     }
     return std::nullopt;
+}
+
+// ---- announce/retract 助手（§16.2；签名 payload 由 SwarmTestNode 独立
+// 重导——与 server 侧验签同一构造但独立实现，防同一 bug 自我印证）--------
+
+// 首字符可变的 64 hex 合法形态（batch 多哈希用）
+std::string sha64(char variant) {
+    std::string s(64, '0');
+    s[0] = variant;
+    return s;
+}
+
+// 组 signed announce params：sig 覆盖 {session, resources} 的 canonical
+// （赋值右侧先求值——params 此时尚无 sig，与 handler 侧去 sig 验签对齐）
+nlohmann::json signed_announce(const SwarmTestNode& node,
+                               const std::string& session,
+                               const nlohmann::json& resources) {
+    nlohmann::json params;
+    params[kFieldSession] = session;
+    params[kFieldResources] = resources;
+    params[kFieldSig] = node.sign_announce(session, canonical_json(params));
+    return params;
+}
+
+nlohmann::json signed_retract(const SwarmTestNode& node,
+                              const std::string& session,
+                              const nlohmann::json& sha256s) {
+    nlohmann::json params;
+    params[kFieldSession] = session;
+    params[kFieldSha256s] = sha256s;
+    params[kFieldSig] = node.sign_retract(session, canonical_json(params));
+    return params;
+}
+
+// file 条目：sha 必填，name/size/ttl 缺省不携带（-1 = 不带）
+nlohmann::json file_entry(const std::string& sha, const std::string& name = {},
+                          std::int64_t size = -1, std::int64_t ttl_s = -1) {
+    nlohmann::json e;
+    e[kFieldKind] = "file";
+    e[kFieldSha256] = sha;
+    if (!name.empty()) e[kFieldName] = name;
+    if (size >= 0) e[kFieldSize] = size;
+    if (ttl_s >= 0) e[kFieldTtlS] = ttl_s;
+    return e;
+}
+
+// mirror 条目：url 必填，etag/ttl 缺省不携带；accept_ranges 恒带
+nlohmann::json mirror_entry(const std::string& sha, const std::string& url,
+                            const std::string& etag = {},
+                            bool accept_ranges = false,
+                            std::int64_t ttl_s = -1) {
+    nlohmann::json e;
+    e[kFieldKind] = "mirror";
+    e[kFieldSha256] = sha;
+    e[kFieldUrl] = url;
+    if (!etag.empty()) e[kFieldEtag] = etag;
+    if (ttl_s >= 0) e[kFieldTtlS] = ttl_s;
+    e[kFieldAcceptRanges] = accept_ranges;
+    return e;
 }
 
 }  // namespace
@@ -213,25 +274,6 @@ TEST(SwarmLoopback, UnknownMethodNotFound) {
     EXPECT_EQ(out.http_status, 200);
     EXPECT_EQ(out.error_code, -32601);
     EXPECT_EQ(out.error_message, "Method not found: falcon.swarm.nope");
-}
-
-TEST(SwarmLoopback, AnnounceRetractNotImplementedInPhaseZero) {
-    SwarmRendezvousHarness harness;
-    ASSERT_TRUE(harness.ok());
-
-    const auto a = http_rpc_call(harness.port(), kMethodAnnounce,
-                                 nlohmann::json::object());
-    EXPECT_EQ(a.error_code, -32601);
-    EXPECT_EQ(a.error_message,
-              std::string("Method not implemented in this phase: ") +
-                  kMethodAnnounce);
-
-    const auto r = http_rpc_call(harness.port(), kMethodRetract,
-                                 nlohmann::json::object());
-    EXPECT_EQ(r.error_code, -32601);
-    EXPECT_EQ(r.error_message,
-              std::string("Method not implemented in this phase: ") +
-                  kMethodRetract);
 }
 
 TEST(SwarmLoopback, WrongPathNotFound) {
@@ -443,7 +485,7 @@ TEST(SwarmLoopback, ParamsMismatchReplayRejected) {
 }
 
 // ===========================================================================
-// 心跳 / 查询 / 注销（空表往返——用户裁决：阶段 0 资源表恒空）
+// 心跳 / 查询 / 注销（未命中查询：sha256 回显 + sources 空数组）
 // ===========================================================================
 
 TEST(SwarmLoopback, HeartbeatRoundtripAndUnknownSession) {
@@ -535,8 +577,363 @@ TEST(SwarmLoopback, UnsubscribeRemovesPeerLoopback) {
 }
 
 // ===========================================================================
-// WS 面：ping→pong / onPeerJoined 广播 / 心跳超时 sweep → onPeerLeft
+// announce / retract（§16.2 全链：公告归并 → 查询命中多路来源 → 摘源；
+// WS onResourceAdded/onResourceExpired；per-session 限频与源配额）
 // ===========================================================================
+
+TEST(SwarmLoopback, AnnounceQueryRoundTripOverHttp) {
+    SwarmRendezvousHarness harness;
+    ASSERT_TRUE(harness.ok());
+    SwarmTestNode node;
+    const auto flow =
+        register_node_two_steps(harness.port(), node, make_nonce());
+    ASSERT_TRUE(flow.ok) << flow.error_message;
+
+    // file 条目公告：accepted=1 / rejected=0 / expires_at 落在钳制区间
+    const std::string sha = make_sha256();
+    const auto ann = http_rpc_call(
+        harness.port(), kMethodAnnounce,
+        signed_announce(node, flow.session,
+                        nlohmann::json::array(
+                            {file_entry(sha, "hello.bin", 456)})));
+    ASSERT_TRUE(ann.ok) << ann.error_message;
+    EXPECT_EQ(ann.result.value(kFieldAccepted, std::size_t{0}), 1u);
+    EXPECT_EQ(ann.result.value(kFieldRejected, std::size_t{1}), 0u);
+    const auto expires_at = ann.result.value(kFieldExpiresAt, std::uint64_t{0});
+    EXPECT_GE(expires_at, std::uint64_t{3600});   // clamp 下界
+    EXPECT_LE(expires_at, std::uint64_t{604800}); // clamp 上界
+
+    // 查询命中：资源级 name/size + node 源实时渲染（type/node_id/agent/
+    // last_seen；无 advertise 字段——注册未公告可达地址）
+    const auto hit = http_rpc_call(
+        harness.port(), kMethodQuery,
+        nlohmann::json{{kFieldSession, flow.session}, {kFieldSha256, sha}});
+    ASSERT_TRUE(hit.ok) << hit.error_message;
+    EXPECT_EQ(hit.result.value(kFieldSha256, ""), sha);
+    EXPECT_EQ(hit.result.value(kFieldName, ""), "hello.bin");
+    EXPECT_EQ(hit.result.value(kFieldSize, std::int64_t{-1}), 456);
+    const auto& sources = hit.result.at(kFieldSources);
+    ASSERT_TRUE(sources.is_array());
+    ASSERT_EQ(sources.size(), 1u);
+    EXPECT_EQ(sources[0].value(kFieldSourceNodeType, ""), "node");
+    EXPECT_EQ(sources[0].value(kFieldNodeId, ""), node.node_id());
+    EXPECT_EQ(sources[0].value(kFieldAgent, ""), "falcon-test");
+    EXPECT_TRUE(sources[0].contains(kFieldLastSeen));
+    EXPECT_FALSE(sources[0].contains(kFieldAdvertise));
+
+    // 幂等重公告：node 源 upsert 不重复（accepted 照常计）
+    const auto again = http_rpc_call(
+        harness.port(), kMethodAnnounce,
+        signed_announce(node, flow.session,
+                        nlohmann::json::array(
+                            {file_entry(sha, "hello.bin", 456)})));
+    ASSERT_TRUE(again.ok) << again.error_message;
+    EXPECT_EQ(again.result.value(kFieldAccepted, std::size_t{0}), 1u);
+
+    const auto hit2 = http_rpc_call(
+        harness.port(), kMethodQuery,
+        nlohmann::json{{kFieldSession, flow.session}, {kFieldSha256, sha}});
+    ASSERT_TRUE(hit2.ok) << hit2.error_message;
+    EXPECT_EQ(hit2.result.at(kFieldSources).size(), 1u);
+}
+
+TEST(SwarmLoopback, AnnounceMirrorMergesIntoSameResourceOverHttp) {
+    SwarmRendezvousHarness harness;
+    ASSERT_TRUE(harness.ok());
+    SwarmTestNode node;
+    const auto flow =
+        register_node_two_steps(harness.port(), node, make_nonce());
+    ASSERT_TRUE(flow.ok) << flow.error_message;
+
+    // file + mirror 同 sha 同资源（§8.3 归并）：node 源 + url 源并列
+    const std::string sha = make_sha256();
+    const auto ann = http_rpc_call(
+        harness.port(), kMethodAnnounce,
+        signed_announce(node, flow.session,
+                        nlohmann::json::array({
+                            file_entry(sha, "pkg.tar", 4096),
+                            mirror_entry(sha, "https://mir.example/pkg.tar",
+                                         "\"v1\"", true),
+                        })));
+    ASSERT_TRUE(ann.ok) << ann.error_message;
+    EXPECT_EQ(ann.result.value(kFieldAccepted, std::size_t{0}), 2u);
+
+    const auto hit = http_rpc_call(
+        harness.port(), kMethodQuery,
+        nlohmann::json{{kFieldSession, flow.session}, {kFieldSha256, sha}});
+    ASSERT_TRUE(hit.ok) << hit.error_message;
+    const auto& sources = hit.result.at(kFieldSources);
+    ASSERT_TRUE(sources.is_array());
+    ASSERT_EQ(sources.size(), 2u);
+
+    // url 源字段全在（etag/last_modified/accept_ranges 恒渲染）
+    bool saw_url = false;
+    for (const auto& src : sources) {
+        if (src.value(kFieldSourceNodeType, "") == "url") {
+            saw_url = true;
+            EXPECT_EQ(src.value(kFieldUrl, ""), "https://mir.example/pkg.tar");
+            EXPECT_EQ(src.value(kFieldEtag, ""), "\"v1\"");
+            EXPECT_EQ(src.value(kFieldAcceptRanges, false), true);
+            EXPECT_TRUE(src.contains(kFieldLastModified));
+        }
+    }
+    EXPECT_TRUE(saw_url) << "url source missing after file+mirror announce";
+}
+
+TEST(SwarmLoopback, RetractRemovesAndQueryMissesOverHttp) {
+    SwarmRendezvousHarness harness;
+    ASSERT_TRUE(harness.ok());
+    SwarmTestNode node;
+    const auto flow =
+        register_node_two_steps(harness.port(), node, make_nonce());
+    ASSERT_TRUE(flow.ok) << flow.error_message;
+
+    const std::string sha = make_sha256();
+    ASSERT_TRUE(http_rpc_call(
+                    harness.port(), kMethodAnnounce,
+                    signed_announce(node, flow.session,
+                                    nlohmann::json::array({file_entry(sha)})))
+                    .ok);
+
+    // 摘除：removed=1 / unknown=0；唯一源被摘 → 资源删除 → 查询落空
+    const auto ret = http_rpc_call(
+        harness.port(), kMethodRetract,
+        signed_retract(node, flow.session, nlohmann::json::array({sha})));
+    ASSERT_TRUE(ret.ok) << ret.error_message;
+    EXPECT_EQ(ret.result.value(kFieldRemoved, std::size_t{0}), 1u);
+    EXPECT_EQ(ret.result.value(kFieldUnknown, std::size_t{1}), 0u);
+
+    const auto miss = http_rpc_call(
+        harness.port(), kMethodQuery,
+        nlohmann::json{{kFieldSession, flow.session}, {kFieldSha256, sha}});
+    ASSERT_TRUE(miss.ok) << miss.error_message;
+    EXPECT_EQ(miss.result.value(kFieldSha256, ""), sha);
+    EXPECT_TRUE(miss.result.at(kFieldSources).empty());
+
+    // 重复 retract：表中已无该哈希 → unknown=1（计数口径 §16.2）
+    const auto ret2 = http_rpc_call(
+        harness.port(), kMethodRetract,
+        signed_retract(node, flow.session, nlohmann::json::array({sha})));
+    ASSERT_TRUE(ret2.ok) << ret2.error_message;
+    EXPECT_EQ(ret2.result.value(kFieldRemoved, std::size_t{1}), 0u);
+    EXPECT_EQ(ret2.result.value(kFieldUnknown, std::size_t{0}), 1u);
+}
+
+TEST(SwarmLoopback, AnnounceNotificationsReachWebSocket) {
+    SwarmRendezvousHarness harness;
+    ASSERT_TRUE(harness.ok());
+
+    // 订阅者先连（广播时已在订阅者表）；peerJoined 帧被 read 过滤跳过
+    SwarmWsClient sub;
+    ASSERT_TRUE(sub.connect(harness.port()));
+
+    SwarmTestNode node;
+    const auto flow =
+        register_node_two_steps(harness.port(), node, make_nonce());
+    ASSERT_TRUE(flow.ok) << flow.error_message;
+
+    const std::string sha = make_sha256();
+    const auto ann = http_rpc_call(
+        harness.port(), kMethodAnnounce,
+        signed_announce(node, flow.session,
+                        nlohmann::json::array(
+                            {file_entry(sha, "notify.bin", 128)})));
+    ASSERT_TRUE(ann.ok) << ann.error_message;
+
+    const auto n = read_until_method(sub, kNotifyResourceAdded, 5000);
+    ASSERT_TRUE(n.has_value()) << "no onResourceAdded within budget";
+    EXPECT_EQ(n->value("jsonrpc", ""), "2.0");
+    EXPECT_EQ(n->value("method", ""), std::string(kNotifyResourceAdded));
+    EXPECT_FALSE(n->contains("id"));  // 通知帧无 id（请求信封才带）
+    ASSERT_TRUE(n->contains("params"));
+    const auto& params = n->at("params");
+    ASSERT_TRUE(params.is_object());
+    EXPECT_EQ(params.value(kFieldSha256, ""), sha);
+    EXPECT_EQ(params.value(kFieldName, ""), "notify.bin");
+    EXPECT_EQ(params.value(kFieldSize, std::int64_t{-1}), 128);
+    EXPECT_EQ(params.value(kFieldBy, ""), node.node_id());
+    ASSERT_TRUE(params.contains(kFieldSources));
+    ASSERT_EQ(params.at(kFieldSources).size(), 1u);
+}
+
+TEST(SwarmLoopback, OnResourceExpiredBothTriggersOverWire) {
+    SwarmRendezvousHarness harness;  // 默认 timeout=2s / sweep=50ms（测试值）
+    ASSERT_TRUE(harness.ok());
+
+    SwarmWsClient sub;
+    ASSERT_TRUE(sub.connect(harness.port()));
+
+    // 触发面 (a)：retract 摘空唯一源 → 资源删除 + onResourceExpired
+    SwarmTestNode node_a;
+    const auto flow_a =
+        register_node_two_steps(harness.port(), node_a, make_nonce());
+    ASSERT_TRUE(flow_a.ok) << flow_a.error_message;
+    const std::string sha_x = make_sha256();
+    ASSERT_TRUE(http_rpc_call(
+                    harness.port(), kMethodAnnounce,
+                    signed_announce(node_a, flow_a.session,
+                                    nlohmann::json::array({file_entry(sha_x)})))
+                    .ok);
+    // onResourceAdded 先到（同帧流上的次序锚——过期帧不早于资源存在）
+    const auto added = read_until_method(sub, kNotifyResourceAdded, 5000);
+    ASSERT_TRUE(added.has_value());
+
+    ASSERT_TRUE(http_rpc_call(
+                    harness.port(), kMethodRetract,
+                    signed_retract(node_a, flow_a.session,
+                                   nlohmann::json::array({sha_x})))
+                    .ok);
+    const auto expired_a =
+        read_until_method(sub, kNotifyResourceExpired, 5000);
+    ASSERT_TRUE(expired_a.has_value()) << "no onResourceExpired (retract)";
+    ASSERT_TRUE(expired_a->contains("params"));
+    EXPECT_EQ(expired_a->at("params").value(kFieldSha256, ""), sha_x);
+
+    // 触发面 (b)：节点心跳超时 sweep 摘除 → 名下源随节点删除 → 空资源
+    // onResourceExpired。（TTL 到期面在过线上不可行——钳制下界 3600s，
+    // 留给单元层虚拟时钟覆盖。）顺序注：erase_peer_locked 先推空资源的
+    // onResourceExpired 再推 onPeerLeft。
+    SwarmTestNode node_b;
+    const auto flow_b =
+        register_node_two_steps(harness.port(), node_b, make_nonce());
+    ASSERT_TRUE(flow_b.ok) << flow_b.error_message;
+    const std::string sha_y = make_sha256();
+    ASSERT_TRUE(http_rpc_call(
+                    harness.port(), kMethodAnnounce,
+                    signed_announce(node_b, flow_b.session,
+                                    nlohmann::json::array({file_entry(sha_y)})))
+                    .ok);
+    const auto added_b = read_until_method(sub, kNotifyResourceAdded, 5000);
+    ASSERT_TRUE(added_b.has_value());
+
+    // node_b 不再心跳 → timeout(2s) + sweep(50ms) 后摘除；等待期间 node_a
+    // 每 800ms 心跳维持 session（末尾查询需要存活 session；超时 2s >
+    // 800ms 不会摘除）。onPeerLeft 帧被 read 过滤跳过，无干扰
+    const auto deadline_b = std::chrono::steady_clock::now() +
+                            std::chrono::milliseconds(15000);
+    auto last_hb = std::chrono::steady_clock::now();
+    std::optional<nlohmann::json> expired_b;
+    while (std::chrono::steady_clock::now() < deadline_b) {
+        auto frame = sub.read_frame(100);
+        if (frame && frame->opcode == 0x1) {
+            nlohmann::json j =
+                nlohmann::json::parse(frame->payload, nullptr, false);
+            if (!j.is_discarded() && j.value("method", std::string()) ==
+                                         std::string(kNotifyResourceExpired)) {
+                expired_b = j;
+                break;
+            }
+        }
+        if (std::chrono::steady_clock::now() - last_hb >
+            std::chrono::milliseconds(800)) {
+            ASSERT_TRUE(http_rpc_call(harness.port(), kMethodHeartbeat,
+                                      nlohmann::json{
+                                          {kFieldSession, flow_a.session}})
+                            .ok);
+            last_hb = std::chrono::steady_clock::now();
+        }
+    }
+    ASSERT_TRUE(expired_b.has_value()) << "no onResourceExpired (sweep)";
+    EXPECT_EQ(expired_b->at("params").value(kFieldSha256, ""), sha_y);
+
+    // 节点摘除后资源确已删除：query 落空（node_a session 存活）
+    const auto miss = http_rpc_call(
+        harness.port(), kMethodQuery,
+        nlohmann::json{{kFieldSession, flow_a.session},
+                       {kFieldSha256, sha_y}});
+    ASSERT_TRUE(miss.ok) << miss.error_message;
+    EXPECT_TRUE(miss.result.at(kFieldSources).empty());
+}
+
+TEST(SwarmLoopback, AnnounceRateLimitPerSessionSharesHttp429) {
+    HarnessConfig cfg;
+    cfg.rate_announce_per_min = 1;
+    SwarmRendezvousHarness harness(cfg);
+    ASSERT_TRUE(harness.ok());
+
+    SwarmTestNode node_a;
+    const auto flow_a =
+        register_node_two_steps(harness.port(), node_a, make_nonce());
+    ASSERT_TRUE(flow_a.ok) << flow_a.error_message;
+    SwarmTestNode node_b;
+    const auto flow_b =
+        register_node_two_steps(harness.port(), node_b, make_nonce());
+    ASSERT_TRUE(flow_b.ok) << flow_b.error_message;
+
+    // node_a 第 1 次放行
+    const auto first = http_rpc_call(
+        harness.port(), kMethodAnnounce,
+        signed_announce(node_a, flow_a.session,
+                        nlohmann::json::array(
+                            {file_entry(make_sha256())})));
+    EXPECT_TRUE(first.ok) << first.error_message;
+
+    // 同 session 第 2 次 → 429 + -32002（per-session key 计满）
+    const auto second = http_rpc_call(
+        harness.port(), kMethodAnnounce,
+        signed_announce(node_a, flow_a.session,
+                        nlohmann::json::array(
+                            {file_entry(make_sha256())})));
+    EXPECT_EQ(second.http_status, 429);
+    EXPECT_FALSE(second.ok);
+    EXPECT_EQ(second.error_code, kErrRateLimited);
+    EXPECT_EQ(second.error_message, "Rate limit exceeded");
+
+    // node_b 独立 session 不受 node_a 配额影响 → per-session 钉子
+    const auto other = http_rpc_call(
+        harness.port(), kMethodAnnounce,
+        signed_announce(node_b, flow_b.session,
+                        nlohmann::json::array(
+                            {file_entry(make_sha256())})));
+    EXPECT_TRUE(other.ok) << other.error_message;
+}
+
+TEST(SwarmLoopback, QuotaRejectionCoSendsHttp429) {
+    HarnessConfig cfg;
+    cfg.max_sources_per_node = 1;
+    SwarmRendezvousHarness harness(cfg);
+    ASSERT_TRUE(harness.ok());
+    SwarmTestNode node;
+    const auto flow =
+        register_node_two_steps(harness.port(), node, make_nonce());
+    ASSERT_TRUE(flow.ok) << flow.error_message;
+
+    // 名下 0 源 + 本批 2 条 > 上限 1 → 整批拒绝：-32002 + HTTP 429 同发
+    const std::string sha = make_sha256();
+    const auto batch = http_rpc_call(
+        harness.port(), kMethodAnnounce,
+        signed_announce(node, flow.session,
+                        nlohmann::json::array({file_entry(sha),
+                                               file_entry(sha64('9'))})));
+    EXPECT_EQ(batch.http_status, 429);
+    EXPECT_FALSE(batch.ok);
+    EXPECT_EQ(batch.error_code, kErrRateLimited);
+    EXPECT_EQ(batch.error_message, "Source quota exceeded for node");
+
+    // 拒绝后零残留：两条都未入库
+    const auto q1 = http_rpc_call(
+        harness.port(), kMethodQuery,
+        nlohmann::json{{kFieldSession, flow.session}, {kFieldSha256, sha}});
+    EXPECT_TRUE(q1.ok);
+    EXPECT_TRUE(q1.result.at(kFieldSources).empty());
+
+    // 单条 = 恰好在上限内 → 放行
+    const auto single = http_rpc_call(
+        harness.port(), kMethodAnnounce,
+        signed_announce(node, flow.session,
+                        nlohmann::json::array({file_entry(sha)})));
+    ASSERT_TRUE(single.ok) << single.error_message;
+    EXPECT_EQ(single.result.value(kFieldAccepted, std::size_t{0}), 1u);
+
+    // 已有 1 源 + 再 1 条 > 上限 → 再次拒绝
+    const auto over = http_rpc_call(
+        harness.port(), kMethodAnnounce,
+        signed_announce(node, flow.session,
+                        nlohmann::json::array({file_entry(sha64('8'))})));
+    EXPECT_EQ(over.http_status, 429);
+    EXPECT_EQ(over.error_code, kErrRateLimited);
+}
+
 
 TEST(SwarmLoopback, WsPingPong) {
     SwarmRendezvousHarness harness;

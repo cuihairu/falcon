@@ -9,8 +9,9 @@
 //   - key store：PEM 落盘往返（同路径两次加载 node_id 一致）+ POSIX 0600
 //   - 注入面：死端口传输失败干净收口 / 错 server_token -32001 /
 //     错群组令牌 -32004
-//   - 空表查询往返：合法 session → sha256 回显 + sources 空数组
-//     （用户裁决「空表往返」——阶段 0 无 announce，资源表恒空）
+//   - 未命中查询往返：合法 session → sha256 回显 + sources 空数组
+//     （server 侧 announce/retract 已随阶段 1 增量 1 落地；client 侧
+//      公告面属增量 2——本文件暂只覆盖查询）
 // ============================================================================
 
 #include "client/swarm_client.hpp"

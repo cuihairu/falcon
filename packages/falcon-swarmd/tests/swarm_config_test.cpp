@@ -72,6 +72,7 @@ constexpr const char* kFullConfig = R"json({
         "sweep_interval_ms": 250,
         "rate_register_per_min": 10,
         "rate_query_per_min": 200,
+        "rate_announce_per_min": 600,
         "blacklist": ["deadbeef", "cafebabe"]
     },
     "daemon": {
@@ -106,6 +107,7 @@ TEST_F(ConfigFileFixture, AllFieldsRoundtrip) {
     EXPECT_EQ(config.sweep_interval_ms, 250);
     EXPECT_EQ(config.rate_register_per_min, 10u);
     EXPECT_EQ(config.rate_query_per_min, 200u);
+    EXPECT_EQ(config.rate_announce_per_min, 600u);
     ASSERT_EQ(config.blacklist.size(), 2u);
     EXPECT_EQ(config.blacklist[0], "deadbeef");
     EXPECT_EQ(config.blacklist[1], "cafebabe");
@@ -141,6 +143,7 @@ TEST_F(ConfigFileFixture, MissingKeysPreserveDefaults) {
     EXPECT_EQ(config.port, 1234u);
     EXPECT_EQ(config.host, "10.0.0.1");
     EXPECT_EQ(config.rate_register_per_min, 5u);
+    EXPECT_EQ(config.rate_announce_per_min, 60u);
     EXPECT_FALSE(config.run_as_daemon);
 }
 

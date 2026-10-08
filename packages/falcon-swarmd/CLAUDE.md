@@ -8,6 +8,15 @@ P2SP 共享网络的 **Rendezvous Service**（会合/发现服务，俗称 track
 
 ## 变更记录 (Changelog)
 
+### 2026-10-09 - P2SP 阶段 1 增量 1：swarmd 服务端 announce/retract 全链（§16.2）
+- **公告面**：`falcon.swarm.announce`（file/mirror 条目批量归并）+ `falcon.swarm.retract`（按哈希摘源）服务端实现——验签链 = session 有效性（-32003）→ Ed25519 验签（签名覆盖 `{session, resources}`/`{session, sha256s}` canonical，nonce 槽位填 session 无逐次挑战，-32005）；条目形状门（缺 sha256/kind 非法）→ -32602 整请求，条目语义失败（哈希非 64 小写 hex / url 非 http(s)）→ 计 rejected 不失败整请求
+- **归并语义（§8.3）**：同 sha256 同资源——file 条目 upsert node 源（owner 幂等）、mirror 条目 upsert (owner,url) 键控 url 源（etag/last_modified/accept_ranges 后写胜出）；name 非空 / has_size 后写胜出；**expires_at = max(现值, now+clamp(ttl))**（ttl 钳 [3600, 604800]，缺省 86400），短 ttl 重公告不缩短他人续租；result.expires_at = **资源级归并后剩余整秒** max(各命中资源)——实现初版误报本批 ttl，单测钉死改回（设计 §16.2「资源级 expires_at」）
+- **通知（WS）**：onResourceAdded 仅资源首次出现（params {sha256,name,size,by,sources}，归并完成后渲染）；onResourceExpired 在清空删除时广播；sweep 摘心跳超时节点 → 连带摘其全部来源 → 空资源 Expired → PeerLeft（先 Expired 后 PeerLeft，loopback 钉住）
+- **限频与配额**：announce 限频 per-session（`rate_announce_per_min` 默认 60，config+CLI `--rate-announce-per-min` 接线）；配额 `max_sources_per_node`（默认 10000）保守超计——`owned + batch > limit` 整批拒绝零残留；两路拒绝与传输层限频同发 HTTP 429 + -32002
+- **测试 105 → 141**（unit 42 → 67：SwarmAnnounce 簇虚拟时钟全覆盖；loopback 50 → 56：announce/retract HTTP 全链 6 用例——公告查询往返/mirror 归并/retract 摘除与 unknown 计数/WS onResourceAdded 到达/onResourceExpired 双触发面（retract 摘空 + 心跳超时 sweep；TTL 到期面过线不可行——钳制下界 3600s，留单元层）/per-session 限频与配额 429；e2e 3 → 8）
+- **单测钉出两处实现偏差**：① expires_at 资源级语义（如上）；② TTL sweep 用例会话保活——单次心跳不可能跨 3600s 观测窗（会话窗 = timeout 60s 且对已过期会话心跳恒 -32003，状态层无复活语义），改 30s 步进心跳循环保活
+- 验证：四 target 141/141 绿；L4 sweep 通知用例 10 轮零失败；全量 ctest 见下批对账
+
 ### 2026-10-01 - main.cpp 边界收口（c45d44a）：parse_size 上界缺陷修复 + 15 单元 + 5 二进制 e2e
 - **parse_size 上界缺陷修复**：CLI 尺寸参数解析此前对超上界输入回绕/截断——补上界校验后非法值确定性报错退出
 - **15 单元用例**（参数解析纯函数矩阵：合法值/边界/垃圾输入全变体）+ **5 二进制 e2e**（fork+execv 真 falcon-swarmd 进程：参数路径逐条走查）
@@ -47,9 +56,9 @@ P2SP 共享网络的 **Rendezvous Service**（会合/发现服务，俗称 track
 
 ## 线协议（JSON-RPC 2.0，HTTP POST /jsonrpc + WS 通知）
 
-方法：`falcon.swarm.register`（两步：身份 params → 同 params + challenge_sig）/ `heartbeat` / `query` / `unsubscribe`。`challenge`/`announce`/`retract` 常量已定义，阶段 0 无服务端实现（announce 为阶段 1 写入路径）。
+方法：`falcon.swarm.register`（两步：身份 params → 同 params + challenge_sig）/ `heartbeat` / `query` / `unsubscribe` / `announce`（§16.2：file/mirror 条目批量归并，result {accepted, rejected, expires_at}）/ `retract`（按哈希摘源，result {removed, unknown}）。
 
-通知（WS 帧，**params 为 object**，与 daemon 的数组式不同）：`falcon.swarm.onPeerJoined`（首次出现 node_id 才广播）/ `falcon.swarm.onPeerLeft`（心跳超时 sweep 摘除）。
+通知（WS 帧，**params 为 object**，与 daemon 的数组式不同）：`falcon.swarm.onPeerJoined`（首次出现 node_id 才广播）/ `falcon.swarm.onPeerLeft`（心跳超时 sweep 摘除）/ `falcon.swarm.onResourceAdded`（资源首次出现）/ `falcon.swarm.onResourceExpired`（资源清空删除：retract 摘空、TTL 到期 sweep、节点摘除连带清空）。
 
 错误码：`-32001` Bearer 准入（HTTP 401）/ `-32002` 限频（HTTP 429 同发）/ `-32003` 未知或过期 session / `-32004` 群组令牌 / `-32005` 签名/指纹/黑名单拒绝。
 
@@ -70,19 +79,19 @@ P2SP 共享网络的 **Rendezvous Service**（会合/发现服务，俗称 track
 - **准入分叉**：swarmd 用 `Authorization: Bearer`（daemon JSON-RPC 用 `token:` 首参——两者不兼容，测试钉死）
 - **start() 内 POSIX `signal(SIGPIPE, SIG_IGN)`** + Windows call_once Winsock；WS 服务器停机先 shutdown 全部 fd 再 join（daemon 先例）
 - **SwarmClient 心跳自愈**：心跳线程对 `-32003` 自动重注册换新 session（Rendezvous sweep 摘除后节点无感恢复）；`detach()` = 停心跳保注册（模拟进程崩溃，e2e 心跳超时用例的客户端侧入口）
-- 阶段 0 **无 announce 面**：资源表无写入路径恒空；query 合法 session → sha256 回显 + 空 sources（「空表往返」用户裁决）；`SwarmResource` 结构 + 表 + 读取逻辑在位（query 真实消费），阶段 1 加 upsert 即通
+- **announce/retract 归并**（阶段 1，§8.3/§16.2）：资源表按 sha256 键——file 条目 upsert node 源（owner 幂等）、mirror 条目 upsert (owner,url) 键控源（元数据后写胜出）；expires_at = max(现值, now+clamp(ttl)) 短公告不缩短他人续租；retract 只摘本节点源，摘空才删资源；announce 签名 nonce 槽位 = session（无逐次挑战）
 
-## 测试（105 用例四 target）
+## 测试（141 用例四 target）
 
 | Target | 数 | 覆盖 |
 |---|---|---|
-| `falcon_swarm_unit_tests` | 42 | canonical JSON/签名 payload 对拍（RFC 8032 TEST1/TEST2 向量 + 指纹推导）/限频器虚拟时钟/状态过期注入 now/密钥往返/**swarm.json 配置 14 用例**（往返/错误路径六类/告警/~/默认保留） |
-| `falcon_swarm_loopback_tests` | 50 | 真 socket 回环：HTTP/WS 握手/通知帧形制/错误路径全集（-32001..-32005、-32600/1/2、429）/限频/注入点（socket/listen 两点 2026-09-28 起真测，EVP 四点在 crypto 测试）/**传输层边界 21 用例**（HTTP 解析失败族/Bearer 边界/start() 生命周期/WS 帧协议面） |
-| `falcon_swarm_client_tests` | 10 | SwarmClient × 回环 Rendezvous：注册往返/心跳存活/退订摘除/会话过期自愈/空表查询/传输失败/错令牌双路径/密钥往返/0600 |
-| `falcon_swarm_e2e_tests` | 3 | 真二进制 fork+execv（POSIX-only）：全流程含通知到达、心跳超时摘除、坏配置非零退出 + SIGTERM exit 0（gcda 铁律） |
+| `falcon_swarm_unit_tests` | 67 | canonical JSON/签名 payload 对拍（RFC 8032 TEST1/TEST2 向量 + 指纹推导）/限频器虚拟时钟/状态过期注入 now/密钥往返/**SwarmAnnounce 簇 25 用例**（归并/expires_at max 与钳制/rejected 分型/retract 计数/摘节点联动/TTL sweep 通知/per-session 限频/配额——虚拟时钟零竞速）/**swarm.json 配置 14 用例**（往返/错误路径六类/告警/~/默认保留） |
+| `falcon_swarm_loopback_tests` | 56 | 真 socket 回环：HTTP/WS 握手/通知帧形制/错误路径全集（-32001..-32005、-32600/1/2、429）/限频/**announce/retract HTTP 全链 6 用例**（2026-10-09：往返/归并/retract/WS 通知/Expired 双触发面/限频配额）/注入点/传输层边界 21 用例 |
+| `falcon_swarm_client_tests` | 10 | SwarmClient × 回环 Rendezvous：注册往返/心跳存活/退订摘除/会话过期自愈/查询往返/传输失败/错令牌双路径/密钥往返/0600 |
+| `falcon_swarm_e2e_tests` | 8 | 真二进制 fork+execv（POSIX-only）：全流程含通知到达、心跳超时摘除、坏配置非零退出 + SIGTERM exit 0（gcda 铁律） |
 
 防「同一 bug 自我印证」：回环测试侧用 SwarmCrypto 独立重导 canonical→payload→verify（s3_browser_auth_test 惯例）；RFC 向量独立生成。
 
 ## 配置（swarm.json `swarm` 节 + CLI）
 
-host/port（7800，0=随机）/server_token（空=不鉴权+启动告警）/group_token（空=不校验）/heartbeat_interval_s（60）/heartbeat_timeout_s（180）/challenge_ttl_s（60）/sweep_interval_ms（1000）/rate_register_per_min（5）/rate_query_per_min（120）/blacklist。`daemon` 节四键复用 `falcon_daemon_core`。CLI `--swarm-host/--swarm-port/--server-token/--group-token/--heartbeat-*-s/--challenge-ttl-s/--sweep-interval-ms/--rate-*-per-min` + daemonize 三键。优先级 CLI > 文件 > 默认；类型错误 daemonize 前报错退出；阶段 0 无 SIGHUP 热更。
+host/port（7800，0=随机）/server_token（空=不鉴权+启动告警）/group_token（空=不校验）/heartbeat_interval_s（60）/heartbeat_timeout_s（180）/challenge_ttl_s（60）/sweep_interval_ms（1000）/rate_register_per_min（5）/rate_query_per_min（120）/rate_announce_per_min（60，per-session）/blacklist。`daemon` 节四键复用 `falcon_daemon_core`。CLI `--swarm-host/--swarm-port/--server-token/--group-token/--heartbeat-*-s/--challenge-ttl-s/--sweep-interval-ms/--rate-*-per-min（register/query/announce 三限频）` + daemonize 三键。优先级 CLI > 文件 > 默认；类型错误 daemonize 前报错退出；阶段 0 无 SIGHUP 热更。

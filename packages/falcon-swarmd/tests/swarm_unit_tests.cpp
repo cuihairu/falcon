@@ -27,6 +27,7 @@
 #include <ctime>
 #include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace falcon::swarm {
@@ -841,14 +842,879 @@ TEST(SwarmDispatch, HeartbeatQueryUnsubscribeSessionShapeGates) {
     }
 }
 
-TEST(SwarmDispatch, AnnounceNotImplementedYields32601) {
-    // 方法常量已定义、阶段 0 无服务端实现 → 分派回 -32601（设计内）
+// ===========================================================================
+// SwarmAnnounce：announce/retract 状态面 + 分派全链（§16.2，阶段 1）
+//
+// dispatch_swarm_method 驱动 handlers 形状/语义门 + state 归并/摘除；
+// 签名由 SwarmTestNode 独立重导 payload（防同一 bug 自我印证）。时钟
+// 纪律不变：虚拟时刻显式入参，session 过期由 heartbeat 续租精确控制。
+// ===========================================================================
+
+namespace {
+
+// 64 字符小写 hex 哈希工厂（首字符变化区分不同资源）
+std::string sha64(char variant) {
+    std::string s(64, '0');
+    s[0] = variant;
+    return s;
+}
+
+// announce params：session + resources + 对「去 sig 后 params」的签名
+// （与 register step2 同法——签名对象不含 sig 自身；§16.2 nonce 位填 session）
+nlohmann::json signed_announce(const SwarmTestNode& node,
+                               const std::string& session,
+                               const nlohmann::json& resources) {
+    nlohmann::json params;
+    params[kFieldSession] = session;
+    params[kFieldResources] = resources;
+    params[kFieldSig] = node.sign_announce(session, canonical_json(params));
+    return params;
+}
+
+// retract params：session + sha256s + 同法签名
+nlohmann::json signed_retract(const SwarmTestNode& node,
+                              const std::string& session,
+                              const nlohmann::json& sha256s) {
+    nlohmann::json params;
+    params[kFieldSession] = session;
+    params[kFieldSha256s] = sha256s;
+    params[kFieldSig] = node.sign_retract(session, canonical_json(params));
+    return params;
+}
+
+// file 条目（name/size/ttl_s 负值 = 缺省不携带）
+nlohmann::json file_entry(const std::string& sha, const std::string& name = {},
+                          std::int64_t size = -1, std::int64_t ttl_s = -1) {
+    nlohmann::json e;
+    e[kFieldKind] = "file";
+    e[kFieldSha256] = sha;
+    if (!name.empty()) e[kFieldName] = name;
+    if (size >= 0) e[kFieldSize] = size;
+    if (ttl_s >= 0) e[kFieldTtlS] = ttl_s;
+    return e;
+}
+
+// mirror 条目（etag/ttl_s 负值/空 = 缺省；accept_ranges 恒显式携带）
+nlohmann::json mirror_entry(const std::string& sha, const std::string& url,
+                            const std::string& etag = {},
+                            bool accept_ranges = false,
+                            std::int64_t ttl_s = -1) {
+    nlohmann::json e;
+    e[kFieldKind] = "mirror";
+    e[kFieldSha256] = sha;
+    e[kFieldUrl] = url;
+    if (!etag.empty()) e[kFieldEtag] = etag;
+    if (ttl_s >= 0) e[kFieldTtlS] = ttl_s;
+    e[kFieldAcceptRanges] = accept_ranges;
+    return e;
+}
+
+// 指定方法的通知条数
+std::size_t count_notifications(
+    const std::vector<SwarmRendezvousState::Notification>& ns,
+    const char* method) {
+    std::size_t n = 0;
+    for (const auto& item : ns) {
+        if (item.method == method) ++n;
+    }
+    return n;
+}
+
+}  // namespace
+
+TEST(SwarmAnnounce, FileEntryMergeQueryHitAndReAnnounceIdempotent) {
+    SwarmRendezvousState state(state_config());
+    const auto t0 = SwarmRendezvousState::Clock::now();
+    SwarmTestNode node;
+    const auto reg = register_via_state(state, node, "0011223344556677", t0);
+    ASSERT_TRUE(reg.ok);
+    const std::string sha = sha64('a');
+
+    // file 条目：name+size + ttl_s=0（夹到窗口下限 3600）
+    const auto reply = dispatch_swarm_method(
+        state, kMethodAnnounce,
+        signed_announce(node, reg.session,
+                        nlohmann::json::array(
+                            {file_entry(sha, "f.bin", 1024, 0)})),
+        t0);
+    ASSERT_TRUE(reply.ok());
+    EXPECT_EQ(reply.result.at(kFieldAccepted), 1);
+    EXPECT_EQ(reply.result.at(kFieldRejected), 0);
+    EXPECT_EQ(reply.result.at(kFieldExpiresAt), 3600);  // ttl 0 → 下限
+
+    // onResourceAdded 恰一条：by = 公告方 + 归并后渲染的 node 源
+    ASSERT_EQ(reply.notifications.size(), 1u);
+    EXPECT_EQ(reply.notifications[0].method, kNotifyResourceAdded);
+    EXPECT_EQ(reply.notifications[0].params.at(kFieldBy), node.node_id());
+    EXPECT_EQ(reply.notifications[0].params.at(kFieldSha256), sha);
+    const auto& added = reply.notifications[0].params.at(kFieldSources);
+    ASSERT_EQ(added.size(), 1u);
+    EXPECT_EQ(added[0].at(kFieldSourceNodeType), "node");
+    EXPECT_EQ(added[0].at(kFieldNodeId), node.node_id());
+
+    // query 命中：name/size/agent 实时渲染（注册态，非公告冻结快照）
+    const auto q = dispatch_swarm_method(
+        state, kMethodQuery,
+        nlohmann::json{{kFieldSession, reg.session}, {kFieldSha256, sha}},
+        t0);
+    ASSERT_TRUE(q.ok());
+    EXPECT_EQ(q.result.at(kFieldName), "f.bin");
+    EXPECT_EQ(q.result.at(kFieldSize), 1024);
+    ASSERT_EQ(q.result.at(kFieldSources).size(), 1u);
+    EXPECT_EQ(q.result.at(kFieldSources)[0].at(kFieldAgent), "falcon-test");
+
+    // 幂等重公告（hash_only）：零通知 + 源不重复 + name 不被空值覆写
+    const auto again = dispatch_swarm_method(
+        state, kMethodAnnounce,
+        signed_announce(node, reg.session,
+                        nlohmann::json::array({file_entry(sha)})),
+        t0);
+    ASSERT_TRUE(again.ok());
+    EXPECT_EQ(again.result.at(kFieldAccepted), 1);
+    EXPECT_TRUE(again.notifications.empty());
+    const auto q2 = dispatch_swarm_method(
+        state, kMethodQuery,
+        nlohmann::json{{kFieldSession, reg.session}, {kFieldSha256, sha}},
+        t0);
+    ASSERT_TRUE(q2.ok());
+    EXPECT_EQ(q2.result.at(kFieldSources).size(), 1u);
+    EXPECT_EQ(q2.result.at(kFieldName), "f.bin");  // hash_only 不覆写
+}
+
+TEST(SwarmAnnounce, MirrorOwnerUrlKeyAndMetadataRefresh) {
+    SwarmRendezvousState state(state_config());
+    const auto t0 = SwarmRendezvousState::Clock::now();
+    SwarmTestNode a, b;
+    const auto ra = register_via_state(state, a, "0011223344556677", t0);
+    const auto rb = register_via_state(state, b, "1122334455667700", t0);
+    ASSERT_TRUE(ra.ok);
+    ASSERT_TRUE(rb.ok);
+    const std::string sha = sha64('b');
+    const std::string url = "http://mirror.example/f.bin";
+
+    // A、B 各公告同一 URL：url 源去重键 = (owner, url) → 两个并列源
+    const auto r1 = dispatch_swarm_method(
+        state, kMethodAnnounce,
+        signed_announce(a, ra.session,
+                        nlohmann::json::array(
+                            {mirror_entry(sha, url, "etag-1")})),
+        t0);
+    ASSERT_TRUE(r1.ok());
+    const auto r2 = dispatch_swarm_method(
+        state, kMethodAnnounce,
+        signed_announce(b, rb.session,
+                        nlohmann::json::array(
+                            {mirror_entry(sha, url, "etag-2")})),
+        t0);
+    ASSERT_TRUE(r2.ok());
+    // onResourceAdded 只在资源首次出现时发（第二次公告同一资源零通知）
+    EXPECT_EQ(r1.notifications.size(), 1u);
+    EXPECT_TRUE(r2.notifications.empty());
+
+    // B 重公告刷新自身 url 源元数据（后写胜出），源数不变
+    const auto r3 = dispatch_swarm_method(
+        state, kMethodAnnounce,
+        signed_announce(b, rb.session,
+                        nlohmann::json::array(
+                            {mirror_entry(sha, url, "etag-3", true)})),
+        t0);
+    ASSERT_TRUE(r3.ok());
+    EXPECT_TRUE(r3.notifications.empty());
+
+    auto query_sources = [&] {
+        const auto q = dispatch_swarm_method(
+            state, kMethodQuery,
+            nlohmann::json{{kFieldSession, ra.session}, {kFieldSha256, sha}},
+            t0);
+        return q.result.at(kFieldSources);
+    };
+    {
+        const auto sources = query_sources();
+        ASSERT_EQ(sources.size(), 2u);
+        int e1 = 0, e3 = 0;
+        for (const auto& s : sources) {
+            const std::string etag = s.value(kFieldEtag, std::string());
+            if (etag == "etag-1") ++e1;
+            if (etag == "etag-3") ++e3;
+            EXPECT_EQ(s.at(kFieldUrl), url);
+        }
+        EXPECT_EQ(e1, 1);  // A 的源未被 B 刷新
+        EXPECT_EQ(e3, 1);  // B 的源 etag-2 → etag-3
+    }
+
+    // A 再加 file 条目 → 三源并列（node + 2 url）
+    const auto r4 = dispatch_swarm_method(
+        state, kMethodAnnounce,
+        signed_announce(a, ra.session,
+                        nlohmann::json::array(
+                            {file_entry(sha, "f.bin", 1024)})),
+        t0);
+    ASSERT_TRUE(r4.ok());
+    EXPECT_EQ(query_sources().size(), 3u);
+}
+
+TEST(SwarmAnnounce, TtlClampedToWindowAndExpiresAtTakesMax) {
+    SwarmRendezvousState state(state_config());
+    const auto t0 = SwarmRendezvousState::Clock::now();
+    SwarmTestNode node;
+    const auto reg = register_via_state(state, node, "0011223344556677", t0);
+    ASSERT_TRUE(reg.ok);
+
+    // ttl 0 → clamp 下限 3600
+    const auto lo = dispatch_swarm_method(
+        state, kMethodAnnounce,
+        signed_announce(node, reg.session,
+                        nlohmann::json::array(
+                            {file_entry(sha64('c'), "c.bin", 1, 0)})),
+        t0);
+    ASSERT_TRUE(lo.ok());
+    EXPECT_EQ(lo.result.at(kFieldExpiresAt), 3600);
+
+    // ttl 巨大 → clamp 上限 604800
+    const auto hi = dispatch_swarm_method(
+        state, kMethodAnnounce,
+        signed_announce(node, reg.session,
+                        nlohmann::json::array({file_entry(
+                            sha64('d'), "d.bin", 1, 999999999)})),
+        t0);
+    ASSERT_TRUE(hi.ok());
+    EXPECT_EQ(hi.result.at(kFieldExpiresAt), 604800);
+
+    // ttl 缺省 → 86400
+    const auto def = dispatch_swarm_method(
+        state, kMethodAnnounce,
+        signed_announce(node, reg.session,
+                        nlohmann::json::array({file_entry(sha64('e'))})),
+        t0);
+    ASSERT_TRUE(def.ok());
+    EXPECT_EQ(def.result.at(kFieldExpiresAt), 86400);
+
+    // expires_at = max(现值, now+ttl)：7200 公告后再 3600 → 取 7200 不缩短
+    const std::string sha = sha64('f');
+    const auto first = dispatch_swarm_method(
+        state, kMethodAnnounce,
+        signed_announce(node, reg.session,
+                        nlohmann::json::array(
+                            {file_entry(sha, "f.bin", 1, 7200)})),
+        t0);
+    ASSERT_TRUE(first.ok());
+    const auto second = dispatch_swarm_method(
+        state, kMethodAnnounce,
+        signed_announce(node, reg.session,
+                        nlohmann::json::array(
+                            {file_entry(sha, "f.bin", 1, 3600)})),
+        t0);
+    ASSERT_TRUE(second.ok());
+    EXPECT_EQ(second.result.at(kFieldExpiresAt), 7200);
+}
+
+TEST(SwarmAnnounce, SemanticRejectsCountedNotWholeRequestFailure) {
+    SwarmRendezvousState state(state_config());
+    const auto t0 = SwarmRendezvousState::Clock::now();
+    SwarmTestNode node;
+    const auto reg = register_via_state(state, node, "0011223344556677", t0);
+    ASSERT_TRUE(reg.ok);
+
+    nlohmann::json bad_sha = file_entry(sha64('a'), "x", 1);
+    bad_sha[kFieldSha256] = "not-hex!";  // 语义门：非 64 小写 hex
+    const nlohmann::json bad_url =
+        mirror_entry(sha64('b'), "ftp://mirror.example/f.bin");  // 非 http(s)
+    const nlohmann::json good = file_entry(sha64('c'), "c.bin", 42);
+
+    const auto reply = dispatch_swarm_method(
+        state, kMethodAnnounce,
+        signed_announce(node, reg.session,
+                        nlohmann::json::array({bad_sha, bad_url, good})),
+        t0);
+    ASSERT_TRUE(reply.ok());  // 语义失败不炸整请求（形状门才 -32602）
+    EXPECT_EQ(reply.result.at(kFieldAccepted), 1);
+    EXPECT_EQ(reply.result.at(kFieldRejected), 2);
+
+    // 合法条目照常可查；两条被拒条目不可查
+    const auto q = dispatch_swarm_method(
+        state, kMethodQuery,
+        nlohmann::json{{kFieldSession, reg.session}, {kFieldSha256, sha64('c')}},
+        t0);
+    ASSERT_TRUE(q.ok());
+    EXPECT_EQ(q.result.at(kFieldSize), 42);
+    for (const char c : {'a', 'b'}) {
+        const auto miss = dispatch_swarm_method(
+            state, kMethodQuery,
+            nlohmann::json{{kFieldSession, reg.session},
+                           {kFieldSha256, sha64(c)}},
+            t0);
+        ASSERT_TRUE(miss.ok());
+        EXPECT_TRUE(miss.result.at(kFieldSources).empty()) << c;
+    }
+}
+
+TEST(SwarmAnnounce, RetractCountsPartialRemovalAndEmptyingDeletes) {
+    SwarmRendezvousState state(state_config());
+    const auto t0 = SwarmRendezvousState::Clock::now();
+    SwarmTestNode a, b;
+    const auto ra = register_via_state(state, a, "0011223344556677", t0);
+    const auto rb = register_via_state(state, b, "1122334455667700", t0);
+    ASSERT_TRUE(ra.ok);
+    ASSERT_TRUE(rb.ok);
+
+    // a：h1+h2；b：h1（h1 双源，h2 仅 a）
+    const std::string h1 = sha64('1');
+    const std::string h2 = sha64('2');
+    const std::string h3 = sha64('3');
+    ASSERT_TRUE(dispatch_swarm_method(
+                    state, kMethodAnnounce,
+                    signed_announce(a, ra.session,
+                                    nlohmann::json::array({file_entry(h1, "h1", 1),
+                                                           file_entry(h2, "h2", 2)})),
+                    t0)
+                    .ok());
+    ASSERT_TRUE(dispatch_swarm_method(
+                    state, kMethodAnnounce,
+                    signed_announce(b, rb.session,
+                                    nlohmann::json::array({file_entry(h1)})),
+                    t0)
+                    .ok());
+
+    // b 撤 [h1(自有 1 源), h3(未知), h2(在表但非己有 → 两边不计)]
+    const auto reply = dispatch_swarm_method(
+        state, kMethodRetract,
+        signed_retract(b, rb.session, nlohmann::json::array({h1, h3, h2})),
+        t0);
+    ASSERT_TRUE(reply.ok());
+    EXPECT_EQ(reply.result.at(kFieldRemoved), 1);
+    EXPECT_EQ(reply.result.at(kFieldUnknown), 1);
+    EXPECT_TRUE(reply.notifications.empty());  // h1 仍有 a 的源，未清空
+
+    // a 撤 h1 → 唯一源摘除 → 删表 + onResourceExpired
+    const auto fin = dispatch_swarm_method(
+        state, kMethodRetract,
+        signed_retract(a, ra.session, nlohmann::json::array({h1})), t0);
+    ASSERT_TRUE(fin.ok());
+    EXPECT_EQ(fin.result.at(kFieldRemoved), 1);
+    ASSERT_EQ(fin.notifications.size(), 1u);
+    EXPECT_EQ(fin.notifications[0].method, kNotifyResourceExpired);
+    EXPECT_EQ(fin.notifications[0].params.at(kFieldSha256), h1);
+
+    // h1 miss；h2 仍命中（a 的源）
+    for (const auto& [sha, expect_hit] :
+         std::vector<std::pair<std::string, bool>>{{h1, false}, {h2, true}}) {
+        const auto q = dispatch_swarm_method(
+            state, kMethodQuery,
+            nlohmann::json{{kFieldSession, ra.session}, {kFieldSha256, sha}},
+            t0);
+        ASSERT_TRUE(q.ok());
+        EXPECT_EQ(!q.result.at(kFieldSources).empty(), expect_hit) << sha;
+    }
+}
+
+TEST(SwarmAnnounce, SessionAndSignatureGatesForAnnounceAndRetract) {
+    SwarmRendezvousState state(state_config());
+    const auto t0 = SwarmRendezvousState::Clock::now();
+    SwarmTestNode node, other;
+    const auto reg = register_via_state(state, node, "0011223344556677", t0);
+    ASSERT_TRUE(reg.ok);
+    const nlohmann::json one_file =
+        nlohmann::json::array({file_entry(sha64('a'))});
+
+    // 未知 session → -32003（announce）
+    const auto bad_session = dispatch_swarm_method(
+        state, kMethodAnnounce,
+        signed_announce(node, "s-nonexistent", one_file), t0);
+    EXPECT_FALSE(bad_session.ok());
+    EXPECT_EQ(bad_session.error_code, -32003);
+    EXPECT_EQ(bad_session.error_message, "Unknown or expired session");
+
+    // 垃圾 sig（形状 128 hex 过 handlers 门，内容全零）→ -32005
+    nlohmann::json garbage =
+        signed_announce(node, reg.session, one_file);
+    garbage[kFieldSig] = std::string(128, '0');
+    const auto bad_sig =
+        dispatch_swarm_method(state, kMethodAnnounce, garbage, t0);
+    EXPECT_FALSE(bad_sig.ok());
+    EXPECT_EQ(bad_sig.error_code, -32005);
+    EXPECT_EQ(bad_sig.error_message, "Announce signature verification failed");
+
+    // 他钥签名（other 签、session 却是 node 的）→ -32005
+    const auto foreign_sig = dispatch_swarm_method(
+        state, kMethodAnnounce,
+        signed_announce(other, reg.session, one_file), t0);
+    EXPECT_EQ(foreign_sig.error_code, -32005);
+
+    // payload nonce 位错填注册 nonce（而非 session）→ 拒：证明位填 session
+    nlohmann::json wrong_slot;
+    wrong_slot[kFieldSession] = reg.session;
+    wrong_slot[kFieldResources] = one_file;
+    wrong_slot[kFieldSig] =
+        node.sign_announce("0011223344556677", canonical_json(wrong_slot));
+    EXPECT_EQ(dispatch_swarm_method(state, kMethodAnnounce, wrong_slot, t0)
+                  .error_code,
+              -32005);
+
+    // 对「含 sig 的完整 params」签名 → 拒：证明签名对象是去 sig 形态
+    nlohmann::json with_sig;
+    with_sig[kFieldSession] = reg.session;
+    with_sig[kFieldResources] = one_file;
+    with_sig[kFieldSig] = std::string(128, '0');  // 占位后对含 sig 形态签
+    with_sig[kFieldSig] =
+        node.sign_announce(reg.session, canonical_json(with_sig));
+    EXPECT_EQ(dispatch_swarm_method(state, kMethodAnnounce, with_sig, t0)
+                  .error_code,
+              -32005);
+
+    // retract 同门：未知 session / 垃圾 sig
+    const auto r1 = dispatch_swarm_method(
+        state, kMethodRetract,
+        signed_retract(node, "s-nonexistent",
+                       nlohmann::json::array({sha64('a')})),
+        t0);
+    EXPECT_EQ(r1.error_code, -32003);
+    nlohmann::json g2 = signed_retract(
+        node, reg.session, nlohmann::json::array({sha64('a')}));
+    g2[kFieldSig] = std::string(128, '0');
+    const auto r2 = dispatch_swarm_method(state, kMethodRetract, g2, t0);
+    EXPECT_EQ(r2.error_code, -32005);
+    EXPECT_EQ(r2.error_message, "Retract signature verification failed");
+}
+
+TEST(SwarmAnnounce, HeartbeatTimeoutSweepRemovesOwnedSources) {
+    SwarmRendezvousState state(state_config());  // heartbeat_timeout 60s
+    const auto t0 = SwarmRendezvousState::Clock::now();
+    SwarmTestNode a, b, c;
+    const auto ra = register_via_state(state, a, "0011223344556677", t0);
+    const auto rb = register_via_state(state, b, "1122334455667700", t0);
+    // c 晚注册（t0+50 → 到期 t0+110）：两轮 sweep 后的存活查询方
+    const auto rc = register_via_state(
+        state, c, "2233445566770011", t0 + std::chrono::seconds(50));
+    ASSERT_TRUE(ra.ok);
+    ASSERT_TRUE(rb.ok);
+    ASSERT_TRUE(rc.ok);
+    const std::string h1 = sha64('a');
+
+    // a、b 各公告 h1（两个 node 源）
+    ASSERT_TRUE(dispatch_swarm_method(
+                    state, kMethodAnnounce,
+                    signed_announce(a, ra.session,
+                                    nlohmann::json::array(
+                                        {file_entry(h1, "h1", 1)})),
+                    t0)
+                    .ok());
+    ASSERT_TRUE(dispatch_swarm_method(
+                    state, kMethodAnnounce,
+                    signed_announce(b, rb.session,
+                                    nlohmann::json::array({file_entry(h1)})),
+                    t0)
+                    .ok());
+
+    // t0+30：b 心跳续命（到期 t0+90）；a 保持 t0+60 到期
+    state.heartbeat(rb.session, t0 + std::chrono::seconds(30));
+
+    // t0+61 sweep：仅 a 下线——摘 a 名下源；h1 由 b 的源保活，无 Expired
+    const auto out1 = state.sweep(t0 + std::chrono::seconds(61));
+    EXPECT_EQ(count_notifications(out1, kNotifyPeerLeft), 1u);
+    EXPECT_EQ(count_notifications(out1, kNotifyResourceExpired), 0u);
+    {
+        const auto q = dispatch_swarm_method(
+            state, kMethodQuery,
+            nlohmann::json{{kFieldSession, rb.session}, {kFieldSha256, h1}},
+            t0 + std::chrono::seconds(61));
+        ASSERT_TRUE(q.ok());
+        ASSERT_EQ(q.result.at(kFieldSources).size(), 1u);
+        EXPECT_EQ(q.result.at(kFieldSources)[0].at(kFieldNodeId), b.node_id());
+    }
+
+    // t0+91 sweep：b 也下线 → h1 源清空 → 删表 + Expired + PeerLeft
+    const auto out2 = state.sweep(t0 + std::chrono::seconds(91));
+    EXPECT_EQ(count_notifications(out2, kNotifyResourceExpired), 1u);
+    EXPECT_EQ(count_notifications(out2, kNotifyPeerLeft), 1u);
+    const auto q = dispatch_swarm_method(
+        state, kMethodQuery,
+        nlohmann::json{{kFieldSession, rc.session}, {kFieldSha256, h1}},
+        t0 + std::chrono::seconds(91));
+    ASSERT_TRUE(q.ok());
+    EXPECT_TRUE(q.result.at(kFieldSources).empty());
+}
+
+TEST(SwarmAnnounce, TtlSweepDeletesExpiredResourceWithNotification) {
+    SwarmRendezvousState state(state_config());
+    const auto t0 = SwarmRendezvousState::Clock::now();
+    SwarmTestNode node;
+    const auto reg = register_via_state(state, node, "0011223344556677", t0);
+    ASSERT_TRUE(reg.ok);
+    const std::string sha = sha64('a');
+
+    ASSERT_TRUE(dispatch_swarm_method(
+                    state, kMethodAnnounce,
+                    signed_announce(node, reg.session,
+                                    nlohmann::json::array(
+                                        {file_entry(sha, "f", 1, 0)})),
+                    t0)
+                    .ok());
+    // 会话保活：虚拟时钟 30s 步进心跳循环续命到 t0+3650（TTL 观测窗
+    // 3601 之后仍有合法查询方）。单次心跳不可能覆盖——会话窗只有
+    // timeout 60s，且对已过期会话心跳是 -32003（客户端自愈靠重注册，
+    // 状态层无复活语义）。
+    for (int t = 30; t <= 3590; t += 30) {
+        state.heartbeat(reg.session, t0 + std::chrono::seconds(t));
+    }
+
+    // t0+3601：过期未清扫 → query 按 miss 收口（不等 sweep）
+    const auto q = dispatch_swarm_method(
+        state, kMethodQuery,
+        nlohmann::json{{kFieldSession, reg.session}, {kFieldSha256, sha}},
+        t0 + std::chrono::seconds(3601));
+    ASSERT_TRUE(q.ok());
+    EXPECT_TRUE(q.result.at(kFieldSources).empty());
+
+    // sweep 摘除 + onResourceExpired（节点未下线 → 无 PeerLeft）
+    const auto out = state.sweep(t0 + std::chrono::seconds(3601));
+    ASSERT_EQ(out.size(), 1u);
+    EXPECT_EQ(out[0].method, kNotifyResourceExpired);
+    EXPECT_EQ(out[0].params.at(kFieldSha256), sha);
+
+    // 删表后再查仍 miss
+    const auto q2 = dispatch_swarm_method(
+        state, kMethodQuery,
+        nlohmann::json{{kFieldSession, reg.session}, {kFieldSha256, sha}},
+        t0 + std::chrono::seconds(3602));
+    ASSERT_TRUE(q2.ok());
+    EXPECT_TRUE(q2.result.at(kFieldSources).empty());
+}
+
+TEST(SwarmAnnounce, SourceQuotaRejectsBatchConservatively) {
+    SwarmRendezvousState::Config cfg = state_config();
+    cfg.max_sources_per_node = 2;
+    SwarmRendezvousState state(cfg);
+    const auto t0 = SwarmRendezvousState::Clock::now();
+    SwarmTestNode node;
+    const auto reg = register_via_state(state, node, "0011223344556677", t0);
+    ASSERT_TRUE(reg.ok);
+
+    // 3 条批量 > 上限 2 → 整批 -32002，零部分归并
+    const auto over = dispatch_swarm_method(
+        state, kMethodAnnounce,
+        signed_announce(node, reg.session,
+                        nlohmann::json::array({file_entry(sha64('1')),
+                                               file_entry(sha64('2')),
+                                               file_entry(sha64('3'))})),
+        t0);
+    EXPECT_FALSE(over.ok());
+    EXPECT_EQ(over.error_code, -32002);
+    EXPECT_EQ(over.error_message, "Source quota exceeded for node");
+    for (const char c : {'1', '2', '3'}) {
+        const auto q = dispatch_swarm_method(
+            state, kMethodQuery,
+            nlohmann::json{{kFieldSession, reg.session},
+                           {kFieldSha256, sha64(c)}},
+            t0);
+        ASSERT_TRUE(q.ok());
+        EXPECT_TRUE(q.result.at(kFieldSources).empty()) << c;
+    }
+
+    // 2 条恰满；追加第 3 条即拒
+    const auto fill = dispatch_swarm_method(
+        state, kMethodAnnounce,
+        signed_announce(node, reg.session,
+                        nlohmann::json::array({file_entry(sha64('1')),
+                                               file_entry(sha64('2'))})),
+        t0);
+    EXPECT_TRUE(fill.ok());
+    const auto third = dispatch_swarm_method(
+        state, kMethodAnnounce,
+        signed_announce(node, reg.session,
+                        nlohmann::json::array({file_entry(sha64('4'))})),
+        t0);
+    EXPECT_EQ(third.error_code, -32002);
+
+    // 幂等重公告既有 2 条：保守多计仍拒（宁可错拒，§16.2 裁决）
+    const auto again = dispatch_swarm_method(
+        state, kMethodAnnounce,
+        signed_announce(node, reg.session,
+                        nlohmann::json::array({file_entry(sha64('1')),
+                                               file_entry(sha64('2'))})),
+        t0);
+    EXPECT_EQ(again.error_code, -32002);
+}
+
+TEST(SwarmDispatch, AnnounceShapeGates) {
     SwarmRendezvousState state(state_config());
     const auto now = SwarmRendezvousState::Clock::now();
-    const auto reply = dispatch_swarm_method(
-        state, kMethodAnnounce, nlohmann::json::object(), now);
-    EXPECT_FALSE(reply.ok());
-    EXPECT_EQ(reply.error_code, -32601);  // JSON-RPC method not found
+    const std::string sig128(128, '0');
+
+    {  // session 非字符串（缺省）
+        expect_shape_error(
+            dispatch_swarm_method(
+                state, kMethodAnnounce,
+                nlohmann::json{{kFieldResources, nlohmann::json::array()},
+                               {kFieldSig, sig128}},
+                now),
+            "session must be a string");
+    }
+    {  // sig 缺失
+        expect_shape_error(
+            dispatch_swarm_method(
+                state, kMethodAnnounce,
+                nlohmann::json{{kFieldSession, "s-x"},
+                               {kFieldResources, nlohmann::json::array()}},
+                now),
+            "sig must be 128 lowercase hex chars");
+    }
+    {  // sig 形态非法
+        expect_shape_error(
+            dispatch_swarm_method(
+                state, kMethodAnnounce,
+                nlohmann::json{{kFieldSession, "s-x"},
+                               {kFieldResources, nlohmann::json::array()},
+                               {kFieldSig, "zz"}},
+                now),
+            "sig must be 128 lowercase hex chars");
+    }
+    {  // resources 缺失 / 非数组
+        expect_shape_error(
+            dispatch_swarm_method(
+                state, kMethodAnnounce,
+                nlohmann::json{{kFieldSession, "s-x"}, {kFieldSig, sig128}},
+                now),
+            "resources must be an array");
+        expect_shape_error(
+            dispatch_swarm_method(
+                state, kMethodAnnounce,
+                nlohmann::json{{kFieldSession, "s-x"},
+                               {kFieldSig, sig128},
+                               {kFieldResources, "nope"}},
+                now),
+            "resources must be an array");
+    }
+    {  // 条目数 > 256（257 个合法形状条目）
+        nlohmann::json many = nlohmann::json::array();
+        for (int i = 0; i < 257; ++i) {
+            many.push_back(file_entry(sha64('a')));
+        }
+        expect_shape_error(
+            dispatch_swarm_method(
+                state, kMethodAnnounce,
+                nlohmann::json{{kFieldSession, "s-x"},
+                               {kFieldSig, sig128},
+                               {kFieldResources, many}},
+                now),
+            "resources must hold at most 256 entries");
+    }
+    {  // 条目非对象
+        expect_shape_error(
+            dispatch_swarm_method(
+                state, kMethodAnnounce,
+                nlohmann::json{{kFieldSession, "s-x"},
+                               {kFieldSig, sig128},
+                               {kFieldResources, nlohmann::json::array({5})}},
+                now),
+            "resources entries must be objects");
+    }
+    {  // kind 缺失 / 非字符串 / 非法枚举
+        expect_shape_error(
+            dispatch_swarm_method(
+                state, kMethodAnnounce,
+                nlohmann::json{{kFieldSession, "s-x"},
+                               {kFieldSig, sig128},
+                               {kFieldResources, nlohmann::json::array(
+                                   {nlohmann::json{{kFieldSha256, sha64('a')}}})}},
+                now),
+            "entry.kind must be a string");
+        expect_shape_error(
+            dispatch_swarm_method(
+                state, kMethodAnnounce,
+                nlohmann::json{{kFieldSession, "s-x"},
+                               {kFieldSig, sig128},
+                               {kFieldResources, nlohmann::json::array(
+                                   {nlohmann::json{{kFieldKind, 7},
+                                                   {kFieldSha256, sha64('a')}}})}},
+                now),
+            "entry.kind must be a string");
+        auto chunk = file_entry(sha64('a'));
+        chunk[kFieldKind] = "chunk";
+        expect_shape_error(
+            dispatch_swarm_method(
+                state, kMethodAnnounce,
+                nlohmann::json{{kFieldSession, "s-x"},
+                               {kFieldSig, sig128},
+                               {kFieldResources, nlohmann::json::array({chunk})}},
+                now),
+            "entry.kind must be \"file\" or \"mirror\"");
+    }
+    {  // sha256 缺失 / 非字符串
+        expect_shape_error(
+            dispatch_swarm_method(
+                state, kMethodAnnounce,
+                nlohmann::json{{kFieldSession, "s-x"},
+                               {kFieldSig, sig128},
+                               {kFieldResources, nlohmann::json::array(
+                                   {nlohmann::json{{kFieldKind, "file"}}})}},
+                now),
+            "entry.sha256 must be a string");
+    }
+    {  // 未知字段（file 条目带 mirror 专属字段 / 反之 / 全新键）
+        auto file_with_url = file_entry(sha64('a'));
+        file_with_url[kFieldUrl] = "http://x/";
+        expect_shape_error(
+            dispatch_swarm_method(
+                state, kMethodAnnounce,
+                nlohmann::json{{kFieldSession, "s-x"},
+                               {kFieldSig, sig128},
+                               {kFieldResources, nlohmann::json::array({file_with_url})}},
+                now),
+            "unknown entry field: url");
+        auto mirror_with_name = mirror_entry(sha64('a'), "http://x/");
+        mirror_with_name[kFieldName] = "f";
+        expect_shape_error(
+            dispatch_swarm_method(
+                state, kMethodAnnounce,
+                nlohmann::json{{kFieldSession, "s-x"},
+                               {kFieldSig, sig128},
+                               {kFieldResources, nlohmann::json::array({mirror_with_name})}},
+                now),
+            "unknown entry field: name");
+        auto bogus = file_entry(sha64('a'));
+        bogus["bogus"] = 1;
+        expect_shape_error(
+            dispatch_swarm_method(
+                state, kMethodAnnounce,
+                nlohmann::json{{kFieldSession, "s-x"},
+                               {kFieldSig, sig128},
+                               {kFieldResources, nlohmann::json::array({bogus})}},
+                now),
+            "unknown entry field: bogus");
+    }
+    {  // ttl_s / size 负数；name / etag / last_modified 非字符串；
+       // accept_ranges 非布尔；mirror 缺 url
+        auto neg_ttl = file_entry(sha64('a'), "f", 1, -5);
+        neg_ttl[kFieldTtlS] = -5;
+        expect_shape_error(
+            dispatch_swarm_method(
+                state, kMethodAnnounce,
+                nlohmann::json{{kFieldSession, "s-x"},
+                               {kFieldSig, sig128},
+                               {kFieldResources, nlohmann::json::array({neg_ttl})}},
+                now),
+            "entry.ttl_s must be a non-negative integer");
+        auto neg_size = file_entry(sha64('a'), "f", -7);
+        neg_size[kFieldSize] = -7;
+        expect_shape_error(
+            dispatch_swarm_method(
+                state, kMethodAnnounce,
+                nlohmann::json{{kFieldSession, "s-x"},
+                               {kFieldSig, sig128},
+                               {kFieldResources, nlohmann::json::array({neg_size})}},
+                now),
+            "entry.size must be a non-negative integer");
+        auto bad_name = file_entry(sha64('a'), "f");
+        bad_name[kFieldName] = 9;
+        expect_shape_error(
+            dispatch_swarm_method(
+                state, kMethodAnnounce,
+                nlohmann::json{{kFieldSession, "s-x"},
+                               {kFieldSig, sig128},
+                               {kFieldResources, nlohmann::json::array({bad_name})}},
+                now),
+            "entry.name must be a string");
+        expect_shape_error(
+            dispatch_swarm_method(
+                state, kMethodAnnounce,
+                nlohmann::json{{kFieldSession, "s-x"},
+                               {kFieldSig, sig128},
+                               {kFieldResources, nlohmann::json::array(
+                                   {nlohmann::json{{kFieldKind, "mirror"},
+                                                   {kFieldSha256, sha64('a')}}})}},
+                now),
+            "entry.url must be a string");
+        auto bad_etag = mirror_entry(sha64('a'), "http://x/");
+        bad_etag[kFieldEtag] = 1;
+        expect_shape_error(
+            dispatch_swarm_method(
+                state, kMethodAnnounce,
+                nlohmann::json{{kFieldSession, "s-x"},
+                               {kFieldSig, sig128},
+                               {kFieldResources, nlohmann::json::array({bad_etag})}},
+                now),
+            "entry.etag must be a string");
+        auto bad_lm = mirror_entry(sha64('a'), "http://x/");
+        bad_lm[kFieldLastModified] = 1;
+        expect_shape_error(
+            dispatch_swarm_method(
+                state, kMethodAnnounce,
+                nlohmann::json{{kFieldSession, "s-x"},
+                               {kFieldSig, sig128},
+                               {kFieldResources, nlohmann::json::array({bad_lm})}},
+                now),
+            "entry.last_modified must be a string");
+        auto bad_ar = mirror_entry(sha64('a'), "http://x/");
+        bad_ar[kFieldAcceptRanges] = "yes";
+        expect_shape_error(
+            dispatch_swarm_method(
+                state, kMethodAnnounce,
+                nlohmann::json{{kFieldSession, "s-x"},
+                               {kFieldSig, sig128},
+                               {kFieldResources, nlohmann::json::array({bad_ar})}},
+                now),
+            "entry.accept_ranges must be a boolean");
+    }
+}
+
+TEST(SwarmDispatch, RetractShapeGates) {
+    SwarmRendezvousState state(state_config());
+    const auto now = SwarmRendezvousState::Clock::now();
+    const std::string sig128(128, '0');
+
+    {  // session 非字符串（缺省）
+        expect_shape_error(
+            dispatch_swarm_method(
+                state, kMethodRetract,
+                nlohmann::json{{kFieldSha256s, nlohmann::json::array()},
+                               {kFieldSig, sig128}},
+                now),
+            "session must be a string");
+    }
+    {  // sig 形态非法
+        expect_shape_error(
+            dispatch_swarm_method(
+                state, kMethodRetract,
+                nlohmann::json{{kFieldSession, "s-x"},
+                               {kFieldSha256s, nlohmann::json::array()},
+                               {kFieldSig, "zz"}},
+                now),
+            "sig must be 128 lowercase hex chars");
+    }
+    {  // sha256s 缺失 / 非数组
+        expect_shape_error(
+            dispatch_swarm_method(
+                state, kMethodRetract,
+                nlohmann::json{{kFieldSession, "s-x"}, {kFieldSig, sig128}},
+                now),
+            "sha256s must be an array");
+        expect_shape_error(
+            dispatch_swarm_method(
+                state, kMethodRetract,
+                nlohmann::json{{kFieldSession, "s-x"},
+                               {kFieldSig, sig128},
+                               {kFieldSha256s, "nope"}},
+                now),
+            "sha256s must be an array");
+    }
+    {  // 条目非字符串 / 非 64 小写 hex → params 级错误（哈希是标识符）
+        expect_shape_error(
+            dispatch_swarm_method(
+                state, kMethodRetract,
+                nlohmann::json{{kFieldSession, "s-x"},
+                               {kFieldSig, sig128},
+                               {kFieldSha256s, nlohmann::json::array({5})}},
+                now),
+            "sha256s entries must be 64 lowercase hex chars");
+        expect_shape_error(
+            dispatch_swarm_method(
+                state, kMethodRetract,
+                nlohmann::json{{kFieldSession, "s-x"},
+                               {kFieldSig, sig128},
+                               {kFieldSha256s, nlohmann::json::array({"not-hex!"})}},
+                now),
+            "sha256s entries must be 64 lowercase hex chars");
+    }
 }
 
 }  // namespace falcon::swarm

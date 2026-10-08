@@ -31,6 +31,7 @@ struct SwarmdFileConfig {
     int sweep_interval_ms = 1000;           // 清扫线程周期
     std::size_t rate_register_per_min = 5;  // per-IP 限频；0 = 不限
     std::size_t rate_query_per_min = 120;   // per-IP 限频；0 = 不限
+    std::size_t rate_announce_per_min = 60;  // per-session 限频；0 = 不限
     std::vector<std::string> blacklist;     // node_id 指纹清单（-32005 拒绝）
 
     // ---- "daemon" 节（falcon_daemon_core 的 DaemonManager 消费）------------

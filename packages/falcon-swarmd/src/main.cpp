@@ -49,7 +49,8 @@ void show_help() {
     std::cout << "      --challenge-ttl-s <s>     Register challenge validity (default: 60)\n";
     std::cout << "      --sweep-interval-ms <ms>  Sweeper period (default: 1000)\n";
     std::cout << "      --rate-register-per-min <n>  Register rate limit per IP (default: 5, 0 = unlimited)\n";
-    std::cout << "      --rate-query-per-min <n>     Query rate limit per IP (default: 120, 0 = unlimited)\n\n";
+    std::cout << "      --rate-query-per-min <n>     Query rate limit per IP (default: 120, 0 = unlimited)\n";
+    std::cout << "      --rate-announce-per-min <n>  Announce rate limit per session (default: 60, 0 = unlimited)\n\n";
     std::cout << "Daemon:\n";
     std::cout << "  -d, --daemon                   Run as background daemon\n";
     std::cout << "      --pid-file <file>          PID file (created only if specified)\n";
@@ -221,6 +222,13 @@ int main(int argc, char* argv[]) {
             }
             continue;
         }
+        if (arg == "--rate-announce-per-min" && i + 1 < argc) {
+            if (!parse_size("--rate-announce-per-min", argv[++i],
+                            config.rate_announce_per_min)) {
+                return 1;
+            }
+            continue;
+        }
         if (arg == "-d" || arg == "--daemon") {
             run_as_daemon = true;
             continue;
@@ -294,6 +302,7 @@ int main(int argc, char* argv[]) {
         std::chrono::milliseconds(config.sweep_interval_ms);
     service_options.rate_register_per_min = config.rate_register_per_min;
     service_options.rate_query_per_min = config.rate_query_per_min;
+    service_options.rate_announce_per_min = config.rate_announce_per_min;
 
     falcon::swarm::SwarmRendezvousServer service(service_options, state);
     if (!service.start()) {

@@ -657,7 +657,7 @@ payload = method + "\n" + session + "\n" + sha256_hex(canonical_params_without_s
 - **归并语义**(§8.3):同 sha256 → 同资源。file 条目 upsert node 源(node_id = session 所属节点,direct/addr/agent 取注册态);mirror 条目 upsert url 源(etag/last_modified/accept_ranges 可选)。**url 源的归属者记为公告者**(SwarmResourceSource.node_id 复用为归属者字段)——retract 与节点摘除联动靠它。
 - name/size:资源级单值,**非空值后写胜出**(确定性;hash_only 公告 name 缺省不覆盖已有 name)。
 - expires_at:**max(现值, now + ttl_s)**——多公告者共存时短 ttl 公告者不得缩短他人续租;单公告者自续租语义不变。
-- result = `{accepted, rejected, expires_at}`(资源级 expires_at,max(各命中资源);空 resources 数组合法,accepted=0)。单条资源非法(哈希形态错/URL 被隐私过滤)计入 rejected 不失败整请求;params 级错误才 -32602。
+- result = `{accepted, rejected, expires_at}`(资源级 expires_at,max(各命中资源),**值为剩余整秒数**(数值型;空 resources 数组合法,accepted=0 且 expires_at=0)。单条资源非法(哈希形态错/URL 被隐私过滤)计入 rejected 不失败整请求;params 级错误才 -32602。
 - **onResourceAdded 触发:资源首次出现才广播**(params object,沿 §8.5);已有资源追加来源不广播(增量语义 = 新资源;来源变更由查询面覆盖)。
 
 **retract(params = {session, sig, sha256s:[64hex,...]})**:

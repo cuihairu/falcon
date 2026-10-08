@@ -276,7 +276,9 @@ SwarmRendezvousServer::SwarmRendezvousServer(SwarmRendezvousOptions options,
     : opts_(std::move(options)),
       state_(state),
       register_limiter_(opts_.rate_register_per_min, std::chrono::minutes(1)),
-      query_limiter_(opts_.rate_query_per_min, std::chrono::minutes(1)) {}
+      query_limiter_(opts_.rate_query_per_min, std::chrono::minutes(1)),
+      announce_limiter_(opts_.rate_announce_per_min, std::chrono::minutes(1)) {
+}
 
 SwarmRendezvousServer::~SwarmRendezvousServer() { stop(); }
 
@@ -670,15 +672,29 @@ std::string SwarmRendezvousServer::handle_jsonrpc(const std::string& payload,
         params = req["params"];
     }
 
-    // per-IP 限频（HTTP/WS 共用；对端 IP 不可得时不限——本机回环恒可得）
+    // per-IP 限频（HTTP/WS 共用；对端 IP 不可得时不限——本机回环恒可得）；
+    // announce 键 = session（会话 1:1 绑定节点，按身份计），session 不可得
+    // 回落 peer IP（§16.2：同键同窗，防单节点多连接绕过）
     SwarmRateLimiter* limiter = nullptr;
+    std::string limiter_key;
     if (method == kMethodRegister) {
         limiter = &register_limiter_;
+        limiter_key = peer;
     } else if (method == kMethodQuery) {
         limiter = &query_limiter_;
+        limiter_key = peer;
+    } else if (method == kMethodAnnounce) {
+        limiter = &announce_limiter_;
+        const auto session_it = params.find(kFieldSession);
+        if (session_it != params.end() && session_it->is_string() &&
+            !session_it->get<std::string>().empty()) {
+            limiter_key = session_it->get<std::string>();
+        } else {
+            limiter_key = peer;
+        }
     }
-    if (limiter != nullptr && !peer.empty() &&
-        !limiter->allow(peer, SwarmRateLimiter::Clock::now())) {
+    if (limiter != nullptr && !limiter_key.empty() &&
+        !limiter->allow(limiter_key, SwarmRateLimiter::Clock::now())) {
         *http_status = 429;
         return error_envelope(id, kErrRateLimited, "Rate limit exceeded");
     }
@@ -699,6 +715,10 @@ std::string SwarmRendezvousServer::handle_jsonrpc(const std::string& payload,
 
     if (reply.ok()) {
         return result_envelope(id, reply.result);
+    }
+    // state 层配额拒绝（-32002）与传输层限频同发 HTTP 429（§16.2）
+    if (reply.error_code == kErrRateLimited) {
+        *http_status = 429;
     }
     return error_envelope(id, reply.error_code, reply.error_message);
 }

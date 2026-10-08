@@ -53,6 +53,7 @@ struct SwarmRendezvousOptions {
     std::chrono::milliseconds sweep_interval{1000};
     std::size_t rate_register_per_min = 5;   // 0 = 不限
     std::size_t rate_query_per_min = 120;    // 0 = 不限
+    std::size_t rate_announce_per_min = 60;  // 0 = 不限（键 = session）
 };
 
 class SwarmRendezvousServer {
@@ -136,9 +137,12 @@ private:
     mutable std::mutex last_error_mutex_;
     std::string last_error_;
 
-    // per-IP 滑动窗口限频（键 = 对端 IP；与 state 的 steady_clock 纪律同源）
+    // 滑动窗口限频（register/query 键 = 对端 IP，announce 键 = session——
+    // 会话 1:1 绑定节点即「按身份计」，session 不可得回落 IP；与 state 的
+    // steady_clock 纪律同源）
     SwarmRateLimiter register_limiter_;
     SwarmRateLimiter query_limiter_;
+    SwarmRateLimiter announce_limiter_;
 };
 
 }  // namespace falcon::swarm
