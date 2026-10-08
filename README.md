@@ -19,7 +19,7 @@
   planes; the event-driven V2 engine and the aria2-compatible CLI/RPC surface
   follow aria2's architecture.
 
-  [English](README.md) | [中文文档](README_CN.md)
+  [中文](README.zh.md) | [English](README.md)
 
 </div>
 
@@ -288,13 +288,6 @@ Falcon uses an event-driven command pattern inspired by aria2:
 3. **Connection Pooling**: Reuses HTTP/HTTPS connections for better performance
 4. **Non-Blocking I/O**: All sockets are non-blocking, driven by events
 
-### Documentation
-
-- [Architecture Overview](docs/aria2_architecture.md) - Detailed architecture documentation
-- [API Guide](docs/api_guide.md) - Complete API usage guide
-- [Developer Guide](docs/developer_guide.md) - Development setup and guidelines
-- [Migration Plan](docs/aria2c-migration-plan.md) - aria2 compatibility roadmap
-
 ## Development
 
 ### Prerequisites
@@ -358,6 +351,28 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 - [OpenSSL](https://www.openssl.org/) for cryptographic operations
 - [SQLite](https://sqlite.org/) for task persistence and configuration storage
 - [Qt 6](https://www.qt.io/) for the desktop application
+
+## Roadmap
+
+### Completed
+- [x] Core download engines (V1 libcurl + experimental event-driven V2 engine)
+- [x] HTTP/HTTPS, FTP/FTPS plugins
+- [x] Metalink downloads (multi-mirror P2SP segmentation + whole-file hash verification)
+- [x] CLI (60+ aria2-compatible options)
+- [x] Daemon: aria2-compatible JSON-RPC (HTTP + WebSocket event stream), SQLite persistence, SIGHUP hot reload, MCP tool endpoint (10 download tools)
+- [x] Desktop application (Qt6, Fluent design, light/dark themes, cloud drive browsing)
+- [x] Private protocol support (Thunder, QQDL, FlashGet, ED2K)
+- [x] SFTP, WebDAV protocols (libssh2 / libcurl data planes)
+- [x] Cloud storage browsing (S3, Alibaba Cloud OSS, Tencent COS, Qiniu Kodo, Upyun)
+- [x] Resource search, encrypted configuration management
+
+### In Progress
+- [ ] Default build and documentation consistency for optional protocol plugins
+- [ ] More private protocols and cloud-drive direct-link parsing
+
+### Planned
+- [ ] Further private protocol and cloud-drive direct-link parsing enhancements
+- [ ] Mobile support
 
 ---
 

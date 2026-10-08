@@ -14,7 +14,7 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-工具链与第三方库要求参见 `README_CN.md` 的「系统要求」一节。
+工具链与第三方库要求参见 `README.zh.md` 的「系统要求」一节。
 
 ## 项目结构
 

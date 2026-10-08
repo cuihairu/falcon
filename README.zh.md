@@ -17,7 +17,7 @@
   开源组件:libcurl、OpenSSL、libtorrent、libssh2 承载各协议数据面;
   事件驱动的 V2 引擎与 aria2 兼容参数/RPC 参照 aria2 的架构与语义实现。
 
-  [中文文档](README_CN.md) | [English](README.md)
+  [English](README.md) | [中文](README.zh.md)
 
 </div>
 
