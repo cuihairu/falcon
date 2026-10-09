@@ -99,7 +99,8 @@ ConfigLoadResult apply_config_file(const std::string& path,
                                    std::string& task_db_path,
                                    bool& enable_rpc,
                                    bool& run_as_daemon,
-                                   DownloadConfig& download_config) {
+                                   DownloadConfig& download_config,
+                                   P2spConfig& p2sp_config) {
     ConfigLoadResult result;
 
     std::ifstream in(path);
@@ -121,7 +122,8 @@ ConfigLoadResult apply_config_file(const std::string& path,
     }
 
     // 允许的节与各节键集合（未知键告警不失败——向前兼容）
-    const std::string known_sections[] = {"rpc", "daemon", "storage", "download", "mcp"};
+    const std::string known_sections[] = {"rpc", "daemon", "storage", "download", "mcp",
+                                          "p2sp"};
 
     for (auto it = root.begin(); it != root.end(); ++it) {
         bool known = false;
@@ -241,6 +243,90 @@ ConfigLoadResult apply_config_file(const std::string& path,
         }
         warn_unknown_keys(mcp, {"enabled"}, "mcp", result.warnings);
         if (!read_key(mcp, "enabled", rpc_config.mcp_enabled, result.error)) return result;
+    }
+
+    // P2SP 共享与 Rendezvous 接入（§16.5）：share.* 可 SIGHUP 热更，
+    // rendezvous.* 变化需重启（main 侧对比告警）
+    if (root.contains("p2sp")) {
+        const auto& p2sp = root.at("p2sp");
+        if (!p2sp.is_object()) {
+            result.error = "'p2sp' section must be an object";
+            return result;
+        }
+        warn_unknown_keys(p2sp, {"share", "rendezvous"}, "p2sp", result.warnings);
+
+        if (p2sp.contains("share")) {
+            const auto& share = p2sp.at("share");
+            if (!share.is_object()) {
+                result.error = "'p2sp.share' section must be an object";
+                return result;
+            }
+            warn_unknown_keys(share, {"enabled", "mode", "one_way", "ttl_s",
+                                      "hash_delay_s", "announce_mirrors"},
+                              "p2sp.share", result.warnings);
+            if (!read_key(share, "enabled", p2sp_config.share.enabled, result.error)) {
+                return result;
+            }
+            if (share.contains("mode")) {
+                std::string value;
+                if (!read_key(share, "mode", value, result.error)) return result;
+                // 非法值告警保留 standard（对齐 download.http_engine 先例）：
+                // 拼错模式名不静默失效，也不至于让守护进程起不来
+                if (value != "standard" && value != "hash_only") {
+                    result.warnings.push_back(
+                        "invalid value for key 'p2sp.share.mode': " + value +
+                        " (expected \"standard\" or \"hash_only\"), keeping \"standard\"");
+                } else {
+                    p2sp_config.share.mode = value;
+                }
+            }
+            if (!read_key(share, "one_way", p2sp_config.share.one_way, result.error)) {
+                return result;
+            }
+            if (!read_key(share, "ttl_s", p2sp_config.share.ttl_s, result.error)) {
+                return result;
+            }
+            if (!read_key(share, "hash_delay_s", p2sp_config.share.hash_delay_s, result.error)) {
+                return result;
+            }
+            if (!read_key(share, "announce_mirrors", p2sp_config.share.announce_mirrors,
+                          result.error)) {
+                return result;
+            }
+        }
+
+        if (p2sp.contains("rendezvous")) {
+            const auto& rdv = p2sp.at("rendezvous");
+            if (!rdv.is_object()) {
+                result.error = "'p2sp.rendezvous' section must be an object";
+                return result;
+            }
+            warn_unknown_keys(rdv, {"host", "port", "server_token", "group_token",
+                                    "advertise_addr", "advertise_direct"},
+                              "p2sp.rendezvous", result.warnings);
+            if (!read_key(rdv, "host", p2sp_config.rendezvous.host, result.error)) {
+                return result;
+            }
+            if (!read_key(rdv, "port", p2sp_config.rendezvous.port, result.error)) {
+                return result;
+            }
+            if (!read_key(rdv, "server_token", p2sp_config.rendezvous.server_token,
+                          result.error)) {
+                return result;
+            }
+            if (!read_key(rdv, "group_token", p2sp_config.rendezvous.group_token,
+                          result.error)) {
+                return result;
+            }
+            if (!read_key(rdv, "advertise_addr", p2sp_config.rendezvous.advertise_addr,
+                          result.error)) {
+                return result;
+            }
+            if (!read_key(rdv, "advertise_direct", p2sp_config.rendezvous.advertise_direct,
+                          result.error)) {
+                return result;
+            }
+        }
     }
 
     result.ok = true;

@@ -133,6 +133,12 @@ struct DownloadOptions {
     /// Default 0 = no time limit (only seed_ratio applies). Seeding
     /// stops when EITHER limit is reached.
     std::size_t seed_time_minutes = 0;
+
+    /// P2SP share tri-state (daemon SwarmAnnouncer consumer only):
+    /// "" (default) follows the daemon global share setting,
+    /// "true"/"false" explicitly override it for this download.
+    /// Engines and other handlers ignore this field entirely.
+    std::string p2sp_share;
 };
 
 /// Global engine configuration

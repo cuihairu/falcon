@@ -6,6 +6,58 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-09 - P2SP 阶段 1 增量 3（SwarmAnnouncer 完成后公告 + TTL 续租，§16.4）
+- **新文件 `src/daemon/swarm_announcer.{hpp,cpp}`**（挂 falcon-daemon
+  可执行，不进 falcon_daemon_core——保持 core 零 CURL 依赖）：
+  `SwarmAnnouncer : IEventListener` 挂引擎 `on_completed`（事件线程只做
+  过滤链 + 入队，零哈希零网络）→ 自有工作线程哈希（sha256）+ 公告。
+  活跃公告表由工作线程独占驱动：TTL 续租（`min(5min, ttl/3)`）/ 文件
+  消失 retract / 内容变化重哈希重公告（先公告新 hash 再 retract 旧）/
+  session 变化全表补差 / announce 失败指数退避（base<<shift 封顶 5min
+  + 0..25% 抖动）。**与 SwarmClient 的边界经 `SwarmAnnouncerGateway`
+  接缝隔离**：真实网关（`#ifdef FALCON_HAS_SWARM`，根 CMakeLists 在
+  daemon 与 swarmd 两子目录之后补链 `falcon_swarm_client` + 定义宏）
+  与测试 fake 共用同一状态机；CURL/swarmd 缺席时工厂返回 nullptr 优雅
+  降级（告警 "swarm client support not built"）
+- **隐私过滤（§16.1）**：mirror URL 仅 http/https 且无 `?`/`#`（凭据
+  泄漏防线）；magnet 前缀跳过（大小写不敏感）；`hash_only` 模式省略
+  name/size；任务级 `p2sp_share` 三态（`DownloadOptions` 新字段，
+  `""` 跟随全局 / `"true"`/`"false"` 显式覆写，引擎与其他 handler
+  零消费）——`"false"` 任务跳过公告
+- **竞速纪律**：`store_back_after_announce` 回写前锁内复核
+  `retract_all_pending_ || !accepting_`，取消的回写丢弃且对刚成功的
+  公告补 retract 回滚（announce 是 upsert——迟到回写会复活刚撤下的
+  条目）；`on_completed` 锁内复核 accepting（与 apply_share 翻关竞速）；
+  apply_share 翻关清待处理队列 + 全量 retract
+- **停机语义**：`stop()` 不 retract（停机 ≠ 删文件，重注册后全量重公告
+  补差，泄漏的公告由 TTL 上界 7d 自愈）；`disable()`（share 翻关或
+  停机+删文件语义）全量 retract 后停（阻塞至 retract 完成）；
+  gateway stop 只在 worker 退出收尾（worker 不跑则网关不活）
+- **配置面（daemon.json `p2sp` 节 + config.{hpp,cpp} `P2spConfig`）**：
+  `share{enabled 默认 false, mode=standard|hash_only, one_way, ttl_s
+  默认 86400, hash_delay_s, announce_mirrors 默认 true}` +
+  `rendezvous{host 默认 127.0.0.1, port 默认 7800, server_token,
+  group_token, advertise_addr, advertise_direct}`；mode 非法值告警保持
+  standard（沿 download.http_engine 先例）；SIGHUP：share.* 六字段全
+  热更（翻关全量 retract / 未启动而翻开现场构建），rendezvous.* 变化
+  告警 "restart required"（SwarmClient 连接在工厂构造期装配）
+- **main.cpp 接线**：启动时 `share.enabled` → 工厂 + `start()` 成功
+  注册引擎监听（RAII 摘除器持 unique_ptr 引用而非注册时刻裸指针——
+  SIGHUP 热启用替换 announcer 后快照指针漏摘/悬垂）
+- **测试**：新 target `falcon_daemon_swarm_announcer_tests`（19 用例，
+  编 `#else` 工厂分支，FakeGateway 经接缝注入）：公告内容 8（R1+R2
+  字段逐项 / hash_only 省略 / 任务 opt-out / magnet / URL 含 ?、#、
+  非 http scheme、announce_mirrors=false）/ 哈希失败不重试与延迟窗口 /
+  状态机 5（续租同内容无 retract / 文件消失 retract / 变更先新后旧 /
+  session 补差 / 失败退避后恢复）/ 停机禁用 4（stop 无 retract /
+  disable retract / 翻关拒新完成 / start 失败传播）+ config 9 用例
+  （31 → 40）。**构建期修复**：① `uniform_int_distribution` 声明为
+  const 后 `operator()`（非 const 成员）不可调用——去 const；②
+  disable 退出路径对未持锁的 unique_lock 调 `unlock()` 抛 EPERM
+  （retract 分支 unlock 后 break）——按 `owns_lock()` 收口
+- 验证：daemon 门禁全套件（见工作汇报）；覆盖定性：真实网关
+  （FALCON_HAS_SWARM）与 e2e 链路不在本机测试面（CI swarmd job 收口）
+
 ### 2026-10-08 - serverInfo.version 单一事实源收口（构建期注入 FALCON_DAEMON_VERSION）
 - **漂移面消除**：`mcp_server.cpp` initialize 的 `serverInfo.version` 从
   `FALCON_VERSION_STRING`（core 头文件硬编码 "0.1.0"）改接
@@ -546,9 +598,35 @@ falcon-mcp [OPTIONS]
   "download": {
     "max_concurrent_tasks": 5,
     "max_overall_speed_limit": 0
+  },
+  "p2sp": {
+    "share": {
+      "enabled": false,
+      "mode": "standard",
+      "one_way": false,
+      "ttl_s": 86400,
+      "hash_delay_s": 0,
+      "announce_mirrors": true
+    },
+    "rendezvous": {
+      "host": "127.0.0.1",
+      "port": 7800,
+      "server_token": "",
+      "group_token": "",
+      "advertise_addr": "",
+      "advertise_direct": true
+    }
   }
 }
 ```
+
+- `p2sp.share.enabled` 开启后，下载完成的任务经 SwarmAnnouncer 向
+  Rendezvous Service 公告（R1 文件哈希 + R2 镜像 URL），并做 TTL 续租/
+  文件消失撤下/内容变化重公告；`mode=standard` 上送 name/size，
+  `hash_only` 仅哈希；`one_way` = 只下载不共享（等同 enabled=false）；
+  `announce_mirrors=false` 仅公告文件不公告镜像 URL
+- `p2sp.rendezvous` 为 SwarmClient 接入参数，**改动需重启**（SIGHUP 仅
+  告警 "restart required"）；`p2sp.share.*` 全部热更（SIGHUP 立即生效）
 
 - 只覆盖文件中出现的键，未出现的键保持下层值
 - 路径值支持 `~/` 前缀展开（HOME / USERPROFILE）
@@ -746,7 +824,8 @@ RPC 的 `pauseAll`/`unpauseAll`/`removeDownloadResult`/`purgeDownloadResult`
 | `falcon_daemon_rpc_storage_tests` | `json_rpc_storage_test.cpp` | RPC × storage 集成（回落/删除联动/批量落库/停机回调） |
 | `falcon_daemon_storage_tests` | `task_storage_test.cpp` `task_storage_listener_test.cpp` | 持久化与监听器 |
 | `falcon_daemon_lifecycle_tests` | `daemon_lifecycle_test.cpp` | 守护进程生命周期（POSIX） |
-| `falcon_daemon_config_tests` | `config_test.cpp` | daemon.json 解析/优先级/容错/~ 展开 |
+| `falcon_daemon_config_tests` | `config_test.cpp` | daemon.json 解析/优先级/容错/~ 展开；`p2sp` 节（share/rendezvous 全字段往返/非法 mode 告警/类型错误/节非 object/未知键告警） |
+| `falcon_daemon_swarm_announcer_tests` | `swarm_announcer_test.cpp` | SwarmAnnouncer 状态机（FakeGateway 接缝注入）：公告内容与隐私过滤/TTL 续租/文件消失与内容变化/session 补差/失败退避/停机禁用语义 |
 | `falcon_daemon_main_tests` | `main_integration_test.cpp` | 真实二进制参数/退出码/配置文件加载（POSIX） |
 
 ```bash

@@ -177,6 +177,14 @@ if(FALCON_BUILD_DAEMON AND FALCON_BUILD_SWARMD)
     add_subdirectory(packages/falcon-swarmd)
 endif()
 
+# daemon P2SP 公告网关接线（falcon-daemon add_subdirectory 先于 swarmd，
+# 届时 falcon_swarm_client 尚不存在——事后在此补链 + 定义；缺 CURL 时
+# client target 不存在，daemon 侧 swarm_announcer.cpp 走 #else 空实现）
+if(TARGET falcon-daemon AND TARGET falcon_swarm_client)
+    target_link_libraries(falcon-daemon PRIVATE falcon_swarm_client)
+    target_compile_definitions(falcon-daemon PRIVATE FALCON_HAS_SWARM=1)
+endif()
+
 # Desktop 应用（可选）
 if(FALCON_BUILD_DESKTOP)
     add_subdirectory(apps/desktop)

@@ -7,6 +7,7 @@
 #include "rpc/json_rpc_server.hpp"
 #include "daemon/daemon.hpp"
 #include "daemon/config.hpp"
+#include "daemon/swarm_announcer.hpp"
 
 #ifdef FALCON_HAS_SQLITE3
 #include "storage/task_storage.hpp"
@@ -77,6 +78,7 @@ int main(int argc, char* argv[]) {
     falcon::daemon::rpc::JsonRpcServerConfig rpc_config;
     falcon::daemon::DaemonConfig daemon_config;
     falcon::daemon::DownloadConfig download_config;
+    falcon::daemon::P2spConfig p2sp_config;
 
 #ifdef _WIN32
     bool install_service = false;
@@ -108,7 +110,7 @@ int main(int argc, char* argv[]) {
             if (!conf_path.empty() || std::filesystem::exists(path)) {
                 auto result = falcon::daemon::apply_config_file(
                     path, rpc_config, daemon_config, task_db_path,
-                    enable_rpc, run_as_daemon, download_config);
+                    enable_rpc, run_as_daemon, download_config, p2sp_config);
                 if (!result.ok) {
                     std::cerr << "Error loading config file: " << result.error << "\n";
                     return 1;
@@ -391,6 +393,38 @@ int main(int argc, char* argv[]) {
         FALCON_LOG_INFO_STREAM("Task persistence disabled (SQLite3 not available)");
 #endif
 
+        // P2SP 共享公告（设计文档 §16.4）：share.enabled 时构建
+        // SwarmAnnouncer 并注册进引擎事件——on_completed 只做过滤+入队，
+        // 哈希与公告全部在组件自有工作线程。工厂在 FALCON_HAS_SWARM
+        // 缺席（无 CURL / 未构建 swarmd client）时返回 nullptr，优雅降级。
+        std::unique_ptr<falcon::daemon::SwarmAnnouncer> swarm_announcer;
+        if (p2sp_config.share.enabled) {
+            swarm_announcer = falcon::daemon::make_swarm_announcer(p2sp_config, &engine);
+            if (swarm_announcer) {
+                std::string announce_error;
+                if (swarm_announcer->start(&announce_error)) {
+                    engine.add_listener(swarm_announcer.get());
+                    FALCON_LOG_INFO_STREAM("P2SP share announcer started (mode="
+                                           << p2sp_config.share.mode << ")");
+                } else {
+                    FALCON_LOG_WARN_STREAM("P2SP share announcer failed to start: "
+                                           << announce_error);
+                    swarm_announcer.reset();
+                }
+            }
+        }
+        // 摘除是注册方责任（EventDispatcher 以裸指针持有监听者）：声明在
+        // announcer 之后，逆序析构时先 remove_listener 再停工作线程。
+        // 持 unique_ptr 引用而非注册时刻的裸指针——SIGHUP 热启用路径
+        // 会替换 announcer，快照指针要么漏摘要么指向已析构的旧实例
+        struct SwarmAnnouncerDetacher {
+            falcon::DownloadEngine& engine;
+            std::unique_ptr<falcon::daemon::SwarmAnnouncer>& announcer;
+            ~SwarmAnnouncerDetacher() {
+                engine.remove_listener(announcer.get());
+            }
+        } swarm_announcer_detacher{engine, swarm_announcer};
+
         // 停机排水：暂停（而非取消）所有任务并等待引擎安静。
         // 取消会把任务落库为 Cancelled 导致重启后不再恢复；
         // 暂停则让未完成任务以可恢复状态（Paused/Downloading）入库。
@@ -457,12 +491,13 @@ int main(int argc, char* argv[]) {
                 falcon::daemon::rpc::JsonRpcServerConfig new_rpc = rpc_config;
                 falcon::daemon::DaemonConfig new_daemon = daemon_config;
                 falcon::daemon::DownloadConfig new_download = download_config;
+                falcon::daemon::P2spConfig new_p2sp = p2sp_config;
                 std::string new_task_db = task_db_path;
                 bool new_enable_rpc = enable_rpc;
                 bool new_run_as_daemon = run_as_daemon;
                 const auto result = falcon::daemon::apply_config_file(
                     active_conf_path, new_rpc, new_daemon, new_task_db,
-                    new_enable_rpc, new_run_as_daemon, new_download);
+                    new_enable_rpc, new_run_as_daemon, new_download, new_p2sp);
                 if (!result.ok) {
                     FALCON_LOG_WARN_STREAM("Config reload failed, keeping current config: "
                                          << result.error);
@@ -491,6 +526,48 @@ int main(int argc, char* argv[]) {
                         engine.set_global_speed_limit(*new_download.max_overall_speed_limit);
                     }
                     FALCON_LOG_INFO_STREAM("Download settings updated (applied immediately)");
+                }
+
+                // 可热更：P2SP share（§16.5：share.* 全热更；生效位翻关
+                // → announcer 内全量 retract + 清活跃表）。announcer 未
+                // 启动而配置翻开 → 现场构建（热启用）
+                if (new_p2sp.share.enabled != p2sp_config.share.enabled ||
+                    new_p2sp.share.mode != p2sp_config.share.mode ||
+                    new_p2sp.share.one_way != p2sp_config.share.one_way ||
+                    new_p2sp.share.ttl_s != p2sp_config.share.ttl_s ||
+                    new_p2sp.share.hash_delay_s != p2sp_config.share.hash_delay_s ||
+                    new_p2sp.share.announce_mirrors != p2sp_config.share.announce_mirrors) {
+                    if (swarm_announcer) {
+                        swarm_announcer->apply_share(new_p2sp.share);
+                        FALCON_LOG_INFO_STREAM("P2SP share settings updated (applied immediately)");
+                    } else if (new_p2sp.share.enabled) {
+                        swarm_announcer =
+                            falcon::daemon::make_swarm_announcer(new_p2sp, &engine);
+                        std::string announce_error;
+                        if (swarm_announcer && swarm_announcer->start(&announce_error)) {
+                            engine.add_listener(swarm_announcer.get());
+                            FALCON_LOG_INFO_STREAM("P2SP share announcer started on reload");
+                        } else {
+                            if (swarm_announcer) {
+                                FALCON_LOG_WARN_STREAM(
+                                    "P2SP share announcer failed to start: "
+                                    << announce_error);
+                            }
+                            swarm_announcer.reset();
+                        }
+                    }
+                }
+                // rendezvous 接入参数变化需重启（SwarmClient 连接在工厂
+                // 构造期装配，不热更）
+                if (new_p2sp.rendezvous.host != p2sp_config.rendezvous.host ||
+                    new_p2sp.rendezvous.port != p2sp_config.rendezvous.port ||
+                    new_p2sp.rendezvous.server_token != p2sp_config.rendezvous.server_token ||
+                    new_p2sp.rendezvous.group_token != p2sp_config.rendezvous.group_token ||
+                    new_p2sp.rendezvous.advertise_addr != p2sp_config.rendezvous.advertise_addr ||
+                    new_p2sp.rendezvous.advertise_direct !=
+                        p2sp_config.rendezvous.advertise_direct) {
+                    FALCON_LOG_WARN_STREAM("Config reload: p2sp.rendezvous settings changed, "
+                                         "restart required to apply");
                 }
 
                 // 需重启：监听、存储、守护化相关
@@ -526,6 +603,7 @@ int main(int argc, char* argv[]) {
                 rpc_config = new_rpc;
                 daemon_config = new_daemon;
                 download_config = new_download;
+                p2sp_config = new_p2sp;
                 task_db_path = new_task_db;
                 enable_rpc = new_enable_rpc;
                 run_as_daemon = new_run_as_daemon;

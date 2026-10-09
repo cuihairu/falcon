@@ -67,6 +67,32 @@ include(GoogleTest)
 gtest_discover_tests(falcon_daemon_rpc_tests)
 gtest_discover_tests(falcon_daemon_config_tests)
 
+# P2SP 公告组件（§16.4）：swarm_announcer.cpp 直接编进测试目标（真实
+# 网关经 SwarmAnnouncerGateway 接缝替换为 fake，无需 CURL/swarmd client）
+add_executable(falcon_daemon_swarm_announcer_tests
+    swarm_announcer_test.cpp
+    ../src/daemon/swarm_announcer.cpp
+)
+
+target_link_libraries(falcon_daemon_swarm_announcer_tests
+    PRIVATE
+        falcon_daemon_rpc
+        GTest::gtest
+        GTest::gtest_main
+        Threads::Threads
+)
+
+target_include_directories(falcon_daemon_swarm_announcer_tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+)
+
+target_compile_features(falcon_daemon_swarm_announcer_tests PRIVATE cxx_std_17)
+
+gtest_discover_tests(falcon_daemon_swarm_announcer_tests
+    DISCOVERY_TIMEOUT 30
+)
+
 # Task Storage Tests (requires SQLite3)
 if(SQLite3_FOUND AND TARGET falcon_daemon_storage)
     add_executable(falcon_daemon_storage_tests

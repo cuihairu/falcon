@@ -178,9 +178,15 @@ if(nlohmann_json_FOUND)
 
     target_compile_features(falcon_daemon_rpc PRIVATE cxx_std_17)
 
+    # swarm_announcer 挂可执行目标而非 falcon_daemon_core——真实网关依赖
+    # falcon_swarm_client（CURL），core 库保持零 CURL 依赖；falcon_swarm_client
+    # 可用时由根 CMakeLists（swarmd add_subdirectory 之后）补链 + 定义
+    # FALCON_HAS_SWARM（编译顺序：本目录先于 swarmd，target 届时尚不存在）
     add_executable(falcon-daemon
         src/main.cpp
         src/daemon/config.cpp
+        src/daemon/swarm_announcer.cpp
+        src/daemon/swarm_announcer.hpp
     )
 
     target_link_libraries(falcon-daemon

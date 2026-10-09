@@ -45,6 +45,31 @@ struct DownloadConfig {
     std::string http_engine = "v1";
 };
 
+/// P2SP 共享与 Rendezvous 接入配置（daemon.json 的 "p2sp" 节，设计
+/// 文档 docs/p2sp_network_design.md §16.5）。默认整体缺省 = share
+/// 关闭（行为零变化）。`share.*` 全部可 SIGHUP 热更；`rendezvous.*`
+/// 变化需重启（告警 restart required）。
+struct P2spConfig {
+    struct Share {
+        bool enabled = false;             ///< 完成后公告开关（默认关）
+        std::string mode = "standard";    ///< "standard"|"hash_only"（非法值告警保留 standard）
+        bool one_way = false;             ///< 只消费不公告（§16.4 过滤链第 1 环）
+        std::uint64_t ttl_s = 86400;      ///< 公告 TTL（秒，服务器侧钳 [3600, 604800]）
+        std::uint64_t hash_delay_s = 0;   ///< 完成后延迟哈希（秒，错峰可选）
+        bool announce_mirrors = true;     ///< 是否随 R1 公告 R2 镜像 URL
+    };
+    struct Rendezvous {
+        std::string host = "127.0.0.1";   ///< Rendezvous 地址
+        std::uint16_t port = 7800;        ///< Rendezvous 端口
+        std::string server_token;         ///< 传输层 Bearer 令牌（空 = 服务器不鉴权）
+        std::string group_token;          ///< 群组准入令牌（空 = 服务器不校验）
+        std::string advertise_addr;       ///< 数据服务公告地址 ip:port（空 = direct=false）
+        bool advertise_direct = true;     ///< 公告 direct 标记（NAT 后节点置 false）
+    };
+    Share share;
+    Rendezvous rendezvous;
+};
+
 /**
  * @brief 解析 JSON 配置文件并应用到配置结构上
  *
@@ -57,6 +82,9 @@ struct DownloadConfig {
  * - daemon: run_as_daemon / pid_file / working_dir / log_file
  * - storage: task_db_path
  * - download: max_concurrent_tasks / max_overall_speed_limit / http_engine
+ * - mcp: enabled
+ * - p2sp: share{enabled/mode/one_way/ttl_s/hash_delay_s/announce_mirrors} +
+ *         rendezvous{host/port/server_token/group_token/advertise_addr/advertise_direct}
  *
  * @param path 配置文件路径
  * @param rpc_config RPC 服务器配置（就地更新）
@@ -65,6 +93,7 @@ struct DownloadConfig {
  * @param enable_rpc 是否启用 RPC（就地更新）
  * @param run_as_daemon 是否守护化运行（就地更新）
  * @param download_config 下载参数（就地更新，optional 语义）
+ * @param p2sp_config P2SP 共享/接入参数（就地更新，默认缺省 = 共享关）
  * @return ConfigLoadResult 加载结果；warnings 含未知键提示
  */
 ConfigLoadResult apply_config_file(const std::string& path,
@@ -73,7 +102,8 @@ ConfigLoadResult apply_config_file(const std::string& path,
                                    std::string& task_db_path,
                                    bool& enable_rpc,
                                    bool& run_as_daemon,
-                                   DownloadConfig& download_config);
+                                   DownloadConfig& download_config,
+                                   P2spConfig& p2sp_config);
 
 /**
  * @brief 展开 "~/" 前缀为用户主目录（无前缀时原样返回）

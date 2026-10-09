@@ -67,6 +67,7 @@ struct AllConfigs {
     falcon::daemon::rpc::JsonRpcServerConfig rpc;
     falcon::daemon::DaemonConfig daemon;
     falcon::daemon::DownloadConfig download;
+    falcon::daemon::P2spConfig p2sp;
     std::string task_db_path;
     bool enable_rpc = false;
     bool run_as_daemon = false;
@@ -75,7 +76,8 @@ struct AllConfigs {
 falcon::daemon::ConfigLoadResult load(const std::string& path, AllConfigs& c) {
     return falcon::daemon::apply_config_file(path, c.rpc, c.daemon,
                                              c.task_db_path, c.enable_rpc,
-                                             c.run_as_daemon, c.download);
+                                             c.run_as_daemon, c.download,
+                                             c.p2sp);
 }
 
 TEST(ConfigTest, ApplyFullConfig) {
@@ -453,6 +455,152 @@ TEST(ConfigTest, DefaultConfigDirFallsBackWithoutHome) {
     if (!old_str.empty()) ::setenv("HOME", old_str.c_str(), 1);
     EXPECT_EQ(dir, "/etc/falcon");
 #endif
+}
+
+//==============================================================================
+// P2SP 共享与 Rendezvous 接入（daemon.json "p2sp" 节，§16.5）
+//==============================================================================
+
+TEST(ConfigTest, P2spSectionAbsentKeepsSharingOff) {
+    const TempFile file(write_config(R"({ "rpc": { "port": 6802 } })"));
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    ASSERT_TRUE(result.ok) << result.error;
+    // 默认整体缺省 = 共享关闭（行为零变化）
+    EXPECT_FALSE(c.p2sp.share.enabled);
+    EXPECT_EQ(c.p2sp.share.mode, "standard");
+    EXPECT_FALSE(c.p2sp.share.one_way);
+    EXPECT_EQ(c.p2sp.share.ttl_s, 86400u);
+    EXPECT_EQ(c.p2sp.share.hash_delay_s, 0u);
+    EXPECT_TRUE(c.p2sp.share.announce_mirrors);
+    EXPECT_EQ(c.p2sp.rendezvous.host, "127.0.0.1");
+    EXPECT_EQ(c.p2sp.rendezvous.port, 7800);
+    EXPECT_TRUE(c.p2sp.rendezvous.advertise_direct);
+}
+
+TEST(ConfigTest, P2spSectionFullRoundTrip) {
+    const TempFile file(write_config(R"({
+        "p2sp": {
+            "share": {
+                "enabled": true,
+                "mode": "hash_only",
+                "one_way": true,
+                "ttl_s": 259200,
+                "hash_delay_s": 30,
+                "announce_mirrors": false
+            },
+            "rendezvous": {
+                "host": "192.168.1.10",
+                "port": 7900,
+                "server_token": "srv-token",
+                "group_token": "grp-token",
+                "advertise_addr": "10.0.0.5:7777",
+                "advertise_direct": false
+            }
+        }
+    })"));
+
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    ASSERT_TRUE(result.ok) << result.error;
+    EXPECT_TRUE(result.warnings.empty());
+
+    EXPECT_TRUE(c.p2sp.share.enabled);
+    EXPECT_EQ(c.p2sp.share.mode, "hash_only");
+    EXPECT_TRUE(c.p2sp.share.one_way);
+    EXPECT_EQ(c.p2sp.share.ttl_s, 259200u);
+    EXPECT_EQ(c.p2sp.share.hash_delay_s, 30u);
+    EXPECT_FALSE(c.p2sp.share.announce_mirrors);
+
+    EXPECT_EQ(c.p2sp.rendezvous.host, "192.168.1.10");
+    EXPECT_EQ(c.p2sp.rendezvous.port, 7900);
+    EXPECT_EQ(c.p2sp.rendezvous.server_token, "srv-token");
+    EXPECT_EQ(c.p2sp.rendezvous.group_token, "grp-token");
+    EXPECT_EQ(c.p2sp.rendezvous.advertise_addr, "10.0.0.5:7777");
+    EXPECT_FALSE(c.p2sp.rendezvous.advertise_direct);
+}
+
+TEST(ConfigTest, P2spShareModeInvalidWarnsAndKeepsStandard) {
+    const TempFile file(write_config(
+        R"({ "p2sp": { "share": { "enabled": true, "mode": "stealth" } } })"));
+    AllConfigs c;
+    // 预置现值：非法值告警保留 standard（对齐 http_engine 先例——拼错
+    // 模式名不静默失效，也不至于让守护进程起不来）
+    c.p2sp.share.mode = "hash_only";
+
+    const auto result = load(file.path, c);
+    ASSERT_TRUE(result.ok) << result.error;
+    ASSERT_EQ(result.warnings.size(), 1u);
+    EXPECT_NE(result.warnings[0].find("p2sp.share.mode"), std::string::npos)
+        << result.warnings[0];
+    EXPECT_EQ(c.p2sp.share.mode, "hash_only");
+}
+
+TEST(ConfigTest, P2spShareTypeMismatchFails) {
+    const TempFile file(
+        write_config(R"({ "p2sp": { "share": { "ttl_s": "one-day" } } })"));
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    EXPECT_FALSE(result.ok);
+    EXPECT_NE(result.error.find("invalid type for key 'ttl_s'"),
+              std::string::npos);
+}
+
+TEST(ConfigTest, P2spRendezvousTypeMismatchFails) {
+    const TempFile file(
+        write_config(R"({ "p2sp": { "rendezvous": { "port": "not-a-port" } } })"));
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    EXPECT_FALSE(result.ok);
+    EXPECT_NE(result.error.find("invalid type for key 'port'"),
+              std::string::npos);
+}
+
+TEST(ConfigTest, P2spSectionNotObjectFails) {
+    const TempFile file(write_config(R"({ "p2sp": 5 })"));
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    EXPECT_FALSE(result.ok);
+    EXPECT_NE(result.error.find("'p2sp' section must be an object"),
+              std::string::npos);
+}
+
+TEST(ConfigTest, P2spShareSectionNotObjectFails) {
+    const TempFile file(write_config(R"({ "p2sp": { "share": "x" } })"));
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    EXPECT_FALSE(result.ok);
+    EXPECT_NE(result.error.find("'p2sp.share' section must be an object"),
+              std::string::npos);
+}
+
+TEST(ConfigTest, P2spRendezvousSectionNotObjectFails) {
+    const TempFile file(write_config(R"({ "p2sp": { "rendezvous": [] } })"));
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    EXPECT_FALSE(result.ok);
+    EXPECT_NE(result.error.find("'p2sp.rendezvous' section must be an object"),
+              std::string::npos);
+}
+
+TEST(ConfigTest, P2spUnknownKeysWarn) {
+    const TempFile file(write_config(R"({
+        "p2sp": {
+            "share": { "enabled": true, "shar": true },
+            "rendezvous": { "host": "h", "post": 1 }
+        }
+    })"));
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    ASSERT_TRUE(result.ok) << result.error;
+    ASSERT_EQ(result.warnings.size(), 2u);
+    EXPECT_NE(result.warnings[0].find("unknown key in 'p2sp.share' section: shar"),
+              std::string::npos) << result.warnings[0];
+    EXPECT_NE(result.warnings[1].find("unknown key in 'p2sp.rendezvous' section: post"),
+              std::string::npos) << result.warnings[1];
+    // 已知键照常生效
+    EXPECT_TRUE(c.p2sp.share.enabled);
+    EXPECT_EQ(c.p2sp.rendezvous.host, "h");
 }
 
 } // namespace
