@@ -93,6 +93,33 @@ gtest_discover_tests(falcon_daemon_swarm_announcer_tests
     DISCOVERY_TIMEOUT 30
 )
 
+# P2SP 入站数据服务（§10.3 阶段 2 增量 1）：swarm_data_service.cpp 直接编进
+# 测试目标（零外部依赖，仅 socket），回环单测无需 daemon/swarmd。
+# 需要 FileHasher（SHA256）——链 Falcon::protocols。
+add_executable(falcon_daemon_swarm_data_service_tests
+    swarm_data_service_test.cpp
+    ../src/daemon/swarm_data_service.cpp
+)
+
+target_link_libraries(falcon_daemon_swarm_data_service_tests
+    PRIVATE
+        Falcon::protocols
+        GTest::gtest
+        GTest::gtest_main
+        Threads::Threads
+)
+
+target_include_directories(falcon_daemon_swarm_data_service_tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+)
+
+target_compile_features(falcon_daemon_swarm_data_service_tests PRIVATE cxx_std_17)
+
+gtest_discover_tests(falcon_daemon_swarm_data_service_tests
+    DISCOVERY_TIMEOUT 30
+)
+
 # Task Storage Tests (requires SQLite3)
 if(SQLite3_FOUND AND TARGET falcon_daemon_storage)
     add_executable(falcon_daemon_storage_tests

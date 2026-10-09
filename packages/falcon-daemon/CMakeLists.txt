@@ -182,11 +182,16 @@ if(nlohmann_json_FOUND)
     # falcon_swarm_client（CURL），core 库保持零 CURL 依赖；falcon_swarm_client
     # 可用时由根 CMakeLists（swarmd add_subdirectory 之后）补链 + 定义
     # FALCON_HAS_SWARM（编译顺序：本目录先于 swarmd，target 届时尚不存在）
+    # swarm_data_service（P2SP 阶段 2 增量 1，§10.3 入站只读 HTTP 数据服务）
+    # 同挂可执行目标：零外部依赖（仅 POSIX/Winsock socket），随 daemon 启动；
+    # 与 swarm_announcer 一起构成 P2SP 数据面（公告 + 服务）。
     add_executable(falcon-daemon
         src/main.cpp
         src/daemon/config.cpp
         src/daemon/swarm_announcer.cpp
         src/daemon/swarm_announcer.hpp
+        src/daemon/swarm_data_service.cpp
+        src/daemon/swarm_data_service.hpp
     )
 
     target_link_libraries(falcon-daemon
