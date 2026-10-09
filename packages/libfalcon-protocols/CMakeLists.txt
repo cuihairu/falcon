@@ -18,6 +18,7 @@ add_library(falcon_protocols
     src/request_group.cpp
     src/resume_control.cpp
     src/file_hash.cpp
+    src/swarm_mirror_source.cpp
     src/commands/command.cpp
     src/commands/http_commands.cpp
     src/net/event_poll_poll.cpp

@@ -25,6 +25,8 @@
 
 #pragma once
 
+#include "daemon/swarm_announcer.hpp"
+
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -43,7 +45,13 @@ struct SwarmDataServiceConfig {
     std::uint16_t listen_port = 0;         ///< 0 = OS 分配随机端口
 };
 
-class SwarmDataService {
+/// 从 p2sp.rendezvous.advertise_addr 派生数据服务绑定点（e2e 确定性）：
+/// "ip:port" → 按 advertise 声明的端口绑定（公告与实听一致）；空串或
+/// 解析失败 → 0.0.0.0:0（OS 分配，port() 回读）。
+SwarmDataServiceConfig make_data_service_config(
+    const std::string& advertise_addr);
+
+class SwarmDataService final : public ISwarmDataRegistry {
 public:
     explicit SwarmDataService(SwarmDataServiceConfig config);
     ~SwarmDataService();
@@ -58,13 +66,14 @@ public:
     void stop();
 
     /// 注册一个可服务资源（已完成成品：sha256 → 本地路径）。幂等。
-    void register_resource(const std::string& sha256_hex, const std::string& path);
+    void register_resource(const std::string& sha256_hex,
+                           const std::string& path) override;
 
     /// 撤销注册（文件被删除/共享关闭）。
-    void unregister_resource(const std::string& sha256_hex);
+    void unregister_resource(const std::string& sha256_hex) override;
 
     /// 清空注册表（共享整体关闭）。
-    void clear();
+    void clear() override;
 
     // ---- 观测 ---------------------------------------------------------
     std::uint16_t port() const { return port_; }

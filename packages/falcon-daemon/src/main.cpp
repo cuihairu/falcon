@@ -4,10 +4,14 @@
 #include <falcon/logger.hpp>
 #include <falcon/protocols/v2_engine_host.hpp>
 
+#include <falcon/protocols/mirror_source.hpp>
+
 #include "rpc/json_rpc_server.hpp"
 #include "daemon/daemon.hpp"
 #include "daemon/config.hpp"
 #include "daemon/swarm_announcer.hpp"
+#include "daemon/swarm_data_service.hpp"
+#include "daemon/swarm_source_provider.hpp"
 
 #ifdef FALCON_HAS_SQLITE3
 #include "storage/task_storage.hpp"
@@ -395,13 +399,64 @@ int main(int argc, char* argv[]) {
         FALCON_LOG_INFO_STREAM("Task persistence disabled (SQLite3 not available)");
 #endif
 
+        // P2SP 入站数据服务（§10.3，阶段 2 增量 1）：对象恒存在（停机态），
+        // share 翻开时 start、翻关/停机时 stop。绑定点从 advertise_addr
+        // 派生（"ip:port" → 按公告端口绑定；解析失败回落 0.0.0.0:0）。
+        // 绑定失败仅告警不阻断——数据面是共享的增量能力，对端连拒绝由
+        // 段级换源吸收。声明在 announcer 之前（announcer 持其指针）。
+        falcon::daemon::SwarmDataService swarm_data_service{
+            falcon::daemon::make_data_service_config(
+                p2sp_config.rendezvous.advertise_addr)};
+        auto sync_data_service = [&swarm_data_service](bool enabled) {
+            if (enabled) {
+                std::string data_error;
+                if (!swarm_data_service.start(&data_error)) {
+                    FALCON_LOG_WARN_STREAM("P2SP data service start failed: "
+                                           << data_error);
+                }
+            } else {
+                swarm_data_service.stop();
+            }
+        };
+
+        // 查询面（§10.4，阶段 2 增量 2）：进程级共享 SwarmClient（只创建
+        // 不启动，首个使用者触发 start 且幂等；公告停了查询仍要活，§11）
+        // → SwarmSourceProvider → 镜像源接缝。swarm 查询源经 seam 进
+        // metalink V2 桥接的镜像池，参与段级换源。缺席（无 CURL / 未构建
+        // swarmd client）时全链保持空，零查询面。
+        std::shared_ptr<falcon::swarm::SwarmClient> swarm_client;
+        std::shared_ptr<falcon::daemon::SwarmSourceProvider> swarm_source_provider;
+        auto ensure_swarm_query = [&]() {
+            if (swarm_source_provider) return true;
+            if (!swarm_client) {
+                swarm_client = falcon::daemon::make_swarm_client(p2sp_config);
+                if (!swarm_client) return false;
+            }
+            swarm_source_provider =
+                falcon::daemon::make_swarm_source_provider(swarm_client);
+            if (!swarm_source_provider) return false;
+            falcon::set_swarm_mirror_source_provider(
+                [swarm_source_provider](const std::string& sha256_hex) {
+                    return swarm_source_provider->sources_for(sha256_hex);
+                });
+            return true;
+        };
+
         // P2SP 共享公告（设计文档 §16.4）：share.enabled 时构建
         // SwarmAnnouncer 并注册进引擎事件——on_completed 只做过滤+入队，
         // 哈希与公告全部在组件自有工作线程。工厂在 FALCON_HAS_SWARM
         // 缺席（无 CURL / 未构建 swarmd client）时返回 nullptr，优雅降级。
         std::unique_ptr<falcon::daemon::SwarmAnnouncer> swarm_announcer;
         if (p2sp_config.share.enabled) {
-            swarm_announcer = falcon::daemon::make_swarm_announcer(p2sp_config, &engine);
+            // 查询面就绪是公告面的一部分（共享同一 client 会话）；失败仅
+            // 告警，公告仍可独立工作（seam 保持空 = 零查询面）
+            if (!ensure_swarm_query()) {
+                FALCON_LOG_WARN_STREAM("P2SP swarm query provider unavailable; "
+                                       "announcer continues without it");
+            }
+            sync_data_service(true);
+            swarm_announcer = falcon::daemon::make_swarm_announcer(
+                p2sp_config, &engine, swarm_client, &swarm_data_service);
             if (swarm_announcer) {
                 std::string announce_error;
                 if (swarm_announcer->start(&announce_error)) {
@@ -431,10 +486,19 @@ int main(int argc, char* argv[]) {
         // 处理器（RPC 工作线程）并发访问 announcer 指针与 p2sp 配置基线；
         // announcer 内部自持锁，护栏只护指针交换/判空/快照
         auto swarm_guard = std::make_shared<std::mutex>();
-        // 热启用路径（SIGHUP reload 与 falcon.swarm.setShare 共用）：构建 +
-        // 启动 + 注册监听后换入指针；构建/启动失败清理并返回 false
+        // 热启用路径（SIGHUP reload 与 falcon.swarm.setShare 共用）：查询面
+        // 补链 + 数据服务起听 + 构建 + 启动 + 注册监听后换入指针；全程持
+        // swarm_guard（构建/启动非快速操作，但热启用本身罕见且两个调用方
+        // 本就经该锁串行化）；任一步失败清理并返回 false
         auto hot_enable_announcer = [&](const falcon::daemon::P2spConfig& cfg) {
-            auto announcer = falcon::daemon::make_swarm_announcer(cfg, &engine);
+            std::lock_guard<std::mutex> lock(*swarm_guard);
+            if (!ensure_swarm_query()) {
+                FALCON_LOG_WARN_STREAM("P2SP swarm query provider unavailable; "
+                                       "announcer continues without it");
+            }
+            sync_data_service(true);
+            auto announcer = falcon::daemon::make_swarm_announcer(
+                cfg, &engine, swarm_client, &swarm_data_service);
             if (!announcer) return false;
             std::string announce_error;
             if (!announcer->start(&announce_error)) {
@@ -443,7 +507,6 @@ int main(int argc, char* argv[]) {
                 return false;
             }
             engine.add_listener(announcer.get());
-            std::lock_guard<std::mutex> lock(*swarm_guard);
             swarm_announcer = std::move(announcer);
             return true;
         };
@@ -508,7 +571,8 @@ int main(int argc, char* argv[]) {
             rpc_server->set_swarm_status_handler(swarm_status_json);
             rpc_server->set_swarm_share_handler(
                 [&swarm_announcer, &p2sp_config, &swarm_guard,
-                 &hot_enable_announcer, &swarm_status_json](bool enabled) -> nlohmann::json {
+                 &hot_enable_announcer, &swarm_status_json,
+                 &sync_data_service](bool enabled) -> nlohmann::json {
                     bool have = false;
                     falcon::daemon::P2spConfig snapshot;
                     {
@@ -529,6 +593,9 @@ int main(int argc, char* argv[]) {
                                                          {"message", "Failed to start swarm announcer"}}}};
                         }
                     }
+                    // 数据服务与生效位同步（start 幂等；stop 对未运行服务
+                    // 是无操作——热启用路径已在内部起听）
+                    sync_data_service(enabled);
                     return swarm_status_json();
                 });
 #endif
@@ -544,11 +611,17 @@ int main(int argc, char* argv[]) {
 
         // Run main loop；stop 回调在收到停止信号/服务停止时执行
         daemon_manager.run(
-            [&rpc_server, &drain_engine, &stop_persistence]() {
+            [&rpc_server, &drain_engine, &stop_persistence, &sync_data_service]() {
                 // Stop callback
+                // 摘查询接缝先于排水：排水期 pause_all 等待的 metalink
+                // 下载线程不再发起新的 swarm 查询（在途查询持有 provider
+                // 的 shared_ptr 拷贝，对象由其延寿，无悬垂）
+                falcon::set_swarm_mirror_source_provider(nullptr);
                 if (rpc_server) {
                     rpc_server->stop();
                 }
+                // 数据服务先于引擎排水停听：停机语义下不再向圈内供数
+                sync_data_service(false);
                 drain_engine();
                 stop_persistence();
             },
@@ -624,6 +697,9 @@ int main(int argc, char* argv[]) {
                             FALCON_LOG_INFO_STREAM("P2SP share announcer started on reload");
                         }
                     }
+                    // 数据服务与生效位同步（热启用路径已在内部起听，
+                    // 此处幂等；翻关路径停听）
+                    sync_data_service(new_p2sp.share.enabled);
                 }
                 // rendezvous 接入参数变化需重启（SwarmClient 连接在工厂
                 // 构造期装配，不热更）

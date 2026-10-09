@@ -17,6 +17,7 @@
 #include <falcon/protocol_registry.hpp>
 #include <falcon/protocols/commands/http_commands.hpp>
 #include <falcon/protocols/download_engine_v2.hpp>
+#include <falcon/protocols/mirror_source.hpp>
 #include <falcon/protocols/request_group.hpp>
 #include <falcon/protocols/v2_engine_host.hpp>
 
@@ -441,6 +442,44 @@ bool verify_or_discard(const MetalinkFile& mf, const std::string& part_path,
 #endif
 }
 
+/// §10.4 查询注入镜像池:按整文件 sha256 向宿主查询 swarm 源(节点源
+/// 与镜像 URL 源),过滤出 V2 可拉形态(http/https)并按文档镜像与自身
+/// 去重。NAT 过滤(direct:false 节点不作数据源)在宿主侧 parse_sources
+/// 完成。查询异常/空回调一律吞掉——发现面故障绝不阻断下载。
+std::vector<std::string> collect_swarm_sources(
+    const MetalinkFile& mf, const std::vector<std::string>& doc_urls) {
+    std::string sha256;
+    for (const auto& h : mf.hashes) {
+        if (h.second == HashAlgorithm::SHA256) {
+            sha256 = to_lower(h.first);
+            break;
+        }
+    }
+    if (sha256.empty()) return {};
+
+    std::vector<std::string> queried;
+    try {
+        if (auto provider = falcon::swarm_mirror_source_snapshot()) {
+            queried = provider(sha256);
+        }
+    } catch (const std::exception&) {
+        return {};
+    }
+
+    std::vector<std::string> usable;
+    usable.reserve(queried.size());
+    for (const auto& u : queried) {
+        const std::string scheme = scheme_of(u);
+        if (scheme != "http" && scheme != "https") continue;
+        if (std::find(doc_urls.begin(), doc_urls.end(), u) != doc_urls.end())
+            continue;  // 文档已有,镜像池不重复收录
+        if (std::find(usable.begin(), usable.end(), u) != usable.end())
+            continue;
+        usable.push_back(u);
+    }
+    return usable;
+}
+
 } // namespace
 
 void MetalinkHandler::download(DownloadTask::Ptr task,
@@ -510,11 +549,22 @@ void MetalinkHandler::download(DownloadTask::Ptr task,
         // 点正常 return(组挂点保留供 resume)
         std::vector<std::string> v2_urls;
         if (v2_multi_source_gate(task->options(), mf, v2_urls)) {
+            // 镜像池补源(§10.4):文档镜像不足分段时向宿主查询 swarm 源
+            // (节点源 + 镜像 URL 源;NAT 过滤宿主侧完成)。查询失败/为空
+            // 吞掉——发现面故障绝不阻断下载。
+            std::vector<std::string> swarm_urls;
+            if (v2_urls.size() < 2)
+                swarm_urls = collect_swarm_sources(mf, v2_urls);
+
+            // 池子仍不足分段(单镜像无换源意义):静默回落串行循环
+            // (与 V2 阶段2 落地前文档单镜像的既有行为一致)
+            if (v2_urls.size() + swarm_urls.size() >= 2) {
             std::string v2_fail_reason;
             auto outcome = V2BridgeOutcome::kFailed;
             try {
                 outcome = run_v2_multi_source(mf, task, listener, part_path,
-                                              v2_urls, v2_fail_reason);
+                                              v2_urls, swarm_urls,
+                                              v2_fail_reason);
             } catch (const std::exception& e) {
                 // 桥接内部异常转失败回落,不向 worker 抛(与方案一致:
                 // worker 的 catch 会把任务置 Failed,跳过回落机会)
@@ -540,6 +590,7 @@ void MetalinkHandler::download(DownloadTask::Ptr task,
                 errors.push_back("v2-multi-source: " + v2_fail_reason);
             }
             if (paused_or_cancelled()) return;
+            }
         }
 
         for (const auto& mirror : mf.urls) {
@@ -632,12 +683,13 @@ bool MetalinkHandler::v2_multi_source_gate(const DownloadOptions& options,
         return false;  // Referer 头(防盗链语义),V2 不发送
     }
 
-    // 3. V2 可拉的镜像(http/https;FTP 镜像留阶段1)≥2 才值得混源
+    // 3. V2 可拉的镜像(http/https;FTP 镜像留阶段1)至少 1 条——
+    //    镜像池是否够分段(≥2)由调用侧并入 swarm 源(§10.4)后裁定
     for (const auto& u : mf.urls) {
         const std::string scheme = scheme_of(u.url);
         if (scheme == "http" || scheme == "https") urls_out.push_back(u.url);
     }
-    if (urls_out.size() < 2) return false;
+    if (urls_out.empty()) return false;
 
     // 4/5. 无整文件哈希(或无 OpenSSL 校验能力)不做无校验混源——
     // 镜像间内容漂移只有整文件哈希门能兜底
@@ -669,20 +721,38 @@ void MetalinkHandler::cleanup_v2_leftovers(const std::string& part_path) {
 MetalinkHandler::V2BridgeOutcome MetalinkHandler::run_v2_multi_source(
     const MetalinkFile& /*mf*/, const DownloadTask::Ptr& parent,
     IEventListener* /*listener*/, const std::string& part_path,
-    const std::vector<std::string>& urls, std::string& fail_reason) {
+    const std::vector<std::string>& doc_urls,
+    const std::vector<std::string>& swarm_urls, std::string& fail_reason) {
     auto* host = &V2EngineHost::instance();
     auto engine = host->engine();  // 此刻才惰性启动(门禁只查开关)
     auto* group_man = engine->request_group_man();
     const TaskId id = parent->id();
 
-    // 组对齐:PAUSED 组(resume 重入)续跑,文档镜像变更则作废重建;
-    // 终态组(常驻引擎按周期回收,不等周期)提前回收让同 id 可重注入
-    // (如 V2 失败→阶段1 全灭→resume 重入);不存在注入新组(同一 V1
-    // id、输出路径覆盖到 part 文件)
+    // 镜像池:文档镜像在前(If-Range 仅主镜像附带,ETag 归属者必须是
+    // uris().front()),swarm 源按文档镜像去重后追加(§10.4);仅新组
+    // 注入时并入——恢复路径忽略 swarm 源漂移(断点不作废)
+    std::vector<std::string> merged = doc_urls;
+    merged.reserve(doc_urls.size() + swarm_urls.size());
+    for (const auto& u : swarm_urls) {
+        if (std::find(merged.begin(), merged.end(), u) == merged.end())
+            merged.push_back(u);
+    }
+
+    // 组对齐:PAUSED 组(resume 重入)按文档镜像子集判定续跑(swarm 源
+    // 漂移不影响断点),文档镜像缺项才作废重建;终态组(常驻引擎按周期
+    // 回收,不等周期)提前回收让同 id 可重注入(如 V2 失败→阶段1 全灭
+    // →resume 重入);不存在注入新组(同一 V1 id、输出路径覆盖到 part
+    // 文件)
     auto* group = group_man->find_group(id);
     if (group != nullptr && group->status() == RequestGroupStatus::PAUSED) {
-        if (group->uris() != urls) {
-            engine->cancel_task(id);  // 镜像列表变更:旧组断点作废
+        const auto& active = group->uris();
+        const bool doc_subset = std::all_of(
+            doc_urls.begin(), doc_urls.end(), [&](const std::string& u) {
+                return std::find(active.begin(), active.end(), u) !=
+                       active.end();
+            });
+        if (!doc_subset) {
+            engine->cancel_task(id);  // 文档镜像变更:旧组断点作废
             group = nullptr;
         } else if (!engine->resume_task(id)) {
             fail_reason = "V2 引擎恢复任务失败: " + std::to_string(id);
@@ -702,7 +772,7 @@ MetalinkHandler::V2BridgeOutcome MetalinkHandler::run_v2_multi_source(
     }
     if (group == nullptr) {
         const TaskId injected = engine->add_download_as(
-            id, urls, parent->options(), part_path);
+            id, merged, parent->options(), part_path);
         if (injected == INVALID_TASK_ID) {
             fail_reason = "V2 引擎无法接受任务(ID 冲突或 URL 无效)";
             return V2BridgeOutcome::kFailed;

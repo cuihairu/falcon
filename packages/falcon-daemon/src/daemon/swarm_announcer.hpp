@@ -34,7 +34,25 @@
 #include <thread>
 #include <vector>
 
-namespace falcon::daemon {
+namespace falcon {
+
+namespace swarm {
+class SwarmClient;  // 前向声明：共享客户端工厂（定义在 .cpp，仅该侧触达）
+}  // namespace swarm
+
+namespace daemon {
+
+/// 数据服务资源台账接缝（P2SP §10.3）：announcer 工作线程在哈希成功/
+/// 内容变化/文件消失/全量 retract 时回调，把「本机完整持有」的成品同步
+/// 进入站数据服务。仅工作线程调用（串行，无并发面）。
+class ISwarmDataRegistry {
+public:
+    virtual ~ISwarmDataRegistry() = default;
+    virtual void register_resource(const std::string& sha256_hex,
+                                   const std::string& path) = 0;
+    virtual void unregister_resource(const std::string& sha256_hex) = 0;
+    virtual void clear() = 0;
+};
 
 /// 公告条目（daemon 侧形状，经网关适配为线上 AnnounceResource）。
 /// R1 = file（本机源，name/size 资源级元数据）；R2 = mirror（任务 URL）。
@@ -94,7 +112,8 @@ public:
                    std::unique_ptr<SwarmAnnouncerGateway> gateway,
                    SwarmTaskInfoFn task_info,
                    SwarmHashFn hasher = nullptr,
-                   SwarmAnnouncerTiming timing = {});
+                   SwarmAnnouncerTiming timing = {},
+                   ISwarmDataRegistry* data_registry = nullptr);
     ~SwarmAnnouncer() override;
 
     SwarmAnnouncer(const SwarmAnnouncer&) = delete;
@@ -171,6 +190,8 @@ private:
     SwarmHashFn hasher_;
     SwarmTaskInfoFn task_info_;
     std::unique_ptr<SwarmAnnouncerGateway> gateway_;
+    // 可空（测试/降级路径）。仅工作线程访问（无并发面）。
+    ISwarmDataRegistry* data_registry_ = nullptr;
 
     mutable std::mutex mutex_;
     std::condition_variable cv_;
@@ -189,7 +210,18 @@ private:
 
 /// 生产工厂：组装 SwarmClient 网关 + 引擎任务查询 + FileHasher 默认哈希。
 /// FALCON_HAS_SWARM 缺席（无 CURL/falcon-swarmd）时返回 nullptr 并告警。
-std::unique_ptr<SwarmAnnouncer> make_swarm_announcer(P2spConfig config,
-                                                     falcon::DownloadEngine* engine);
+/// shared_client 为空时内部自建客户端（兼容既有调用形态）；传入进程级
+/// 共享客户端时公告与查询复用同一会话。data_registry 可空。
+std::unique_ptr<SwarmAnnouncer> make_swarm_announcer(
+    P2spConfig config, falcon::DownloadEngine* engine,
+    std::shared_ptr<falcon::swarm::SwarmClient> shared_client = nullptr,
+    ISwarmDataRegistry* data_registry = nullptr);
 
-}  // namespace falcon::daemon
+/// 进程级共享 SwarmClient 工厂：只创建不启动（start 由首个使用者触发，
+/// 幂等；stop 无人调——公告停了查询仍要活，§11 查询面与公告面解耦）。
+/// share 关闭时不调用（不产生密钥文件副作用）。缺席时返回 nullptr。
+std::shared_ptr<falcon::swarm::SwarmClient> make_swarm_client(
+    const P2spConfig& config);
+
+}  // namespace daemon
+}  // namespace falcon

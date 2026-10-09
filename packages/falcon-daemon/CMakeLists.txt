@@ -192,6 +192,8 @@ if(nlohmann_json_FOUND)
         src/daemon/swarm_announcer.hpp
         src/daemon/swarm_data_service.cpp
         src/daemon/swarm_data_service.hpp
+        src/daemon/swarm_source_provider.cpp
+        src/daemon/swarm_source_provider.hpp
     )
 
     target_link_libraries(falcon-daemon

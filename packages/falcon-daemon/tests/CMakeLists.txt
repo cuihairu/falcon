@@ -120,6 +120,33 @@ gtest_discover_tests(falcon_daemon_swarm_data_service_tests
     DISCOVERY_TIMEOUT 30
 )
 
+# P2SP 查询源 provider（§10.4 查询注入镜像池 + §10.5 NAT 过滤 + §11
+# 退避）：swarm_source_provider.cpp 直接编进测试目标（仅 nlohmann_json
+# 头依赖），QueryFn fake 驱动，零触网。
+add_executable(falcon_daemon_swarm_source_provider_tests
+    swarm_source_provider_test.cpp
+    ../src/daemon/swarm_source_provider.cpp
+)
+
+target_link_libraries(falcon_daemon_swarm_source_provider_tests
+    PRIVATE
+        falcon_daemon_rpc
+        GTest::gtest
+        GTest::gtest_main
+        Threads::Threads
+)
+
+target_include_directories(falcon_daemon_swarm_source_provider_tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+)
+
+target_compile_features(falcon_daemon_swarm_source_provider_tests PRIVATE cxx_std_17)
+
+gtest_discover_tests(falcon_daemon_swarm_source_provider_tests
+    DISCOVERY_TIMEOUT 30
+)
+
 # Task Storage Tests (requires SQLite3)
 if(SQLite3_FOUND AND TARGET falcon_daemon_storage)
     add_executable(falcon_daemon_storage_tests

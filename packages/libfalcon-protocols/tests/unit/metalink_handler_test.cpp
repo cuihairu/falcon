@@ -19,6 +19,7 @@
 #include <falcon/download_task.hpp>
 #include <falcon/event_listener.hpp>
 #include <falcon/protocol_registry.hpp>
+#include <falcon/protocols/mirror_source.hpp>
 
 #include <gtest/gtest.h>
 
@@ -29,6 +30,7 @@
 #include <fstream>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -705,6 +707,7 @@ protected:
         handler_->set_protocol_registry(registry_.get());
     }
     void TearDown() override {
+        falcon::set_swarm_mirror_source_provider(nullptr);  // 进程全局接缝,跨用例复位
         handler_.reset();
         registry_.reset();
         server_->stop();
@@ -1220,6 +1223,221 @@ TEST_F(MetalinkV2BridgeTest, V2ConflictingActiveGroupFallsBackToSerial) {
     std::error_code rm_ec;
     fs::remove("/tmp/falcon-conflict.bin.falcon.tmp", rm_ec);
     fs::remove("/tmp/falcon-conflict.bin.falcon.ctrl", rm_ec);
+}
+
+// ---------------------------------------------------------------------------
+// Swarm 源注入镜像池(§10.4):provider 接缝 → collect_swarm_sources 合并
+// ---------------------------------------------------------------------------
+
+/// swarm 源补充单镜像 → 池 2 → V2 多源分段;查询实参 = 整文件哈希
+TEST_F(MetalinkV2BridgeTest, SwarmSourceExtendsPoolEnablesMultiSource) {
+    const std::string body = v2_test_body();
+    server().set_response("/m1.bin", v2_range_response(body));
+    server().set_response("/swarm.bin", v2_range_response(body));
+
+    std::string asked_sha;
+    falcon::set_swarm_mirror_source_provider(
+        [&](const std::string& sha_hex) -> std::vector<std::string> {
+            asked_sha = sha_hex;
+            return {server().url("/swarm.bin")};
+        });
+
+    const std::string doc = local_meta4(
+        "<file name=\"out.bin\">"
+        "<size>32</size>"
+        "<hash type=\"sha-256\">" + sha256_hex(body) + "</hash>"
+        "<url priority=\"1\">" + server().url("/m1.bin") + "</url>"
+        "</file>");
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    options.max_connections = 4;
+    options.min_segment_size = 8;
+    auto task = make_task(301, doc, options);
+    RecordingListener listener;
+    task->set_listener(&listener);
+    task->set_status(TaskStatus::Downloading);
+    handler_->download(task, &listener);
+
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(asked_sha, sha256_hex(body));  // 查询实参 = 整文件哈希
+    EXPECT_EQ(read_file((dir_.path() / "out.bin").string()), body);
+    {
+        std::lock_guard<std::mutex> lock(listener.mutex_);
+        ASSERT_EQ(listener.statuses.size(), 2u);
+        EXPECT_EQ(listener.statuses[1].second, TaskStatus::Completed);
+    }
+    const auto reqs = server().requests();
+    EXPECT_TRUE(path_received_range(reqs, "/m1.bin"));
+    EXPECT_TRUE(path_received_range(reqs, "/swarm.bin"));  // swarm 源真实参与分段
+    const std::string final_path = (dir_.path() / "out.bin").string();
+    EXPECT_FALSE(fs::exists(final_path + ".metalink-part"));
+    EXPECT_FALSE(fs::exists(final_path + ".metalink-part.falcon.tmp"));
+    EXPECT_FALSE(fs::exists(final_path + ".metalink-part.falcon.ctrl"));
+}
+
+/// swarm 源与文档镜像重复 → 去重后池仍 1 → 阶段1 串行(查询已发生)
+TEST_F(MetalinkV2BridgeTest, SwarmSourceDuplicateOfDocMirrorStaysSerial) {
+    server().set_response("/m1.bin",
+                          FakeResponse{200, "OK", {}, kMirror1Body, true, {}, false, false, false, false, 0, {}});
+    int calls = 0;
+    falcon::set_swarm_mirror_source_provider(
+        [&](const std::string&) -> std::vector<std::string> {
+            ++calls;
+            return {server().url("/m1.bin")};  // 与文档镜像同一 URL
+        });
+
+    const std::string doc = local_meta4(
+        "<file name=\"out.bin\">"
+        "<size>22</size>"
+        "<hash type=\"sha-256\">" + std::string(kMirror1Sha256) + "</hash>"
+        "<url priority=\"1\">" + server().url("/m1.bin") + "</url>"
+        "</file>");
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    auto task = make_task(302, doc, options);
+    task->set_status(TaskStatus::Downloading);
+    handler_->download(task, nullptr);
+
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(calls, 1);  // 池 <2 触发查询;去重后未扩池
+    EXPECT_EQ(read_file((dir_.path() / "out.bin").string()), kMirror1Body);
+    // 阶段1 单连接:全新下载不带 Range
+    for (const auto& r : server().requests()) {
+        if (r.path == "/m1.bin") {
+            EXPECT_TRUE(r.range.empty());
+        }
+    }
+}
+
+/// provider 抛异常 → collect_swarm_sources 吞掉得空表 → 串行回退
+TEST_F(MetalinkV2BridgeTest, SwarmSourceProviderThrowsFallsBackToSerial) {
+    server().set_response("/m1.bin",
+                          FakeResponse{200, "OK", {}, kMirror1Body, true, {}, false, false, false, false, 0, {}});
+    int calls = 0;
+    falcon::set_swarm_mirror_source_provider(
+        [&](const std::string&) -> std::vector<std::string> {
+            ++calls;
+            throw std::runtime_error("query backend down");
+        });
+
+    const std::string doc = local_meta4(
+        "<file name=\"out.bin\">"
+        "<size>22</size>"
+        "<hash type=\"sha-256\">" + std::string(kMirror1Sha256) + "</hash>"
+        "<url priority=\"1\">" + server().url("/m1.bin") + "</url>"
+        "</file>");
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    auto task = make_task(303, doc, options);
+    task->set_status(TaskStatus::Downloading);
+    handler_->download(task, nullptr);
+
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(calls, 1);  // 查询发生且异常被吞
+    EXPECT_EQ(read_file((dir_.path() / "out.bin").string()), kMirror1Body);
+    for (const auto& r : server().requests()) {
+        if (r.path == "/m1.bin") {
+            EXPECT_TRUE(r.range.empty());
+        }
+    }
+}
+
+/// provider 返回非 http(s) scheme → 过滤后空表 → 串行
+TEST_F(MetalinkV2BridgeTest, SwarmSourceNonHttpFilteredStaysSerial) {
+    server().set_response("/m1.bin",
+                          FakeResponse{200, "OK", {}, kMirror1Body, true, {}, false, false, false, false, 0, {}});
+    int calls = 0;
+    falcon::set_swarm_mirror_source_provider(
+        [&](const std::string&) -> std::vector<std::string> {
+            ++calls;
+            return {"ftp://other/f.bin"};  // 非 http/https,过滤
+        });
+
+    const std::string doc = local_meta4(
+        "<file name=\"out.bin\">"
+        "<size>22</size>"
+        "<hash type=\"sha-256\">" + std::string(kMirror1Sha256) + "</hash>"
+        "<url priority=\"1\">" + server().url("/m1.bin") + "</url>"
+        "</file>");
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    auto task = make_task(304, doc, options);
+    task->set_status(TaskStatus::Downloading);
+    handler_->download(task, nullptr);
+
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(calls, 1);
+    EXPECT_EQ(read_file((dir_.path() / "out.bin").string()), kMirror1Body);
+    for (const auto& r : server().requests()) {
+        if (r.path == "/m1.bin") {
+            EXPECT_TRUE(r.range.empty());
+        }
+    }
+}
+
+/// provider 返回空表 → 无补充 → 串行
+TEST_F(MetalinkV2BridgeTest, SwarmSourceEmptyResultStaysSerial) {
+    server().set_response("/m1.bin",
+                          FakeResponse{200, "OK", {}, kMirror1Body, true, {}, false, false, false, false, 0, {}});
+    int calls = 0;
+    falcon::set_swarm_mirror_source_provider(
+        [&](const std::string&) -> std::vector<std::string> {
+            ++calls;
+            return {};
+        });
+
+    const std::string doc = local_meta4(
+        "<file name=\"out.bin\">"
+        "<size>22</size>"
+        "<hash type=\"sha-256\">" + std::string(kMirror1Sha256) + "</hash>"
+        "<url priority=\"1\">" + server().url("/m1.bin") + "</url>"
+        "</file>");
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    auto task = make_task(305, doc, options);
+    task->set_status(TaskStatus::Downloading);
+    handler_->download(task, nullptr);
+
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(calls, 1);
+    EXPECT_EQ(read_file((dir_.path() / "out.bin").string()), kMirror1Body);
+    for (const auto& r : server().requests()) {
+        if (r.path == "/m1.bin") {
+            EXPECT_TRUE(r.range.empty());
+        }
+    }
+}
+
+/// 文档镜像已 ≥2 → 不查 provider(池充足不花 rdv 限频预算)
+TEST_F(MetalinkV2BridgeTest, SwarmSourceNotQueriedWhenDocPoolSufficient) {
+    const std::string body = v2_test_body();
+    server().set_response("/m1.bin", v2_range_response(body));
+    server().set_response("/m2.bin", v2_range_response(body));
+    int calls = 0;
+    falcon::set_swarm_mirror_source_provider(
+        [&](const std::string&) -> std::vector<std::string> {
+            ++calls;
+            return {server().url("/swarm.bin")};
+        });
+
+    const std::string doc = local_meta4(
+        "<file name=\"out.bin\">"
+        "<size>32</size>"
+        "<hash type=\"sha-256\">" + sha256_hex(body) + "</hash>"
+        "<url priority=\"1\">" + server().url("/m1.bin") + "</url>"
+        "<url priority=\"2\">" + server().url("/m2.bin") + "</url>"
+        "</file>");
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    options.max_connections = 4;
+    options.min_segment_size = 8;
+    auto task = make_task(306, doc, options);
+    task->set_status(TaskStatus::Downloading);
+    handler_->download(task, nullptr);
+
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(calls, 0);  // 池充足,查询不发生
+    EXPECT_EQ(read_file((dir_.path() / "out.bin").string()), body);
 }
 
 #endif  // FALCON_TEST_METALINK_V2_HASH

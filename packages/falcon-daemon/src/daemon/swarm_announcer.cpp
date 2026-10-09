@@ -17,6 +17,8 @@
 
 #include "daemon/swarm_announcer.hpp"
 
+#include "daemon/swarm_source_provider.hpp"
+
 #include <falcon/logger.hpp>
 #include <falcon/protocols/file_hash.hpp>
 
@@ -67,11 +69,13 @@ SwarmAnnouncer::SwarmAnnouncer(P2spConfig config,
                                std::unique_ptr<SwarmAnnouncerGateway> gateway,
                                SwarmTaskInfoFn task_info,
                                SwarmHashFn hasher,
-                               SwarmAnnouncerTiming timing)
+                               SwarmAnnouncerTiming timing,
+                               ISwarmDataRegistry* data_registry)
     : timing_(timing),
       hasher_(hasher ? std::move(hasher) : SwarmHashFn(&default_sha256)),
       task_info_(std::move(task_info)),
       gateway_(std::move(gateway)),
+      data_registry_(data_registry),
       share_(config.share) {
     accepting_.store(share_.enabled && !share_.one_way);
 }
@@ -208,6 +212,9 @@ void SwarmAnnouncer::worker_loop() {
             queue_.clear();
             retract_all_pending_ = false;
             lock.unlock();
+            // 数据服务台账同步清空：全量 retract = 本机共享翻关，服务面
+            // 不再对外声称持有任何资源（§11）。
+            if (data_registry_) data_registry_->clear();
             if (!hashes.empty() && !gateway_->retract(hashes)) {
                 FALCON_LOG_WARN_STREAM(
                     "swarm announce: retract-all failed (" << hashes.size()
@@ -293,6 +300,12 @@ void SwarmAnnouncer::process_queue_item(const QueueItem& item) {
                                << item.output_path << ", dropping");
         return;
     }
+
+    // 数据服务台账注册（§10.3）：哈希成功即「本机完整持有」成立。注册
+    // 先于公告——服务面与发现面解耦（公告失败退避重试期间数据服务照常
+    // 可应答查询到本机的拉取），与「公告成功才可被远程发现」的发现面
+    // 语义互不约束。
+    if (data_registry_) data_registry_->register_resource(hash, item.output_path);
 
     ActiveEntry entry;
     entry.output_path = item.output_path;
@@ -388,6 +401,11 @@ void SwarmAnnouncer::process_active_entry(falcon::TaskId id) {
                 return;
             }
             // 新内容：先公告新哈希（无缝衔接），再无条件 retract 旧哈希
+            // 数据服务台账同步换绑：旧哈希摘除、新哈希注册
+            if (data_registry_) {
+                data_registry_->unregister_resource(entry.sha256);
+                data_registry_->register_resource(hash, entry.output_path);
+            }
             ActiveEntry fresh;
             fresh.output_path = entry.output_path;
             fresh.url = entry.url;
@@ -403,6 +421,8 @@ void SwarmAnnouncer::process_active_entry(falcon::TaskId id) {
     }
     if (ec) {
         // 文件消失/不可访问 → 欠账 retract + 摘表（无重试：消失是终态）
+        // 数据服务台账同步摘除（「完整持有」不再成立）
+        if (data_registry_) data_registry_->unregister_resource(entry.sha256);
         if (entry.announced_once) gateway_->retract({entry.sha256});
         std::lock_guard<std::mutex> lock(mutex_);
         active_.erase(id);
@@ -534,13 +554,22 @@ namespace {
 /// SwarmAnnouncerGateway 的 SwarmClient 适配器。线程模型对齐：start()
 /// 在注册线程一次；announce/retract/session/stop 仅在 announcer 工作
 /// 线程串行调用（SwarmClient 自身线程安全，约束天然满足）。
+/// stop() 有意 no-op：进程级共享客户端的会话生命周期归 main 持有——
+/// announcer 停止/热禁用后查询面（§11）仍须存活，客户端无人 stop，
+/// 析构随进程尾随 shared_ptr 归零自然收口。
 class SwarmClientGateway final : public SwarmAnnouncerGateway {
 public:
-    explicit SwarmClientGateway(std::unique_ptr<falcon::swarm::SwarmClient> client)
+    explicit SwarmClientGateway(std::shared_ptr<falcon::swarm::SwarmClient> client)
         : client_(std::move(client)) {}
 
-    bool start(std::string* error) override { return client_->start(error); }
-    void stop() override { client_->stop(); }
+    bool start(std::string* error) override {
+        // SwarmClient::start 非线程安全（幂等但无内部互斥）：热启用路径
+        // 可能与既有 announcer 的工作线程尾随 start 竞速，进程级互斥兜底。
+        static std::mutex client_start_mutex;
+        std::lock_guard<std::mutex> lock(client_start_mutex);
+        return client_->start(error);
+    }
+    void stop() override {}  // no-op——见类注释
     std::string session() override { return client_->session(); }
     std::string node_id() override { return client_->node_id(); }
 
@@ -590,21 +619,19 @@ public:
     }
 
 private:
-    std::unique_ptr<falcon::swarm::SwarmClient> client_;
+    std::shared_ptr<falcon::swarm::SwarmClient> client_;
 };
 
 }  // namespace
 
-std::unique_ptr<SwarmAnnouncer> make_swarm_announcer(P2spConfig config,
-                                                     falcon::DownloadEngine* engine) {
-    if (!engine) return nullptr;
-
+std::shared_ptr<falcon::swarm::SwarmClient> make_swarm_client(
+    const P2spConfig& config) {
     const std::string key_file = get_default_config_dir() + "/swarm_key.pem";
     std::string key_error;
     const auto key = falcon::swarm::load_or_create_swarm_key(key_file, &key_error);
     if (!key.valid()) {
-        FALCON_LOG_WARN_STREAM("swarm announce: identity key unavailable ("
-                               << key_error << "), announcing disabled");
+        FALCON_LOG_WARN_STREAM("swarm client: identity key unavailable ("
+                               << key_error << "), swarm disabled");
         return nullptr;
     }
 
@@ -618,8 +645,21 @@ std::unique_ptr<SwarmAnnouncer> make_swarm_announcer(P2spConfig config,
     client_config.advertise_direct = config.rendezvous.advertise_direct;
     client_config.key_file = key_file;
 
-    auto gateway = std::make_unique<SwarmClientGateway>(
-        std::make_unique<falcon::swarm::SwarmClient>(client_config, key));
+    // 只创建不启动：start 由首个使用者（gateway 或查询 provider 侧）触发，
+    // 幂等。stop 无人调——公告停了查询仍要活（§11），进程尾随析构收口。
+    return std::make_shared<falcon::swarm::SwarmClient>(client_config, key);
+}
+
+std::unique_ptr<SwarmAnnouncer> make_swarm_announcer(
+    P2spConfig config, falcon::DownloadEngine* engine,
+    std::shared_ptr<falcon::swarm::SwarmClient> shared_client,
+    ISwarmDataRegistry* data_registry) {
+    if (!engine) return nullptr;
+
+    auto client = shared_client ? std::move(shared_client) : make_swarm_client(config);
+    if (!client) return nullptr;
+
+    auto gateway = std::make_unique<SwarmClientGateway>(std::move(client));
 
     SwarmTaskInfoFn task_info = [engine](falcon::TaskId id, std::string& url,
                                          std::string& share_flag) {
@@ -631,16 +671,46 @@ std::unique_ptr<SwarmAnnouncer> make_swarm_announcer(P2spConfig config,
     };
 
     return std::make_unique<SwarmAnnouncer>(std::move(config), std::move(gateway),
-                                            std::move(task_info));
+                                            std::move(task_info), nullptr,
+                                            SwarmAnnouncerTiming{},
+                                            data_registry);
+}
+
+std::shared_ptr<SwarmSourceProvider> make_swarm_source_provider(
+    std::shared_ptr<falcon::swarm::SwarmClient> client) {
+    if (!client) return nullptr;
+    // QueryFn 适配：SwarmClient::query 线程安全（per-call curl handle，
+    // session 读经互斥），并发查询面满足。非 0 = 查询失败（含 rdv 不可达）。
+    auto query = [client](const std::string& sha256_hex,
+                          nlohmann::json* result) -> int {
+        return client->query(sha256_hex, result).code;
+    };
+    return std::make_shared<SwarmSourceProvider>(std::move(query),
+                                                 client->node_id());
 }
 
 #else  // FALCON_HAS_SWARM
 
-std::unique_ptr<SwarmAnnouncer> make_swarm_announcer(P2spConfig /*config*/,
-                                                     falcon::DownloadEngine* /*engine*/) {
+std::unique_ptr<SwarmAnnouncer> make_swarm_announcer(
+    P2spConfig /*config*/, falcon::DownloadEngine* /*engine*/,
+    std::shared_ptr<falcon::swarm::SwarmClient> /*shared_client*/,
+    ISwarmDataRegistry* /*data_registry*/) {
     FALCON_LOG_WARN(
         "swarm announce: swarm client support not built (CURL/falcon-swarmd "
         "unavailable), announcing disabled");
+    return nullptr;
+}
+
+std::shared_ptr<falcon::swarm::SwarmClient> make_swarm_client(
+    const P2spConfig& /*config*/) {
+    FALCON_LOG_WARN(
+        "swarm client: swarm support not built (CURL/falcon-swarmd "
+        "unavailable), swarm disabled");
+    return nullptr;
+}
+
+std::shared_ptr<SwarmSourceProvider> make_swarm_source_provider(
+    std::shared_ptr<falcon::swarm::SwarmClient> /*client*/) {
     return nullptr;
 }
 

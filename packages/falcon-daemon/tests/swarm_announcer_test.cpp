@@ -30,6 +30,7 @@ namespace {
 
 namespace fs = std::filesystem;
 
+using falcon::daemon::ISwarmDataRegistry;
 using falcon::daemon::P2spConfig;
 using falcon::daemon::SwarmAnnounceItem;
 using falcon::daemon::SwarmAnnouncer;
@@ -240,6 +241,69 @@ void expect_same_items(const std::vector<SwarmAnnounceItem>& lhs,
 }
 
 // ---------------------------------------------------------------------------
+/// ISwarmDataRegistry 记录型 fake：调用留痕 + 按调用序演进的净态快照。
+/// 台账操作与网关调用同在 announcer 工作线程串行执行——观测到某次
+/// 网关调用即可断言先行的台账操作已发生（顺序性断言的观测支点）。
+class FakeRegistry : public ISwarmDataRegistry {
+public:
+    void register_resource(const std::string& sha256_hex,
+                           const std::string& path) override {
+        std::lock_guard<std::mutex> lock(mu_);
+        registers_.emplace_back(sha256_hex, path);
+        state_[sha256_hex] = path;
+    }
+
+    void unregister_resource(const std::string& sha256_hex) override {
+        std::lock_guard<std::mutex> lock(mu_);
+        unregisters_.push_back(sha256_hex);
+        state_.erase(sha256_hex);
+    }
+
+    void clear() override {
+        std::lock_guard<std::mutex> lock(mu_);
+        ++clear_calls_;
+        state_.clear();
+    }
+
+    std::vector<std::pair<std::string, std::string>> register_calls() const {
+        std::lock_guard<std::mutex> lock(mu_);
+        return registers_;
+    }
+
+    std::size_t register_count() const {
+        std::lock_guard<std::mutex> lock(mu_);
+        return registers_.size();
+    }
+
+    std::vector<std::string> unregister_calls() const {
+        std::lock_guard<std::mutex> lock(mu_);
+        return unregisters_;
+    }
+
+    std::size_t unregister_count() const {
+        std::lock_guard<std::mutex> lock(mu_);
+        return unregisters_.size();
+    }
+
+    int clear_count() const {
+        std::lock_guard<std::mutex> lock(mu_);
+        return clear_calls_;
+    }
+
+    std::map<std::string, std::string> state() const {
+        std::lock_guard<std::mutex> lock(mu_);
+        return state_;
+    }
+
+private:
+    mutable std::mutex mu_;
+    std::vector<std::pair<std::string, std::string>> registers_;
+    std::vector<std::string> unregisters_;
+    int clear_calls_ = 0;
+    std::map<std::string, std::string> state_;
+};
+
+// ---------------------------------------------------------------------------
 // 用例
 // ---------------------------------------------------------------------------
 
@@ -254,7 +318,7 @@ protected:
     bool start_announcer(std::string* error = nullptr) {
         announcer_ = std::make_unique<SwarmAnnouncer>(
             config_, std::move(gateway_), task_info_from(tasks_), hashes_.fn(),
-            timing_);
+            timing_, &registry_);
         return announcer_->start(error);
     }
 
@@ -266,6 +330,7 @@ protected:
     FakeGateway* gw_ = nullptr;
     P2spConfig config_;
     SwarmAnnouncerTiming timing_ = fast_timing();
+    FakeRegistry registry_;
     std::unique_ptr<SwarmAnnouncer> announcer_;
 };
 
@@ -786,6 +851,203 @@ TEST_F(SwarmAnnouncerTest, SetShareEnabledRuntimeToggle) {
     announcer_->on_completed(2, path2);
     ASSERT_TRUE(wait_for([this] { return gw_->announce_count() == 2; }));
     ASSERT_TRUE(wait_for([this] { return announcer_->active_count() == 1; }));
+}
+
+// ---------------------------------------------------------------------------
+// 数据服务台账接缝（ISwarmDataRegistry）：注册/摘除/清空与公告状态机联动
+// ---------------------------------------------------------------------------
+
+TEST_F(SwarmAnnouncerTest, HashSuccessRegistersBeforeAnnounce) {
+    tasks_[1] = {"http://m.example/f.bin", ""};
+    const std::string path =
+        write_temp_file("falcon-ann-reg1.bin", std::string(kFileSize, 'x'));
+    hashes_.set(path, kHashA);
+    config_.share.enabled = true;
+
+    ASSERT_TRUE(start_announcer());
+    announcer_->on_completed(1, path);
+    ASSERT_TRUE(wait_for([this] { return gw_->announce_count() >= 1; }));
+
+    // 注册先于公告（同一工作线程串行）：观测到公告即台账必已注册
+    const auto regs = registry_.register_calls();
+    ASSERT_EQ(regs.size(), 1u);
+    EXPECT_EQ(regs[0].first, kHashA);
+    EXPECT_EQ(regs[0].second, path);
+    EXPECT_EQ(registry_.unregister_count(), 0u);
+    EXPECT_EQ(registry_.clear_count(), 0);
+    const auto state = registry_.state();
+    ASSERT_EQ(state.size(), 1u);
+    EXPECT_EQ(state.at(kHashA), path);
+}
+
+TEST_F(SwarmAnnouncerTest, HashFailureDoesNotRegister) {
+    // 哈希失败（路径不在哈希表）→ 不公告也不注册
+    const std::string path =
+        write_temp_file("falcon-ann-regfail.bin", std::string(kFileSize, 'x'));
+    config_.share.enabled = true;
+
+    ASSERT_TRUE(start_announcer());
+    announcer_->on_completed(1, path);
+    ASSERT_TRUE(wait_for([this] { return announcer_->queue_depth() == 0; }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(80));
+
+    EXPECT_EQ(gw_->announce_count(), 0u);
+    EXPECT_EQ(registry_.register_count(), 0u);
+    EXPECT_EQ(registry_.unregister_count(), 0u);
+    EXPECT_EQ(registry_.clear_count(), 0);
+    EXPECT_EQ(announcer_->active_count(), 0u);
+}
+
+TEST_F(SwarmAnnouncerTest, FileGoneUnregistersFromDataRegistry) {
+    timing_.renewal_cap = std::chrono::milliseconds(60);  // 消失检测随续租节拍
+    tasks_[1] = {"http://m.example/f.bin", ""};
+    const std::string path =
+        write_temp_file("falcon-ann-reggone.bin", std::string(kFileSize, 'x'));
+    hashes_.set(path, kHashA);
+    config_.share.enabled = true;
+
+    ASSERT_TRUE(start_announcer());
+    announcer_->on_completed(1, path);
+    ASSERT_TRUE(wait_for([this] { return announcer_->active_count() == 1; }));
+
+    std::error_code ec;
+    fs::remove(path, ec);
+    ASSERT_FALSE(ec);
+
+    // 摘除先于 retract（同一工作线程）：观测到 retract 即台账必已摘除
+    ASSERT_TRUE(wait_for([this] { return gw_->retract_count() >= 1; }));
+    const auto unregs = registry_.unregister_calls();
+    ASSERT_EQ(unregs.size(), 1u);
+    EXPECT_EQ(unregs[0], kHashA);
+    EXPECT_TRUE(registry_.state().empty());
+}
+
+TEST_F(SwarmAnnouncerTest, ContentChangeSwapsRegistration) {
+    timing_.renewal_cap = std::chrono::milliseconds(60);  // 变化检测随续租节拍
+    tasks_[1] = {"http://m.example/f.bin", ""};
+    const std::string name = "falcon-ann-regchg.bin";
+    const std::string path = write_temp_file(name, std::string(kFileSize, 'x'));
+    hashes_.set(path, kHashA);
+    config_.share.enabled = true;
+
+    ASSERT_TRUE(start_announcer());
+    announcer_->on_completed(1, path);
+    ASSERT_TRUE(wait_for([this] { return announcer_->active_count() == 1; }));
+
+    // 先改哈希表、后改文件（同 FileChangedRehashAnnouncesNewThenRetractsOld）
+    hashes_.set(path, kHashB);
+    write_temp_file(name, std::string(200, 'B'));
+
+    // 换绑先于新公告：观测到新哈希公告即 swap 完成
+    ASSERT_TRUE(wait_for([this] {
+        for (const auto& call : gw_->announce_calls()) {
+            const SwarmAnnounceItem* file_item = find_item(call, true);
+            if (file_item != nullptr && file_item->sha256 == kHashB) return true;
+        }
+        return false;
+    }));
+    ASSERT_TRUE(wait_for([this] { return gw_->retract_count() >= 1; }));
+
+    const auto regs = registry_.register_calls();
+    ASSERT_EQ(regs.size(), 2u);
+    EXPECT_EQ(regs[0].first, kHashA);
+    EXPECT_EQ(regs[0].second, path);
+    EXPECT_EQ(regs[1].first, kHashB);
+    EXPECT_EQ(regs[1].second, path);
+    const auto unregs = registry_.unregister_calls();
+    ASSERT_EQ(unregs.size(), 1u);
+    EXPECT_EQ(unregs[0], kHashA);
+    const auto state = registry_.state();
+    ASSERT_EQ(state.size(), 1u);
+    EXPECT_EQ(state.at(kHashB), path);
+}
+
+TEST_F(SwarmAnnouncerTest, DisableClearsRegistry) {
+    tasks_[1] = {"http://m.example/f.bin", ""};
+    const std::string path =
+        write_temp_file("falcon-ann-regdis.bin", std::string(kFileSize, 'x'));
+    hashes_.set(path, kHashA);
+    config_.share.enabled = true;
+
+    ASSERT_TRUE(start_announcer());
+    announcer_->on_completed(1, path);
+    ASSERT_TRUE(wait_for([this] { return announcer_->active_count() == 1; }));
+
+    // 阻塞至全量 retract 完成（retract-all 无条件 clear 台账）
+    announcer_->disable();
+    const auto retracts = gw_->retract_calls();
+    ASSERT_EQ(retracts.size(), 1u);
+    EXPECT_EQ(retracts[0], std::vector<std::string>{kHashA});
+    EXPECT_EQ(registry_.clear_count(), 1);
+    EXPECT_TRUE(registry_.state().empty());
+}
+
+TEST_F(SwarmAnnouncerTest, ApplyShareOffClearsRegistry) {
+    tasks_[1] = {"http://m.example/f.bin", ""};
+    const std::string path =
+        write_temp_file("falcon-ann-regoff1.bin", std::string(kFileSize, 'x'));
+    hashes_.set(path, kHashA);
+    config_.share.enabled = true;
+
+    ASSERT_TRUE(start_announcer());
+    announcer_->on_completed(1, path);
+    ASSERT_TRUE(wait_for([this] { return announcer_->active_count() == 1; }));
+
+    P2spConfig::Share off;
+    off.enabled = false;
+    announcer_->apply_share(off);
+
+    ASSERT_TRUE(wait_for([this] { return registry_.clear_count() >= 1; }));
+    ASSERT_TRUE(wait_for([this] { return gw_->retract_count() >= 1; }));
+    EXPECT_TRUE(registry_.state().empty());
+    EXPECT_EQ(announcer_->active_count(), 0u);
+}
+
+TEST_F(SwarmAnnouncerTest, SetShareEnabledFalseClearsRegistry) {
+    tasks_[1] = {"http://m.example/f.bin", ""};
+    tasks_[2] = {"http://m.example/g.bin", ""};
+    const std::string path1 =
+        write_temp_file("falcon-ann-regoff2.bin", std::string(kFileSize, 'x'));
+    const std::string path2 =
+        write_temp_file("falcon-ann-regoff3.bin", std::string(32, 'y'));
+    hashes_.set(path1, kHashA);
+    config_.share.enabled = true;
+
+    ASSERT_TRUE(start_announcer());
+    announcer_->on_completed(1, path1);
+    ASSERT_TRUE(wait_for([this] { return announcer_->active_count() == 1; }));
+
+    announcer_->set_share_enabled(false);
+    ASSERT_TRUE(wait_for([this] { return gw_->retract_count() >= 1; }));
+    ASSERT_TRUE(wait_for([this] { return registry_.clear_count() >= 1; }));
+    EXPECT_TRUE(registry_.state().empty());
+
+    // 翻关后完成事件被拒：台账不新增注册
+    announcer_->on_completed(2, path2);
+    std::this_thread::sleep_for(std::chrono::milliseconds(80));
+    EXPECT_EQ(registry_.register_count(), 1u);
+    EXPECT_EQ(gw_->announce_count(), 1u);
+}
+
+TEST_F(SwarmAnnouncerTest, StopKeepsRegistryIntact) {
+    // 停机 ≠ 删文件：stop 不 retract 也不清台账（数据服务继续服务持有文件）
+    tasks_[1] = {"http://m.example/f.bin", ""};
+    const std::string path =
+        write_temp_file("falcon-ann-regstop.bin", std::string(kFileSize, 'x'));
+    hashes_.set(path, kHashA);
+    config_.share.enabled = true;
+
+    ASSERT_TRUE(start_announcer());
+    announcer_->on_completed(1, path);
+    ASSERT_TRUE(wait_for([this] { return announcer_->active_count() == 1; }));
+
+    announcer_->stop();
+    EXPECT_TRUE(gw_->retract_calls().empty());
+    EXPECT_EQ(registry_.clear_count(), 0);
+    EXPECT_EQ(registry_.unregister_count(), 0u);
+    const auto state = registry_.state();
+    ASSERT_EQ(state.size(), 1u);
+    EXPECT_EQ(state.at(kHashA), path);
 }
 
 } // namespace

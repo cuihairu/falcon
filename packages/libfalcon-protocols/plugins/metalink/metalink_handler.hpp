@@ -183,19 +183,24 @@ private:
     /// V2 多源桥接结果:完成 / 挂起(parent Paused/Cancelled)/ 失败(回落)
     enum class V2BridgeOutcome { kCompleted, kSuspended, kFailed };
 
-    /// V2 多源门禁:开关开 + 无 curl 专属能力 + http/https 镜像 ≥2 +
+    /// V2 多源门禁:开关开 + 无 curl 专属能力 + http/https 镜像 ≥1 +
     /// 有整文件哈希(含 OpenSSL 可用)。全部满足才写 urls_out 并返回 true
+    /// (镜像池是否够分段由调用侧并入 swarm 源后裁定)
     static bool v2_multi_source_gate(const DownloadOptions& options,
                                      const MetalinkFile& mf,
                                      std::vector<std::string>& urls_out);
 
     /// 驱动共享 V2 引擎做多源分段下载(桥接轮询,200ms 粒度);阻塞
-    /// 至组终态或 parent 暂停/取消。失败时内部已 cancel 组并清理残留
+    /// 至组终态或 parent 暂停/取消。失败时内部已 cancel 组并清理残留。
+    /// doc_urls = metalink 文档镜像(文档序在前,恢复对齐判据);
+    /// swarm_urls = 发现面补源(§10.4),仅新组注入时去重并入镜像池,
+    /// 恢复路径忽略其漂移(断点不作废)
     V2BridgeOutcome run_v2_multi_source(const MetalinkFile& mf,
                                         const DownloadTask::Ptr& parent,
                                         IEventListener* listener,
                                         const std::string& part_path,
-                                        const std::vector<std::string>& urls,
+                                        const std::vector<std::string>& doc_urls,
+                                        const std::vector<std::string>& swarm_urls,
                                         std::string& fail_reason);
 
     /// 删除 V2 下载残留(临时数据文件与断点控制文件),best-effort

@@ -99,6 +99,19 @@ bool is_hex_string(const std::string& s) {
     });
 }
 
+// 十进制无符号解析（无前导符号/空白/垃圾字符容忍）；空串或非法字符
+// 返回 false。parse_range 与 make_data_service_config 共用。
+bool to_u64(const std::string& t, std::uint64_t* out) {
+    if (t.empty()) return false;
+    std::uint64_t v = 0;
+    for (char c : t) {
+        if (c < '0' || c > '9') return false;
+        v = v * 10 + static_cast<std::uint64_t>(c - '0');
+    }
+    *out = v;
+    return true;
+}
+
 // 解析请求头里的 Range: bytes=start-end / bytes=start- / bytes=-suffix。
 // 返回 true 表示解析出合法区间（含 suffix 语义展开后）。end_exclusive 为
 // [start, end) 半开区间，便于切文件流。total 用于 suffix 展开与钳制。
@@ -116,17 +129,6 @@ bool parse_range(const std::string& value, std::uint64_t total, std::uint64_t* s
     if (dash == std::string::npos) return false;
     std::string a = spec.substr(0, dash);
     std::string b = spec.substr(dash + 1);
-
-    auto to_u64 = [](const std::string& t, std::uint64_t* out) -> bool {
-        if (t.empty()) return false;
-        std::uint64_t v = 0;
-        for (char c : t) {
-            if (c < '0' || c > '9') return false;
-            v = v * 10 + static_cast<std::uint64_t>(c - '0');
-        }
-        *out = v;
-        return true;
-    };
 
     if (a.empty()) {
         // suffix-range：末 N 字节
@@ -158,6 +160,26 @@ bool parse_range(const std::string& value, std::uint64_t total, std::uint64_t* s
 }
 
 }  // namespace
+
+SwarmDataServiceConfig make_data_service_config(
+    const std::string& advertise_addr) {
+    SwarmDataServiceConfig config;  // 默认 0.0.0.0:0（OS 分配，port() 回读）
+    const auto colon = advertise_addr.rfind(':');
+    if (colon == std::string::npos) return config;
+    const std::string ip = advertise_addr.substr(0, colon);
+    const std::string port_str = advertise_addr.substr(colon + 1);
+    std::uint64_t port = 0;
+    // 非法形态（空段/非数字/越界/IPv4 不可解析）一律回落默认绑定点——
+    // advertise 解析失败不应阻断数据面（对端连拒绝 → 段级换源吸收）。
+    if (ip.empty() || !to_u64(port_str, &port) || port == 0 || port > 65535) {
+        return config;
+    }
+    in_addr probe{};
+    if (::inet_pton(AF_INET, ip.c_str(), &probe) != 1) return config;
+    config.bind_address = ip;
+    config.listen_port = static_cast<std::uint16_t>(port);
+    return config;
+}
 
 SwarmDataService::SwarmDataService(SwarmDataServiceConfig config) : config_(std::move(config)) {}
 
@@ -439,6 +461,10 @@ void SwarmDataService::handle_connection(int fd) {
         close_socket(fd);
         return;
     }
+    FALCON_LOG_INFO_STREAM("P2SP data service serving " << hex << " bytes "
+                           << start << "-" << (end_excl > 0 ? end_excl - 1 : 0)
+                           << "/" << total << " ("
+                           << (method == "HEAD" ? "HEAD" : "GET") << ")");
 
     // HEAD：头之后不发体。
     if (method == "HEAD") {
