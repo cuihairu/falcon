@@ -253,4 +253,26 @@ if(NOT WIN32)
     gtest_discover_tests(falcon_daemon_main_tests
         DISCOVERY_TIMEOUT 30
     )
+
+    # Swarm daemon e2e（§16.6 铁律真二进制验收，POSIX-only）：本 target 在此
+    # 无条件注册（daemon tests 子目录先于 swarmd 子目录处理，届时
+    # falcon_swarm_client 尚不存在）；链接与 FALCON_SWARMD_BIN/FALCON_DAEMON_BIN/
+    # FALCON_SWARM_E2E_ENABLED 定义由根 CMakeLists 在 swarmd 之后事后补注入
+    # （与 FALCON_HAS_SWARM 补链同款形态）。宏缺席时编译为单 skip 占位。
+    add_executable(falcon_daemon_swarm_e2e_tests
+        swarm_daemon_e2e_test.cpp
+    )
+
+    target_link_libraries(falcon_daemon_swarm_e2e_tests
+        PRIVATE
+            GTest::gtest
+            GTest::gtest_main
+            Threads::Threads
+    )
+
+    target_compile_features(falcon_daemon_swarm_e2e_tests PRIVATE cxx_std_17)
+
+    gtest_discover_tests(falcon_daemon_swarm_e2e_tests
+        DISCOVERY_TIMEOUT 30
+    )
 endif()
