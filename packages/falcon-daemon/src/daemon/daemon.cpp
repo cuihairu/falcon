@@ -484,8 +484,10 @@ bool DaemonManager::uninstall_service() {
 #endif
 
 void DaemonManager::stop() {
-    stop_requested_ = true;
+    // 先置状态再置标志：run() 退出循环写 Stopped 发生在读到标志之后，
+    // 反序会让 stop() 的 Stopping 覆盖已写好的 Stopped（RunLoopWorksWithoutCallbacks 竞态）。
     state_ = DaemonState::Stopping;
+    stop_requested_ = true;
 }
 
 void DaemonManager::reload() {

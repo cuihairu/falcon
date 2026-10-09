@@ -3,6 +3,14 @@
  * @brief P2SP 阶段 2 增量 1：入站只读 HTTP 数据服务实现（§10.3）。
  */
 
+// winsock2 必须先于项目头：swarm_data_service.hpp → swarm_announcer.hpp →
+// config.hpp → daemon.hpp 在 _WIN32 下拉入 windows.h（含 winsock.h），
+// 后置 winsock2.h 会撞 'sockaddr'/'fd_set' 重定义（MSVC C2011）。
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#endif
+
 #include "swarm_data_service.hpp"
 
 #include <algorithm>
@@ -11,10 +19,7 @@
 #include <fstream>
 #include <sstream>
 
-#ifdef _WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#else
+#ifndef _WIN32
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>

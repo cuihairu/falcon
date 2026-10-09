@@ -4,6 +4,14 @@
 // port() 访问器取回。客户端为裸 socket 手写请求，逐字节核对响应。
 // swarm_data_service.cpp 直接编进本目标（零外部依赖），无需 swarmd client。
 
+// winsock2 先于项目头（swarm_data_service.hpp 间接拉 windows.h，见 .cpp 同名注释）
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+using socket_len_t = int;
+using ssize_t = int;
+#endif
+
 #include "daemon/swarm_data_service.hpp"
 
 #include <atomic>
@@ -17,12 +25,7 @@
 
 #include <gtest/gtest.h>
 
-#ifdef _WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
-using socket_len_t = int;
-using ssize_t = int;
-#else
+#ifndef _WIN32
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
