@@ -198,6 +198,7 @@ static json download_options_to_json(const falcon::DownloadOptions& options) {
     out["max-download-limit"] = std::to_string(options.speed_limit);
     out["seed-ratio"] = std::to_string(options.seed_ratio);
     out["seed-time"] = std::to_string(options.seed_time_minutes);
+    out["p2sp-share"] = options.p2sp_share;
     json headers = json::object();
     for (const auto& [key, value] : options.headers) {
         headers[key] = value;
@@ -499,6 +500,16 @@ JsonRpcServer::JsonRpcServer(falcon::DownloadEngine* engine,
 
 void JsonRpcServer::set_shutdown_handler(std::function<void()> handler) {
     shutdown_handler_ = std::move(handler);
+}
+
+void JsonRpcServer::set_swarm_status_handler(
+    std::function<nlohmann::json()> handler) {
+    swarm_status_handler_ = std::move(handler);
+}
+
+void JsonRpcServer::set_swarm_share_handler(
+    std::function<nlohmann::json(bool)> handler) {
+    swarm_share_handler_ = std::move(handler);
 }
 
 void JsonRpcServer::update_auth(std::string secret, bool allow_origin_all) {
@@ -1154,6 +1165,8 @@ nlohmann::json JsonRpcServer::dispatch_rpc(const std::string& method, nlohmann::
             "aria2.purgeDownloadResult",
             "aria2.removeDownloadResult",
             "falcon.stopSeeding",
+            "falcon.swarm.status",
+            "falcon.swarm.setShare",
             "system.listMethods",
             "system.multicall",
         });
@@ -1334,6 +1347,31 @@ nlohmann::json JsonRpcServer::dispatch_rpc(const std::string& method, nlohmann::
         return task_id_to_gid(*tid);
     }
 
+    if (method == "falcon.swarm.status") {
+        // Falcon 扩展（§16.5）：announcer 快照。处理器由 main 注入——
+        // FALCON_HAS_SWARM 缺席（未链 swarm client）时未注册，报 -32603
+        if (!swarm_status_handler_) {
+            return json{{"error", json{{"code", -32603},
+                                       {"message", "Swarm announcer unavailable"}}}};
+        }
+        return swarm_status_handler_();
+    }
+
+    if (method == "falcon.swarm.setShare") {
+        // Falcon 扩展（§16.5）：params = [{enabled: bool}]——运行期共享
+        // 开关（与 SIGHUP 热更同语义：翻关全量 retract，announcer 不停机）
+        if (!swarm_share_handler_) {
+            return json{{"error", json{{"code", -32603},
+                                       {"message", "Swarm announcer unavailable"}}}};
+        }
+        if (!params.is_array() || params.empty() || !params[0].is_object() ||
+            !params[0].contains("enabled") || !params[0]["enabled"].is_boolean()) {
+            return json{{"error", json{{"code", -32602},
+                                       {"message", "Invalid params"}}}};
+        }
+        return swarm_share_handler_(params[0]["enabled"].get<bool>());
+    }
+
     if (method == "aria2.changeGlobalOption") {
         // aria2 签名是 (secret, options)：token 剥离后 options 就在 params[0]
         if (!params.is_array() || params.empty() || !params[0].is_object()) {
@@ -1492,6 +1530,18 @@ nlohmann::json JsonRpcServer::dispatch_rpc(const std::string& method, nlohmann::
                 }
                 options.seed_time_minutes = static_cast<std::size_t>(
                     std::max(0.0, minutes));
+            }
+
+            // P2SP 共享三态（§16.5）：仅接受 "true"/"false" 字符串
+            //（aria2 风格）；缺省 = ""（回落全局开关），其余值 -32602
+            if (o.contains("p2sp-share")) {
+                if (!o["p2sp-share"].is_string() ||
+                    (o["p2sp-share"].get<std::string>() != "true" &&
+                     o["p2sp-share"].get<std::string>() != "false")) {
+                    return json{{"error", json{{"code", -32602},
+                                               {"message", "p2sp-share must be \"true\" or \"false\""}}}};
+                }
+                options.p2sp_share = o["p2sp-share"].get<std::string>();
             }
 
             if (o.contains("header")) {

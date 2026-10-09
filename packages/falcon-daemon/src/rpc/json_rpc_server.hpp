@@ -59,6 +59,14 @@ public:
     /// 回调在 RPC 工作线程上执行，实现方需能从任意线程安全地请求停机。
     void set_shutdown_handler(std::function<void()> handler);
 
+    /// 注册 falcon.swarm.status 处理器：返回 announcer 快照对象
+    /// （§16.5）。回调在 RPC 工作线程执行；未注册时该方法报 -32603。
+    void set_swarm_status_handler(std::function<nlohmann::json()> handler);
+
+    /// 注册 falcon.swarm.setShare 处理器（enabled 已校验为布尔）。
+    /// 未注册时该方法报 -32603。
+    void set_swarm_share_handler(std::function<nlohmann::json(bool)> handler);
+
     /// 向所有 WebSocket 订阅者与 MCP SSE 订阅者广播一条 JSON-RPC 通知。
     /// params_json 必须是已序列化的 JSON 数组文本（如 `[{"gid":"..."}]`）；
     /// WS 走 TEXT 帧，SSE 走 `data: <信封>\n\n` 行（同一信封两种帧装）。
@@ -114,6 +122,8 @@ private:
     std::string auth_secret_;
     bool auth_allow_origin_all_ = false;
     std::function<void()> shutdown_handler_;
+    std::function<nlohmann::json()> swarm_status_handler_;
+    std::function<nlohmann::json(bool)> swarm_share_handler_;
     std::string session_id_;
 
     std::atomic<bool> stop_requested_{false};

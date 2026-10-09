@@ -488,6 +488,45 @@ std::size_t SwarmAnnouncer::queue_depth() const {
     return queue_.size();
 }
 
+void SwarmAnnouncer::set_share_enabled(bool enabled) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (share_.enabled == enabled) return;  // 幂等
+        share_.enabled = enabled;               // 其余字段不动
+        const bool effective = enabled && !share_.one_way;
+        if (!effective) {
+            // 翻关：请求全量 retract + 丢弃待处理队列（同 apply_share）；
+            // announcer 保持存活，新开启无动作（新完成事件自然进入）
+            retract_all_pending_ = true;
+            queue_.clear();
+            accepting_.store(false);
+        } else {
+            accepting_.store(true);
+        }
+    }
+    cv_.notify_all();
+}
+
+SwarmAnnouncerStatus SwarmAnnouncer::status() {
+    // 互斥量成员锁内快照；session/node_id 走网关（SwarmClient 访问器
+    // 自带锁，且非工作线程独占）在锁外读——last_session_ 是工作线程
+    // 私有（无锁），绝不可在此读取
+    SwarmAnnouncerStatus snap;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        snap.running = worker_started_;
+        snap.enabled = share_.enabled;
+        snap.announced_count = active_.size();
+        snap.queue_depth = queue_.size();
+    }
+    if (gateway_) {
+        snap.session = gateway_->session();
+        snap.node_id = gateway_->node_id();
+    }
+    snap.registered = !snap.session.empty();
+    return snap;
+}
+
 #ifdef FALCON_HAS_SWARM
 
 namespace {
@@ -503,6 +542,7 @@ public:
     bool start(std::string* error) override { return client_->start(error); }
     void stop() override { client_->stop(); }
     std::string session() override { return client_->session(); }
+    std::string node_id() override { return client_->node_id(); }
 
     bool announce(const std::vector<SwarmAnnounceItem>& items) override {
         std::vector<falcon::swarm::AnnounceResource> resources;

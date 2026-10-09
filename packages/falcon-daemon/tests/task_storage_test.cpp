@@ -375,6 +375,24 @@ TEST_F(TaskStorageTest, OptionsSerialization) {
     EXPECT_EQ("value", retrieved->options.headers["X-Custom"]);
 }
 
+TEST_F(TaskStorageTest, P2spShareOptionRoundTripAndLegacyRows) {
+    // 显式覆写值往返
+    auto record = create_test_record();
+    record.options.p2sp_share = "false";
+    TaskId id = storage_->create_task(record);
+    auto retrieved = storage_->get_task(id);
+    ASSERT_TRUE(retrieved.has_value());
+    EXPECT_EQ("false", retrieved->options.p2sp_share);
+
+    // 缺省空串不落列：读取回落默认空串（旧档零变化）
+    auto record2 = create_test_record();
+    record2.url = "test://local/p2sp-legacy.bin";
+    TaskId id2 = storage_->create_task(record2);
+    auto retrieved2 = storage_->get_task(id2);
+    ASSERT_TRUE(retrieved2.has_value());
+    EXPECT_EQ("", retrieved2->options.p2sp_share);
+}
+
 // ============================================================================
 // Maintenance Tests
 // ============================================================================

@@ -19,6 +19,8 @@
 #include <cstring>
 #include <filesystem>
 #include <iostream>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -425,6 +427,27 @@ int main(int argc, char* argv[]) {
             }
         } swarm_announcer_detacher{engine, swarm_announcer};
 
+        // announcer 指针护栏：SIGHUP 热更（主线程）与 falcon.swarm.* RPC
+        // 处理器（RPC 工作线程）并发访问 announcer 指针与 p2sp 配置基线；
+        // announcer 内部自持锁，护栏只护指针交换/判空/快照
+        auto swarm_guard = std::make_shared<std::mutex>();
+        // 热启用路径（SIGHUP reload 与 falcon.swarm.setShare 共用）：构建 +
+        // 启动 + 注册监听后换入指针；构建/启动失败清理并返回 false
+        auto hot_enable_announcer = [&](const falcon::daemon::P2spConfig& cfg) {
+            auto announcer = falcon::daemon::make_swarm_announcer(cfg, &engine);
+            if (!announcer) return false;
+            std::string announce_error;
+            if (!announcer->start(&announce_error)) {
+                FALCON_LOG_WARN_STREAM("P2SP share announcer failed to start: "
+                                       << announce_error);
+                return false;
+            }
+            engine.add_listener(announcer.get());
+            std::lock_guard<std::mutex> lock(*swarm_guard);
+            swarm_announcer = std::move(announcer);
+            return true;
+        };
+
         // 停机排水：暂停（而非取消）所有任务并等待引擎安静。
         // 取消会把任务落库为 Cancelled 导致重启后不再恢复；
         // 暂停则让未完成任务以可恢复状态（Paused/Downloading）入库。
@@ -460,6 +483,55 @@ int main(int argc, char* argv[]) {
 #endif
             // aria2.forceShutdown/shutdown → 走正常停机流程（排水 + 落库）
             rpc_server->set_shutdown_handler([&daemon_manager]() { daemon_manager.request_stop(); });
+#ifdef FALCON_HAS_SWARM
+            // P2SP swarm RPC（§16.5）。announcer 为空时 status 返回禁用
+            // 快照；setShare 在空位上 enabled=true 现场热启用（与 SIGHUP
+            // 热启用同路径），空位 + enabled=false 为幂等成功
+            auto swarm_status_json = [&swarm_announcer, &swarm_guard]() -> nlohmann::json {
+                std::lock_guard<std::mutex> lock(*swarm_guard);
+                if (!swarm_announcer) {
+                    return nlohmann::json{{"enabled", false},
+                                          {"registered", false},
+                                          {"node_id", ""},
+                                          {"session", ""},
+                                          {"announced_count", 0},
+                                          {"queue_depth", 0}};
+                }
+                const auto snap = swarm_announcer->status();
+                return nlohmann::json{{"enabled", snap.enabled},
+                                      {"registered", snap.registered},
+                                      {"node_id", snap.node_id},
+                                      {"session", snap.session},
+                                      {"announced_count", snap.announced_count},
+                                      {"queue_depth", snap.queue_depth}};
+            };
+            rpc_server->set_swarm_status_handler(swarm_status_json);
+            rpc_server->set_swarm_share_handler(
+                [&swarm_announcer, &p2sp_config, &swarm_guard,
+                 &hot_enable_announcer, &swarm_status_json](bool enabled) -> nlohmann::json {
+                    bool have = false;
+                    falcon::daemon::P2spConfig snapshot;
+                    {
+                        std::lock_guard<std::mutex> lock(*swarm_guard);
+                        have = (swarm_announcer != nullptr);
+                        if (have) {
+                            swarm_announcer->set_share_enabled(enabled);
+                        } else {
+                            // 基线读经护栏（SIGHUP 采纳基线的写侧同锁）
+                            snapshot = p2sp_config;
+                        }
+                    }
+                    if (!have && enabled) {
+                        snapshot.share.enabled = true;
+                        if (!hot_enable_announcer(snapshot)) {
+                            return nlohmann::json{
+                                {"error", nlohmann::json{{"code", 1},
+                                                         {"message", "Failed to start swarm announcer"}}}};
+                        }
+                    }
+                    return swarm_status_json();
+                });
+#endif
             if (!rpc_server->start()) {
                 std::cerr << "Failed to start JSON-RPC server\n";
                 return 1;
@@ -537,23 +609,19 @@ int main(int argc, char* argv[]) {
                     new_p2sp.share.ttl_s != p2sp_config.share.ttl_s ||
                     new_p2sp.share.hash_delay_s != p2sp_config.share.hash_delay_s ||
                     new_p2sp.share.announce_mirrors != p2sp_config.share.announce_mirrors) {
-                    if (swarm_announcer) {
-                        swarm_announcer->apply_share(new_p2sp.share);
+                    bool have_announcer = false;
+                    {
+                        std::lock_guard<std::mutex> lock(*swarm_guard);
+                        have_announcer = (swarm_announcer != nullptr);
+                        if (have_announcer) {
+                            swarm_announcer->apply_share(new_p2sp.share);
+                        }
+                    }
+                    if (have_announcer) {
                         FALCON_LOG_INFO_STREAM("P2SP share settings updated (applied immediately)");
                     } else if (new_p2sp.share.enabled) {
-                        swarm_announcer =
-                            falcon::daemon::make_swarm_announcer(new_p2sp, &engine);
-                        std::string announce_error;
-                        if (swarm_announcer && swarm_announcer->start(&announce_error)) {
-                            engine.add_listener(swarm_announcer.get());
+                        if (hot_enable_announcer(new_p2sp)) {
                             FALCON_LOG_INFO_STREAM("P2SP share announcer started on reload");
-                        } else {
-                            if (swarm_announcer) {
-                                FALCON_LOG_WARN_STREAM(
-                                    "P2SP share announcer failed to start: "
-                                    << announce_error);
-                            }
-                            swarm_announcer.reset();
                         }
                     }
                 }
@@ -603,7 +671,11 @@ int main(int argc, char* argv[]) {
                 rpc_config = new_rpc;
                 daemon_config = new_daemon;
                 download_config = new_download;
-                p2sp_config = new_p2sp;
+                {
+                    // p2sp 基线被 falcon.swarm.setShare 处理器并发快照读
+                    std::lock_guard<std::mutex> lock(*swarm_guard);
+                    p2sp_config = new_p2sp;
+                }
                 task_db_path = new_task_db;
                 enable_rpc = new_enable_rpc;
                 run_as_daemon = new_run_as_daemon;

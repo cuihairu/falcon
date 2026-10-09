@@ -70,6 +70,11 @@ public:
         return session_;
     }
 
+    std::string node_id() override {
+        std::lock_guard<std::mutex> lock(mu_);
+        return node_id_;
+    }
+
     bool announce(const std::vector<SwarmAnnounceItem>& items) override {
         std::lock_guard<std::mutex> lock(mu_);
         announce_calls_.push_back(items);
@@ -121,6 +126,11 @@ public:
         session_ = session;
     }
 
+    void set_node_id(const std::string& node_id) {
+        std::lock_guard<std::mutex> lock(mu_);
+        node_id_ = node_id;
+    }
+
     void set_start_ok(bool ok) {
         std::lock_guard<std::mutex> lock(mu_);
         start_ok_ = ok;
@@ -137,6 +147,7 @@ private:
     std::vector<bool> announce_results_;
     std::vector<std::vector<std::string>> retract_calls_;
     std::string session_ = "s-1";
+    std::string node_id_ = "0123456789abcdef0123456789abcdef";
     bool start_ok_ = true;
     int fail_next_announces_ = 0;
     int start_calls_ = 0;
@@ -697,6 +708,84 @@ TEST_F(SwarmAnnouncerTest, StartFailurePropagatesGatewayError) {
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     EXPECT_EQ(announcer_->queue_depth(), 0u);
     EXPECT_EQ(gw_->announce_count(), 0u);
+}
+
+TEST_F(SwarmAnnouncerTest, StatusSnapshotTracksRuntime) {
+    tasks_[1] = {"http://m.example/f.bin", ""};
+    const std::string path =
+        write_temp_file("falcon-ann-status.bin", std::string(kFileSize, 'x'));
+    hashes_.set(path, kHashA);
+    config_.share.enabled = true;
+
+    ASSERT_TRUE(start_announcer());
+    auto snap = announcer_->status();
+    EXPECT_TRUE(snap.running);
+    EXPECT_TRUE(snap.enabled);
+    EXPECT_TRUE(snap.registered);  // fake 会话恒 s-1
+    EXPECT_EQ(snap.session, "s-1");
+    EXPECT_EQ(snap.node_id, "0123456789abcdef0123456789abcdef");
+    EXPECT_EQ(snap.announced_count, 0u);
+    EXPECT_EQ(snap.queue_depth, 0u);
+
+    // 会话/指纹经网关现读（fake 翻转即见）
+    gw_->set_session("s-2");
+    EXPECT_EQ(announcer_->status().session, "s-2");
+    gw_->set_node_id("fedcba9876543210fedcba9876543210");
+    EXPECT_EQ(announcer_->status().node_id,
+              "fedcba9876543210fedcba9876543210");
+    gw_->set_session("");
+    EXPECT_FALSE(announcer_->status().registered);
+
+    // 完成入队 → 公告成功后 announced_count=1 且队列清空
+    gw_->set_session("s-3");
+    announcer_->on_completed(1, path);
+    ASSERT_TRUE(wait_for([this] { return announcer_->status().announced_count == 1; }));
+    snap = announcer_->status();
+    EXPECT_EQ(snap.announced_count, 1u);
+    EXPECT_EQ(snap.queue_depth, 0u);
+    EXPECT_TRUE(snap.registered);
+}
+
+TEST_F(SwarmAnnouncerTest, SetShareEnabledRuntimeToggle) {
+    tasks_[1] = {"http://m.example/f.bin", ""};
+    tasks_[2] = {"http://m.example/g.bin", ""};
+    const std::string path1 =
+        write_temp_file("falcon-ann-tog1.bin", std::string(kFileSize, 'x'));
+    const std::string path2 =
+        write_temp_file("falcon-ann-tog2.bin", std::string(32, 'y'));
+    hashes_.set(path1, kHashA);
+    hashes_.set(path2, kHashB);
+    config_.share.enabled = true;
+
+    ASSERT_TRUE(start_announcer());
+
+    // 幂等：同值翻开无动作
+    announcer_->set_share_enabled(true);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    EXPECT_EQ(gw_->retract_count(), 0u);
+
+    // 翻关：清活跃表 + 全量 retract（announcer 存活），后续完成被过滤
+    announcer_->on_completed(1, path1);
+    ASSERT_TRUE(wait_for([this] { return announcer_->active_count() == 1; }));
+    announcer_->set_share_enabled(false);
+    ASSERT_TRUE(wait_for([this] { return gw_->retract_count() >= 1; }));
+    const auto retracts = gw_->retract_calls();
+    ASSERT_EQ(retracts.size(), 1u);
+    EXPECT_EQ(retracts[0], std::vector<std::string>{kHashA});
+    EXPECT_EQ(announcer_->active_count(), 0u);
+    EXPECT_FALSE(announcer_->status().enabled);
+
+    announcer_->on_completed(2, path2);
+    std::this_thread::sleep_for(std::chrono::milliseconds(80));
+    EXPECT_EQ(gw_->announce_count(), 1u);
+    EXPECT_EQ(announcer_->queue_depth(), 0u);
+
+    // 翻开：新完成事件重新进入（one_way=false 生效位随之翻回）
+    announcer_->set_share_enabled(true);
+    EXPECT_TRUE(announcer_->status().enabled);
+    announcer_->on_completed(2, path2);
+    ASSERT_TRUE(wait_for([this] { return gw_->announce_count() == 2; }));
+    ASSERT_TRUE(wait_for([this] { return announcer_->active_count() == 1; }));
 }
 
 } // namespace

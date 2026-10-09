@@ -653,7 +653,10 @@ TEST_F(JsonRpcCoverageTest, ListMethodsContainsAllAria2Methods) {
                              "aria2.purgeDownloadResult",
                              "aria2.removeDownloadResult",
                              "system.listMethods",
-                             "system.multicall"}) {
+                             "system.multicall",
+                             "falcon.stopSeeding",
+                             "falcon.swarm.status",
+                             "falcon.swarm.setShare"}) {
         bool found = false;
         for (const auto& m : arr) {
             if (m.is_string() && m.get<std::string>() == name) found = true;
@@ -907,6 +910,7 @@ TEST_F(JsonRpcCoverageTest, AddUriParsesAllTypedOptions) {
         {"retry-wait", 3},
         {"max-connection-per-server", "5"},
         {"max-download-limit", 2048},
+        {"p2sp-share", "true"},
         {"header", json::array({"X-Custom-A: 1", "X-Custom-B:2", "no-colon-here", 42})},
     };
     auto parsed = call("aria2.addUri",
@@ -921,11 +925,40 @@ TEST_F(JsonRpcCoverageTest, AddUriParsesAllTypedOptions) {
         {"retry-wait", "2"},
         {"max-connection-per-server", 6},
         {"max-download-limit", "4096"},
+        {"p2sp-share", "false"},
         {"header", "X-Custom-C: 3"},
     };
     parsed = call("aria2.addUri",
                   json::array({json::array({"test://local/b.bin"}), opts2}));
     ASSERT_TRUE(parsed.contains("result")) << parsed.dump();
+}
+
+TEST_F(JsonRpcCoverageTest, AddUriP2spShareStrictValues) {
+    start_server();
+
+    const std::string dir = ::testing::TempDir();
+    // 合法三态只允许 "true"/"false" 字符串，且经 getOption 原样回显
+    for (const char* const val : {"true", "false"}) {
+        json opts = {{"dir", dir},
+                     {"out", std::string("falcon-p2sp-") + val + ".bin"},
+                     {"p2sp-share", std::string(val)}};
+        auto parsed = call("aria2.addUri",
+                           json::array({json::array({"test://local/p2sp.bin"}), opts}));
+        ASSERT_TRUE(parsed.contains("result")) << parsed.dump();
+        const std::string gid = parsed["result"].get<std::string>();
+        auto got = call("aria2.getOption", json::array({gid}));
+        ASSERT_TRUE(got.contains("result")) << got.dump();
+        EXPECT_EQ(got["result"]["p2sp-share"], std::string(val));
+    }
+
+    // 非字符串 / 非法字面量 / 缺省以外的形态 => -32602
+    for (const json& bad : {json(true), json("yes"), json("TRUE"), json(1)}) {
+        json opts = {{"dir", dir}, {"p2sp-share", bad}};
+        auto parsed = call("aria2.addUri",
+                           json::array({json::array({"test://local/p2sp-bad.bin"}), opts}));
+        ASSERT_TRUE(parsed.contains("error")) << parsed.dump();
+        EXPECT_EQ(parsed["error"]["code"], -32602) << parsed.dump();
+    }
 }
 
 // ===========================================================================

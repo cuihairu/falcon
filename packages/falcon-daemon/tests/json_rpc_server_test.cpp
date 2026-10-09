@@ -192,3 +192,111 @@ TEST(JsonRpcServerTest, SecretTokenRequired) {
 
     server.stop();
 }
+
+TEST(JsonRpcServerTest, SwarmStatusSetShareHandlers) {
+    falcon::DownloadEngine engine;
+    falcon::daemon::rpc::JsonRpcServerConfig cfg;
+    cfg.listen_port = 0;
+    cfg.secret.clear();
+
+    falcon::daemon::rpc::JsonRpcServer server(&engine, cfg);
+    ASSERT_TRUE(server.start());
+
+    // status 处理器：返回 announcer 快照载荷
+    server.set_swarm_status_handler([]() {
+        return json{{"enabled", true},
+                    {"registered", true},
+                    {"node_id", "abc123"},
+                    {"session", "s-xyz"},
+                    {"announced_count", 3},
+                    {"queue_depth", 1}};
+    });
+
+    // setShare 处理器：记录 bool 入参，回显快照
+    std::mutex share_mutex;
+    std::optional<bool> share_arg;
+    server.set_swarm_share_handler([&share_mutex, &share_arg](bool enabled) {
+        std::lock_guard<std::mutex> lock(share_mutex);
+        share_arg = enabled;
+        return json{{"enabled", enabled},
+                    {"registered", false},
+                    {"node_id", "abc123"},
+                    {"session", ""},
+                    {"announced_count", 0},
+                    {"queue_depth", 0}};
+    });
+
+    // status 往返
+    json req_status = {{"jsonrpc", "2.0"},
+                       {"id", 10},
+                       {"method", "falcon.swarm.status"},
+                       {"params", json::array()}};
+    json resp_status = jsonrpc_call("127.0.0.1", server.port(), req_status);
+    ASSERT_TRUE(resp_status.contains("result"));
+    EXPECT_EQ(resp_status["result"]["enabled"], true);
+    EXPECT_EQ(resp_status["result"]["registered"], true);
+    EXPECT_EQ(resp_status["result"]["node_id"], "abc123");
+    EXPECT_EQ(resp_status["result"]["session"], "s-xyz");
+    EXPECT_EQ(resp_status["result"]["announced_count"], 3);
+    EXPECT_EQ(resp_status["result"]["queue_depth"], 1);
+
+    // setShare 合法参数到达处理器
+    json req_share = {{"jsonrpc", "2.0"},
+                      {"id", 11},
+                      {"method", "falcon.swarm.setShare"},
+                      {"params", json::array({json{{"enabled", false}}})}};
+    json resp_share = jsonrpc_call("127.0.0.1", server.port(), req_share);
+    ASSERT_TRUE(resp_share.contains("result"));
+    {
+        std::lock_guard<std::mutex> lock(share_mutex);
+        ASSERT_TRUE(share_arg.has_value());
+        EXPECT_FALSE(*share_arg);
+    }
+    EXPECT_EQ(resp_share["result"]["enabled"], false);
+
+    // 参数形状错误 => -32602（空 params / enabled 非 bool / 缺 enabled）
+    json bad1 = {{"jsonrpc", "2.0"},
+                 {"id", 12},
+                 {"method", "falcon.swarm.setShare"},
+                 {"params", json::array()}};
+    EXPECT_EQ(jsonrpc_call("127.0.0.1", server.port(), bad1)["error"]["code"], -32602);
+
+    json bad2 = {{"jsonrpc", "2.0"},
+                 {"id", 13},
+                 {"method", "falcon.swarm.setShare"},
+                 {"params", json::array({json{{"enabled", "true"}}})}};
+    EXPECT_EQ(jsonrpc_call("127.0.0.1", server.port(), bad2)["error"]["code"], -32602);
+
+    json bad3 = {{"jsonrpc", "2.0"},
+                 {"id", 14},
+                 {"method", "falcon.swarm.setShare"},
+                 {"params", json::array({json{{"other", true}}})}};
+    EXPECT_EQ(jsonrpc_call("127.0.0.1", server.port(), bad3)["error"]["code"], -32602);
+
+    server.stop();
+}
+
+TEST(JsonRpcServerTest, SwarmHandlersUnsetFailsCleanly) {
+    falcon::DownloadEngine engine;
+    falcon::daemon::rpc::JsonRpcServerConfig cfg;
+    cfg.listen_port = 0;
+    cfg.secret.clear();
+
+    falcon::daemon::rpc::JsonRpcServer server(&engine, cfg);
+    ASSERT_TRUE(server.start());
+
+    // 处理器未接线（swarm 支持缺席构建）=> 业务错误 -32603 而非崩溃
+    json req_status = {{"jsonrpc", "2.0"},
+                       {"id", 1},
+                       {"method", "falcon.swarm.status"},
+                       {"params", json::array()}};
+    EXPECT_EQ(jsonrpc_call("127.0.0.1", server.port(), req_status)["error"]["code"], -32603);
+
+    json req_share = {{"jsonrpc", "2.0"},
+                      {"id", 2},
+                      {"method", "falcon.swarm.setShare"},
+                      {"params", json::array({json{{"enabled", true}}})}};
+    EXPECT_EQ(jsonrpc_call("127.0.0.1", server.port(), req_share)["error"]["code"], -32603);
+
+    server.stop();
+}

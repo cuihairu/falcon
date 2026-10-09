@@ -707,6 +707,11 @@ private:
             j["headers"] = opts.headers;
         }
 
+        // P2SP 共享三态（§16.5）：缺省空串不落列——旧档回读零变化
+        if (!opts.p2sp_share.empty()) {
+            j["p2sp_share"] = opts.p2sp_share;
+        }
+
         return j;
     }
 
@@ -740,6 +745,10 @@ private:
             for (auto& [k, v] : j["headers"].items()) {
                 opts.headers[k] = v.get<std::string>();
             }
+        }
+
+        if (j.contains("p2sp_share") && j["p2sp_share"].is_string()) {
+            opts.p2sp_share = j["p2sp_share"].get<std::string>();
         }
 
         return opts;

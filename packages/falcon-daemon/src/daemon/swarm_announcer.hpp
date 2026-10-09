@@ -56,6 +56,7 @@ public:
     virtual bool start(std::string* error) = 0;
     virtual void stop() = 0;
     virtual std::string session() = 0;
+    virtual std::string node_id() = 0;
     virtual bool announce(const std::vector<SwarmAnnounceItem>& items) = 0;
     virtual bool retract(const std::vector<std::string>& sha256s) = 0;
 };
@@ -71,6 +72,18 @@ struct SwarmAnnouncerTiming {
 /// 任务信息查询接缝：返回 url 与 options.p2sp_share 三态值；查无任务返 false。
 using SwarmTaskInfoFn =
     std::function<bool(falcon::TaskId, std::string& url, std::string& share_flag)>;
+
+/// announcer 快照（falcon.swarm.status 载荷，§16.5）。session/node_id 取
+/// 网关侧现值（工作线程私有的 last_session_ 不读）；registered = !session.empty()。
+struct SwarmAnnouncerStatus {
+    bool running = false;             ///< 工作线程在跑
+    bool enabled = false;             ///< share.enabled
+    bool registered = false;          ///< 会合服务会话有效
+    std::string node_id;              ///< 节点指纹
+    std::string session;              ///< 会话 id
+    std::size_t announced_count = 0;  ///< 活跃公告数
+    std::size_t queue_depth = 0;      ///< 待哈希队列深度
+};
 
 /// 文件哈希接缝：path → sha256 hex；失败返回空串。
 using SwarmHashFn = std::function<std::string(const std::string& path)>;
@@ -101,6 +114,14 @@ public:
     /// 热更新 share 参数。生效公告位（enabled && !one_way）翻关 →
     /// 全量 retract + 清活跃表；翻开无动作（新完成事件自然进入）。
     void apply_share(const P2spConfig::Share& share);
+
+    /// 运行期共享开关（falcon.swarm.setShare，§16.5）：只翻 share.enabled，
+    /// 其余字段不动。生效位翻关 → 请求全量 retract + 清待处理队列；
+    /// announcer 保持存活——与 disable() 的「停机」语义不同。
+    void set_share_enabled(bool enabled);
+
+    /// 快照（falcon.swarm.status）。非 const：网关访问器非 const。
+    SwarmAnnouncerStatus status();
 
     /// 引擎完成回调（事件线程）：过滤链 + 入队，零哈希零网络。
     void on_completed(falcon::TaskId task_id,
