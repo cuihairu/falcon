@@ -1440,6 +1440,56 @@ TEST_F(MetalinkV2BridgeTest, SwarmSourceNotQueriedWhenDocPoolSufficient) {
     EXPECT_EQ(read_file((dir_.path() / "out.bin").string()), body);
 }
 
+/// §12 验收 2(坏源剔除):伪造 swarm 源返回错字节(长度正确、支持 Range)
+/// → V2 完成但整文件哈希校验失败 → 回落串行文档镜像 → 成品仍正确。
+/// 段分发按 i % 池大小轮转(§16),池 2 → swarm 源确定收到奇数段,V2 产物
+/// 必然被污染——校验失败是确定性路径而非竞速。
+TEST_F(MetalinkV2BridgeTest, SwarmSourceBadBytesRejectedByWholeFileHash) {
+    const std::string body = v2_test_body();
+    std::string bad_body(body.size(), '\0');
+    for (std::size_t i = 0; i < bad_body.size(); ++i) {
+        bad_body[i] = static_cast<char>('a' + (i % 26));  // 长度正确内容错
+    }
+    ASSERT_NE(bad_body, body);
+    server().set_response("/good.bin", v2_range_response(body));
+    server().set_response("/fakeswarm.bin", v2_range_response(bad_body));
+    falcon::set_swarm_mirror_source_provider(
+        [&](const std::string&) -> std::vector<std::string> {
+            return {server().url("/fakeswarm.bin")};
+        });
+
+    const std::string doc = local_meta4(
+        "<file name=\"out.bin\">"
+        "<size>32</size>"
+        "<hash type=\"sha-256\">" + sha256_hex(body) + "</hash>"
+        "<url priority=\"1\">" + server().url("/good.bin") + "</url>"
+        "</file>");
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    options.max_connections = 4;
+    options.min_segment_size = 8;
+    auto task = make_task(307, doc, options);
+    task->set_status(TaskStatus::Downloading);
+    handler_->download(task, nullptr);
+
+    // 换源收口:串行文档镜像(好源)校验通过发布,成品逐字节正确
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(read_file((dir_.path() / "out.bin").string()), body);
+    const auto reqs = server().requests();
+    EXPECT_TRUE(path_received_range(reqs, "/fakeswarm.bin"));  // 坏源真实参与过
+    // 两阶段铁证:V2 阶段好镜像恰 1 请求(初始连接,无 Range);串行回退
+    // 再加 HEAD 探测 + GET,合计 ≥2。若 V2 直接成功,好镜像只会是 1 请求
+    std::size_t good_hits = 0;
+    for (const auto& r : reqs) {
+        if (r.path == "/good.bin") ++good_hits;
+    }
+    EXPECT_GE(good_hits, 2u);
+    const std::string final_path = (dir_.path() / "out.bin").string();
+    EXPECT_FALSE(fs::exists(final_path + ".metalink-part"));
+    EXPECT_FALSE(fs::exists(final_path + ".metalink-part.falcon.tmp"));
+    EXPECT_FALSE(fs::exists(final_path + ".metalink-part.falcon.ctrl"));
+}
+
 #endif  // FALCON_TEST_METALINK_V2_HASH
 
 /// 单镜像(V2 开):门禁 http 镜像 ≥2 不过 → 阶段1 串行,行为不变
