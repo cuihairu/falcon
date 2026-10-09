@@ -48,12 +48,17 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <dirent.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cerrno>
 #include <chrono>
 #include <cstring>
 #include <fstream>
+#include <map>
+#include <mutex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -311,7 +316,14 @@ bool wait_until(Pred pred, int timeout_ms, int poll_ms = 20) {
     return false;
 }
 
-// ---- 极简 HTTP 下载服务器（只服务一个固定 body；HEAD + GET）--------------
+// ---- 极简 HTTP 下载服务器（固定 body 或多路径表；HEAD + GET + Range）------
+
+// 请求记录（V2 分段是否携带 Range 的证据链）
+struct RequestLog {
+    std::string method;
+    std::string path;
+    std::string range;
+};
 
 class HttpMirror {
 public:
@@ -363,6 +375,20 @@ public:
         return "http://127.0.0.1:" + std::to_string(port_) + "/payload.bin";
     }
 
+    // 多路径表（任一 add_path 后进入多路径模式：按 path 服务、缺 path 404、
+    // Range 忠实 206 切片 / 越界 416；表为空保持固定 body 形态零变化）。
+    // 须在产生请求之前调用（无内部请求排队）。
+    void add_path(const std::string& path, const std::string& body) {
+        std::lock_guard<std::mutex> lock(paths_mu_);
+        paths_[path] = body;
+    }
+
+    // 请求留痕（method/path/Range）——断言在已收到的快照上，锁内拷贝
+    std::vector<RequestLog> requests() const {
+        std::lock_guard<std::mutex> lock(log_mu_);
+        return requests_;
+    }
+
     // 规则 (b)：慢发拉开下载窗口（每 chunk 字节间歇 ms），让"下载进行中"
     // 与"杀 Rendezvous"可排序
     void set_slow(std::size_t chunk, int ms) {
@@ -370,7 +396,95 @@ public:
         slow_ms_ = ms;
     }
 
+    // 规则 (d)：该 path 的 Range GET 一律回 416（plain GET 照常 200 +
+    // Accept-Ranges: bytes + 全量 body）。判别器形态——镜像对 Range 撒谎
+    // （HEAD 宣称 bytes、GET 拒绝切片）：V2 分段连接必须换源重试才能收
+    // 满；V1 串行回退（SegmentDownloader）发 Range 必败不可能假完成
+    void refuse_range(const std::string& path) {
+        std::lock_guard<std::mutex> lock(paths_mu_);
+        range_refusers_.insert(path);
+    }
+
 private:
+    // 请求行 path（首行第二个空格分段）
+    static std::string request_path(const std::string& head) {
+        const auto eol = head.find("\r\n");
+        const std::string line =
+            head.substr(0, eol == std::string::npos ? head.size() : eol);
+        const auto sp1 = line.find(' ');
+        if (sp1 == std::string::npos) return "";
+        const auto sp2 = line.find(' ', sp1 + 1);
+        if (sp2 == std::string::npos) return "";
+        return line.substr(sp1 + 1, sp2 - sp1 - 1);
+    }
+
+    // 头值查找（RFC 9110 §5.1：头名大小写不敏感；两侧空白裁剪）
+    static std::string header_value(const std::string& head,
+                                    const std::string& name) {
+        std::size_t pos = head.find("\r\n");
+        if (pos == std::string::npos) return "";
+        pos += 2;
+        while (pos < head.size()) {
+            const auto eol = head.find("\r\n", pos);
+            if (eol == std::string::npos || eol == pos) break;
+            const std::string line = head.substr(pos, eol - pos);
+            pos = eol + 2;
+            const auto colon = line.find(':');
+            if (colon == std::string::npos) continue;
+            std::string key = line.substr(0, colon);
+            for (auto& c : key) {
+                c = static_cast<char>(
+                    std::tolower(static_cast<unsigned char>(c)));
+            }
+            if (key != name) continue;
+            const std::string val = line.substr(colon + 1);
+            const auto first = val.find_first_not_of(" \t");
+            if (first == std::string::npos) return "";
+            const auto last = val.find_last_not_of(" \t");
+            return val.substr(first, last - first + 1);
+        }
+        return "";
+    }
+
+    // 仅认 "bytes=S-" 与 "bytes=S-E"（后缀区间不支持——e 计算处 stoull 空
+    // 串抛出即 false）；s>=total 或 e<s → false（调用方回 416）；e 截到
+    // total-1
+    static bool parse_range(const std::string& v, std::size_t total,
+                            std::size_t& off, std::size_t& end) {
+        const std::string pfx = "bytes=";
+        if (v.size() < pfx.size() || v.compare(0, pfx.size(), pfx) != 0) {
+            return false;
+        }
+        std::size_t i = pfx.size();
+        std::size_t s = 0;
+        bool got_s = false;
+        while (i < v.size() && std::isdigit(static_cast<unsigned char>(v[i]))) {
+            s = s * 10 + static_cast<std::size_t>(v[i] - '0');
+            ++i;
+            got_s = true;
+        }
+        if (!got_s || i >= v.size() || v[i] != '-') return false;
+        ++i;
+        std::size_t e = 0;
+        bool got_e = false;
+        while (i < v.size() && std::isdigit(static_cast<unsigned char>(v[i]))) {
+            e = e * 10 + static_cast<std::size_t>(v[i] - '0');
+            ++i;
+            got_e = true;
+        }
+        if (i != v.size()) return false;
+        if (s >= total) return false;
+        if (got_e) {
+            if (e < s) return false;
+            if (e >= total) e = total - 1;
+        } else {
+            e = total - 1;  // 开放区间 "bytes=S-" 到末尾
+        }
+        off = s;
+        end = e;
+        return true;
+    }
+
     void accept_loop() {
         while (true) {
             int conn = ::accept(listener_, nullptr, nullptr);
@@ -394,29 +508,102 @@ private:
             head.append(buf, static_cast<std::size_t>(n));
         }
         const bool is_head = head.rfind("HEAD ", 0) == 0;
-        std::string resp = "HTTP/1.1 200 OK\r\n";
-        resp += "Content-Length: " + std::to_string(body_.size()) + "\r\n";
-        resp += "Accept-Ranges: none\r\n";
-        resp += "Connection: close\r\n\r\n";
+        const std::string path = request_path(head);
+        const std::string range_hdr = header_value(head, "range");
+        {
+            std::lock_guard<std::mutex> lock(log_mu_);
+            requests_.push_back({is_head ? "HEAD" : "GET", path, range_hdr});
+        }
+
+        // 路由：多路径表非空按 path 服务（缺 path 404）；表为空保持
+        // 固定 body 形态（任意 path 回 body_，Accept-Ranges: none）
+        std::string body;
+        bool multi = false;
+        {
+            std::lock_guard<std::mutex> lock(paths_mu_);
+            multi = !paths_.empty();
+            if (multi) {
+                const auto it = paths_.find(path);
+                if (it == paths_.end()) {
+                    static const char k404[] =
+                        "HTTP/1.1 404 Not Found\r\n"
+                        "Content-Length: 0\r\n"
+                        "Connection: close\r\n\r\n";
+                    const ssize_t n =
+                        ::send(conn, k404, sizeof(k404) - 1, MSG_NOSIGNAL);
+                    (void)n;
+                    ::close(conn);
+                    return;
+                }
+                body = it->second;
+            } else {
+                body = body_;
+            }
+        }
+
+        // Range 解析（仅多路径模式——固定 body 形态不带 Accept-Ranges: bytes）
+        std::size_t off = 0;
+        std::size_t len = body.size();
+        bool ranged = false;
+        bool refuse = false;
+        if (multi) {
+            std::lock_guard<std::mutex> lock(paths_mu_);
+            refuse = range_refusers_.count(path) > 0;
+        }
+        if (multi && !range_hdr.empty()) {
+            std::size_t s = 0;
+            std::size_t e = 0;
+            if (!refuse && parse_range(range_hdr, body.size(), s, e)) {
+                off = s;
+                len = e - s + 1;
+                ranged = true;
+            } else {
+                const std::string r416 =
+                    "HTTP/1.1 416 Range Not Satisfiable\r\n"
+                    "Content-Range: bytes */" +
+                    std::to_string(body.size()) +
+                    "\r\nContent-Length: 0\r\n"
+                    "Connection: close\r\n\r\n";
+                const ssize_t n =
+                    ::send(conn, r416.data(), r416.size(), MSG_NOSIGNAL);
+                (void)n;
+                ::close(conn);
+                return;
+            }
+        }
+
+        std::string resp;
+        if (ranged) {
+            // 206 切片：Content-Range 回显真实区间
+            resp = "HTTP/1.1 206 Partial Content\r\n";
+            resp += "Content-Length: " + std::to_string(len) + "\r\n";
+            resp += "Content-Range: bytes " + std::to_string(off) + "-" +
+                    std::to_string(off + len - 1) + "/" +
+                    std::to_string(body.size()) + "\r\n";
+            resp += "Accept-Ranges: bytes\r\n";
+            resp += "Connection: close\r\n\r\n";
+        } else {
+            resp = "HTTP/1.1 200 OK\r\n";
+            resp += "Content-Length: " + std::to_string(len) + "\r\n";
+            resp += std::string("Accept-Ranges: ") +
+                    (multi ? "bytes" : "none") + "\r\n";
+            resp += "Connection: close\r\n\r\n";
+        }
+        const ssize_t n0 =
+            ::send(conn, resp.data(), resp.size(), MSG_NOSIGNAL);
+        (void)n0;
         if (is_head) {
-            const ssize_t n = ::send(conn, resp.data(), resp.size(),
-                                     MSG_NOSIGNAL);
-            (void)n;
             ::close(conn);
             return;
         }
         // 头 + body 分开发送：body 按 slow 节奏逐块慢发
-        const ssize_t n0 = ::send(conn, resp.data(), resp.size(),
-                                  MSG_NOSIGNAL);
-        (void)n0;
-        std::size_t off = 0;
-        while (off < body_.size()) {
-            const std::size_t take = std::min(slow_chunk_,
-                                              body_.size() - off);
-            const ssize_t n = ::send(conn, body_.data() + off, take,
+        std::size_t done = 0;
+        while (done < len) {
+            const std::size_t take = std::min(slow_chunk_, len - done);
+            const ssize_t n = ::send(conn, body.data() + off + done, take,
                                      MSG_NOSIGNAL);
             if (n <= 0) break;
-            off += static_cast<std::size_t>(n);
+            done += static_cast<std::size_t>(n);
             if (slow_ms_ > 0) {
                 std::this_thread::sleep_for(
                     std::chrono::milliseconds(slow_ms_));
@@ -428,6 +615,11 @@ private:
     int listener_ = -1;
     std::uint16_t port_ = 0;
     std::string body_;
+    std::map<std::string, std::string> paths_;
+    std::set<std::string> range_refusers_;
+    mutable std::mutex paths_mu_;
+    mutable std::mutex log_mu_;
+    std::vector<RequestLog> requests_;
     std::thread accept_;
     std::vector<std::thread> conns_;
     // 默认整包直发（take = min(slow_chunk_, remaining)：初版默认 0 会让
@@ -528,7 +720,9 @@ std::string write_daemon_conf(const std::string& dir, const char* name,
                               bool share_enabled, std::uint16_t rdv_port,
                               const std::string& server_token,
                               const std::string& group_token,
-                              long ttl_s = 86400) {
+                              long ttl_s = 86400,
+                              const std::string& advertise_addr = "",
+                              const std::string& http_engine = "") {
     nlohmann::json conf;
     conf["rpc"] = {{"enabled", true},
                    {"host", "127.0.0.1"},
@@ -542,6 +736,13 @@ std::string write_daemon_conf(const std::string& dir, const char* name,
                                   {"port", static_cast<int>(rdv_port)},
                                   {"server_token", server_token},
                                   {"group_token", group_token}};
+    // 缺省参数不写键——既有用例的配置 JSON 逐键不变
+    if (!advertise_addr.empty()) {
+        conf["p2sp"]["rendezvous"]["advertise_addr"] = advertise_addr;
+    }
+    if (!http_engine.empty()) {
+        conf["download"]["http_engine"] = http_engine;
+    }
     return write_temp_file_at(dir, name, conf.dump(2));
 }
 
@@ -684,6 +885,254 @@ TEST(SwarmDaemonE2E, AnnounceQueryThenDeleteRetracts) {
     proc_terminate(daemon);
     proc_terminate(rdv);
     EXPECT_EQ(exit_code_of(daemon), 0) << daemon.err;
+    EXPECT_EQ(exit_code_of(rdv), 0) << rdv.err;
+}
+
+// ============================================================================
+// 规则 (d)：metalink V2 桥接把 swarm 节点源拉入镜像池（P2SP 阶段 2 验收 #1）
+//
+// A（share on + advertise_addr）从单镜像完成 8MB 下载 → 公告节点源（入站
+// 数据服务绑 advertise 端口）；B（share off + http_engine=v2）经「单镜像
+// metalink 文档」下载同一内容——V2 门禁放行后池子只有 1 条文档镜像，
+// collect_swarm_sources 查询补入 A 的节点源凑满 2 条走多段轮转。
+// 文档镜像 plain GET 忠实应答、Range GET 一律 416（416-refuser 判别器）：
+// 多段轮转下必有段落在文档镜像上吃到 416 后换源到 swarm 数据服务——
+// 「doc 日志同时出现 plain GET 与 Range GET」+ 成品逐字节一致 +
+// 整文件哈希通过 = swarm 源真实承载了数据段（V1 串行回落不会对单镜像
+// 发 Range GET；announce_mirrors=false 时池中除 swarm 外别无其他源）。
+// ============================================================================
+TEST(SwarmDaemonE2E, MetalinkV2BridgePullsSwarmSourceIntoMirrorPool) {
+    std::string payload(8 * 1024 * 1024, '\0');
+    for (std::size_t i = 0; i < payload.size(); ++i) {
+        payload[i] = static_cast<char>('A' + (i % 26));
+    }
+    const std::string expect_sha = SwarmCrypto::sha256_hex(payload);
+
+    // A 的源镜像：legacy 形态（任意 path → 200 全量 + Accept-Ranges: none）
+    HttpMirror mirror_a;
+    ASSERT_TRUE(mirror_a.start(payload));
+
+    // B 的文档镜像：多路径形态；payload 忠实应答但拒绝 Range（416）
+    HttpMirror mirror_doc;
+    ASSERT_TRUE(mirror_doc.start(payload));
+    const std::uint16_t doc_port = mirror_doc.port();
+    const std::string doc_payload_url =
+        "http://127.0.0.1:" + std::to_string(doc_port) + "/payload.bin";
+    const std::string meta4_url =
+        "http://127.0.0.1:" + std::to_string(doc_port) + "/meta4/test.meta4";
+    const std::string xml =
+        std::string("<?xml version=\"1.0\"?>"
+                    "<metalink xmlns=\"urn:ietf:params:xml:ns:metalink\">"
+                    "<file name=\"payload.bin\"><size>8388608</size>"
+                    "<hash type=\"sha256\">") +
+        expect_sha + "</hash><url>" + doc_payload_url +
+        "</url></file></metalink>";
+    mirror_doc.add_path("/payload.bin", payload);
+    mirror_doc.add_path("/meta4/test.meta4", xml);
+    mirror_doc.refuse_range("/payload.bin");
+
+    const std::uint16_t adv_port = pick_free_port();
+    const std::uint16_t rdv_port = pick_free_port();
+    const std::string server_token = "tok-d";
+    const std::string group_token = "gtok-d";
+    const std::string adv_addr = "127.0.0.1:" + std::to_string(adv_port);
+
+    // 注册限频 per-IP 按 RPC 调用计（两步挑战 step1+step2 各一次）；本测试
+    // 单 IP 上有 3 个注册客户端（A 公告面 + 测试侧探针 + B 查询面）= 6 次
+    // register 调用 > 默认 5/min，B 的 step2 必吃 -32002。注册限频语义
+    // 由 swarmd 单测覆盖，e2e 只取够用的值（30）。
+    Proc rdv;
+    ASSERT_TRUE(proc_start(rdv, FALCON_SWARMD_BIN,
+                           {"--no-conf", "--swarm-host", "127.0.0.1",
+                            "--swarm-port", std::to_string(rdv_port),
+                            "--server-token", server_token,
+                            "--group-token", group_token,
+                            "--rate-register-per-min", "30"}));
+    ASSERT_TRUE(wait_until([&] { return tcp_connect(rdv_port); }, 10000));
+
+    // ---- A：share on + advertise_addr → 完成后公告节点源 ----
+    const std::string home_a = make_temp_dir("falcon_daemon_e2e_d");
+    ASSERT_FALSE(home_a.empty());
+    ::setenv("HOME", home_a.c_str(), 1);
+    const std::string dir_a = home_a + "/dl_a";
+    ::mkdir(dir_a.c_str(), 0755);
+    const std::string conf_a = write_daemon_conf(
+        home_a, "daemon_da.json", /*share_enabled=*/true, rdv_port,
+        server_token, group_token, /*ttl_s=*/86400, adv_addr);
+    ASSERT_FALSE(conf_a.empty());
+
+    const std::uint16_t port_a = pick_free_port();
+    Proc daemon_a;
+    ASSERT_TRUE(proc_start(daemon_a, FALCON_DAEMON_BIN,
+                           {"--enable-rpc", "--rpc-listen-host", "127.0.0.1",
+                            "--rpc-listen-port", std::to_string(port_a),
+                            "--task-db", home_a + "/tasks_d_a.db",
+                            "--conf-path", conf_a}));
+    ASSERT_TRUE(wait_until([&] { return tcp_connect(port_a); }, 15000));
+
+    const auto status_registered_a = [&] {
+        const auto r = rpc_call(port_a, "falcon.swarm.status",
+                                nlohmann::json::array());
+        return r.value("result", nlohmann::json::object())
+            .value("registered", false);
+    };
+    ASSERT_TRUE(wait_until(status_registered_a, 20000))
+        << "daemon_a never registered; stderr=" << daemon_a.err;
+    const auto status_a =
+        rpc_call(port_a, "falcon.swarm.status", nlohmann::json::array());
+    ASSERT_TRUE(status_a.contains("result")) << status_a.dump();
+    const std::string daemon_node_id_a =
+        status_a["result"].value("node_id", std::string());
+    ASSERT_FALSE(daemon_node_id_a.empty());
+
+    const auto add_a = rpc_call(
+        port_a, "aria2.addUri",
+        nlohmann::json::array(
+            {nlohmann::json::array({mirror_a.url()}),
+             nlohmann::json{{"dir", dir_a}, {"allow-overwrite", "true"}}}));
+    ASSERT_TRUE(add_a.contains("result")) << add_a.dump();
+    const std::string gid_a = add_a["result"].get<std::string>();
+    ASSERT_EQ(wait_task_terminal(port_a, gid_a, 60000), "complete")
+        << "daemon_a.err=" << daemon_a.err;
+    ASSERT_EQ(read_file_if_exists(dir_a + "/payload.bin"), payload);
+
+    // 公告可见之后才让 B 开工——否则 B 首查落空池子=1 走串行回落，判别器失效
+    auto cfg = SwarmClientConfig{};
+    cfg.host = "127.0.0.1";
+    cfg.port = static_cast<int>(rdv_port);
+    cfg.server_token = server_token;
+    cfg.group_token = group_token;
+    cfg.rpc_timeout_ms = std::chrono::milliseconds(2000);
+    cfg.reconnect_delay = std::chrono::milliseconds(100);
+    SwarmClient qnode(cfg, memory_key());
+    std::string qerr;
+    ASSERT_TRUE(qnode.start(&qerr)) << qerr;
+    std::string qnode_last_err;
+    nlohmann::json announced;
+    const auto query_hit = [&] {
+        nlohmann::json hit;
+        const auto err = qnode.query(expect_sha, &hit);
+        if (!err.ok()) {
+            qnode_last_err = std::to_string(err.code) + ": " + err.message;
+            return false;
+        }
+        if (!hit.contains("sources") || hit["sources"].empty()) {
+            return false;
+        }
+        announced = hit;
+        return true;
+    };
+    // rdv 默认 query 限频 120/min（§9.1）——20ms 轮询 2.4s 即烧穿预算，
+    // 此后本 key 恒 -32002，查询永不稳定 ok。600ms 间隔 ≤100/min 保持在限内
+    ASSERT_TRUE(wait_until(query_hit, 30000, 600))
+        << "announcement never reached rendezvous; last query err: "
+        << qnode_last_err;
+    const auto& srcs = announced["sources"];
+    ASSERT_FALSE(srcs.empty());
+    EXPECT_EQ(srcs[0].value("type", std::string()), "node");
+    EXPECT_EQ(srcs[0].value("node_id", std::string()), daemon_node_id_a);
+    ASSERT_TRUE(srcs[0].contains("advertise")) << srcs[0].dump();
+    EXPECT_EQ(srcs[0]["advertise"].value("addr", std::string()), adv_addr);
+    EXPECT_EQ(srcs[0]["advertise"].value("direct", false), true);
+
+    // A 的入站数据服务必须真的在 advertise 端口监听（公告内容 ≠ 数据面
+    // 在位；这里直接探活，缺席即结构性失败，不等 B 侧下载超时归因）
+    ASSERT_TRUE(wait_until([&] { return tcp_connect(adv_port); }, 10000))
+        << "daemon_a data service never listened on " << adv_addr
+        << "; daemon_a.out=" << daemon_a.out;
+
+    // ---- B：share off + http_engine=v2 → 单镜像 metalink + swarm 补池 ----
+    const std::string home_b = make_temp_dir("falcon_daemon_e2e_d_b");
+    ASSERT_FALSE(home_b.empty());
+    ::setenv("HOME", home_b.c_str(), 1);
+    const std::string dir_b = home_b + "/dl_b";
+    ::mkdir(dir_b.c_str(), 0755);
+    const std::string conf_b = write_daemon_conf(
+        home_b, "daemon_db.json", /*share_enabled=*/false, rdv_port,
+        server_token, group_token, /*ttl_s=*/86400, /*advertise_addr=*/"",
+        /*http_engine=*/"v2");
+    ASSERT_FALSE(conf_b.empty());
+
+    const std::uint16_t port_b = pick_free_port();
+    Proc daemon_b;
+    ASSERT_TRUE(proc_start(daemon_b, FALCON_DAEMON_BIN,
+                           {"--enable-rpc", "--rpc-listen-host", "127.0.0.1",
+                            "--rpc-listen-port", std::to_string(port_b),
+                            "--task-db", home_b + "/tasks_d_b.db",
+                            "--conf-path", conf_b}));
+    ASSERT_TRUE(wait_until([&] { return tcp_connect(port_b); }, 15000));
+
+    const auto add_b = rpc_call(
+        port_b, "aria2.addUri",
+        nlohmann::json::array(
+            {nlohmann::json::array({meta4_url}),
+             nlohmann::json{{"dir", dir_b}, {"allow-overwrite", "true"}}}));
+    ASSERT_TRUE(add_b.contains("result")) << add_b.dump();
+    const std::string gid_b = add_b["result"].get<std::string>();
+    if (wait_task_terminal(port_b, gid_b, 120000) != "complete") {
+        // 诊断面：daemon 日志分流（logger console sink：WARN 及以上 →
+        // stderr，INFO 及以下 → stdout），失败时两侧日志都倾倒——
+        // P2SP 查询面的退避/失败 WARN 全在 err 侧，只 dump out 会漏。
+        auto tail = [](const std::string& s, std::size_t n) {
+            return s.size() <= n ? s : s.substr(s.size() - n);
+        };
+        std::string reqs;
+        for (const auto& r : mirror_doc.requests()) {
+            reqs += "  " + r.method + " " + r.path +
+                    (r.range.empty() ? "" : " Range=" + r.range) + "\n";
+        }
+        // out 只在 poll_drain（proc_wait_exit 路径）时从管道填充——
+        // 打印前先排空，否则 64KB 管道里的日志被误读为空
+        poll_drain(daemon_b, 300);
+        poll_drain(daemon_a, 300);
+        ADD_FAILURE() << "task_b not complete; adv_port_listening="
+                      << tcp_connect(adv_port)
+                      << "\n--- daemon_b.err tail ---\n"
+                      << tail(daemon_b.err, 8000)
+                      << "\n--- daemon_b.out tail ---\n"
+                      << tail(daemon_b.out, 20000)
+                      << "\n--- daemon_a.err tail ---\n"
+                      << tail(daemon_a.err, 4000)
+                      << "\n--- daemon_a.out tail ---\n"
+                      << tail(daemon_a.out, 3000)
+                      << "\n--- mirror_doc requests ---\n" << reqs;
+        return;
+    }
+
+    ASSERT_EQ(read_file_if_exists(dir_b + "/payload.bin"), payload);
+
+    // 416-refuser 判别器：doc 日志必须同时出现 plain GET（初始连接=段 0）
+    // 与 Range GET（轮转段被 416 后换源到 swarm）——Range GET 只在
+    // V2 多段轮转下发生，串行回落形态不可能出现
+    std::size_t plain_gets = 0;
+    std::size_t range_gets = 0;
+    for (const auto& r : mirror_doc.requests()) {
+        if (r.method == "GET" && r.path == "/payload.bin") {
+            if (r.range.empty()) {
+                ++plain_gets;
+            } else {
+                ++range_gets;
+            }
+        }
+    }
+    EXPECT_GE(plain_gets, 1u);
+    EXPECT_GE(range_gets, 1u);
+
+    // 无临时残留（.falcon.tmp / .falcon.ctrl / metalink part 均已收口）
+    if (DIR* d = ::opendir(dir_b.c_str())) {
+        while (const dirent* e = ::readdir(d)) {
+            const std::string name = e->d_name;
+            EXPECT_EQ(name.find(".falcon."), std::string::npos) << name;
+        }
+        ::closedir(d);
+    }
+
+    qnode.stop();
+    proc_terminate(daemon_a);
+    proc_terminate(daemon_b);
+    proc_terminate(rdv);
+    EXPECT_EQ(exit_code_of(daemon_a), 0) << daemon_a.err;
+    EXPECT_EQ(exit_code_of(daemon_b), 0) << daemon_b.err;
     EXPECT_EQ(exit_code_of(rdv), 0) << rdv.err;
 }
 
