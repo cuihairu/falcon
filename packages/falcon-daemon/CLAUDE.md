@@ -6,6 +6,12 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-09 - P2SP e2e 撤回链红面收口（query 轮询烧穿 rdv 限频预算——测试面缺陷，零产品改动）
+- **红面**：`SwarmDaemonE2E.AnnounceQueryThenDeleteRetracts` 30.4s 恒红（3/3 复现）"retract after delete never propagated"——announcer 状态机单测绿、rdv retract 语义绿，真实链路 retract 实际早已成功
+- **根因（测试轮询违反限频契约）**：rdv 默认 query 限频 120/min（per-key 1min 滑窗，§9.1）；测试 `wait_until` 固定 20ms 轮询 = 3000/min，qnode ~2.4s 烧穿预算，此后持续轮询使窗口永久饱和 → 每 query 恒 `-32002` → `query_empty` 的 `err.ok()` 永假。query_hit/元数据单查赶在预算耗尽前（~2.4s 内）通过掩盖了烧穿；滑窗老化放行呈「每 60s ~2.4s 突发」节奏，30s 断言窗内恒无 ok 响应 → 确定性红
+- **修法（纯测试面）**：`wait_until` 增 `poll_ms` 参数（默认 20 保持既有形态）；四处 query 轮询站点改 600ms（≤100/min < 120/min）；query 失败消息补 `last query err`（code+message）——未来红面直接可读不必再猜
+- **验证**：修后单跑 3.8s 绿（原 30.4s 红）+ 10/10 压测 + e2e 全二进制 3/3 + build-cov 全量 ctest 2740 过 0 失败（2753 清单，13 skip 设计内）
+
 ### 2026-10-09 - P2SP 阶段 1 增量 4（RPC status/setShare + addUri p2sp-share + 真二进制 e2e，§16 收口）
 - **RPC 两新方法**（均入 `system.listMethods`，28 → 30 个）：`falcon.swarm.status`（params `[]` → announcer 快照 `{enabled, registered, node_id, session, announced_count, queue_depth}`；`registered = !session.empty()`，node_id/session 取网关现值而非 worker 私有副本）与 `falcon.swarm.setShare`（params `{enabled:bool}` → 运行时开关，语义同 SIGHUP `share.enabled` 热更：翻关全量 retract + announcer 存活、翻开现场构建启动注册）；未启 announcer（配置 off）时 status 回 `enabled:false` 快照、setShare 走 SIGHUP 同款热启用路径
 - **SwarmAnnouncer 增量**：`SwarmAnnouncerStatus` 快照结构 + `status()`；`set_share_enabled(bool)`（翻关 = 请求全量 retract + 清待处理队列，announcer 保持存活——与 `disable()` 的 retract+停机语义区分）；gateway 接缝新增 `node_id()` 虚方法

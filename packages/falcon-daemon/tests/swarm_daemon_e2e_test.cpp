@@ -301,12 +301,12 @@ bool tcp_connect(std::uint16_t port) {
 }
 
 template <typename Pred>
-bool wait_until(Pred pred, int timeout_ms) {
+bool wait_until(Pred pred, int timeout_ms, int poll_ms = 20) {
     const auto deadline = std::chrono::steady_clock::now() +
                           std::chrono::milliseconds(timeout_ms);
     while (std::chrono::steady_clock::now() < deadline) {
         if (pred()) return true;
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        std::this_thread::sleep_for(std::chrono::milliseconds(poll_ms));
     }
     return false;
 }
@@ -634,15 +634,23 @@ TEST(SwarmDaemonE2E, AnnounceQueryThenDeleteRetracts) {
     std::string qerr;
     ASSERT_TRUE(qnode.start(&qerr)) << qerr;
 
+    // rdv 默认 query 限频 120/min（§9.1）——20ms 轮询 2.4s 即烧穿预算，
+    // 此后本 key 恒 -32002，查询永不稳定 ok。600ms 间隔 ≤100/min 保持在限内
+    std::string qnode_last_err;
     auto query_hit = [&] {
         nlohmann::json result;
         auto err = qnode.query(expect_sha, &result);
-        if (!err.ok()) return false;
+        if (!err.ok()) {
+            qnode_last_err =
+                std::to_string(err.code) + ": " + err.message;
+            return false;
+        }
         const auto srcs = result.value("sources", nlohmann::json::array());
         return !srcs.empty();
     };
-    ASSERT_TRUE(wait_until(query_hit, 20000))
-        << "announcement never reached rendezvous";
+    ASSERT_TRUE(wait_until(query_hit, 20000, 600))
+        << "announcement never reached rendezvous; last query err: "
+        << qnode_last_err;
 
     // 元数据一致性：sha256 / name / size / node source node_id
     nlohmann::json hit;
@@ -661,11 +669,16 @@ TEST(SwarmDaemonE2E, AnnounceQueryThenDeleteRetracts) {
     auto query_empty = [&] {
         nlohmann::json result;
         auto err = qnode.query(expect_sha, &result);
-        return err.ok() &&
-               result.value("sources", nlohmann::json::array()).empty();
+        if (!err.ok()) {
+            qnode_last_err =
+                std::to_string(err.code) + ": " + err.message;
+            return false;
+        }
+        return result.value("sources", nlohmann::json::array()).empty();
     };
-    EXPECT_TRUE(wait_until(query_empty, 30000))
-        << "retract after delete never propagated";
+    EXPECT_TRUE(wait_until(query_empty, 30000, 600))
+        << "retract after delete never propagated; last query err: "
+        << qnode_last_err;
 
     qnode.stop();
     proc_terminate(daemon);
@@ -861,8 +874,8 @@ TEST(SwarmDaemonE2E, DefaultOffAnnouncesNothing) {
     // qnode 首连时序是竞速
     nlohmann::json result;
     ASSERT_TRUE(wait_until(
-        [&] { return qnode.query(expect_sha, &result).ok(); }, 10000))
-        << "query channel never became usable";
+        [&] { return qnode.query(expect_sha, &result).ok(); }, 10000,
+        600)) << "query channel never became usable";
     EXPECT_TRUE(result.value("sources", nlohmann::json::array()).empty());
 
     qnode.stop();
