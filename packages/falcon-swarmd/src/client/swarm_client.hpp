@@ -124,6 +124,7 @@ private:
     SwarmKeyMaterial key_;
     SwarmHttpClient http_;
     std::unique_ptr<SwarmWsSubscriber> subscriber_;
+    std::mutex start_mutex_;  // 串行化 start：查询面惰性启动可并发到达
 
     mutable std::mutex session_mutex_;  // session() const 读锁
     std::string session_;

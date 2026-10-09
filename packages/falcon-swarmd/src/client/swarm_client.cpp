@@ -172,6 +172,9 @@ SwarmError SwarmClient::do_register() {
 }
 
 bool SwarmClient::start(std::string* error) {
+    // 查询面惰性启动（首个查询者触发）与公告路径 start 可并发到达：
+    // 幂等判定 subscriber_ != nullptr 须在锁内，否则双注册双订阅。
+    std::lock_guard<std::mutex> lock(start_mutex_);
     if (!key_.valid()) {
         if (error) *error = "invalid key material";
         return false;
@@ -355,6 +358,9 @@ void SwarmClient::detach() {
 }
 
 void SwarmClient::stop() {
+    // 与 start() 互斥：停机不与在途惰性启动交错（stop 观察不到刚建
+    // subscriber_ 就退出 → 留下活订阅）。
+    std::lock_guard<std::mutex> lock(start_mutex_);
     {
         std::lock_guard<std::mutex> lock(hb_mutex_);
         heartbeat_active_ = false;

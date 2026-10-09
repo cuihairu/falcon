@@ -23,6 +23,7 @@
 #include <falcon/protocols/file_hash.hpp>
 
 #include <algorithm>
+#include <mutex>
 #include <random>
 #include <system_error>
 #include <utility>
@@ -681,9 +682,37 @@ std::shared_ptr<SwarmSourceProvider> make_swarm_source_provider(
     if (!client) return nullptr;
     // QueryFn 适配：SwarmClient::query 线程安全（per-call curl handle，
     // session 读经互斥），并发查询面满足。非 0 = 查询失败（含 rdv 不可达）。
-    auto query = [client](const std::string& sha256_hex,
-                          nlohmann::json* result) -> int {
-        return client->query(sha256_hex, result).code;
+    // 查询面惰性启动：Client 只创建不启动（零 I/O），首个查询者在此触发
+    // start（幂等；未注册 = session 空才调，注册成功后恒跳过）。start 失败
+    // 返回非 0 交给 provider 退避（§11）——rdv 恢复后下个退避窗自然重试，
+    // 查询缺席绝不阻断下载。SwarmClient::start 自带锁，双保险。
+    auto start_latch = std::make_shared<std::mutex>();
+    auto query = [client, start_latch](const std::string& sha256_hex,
+                                       nlohmann::json* result) -> int {
+        {
+            std::lock_guard<std::mutex> lock(*start_latch);
+            if (client->session().empty()) {
+                std::string start_error;
+                if (!client->start(&start_error)) {
+                    FALCON_LOG_WARN_STREAM(
+                        "P2SP swarm query face start failed: " << start_error);
+                    return 1;
+                }
+            }
+        }
+        const auto err = client->query(sha256_hex, result);
+        if (!err.ok()) {
+            FALCON_LOG_WARN_STREAM("P2SP swarm query failed: " << err.code
+                                                               << " "
+                                                               << err.message);
+        } else if (result == nullptr || !result->contains("sources") ||
+                   (*result)["sources"].empty()) {
+            // 尚无公告（含 announce 未落地/内容无人共享）：只作观测，
+            // 不计失败不退避——空表是合法稳态
+            FALCON_LOG_INFO_STREAM("P2SP swarm query: no sources for "
+                                   << sha256_hex.substr(0, 12));
+        }
+        return err.code;
     };
     return std::make_shared<SwarmSourceProvider>(std::move(query),
                                                  client->node_id());

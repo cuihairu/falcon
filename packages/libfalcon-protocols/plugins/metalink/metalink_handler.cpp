@@ -461,8 +461,12 @@ std::vector<std::string> collect_swarm_sources(
     try {
         if (auto provider = falcon::swarm_mirror_source_snapshot()) {
             queried = provider(sha256);
+        } else {
+            FALCON_LOG_INFO_STREAM(
+                "V2 镜像池补源跳过:swarm 源接缝未注册(宿主未装配查询面)");
         }
-    } catch (const std::exception&) {
+    } catch (const std::exception& e) {
+        FALCON_LOG_WARN_STREAM("V2 镜像池补源查询异常: " << e.what());
         return {};
     }
 
@@ -556,9 +560,15 @@ void MetalinkHandler::download(DownloadTask::Ptr task,
             if (v2_urls.size() < 2)
                 swarm_urls = collect_swarm_sources(mf, v2_urls);
 
-            // 池子仍不足分段(单镜像无换源意义):静默回落串行循环
+            // 池子仍不足分段(单镜像无换源意义):回落串行循环
             // (与 V2 阶段2 落地前文档单镜像的既有行为一致)
-            if (v2_urls.size() + swarm_urls.size() >= 2) {
+            if (v2_urls.size() + swarm_urls.size() < 2) {
+                FALCON_LOG_INFO_STREAM(
+                    "V2 多源桥接跳过:镜像池不足 (doc=" << v2_urls.size()
+                                                       << ", swarm="
+                                                       << swarm_urls.size()
+                                                       << "),回落串行委托");
+            } else {
             std::string v2_fail_reason;
             auto outcome = V2BridgeOutcome::kFailed;
             try {
@@ -591,6 +601,8 @@ void MetalinkHandler::download(DownloadTask::Ptr task,
             }
             if (paused_or_cancelled()) return;
             }
+        } else {
+            FALCON_LOG_INFO_STREAM("V2 多源桥接跳过:门禁未过,回落串行委托");
         }
 
         for (const auto& mirror : mf.urls) {

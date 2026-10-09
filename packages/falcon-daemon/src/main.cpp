@@ -447,13 +447,16 @@ int main(int argc, char* argv[]) {
         // 哈希与公告全部在组件自有工作线程。工厂在 FALCON_HAS_SWARM
         // 缺席（无 CURL / 未构建 swarmd client）时返回 nullptr，优雅降级。
         std::unique_ptr<falcon::daemon::SwarmAnnouncer> swarm_announcer;
+        // 查询面独立于共享开关（§11 降级表：本机共享关闭，下载/查询行为
+        // 保留；share.one_way 即"只消费不提供"形态）。Client 只创建不
+        // 启动——零 I/O，首个查询者（metalink V2 桥接镜像池补源）触发
+        // start（幂等，含注册+心跳）。失败仅告警：查询缺席 = 零 swarm 源，
+        // 下载照常。
+        if (!ensure_swarm_query()) {
+            FALCON_LOG_WARN_STREAM("P2SP swarm query provider unavailable; "
+                                   "downloads continue without swarm sources");
+        }
         if (p2sp_config.share.enabled) {
-            // 查询面就绪是公告面的一部分（共享同一 client 会话）；失败仅
-            // 告警，公告仍可独立工作（seam 保持空 = 零查询面）
-            if (!ensure_swarm_query()) {
-                FALCON_LOG_WARN_STREAM("P2SP swarm query provider unavailable; "
-                                       "announcer continues without it");
-            }
             sync_data_service(true);
             swarm_announcer = falcon::daemon::make_swarm_announcer(
                 p2sp_config, &engine, swarm_client, &swarm_data_service);
