@@ -339,3 +339,47 @@ TEST(ParseArgs, SeedPolicyValuesParsedAndClamped) {
     EXPECT_DOUBLE_EQ(negative.seed_ratio, 0.0);
     EXPECT_EQ(negative.seed_time_minutes, 0);
 }
+
+TEST(ParseArgs, P2spShareFlagVariants) {
+    // 裸旗标 = true（aria2 [=true|false] 语义）
+    auto bare = parse_args_from_vector(
+        {"--p2sp-share", "https://example.com/file.zip"});
+    EXPECT_EQ(bare.p2sp_share, "true");
+    // URL 不被布尔旗标吃掉
+    EXPECT_EQ(bare.urls.size(), 1u);
+
+    auto explicit_on = parse_args_from_vector(
+        {"--p2sp-share=true", "https://example.com/file.zip"});
+    EXPECT_EQ(explicit_on.p2sp_share, "true");
+
+    auto explicit_off = parse_args_from_vector(
+        {"--p2sp-share=false", "https://example.com/file.zip"});
+    EXPECT_EQ(explicit_off.p2sp_share, "false");
+
+    // 非法值回落 true（与 parse_bool 缺省语义一致）
+    auto bogus = parse_args_from_vector({"--p2sp-share=maybe"});
+    EXPECT_EQ(bogus.p2sp_share, "true");
+
+    // 缺省 = 未指定（空串）
+    auto absent = parse_args_from_vector({"https://example.com/file.zip"});
+    EXPECT_EQ(absent.p2sp_share, "");
+}
+
+TEST(ParseArgs, P2spAnnounceOptions) {
+    auto args = parse_args_from_vector(
+        {"--swarm-server", "rdv.example.com:7800",
+         "--p2sp-advertise", "203.0.113.7:6800",
+         "--swarm-fingerprint", "aa11bb22",
+         "https://example.com/file.zip"});
+    EXPECT_EQ(args.swarm_server, "rdv.example.com:7800");
+    EXPECT_EQ(args.p2sp_advertise, "203.0.113.7:6800");
+    EXPECT_EQ(args.swarm_fingerprint, "aa11bb22");
+    EXPECT_EQ(args.urls.size(), 1u);
+
+    // 缺省为空
+    auto defaults = parse_args_from_vector({"https://example.com/file.zip"});
+    EXPECT_EQ(defaults.swarm_server, "");
+    EXPECT_EQ(defaults.p2sp_advertise, "");
+    EXPECT_EQ(defaults.swarm_fingerprint, "");
+}
+

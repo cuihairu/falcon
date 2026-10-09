@@ -62,6 +62,9 @@ DownloadOptions CliConfig::to_download_options() const {
     opts.seed_ratio = seed_ratio;
     opts.seed_time_minutes = static_cast<std::size_t>(
         std::max(0, seed_time_minutes));
+    // P2SP 公告三态（""/"true"/"false"）透传——daemon SwarmAnnouncer
+    // 消费，下载引擎侧零消费
+    opts.p2sp_share = p2sp_share;
 
     // Copy headers
     for (const auto& [k, v] : headers) {
@@ -264,6 +267,21 @@ bool ConfigLoader::save(const CliConfig& config, const std::string& config_path)
         j["file_allocation"] = config.file_allocation;
         j["seed_ratio"] = config.seed_ratio;
         j["seed_time_minutes"] = config.seed_time_minutes;
+
+        // P2SP 公告（阶段 1 增量 4）：空串不落盘 = 未指定
+        if (!config.p2sp_share.empty()) {
+            j["p2sp_share"] = config.p2sp_share;
+        }
+        if (!config.swarm_server.empty()) {
+            j["swarm_server"] = config.swarm_server;
+        }
+        if (!config.p2sp_advertise.empty()) {
+            j["p2sp_advertise"] = config.p2sp_advertise;
+        }
+        if (!config.swarm_fingerprint.empty()) {
+            j["swarm_fingerprint"] = config.swarm_fingerprint;
+        }
+
         j["create_directory"] = config.create_directory;
         j["overwrite_existing"] = config.overwrite_existing;
 
@@ -483,6 +501,22 @@ std::optional<CliConfig> ConfigLoader::load_from_file(const std::string& path) {
             config.seed_time_minutes = std::max(
                 0, j["seed_time_minutes"].get<int>());
         }
+
+        // P2SP 公告（阶段 1 增量 4）
+        if (j.contains("p2sp_share")) {
+            config.p2sp_share = j["p2sp_share"].get<std::string>();
+        }
+        if (j.contains("swarm_server")) {
+            config.swarm_server = j["swarm_server"].get<std::string>();
+        }
+        if (j.contains("p2sp_advertise")) {
+            config.p2sp_advertise = j["p2sp_advertise"].get<std::string>();
+        }
+        if (j.contains("swarm_fingerprint")) {
+            config.swarm_fingerprint =
+                j["swarm_fingerprint"].get<std::string>();
+        }
+
         if (j.contains("create_directory")) {
             config.create_directory = j["create_directory"].get<bool>();
         }
@@ -632,6 +666,21 @@ CliConfig merge_configs(const CliConfig& file_config, const CliConfig& cli_args)
     }
     if (cli_args.rpc_listen_port != 6800) {
         merged.rpc_listen_port = cli_args.rpc_listen_port;
+    }
+
+    // P2SP 公告（阶段 1 增量 4）：CLI 非空胜出，空 = 保留配置文件值
+    //（p2sp_share 为三态字符串，"" 即未指定，与 file_allocation 同姿态）
+    if (!cli_args.p2sp_share.empty()) {
+        merged.p2sp_share = cli_args.p2sp_share;
+    }
+    if (!cli_args.swarm_server.empty()) {
+        merged.swarm_server = cli_args.swarm_server;
+    }
+    if (!cli_args.p2sp_advertise.empty()) {
+        merged.p2sp_advertise = cli_args.p2sp_advertise;
+    }
+    if (!cli_args.swarm_fingerprint.empty()) {
+        merged.swarm_fingerprint = cli_args.swarm_fingerprint;
     }
 
     // 布尔值：命令行设置则使用

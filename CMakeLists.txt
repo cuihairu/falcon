@@ -185,6 +185,27 @@ if(TARGET falcon-daemon AND TARGET falcon_swarm_client)
     target_compile_definitions(falcon-daemon PRIVATE FALCON_HAS_SWARM=1)
 endif()
 
+# CLI P2SP 单发公告接线（§16.5，与 daemon 同款事后补链形态；缺 CURL 时
+# client target 不存在，main.cpp 走 #else WARN 形态，--swarm-server 解析
+# 仍生效但公告禁用）
+if(TARGET falcon-cli AND TARGET falcon_swarm_client)
+    target_link_libraries(falcon-cli PRIVATE falcon_swarm_client)
+    target_compile_definitions(falcon-cli PRIVATE FALCON_HAS_SWARM=1)
+endif()
+
+# daemon swarm e2e 接线（§16.6 真二进制验收）：falcon-swarmd + 两个
+# falcon-daemon 回环。与 FALCON_HAS_SWARM 同款事后补链形态——daemon tests
+# 子目录先于 swarmd 处理，target 注册时链接与宏尚不可用。缺任一 target
+# （无 CURL / swarmd 未构建 / 测试关闭）时 e2e 保持 disabled 模式（单 skip 占位）
+if(TARGET falcon_daemon_swarm_e2e_tests AND TARGET falcon_swarm_client
+        AND TARGET falcon-swarmd AND TARGET falcon-daemon)
+    target_link_libraries(falcon_daemon_swarm_e2e_tests PRIVATE falcon_swarm_client)
+    target_compile_definitions(falcon_daemon_swarm_e2e_tests PRIVATE
+        FALCON_SWARMD_BIN="$<TARGET_FILE:falcon-swarmd>"
+        FALCON_DAEMON_BIN="$<TARGET_FILE:falcon-daemon>"
+        FALCON_SWARM_E2E_ENABLED=1)
+endif()
+
 # Desktop 应用（可选）
 if(FALCON_BUILD_DESKTOP)
     add_subdirectory(apps/desktop)

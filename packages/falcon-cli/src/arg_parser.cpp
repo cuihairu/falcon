@@ -275,6 +275,28 @@ CliArgs parse_args(int argc, char* argv[]) {
             if (i + 1 < argc) {
                 args.seed_time_minutes = std::max(0, std::stoi(argv[++i]));
             }
+        } else if (arg == "--p2sp-share" ||
+                   arg.rfind("--p2sp-share=", 0) == 0) {
+            // aria2 布尔旗标 [=true|false] 语义：裸旗标 = true；显式值
+            // 只经 "=" 形态（空格形态不消费下一 token，避免把 URL 当值
+            // 吃掉）；解析统一归一为 "true"/"false"（非法值回落 true）
+            std::string value = "true";
+            if (arg.size() > 13) { // strlen("--p2sp-share=")
+                value = arg.substr(13);
+            }
+            args.p2sp_share = parse_bool(value, true) ? "true" : "false";
+        } else if (arg == "--swarm-server") {
+            if (i + 1 < argc) {
+                args.swarm_server = argv[++i];
+            }
+        } else if (arg == "--p2sp-advertise") {
+            if (i + 1 < argc) {
+                args.p2sp_advertise = argv[++i];
+            }
+        } else if (arg == "--swarm-fingerprint") {
+            if (i + 1 < argc) {
+                args.swarm_fingerprint = argv[++i];
+            }
         } else if (arg == "--rpc-secret") {
             if (i + 1 < argc) {
                 args.rpc_secret = argv[++i];

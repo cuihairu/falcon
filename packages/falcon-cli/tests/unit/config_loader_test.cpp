@@ -358,6 +358,105 @@ TEST_F(ConfigLoaderTest, MergeConfigsBooleanFlags) {
 }
 
 // ============================================================================
+// P2SP 公告配置（阶段 1 增量 4）
+// ============================================================================
+
+TEST_F(ConfigLoaderTest, LoadP2spAnnounceFields) {
+    std::string config_content = R"json({
+        "p2sp_share": "true",
+        "swarm_server": "rdv.example.com:7800",
+        "p2sp_advertise": "203.0.113.7:6800",
+        "swarm_fingerprint": "aa11bb22cc33dd44"
+    })json";
+
+    auto config_path = test_dir_ / "p2sp_config.json";
+    std::ofstream file(config_path);
+    file << config_content;
+    file.close();
+
+    auto config = falcon::cli::ConfigLoader::load(config_path.string());
+
+    ASSERT_TRUE(config.has_value());
+    EXPECT_EQ("true", config->p2sp_share);
+    EXPECT_EQ("rdv.example.com:7800", config->swarm_server);
+    EXPECT_EQ("203.0.113.7:6800", config->p2sp_advertise);
+    EXPECT_EQ("aa11bb22cc33dd44", config->swarm_fingerprint);
+}
+
+TEST_F(ConfigLoaderTest, P2spFieldsDefaultEmptyWhenAbsent) {
+    std::string config_content = R"json({
+        "max_connections": 4
+    })json";
+
+    auto config_path = test_dir_ / "p2sp_absent_config.json";
+    std::ofstream file(config_path);
+    file << config_content;
+    file.close();
+
+    auto config = falcon::cli::ConfigLoader::load(config_path.string());
+
+    ASSERT_TRUE(config.has_value());
+    // 未指定 = 空串（p2sp_share 三态的未指定形态）
+    EXPECT_EQ("", config->p2sp_share);
+    EXPECT_EQ("", config->swarm_server);
+    EXPECT_EQ("", config->p2sp_advertise);
+    EXPECT_EQ("", config->swarm_fingerprint);
+}
+
+TEST_F(ConfigLoaderTest, SaveLoadP2spFieldsRoundTrip) {
+    falcon::cli::CliConfig config;
+    config.p2sp_share = "false";
+    config.swarm_server = "127.0.0.1:7800";
+    config.p2sp_advertise = "192.168.1.10:6881";
+    config.swarm_fingerprint = "ffeeddccbbaa0011";
+
+    auto save_path = test_dir_ / "p2sp_saved.json";
+    ASSERT_TRUE(falcon::cli::ConfigLoader::save(config, save_path.string()));
+
+    auto loaded = falcon::cli::ConfigLoader::load(save_path.string());
+    ASSERT_TRUE(loaded.has_value());
+    EXPECT_EQ("false", loaded->p2sp_share);
+    EXPECT_EQ("127.0.0.1:7800", loaded->swarm_server);
+    EXPECT_EQ("192.168.1.10:6881", loaded->p2sp_advertise);
+    EXPECT_EQ("ffeeddccbbaa0011", loaded->swarm_fingerprint);
+}
+
+TEST_F(ConfigLoaderTest, ToDownloadOptionsP2spShareTriState) {
+    // 显式 "true"/"false" 原样透传
+    falcon::cli::CliConfig explicit_on;
+    explicit_on.p2sp_share = "true";
+    EXPECT_EQ("true", explicit_on.to_download_options().p2sp_share);
+
+    falcon::cli::CliConfig explicit_off;
+    explicit_off.p2sp_share = "false";
+    EXPECT_EQ("false", explicit_off.to_download_options().p2sp_share);
+
+    // 缺省 = 未指定，跟随 daemon 全局（daemon SwarmAnnouncer 消费）
+    falcon::cli::CliConfig absent;
+    EXPECT_EQ("", absent.to_download_options().p2sp_share);
+}
+
+TEST_F(ConfigLoaderTest, MergeConfigsP2spCliPriority) {
+    falcon::cli::CliConfig file_config;
+    file_config.swarm_server = "file-rdv.example.com:7800";
+    file_config.p2sp_advertise = "10.0.0.1:6800";
+    file_config.p2sp_share = "true";
+    file_config.swarm_fingerprint = "filefp";
+
+    falcon::cli::CliConfig cli_args;
+    cli_args.swarm_server = "cli-rdv.example.com:7800";  // CLI 覆盖
+
+    auto merged = falcon::cli::merge_configs(file_config, cli_args);
+
+    // CLI 显式给出：胜出
+    EXPECT_EQ("cli-rdv.example.com:7800", merged.swarm_server);
+    // CLI 未指定（空）：保留配置文件值
+    EXPECT_EQ("10.0.0.1:6800", merged.p2sp_advertise);
+    EXPECT_EQ("true", merged.p2sp_share);
+    EXPECT_EQ("filefp", merged.swarm_fingerprint);
+}
+
+// ============================================================================
 // Environment Variable Tests
 // ============================================================================
 

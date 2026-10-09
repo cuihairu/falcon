@@ -19,6 +19,7 @@
 #include <chrono>
 #include <csignal>
 #include <atomic>
+#include <cstdint>
 #include <sstream>
 #include <filesystem>
 #include <map>
@@ -30,6 +31,17 @@
 #include <termios.h>
 #include <unistd.h>
 #include <fcntl.h>
+#endif
+
+// P2SP 单发公告（阶段 1 增量 4，§16.5）：仅当构建链接了 falcon_swarm_client
+//（根 CMakeLists 定义 FALCON_HAS_SWARM）才编译真实公告链路；缺 CURL 的
+// 构建走 #else WARN 形态（--swarm-server 解析仍生效，公告禁用）
+#ifdef FALCON_HAS_SWARM
+#include <falcon/protocols/file_hash.hpp>
+#include "client/swarm_client.hpp"
+#include "client/swarm_key_store.hpp"
+
+#include <nlohmann/json.hpp>
 #endif
 
 namespace term = falcon::cli::term;
@@ -321,7 +333,13 @@ void show_help() {
     std::cout << "      --auto-file-renaming   aria2: 自动重命名文件\n";
     std::cout << "      --file-allocation <模式> aria2: 文件预分配 (none|trunc|falloc|prealloc)\n";
     std::cout << "      --seed-ratio <比率>    aria2: BT 做种分享率 [默认: 1.0，0 = 下完即停]\n";
-    std::cout << "      --seed-time <分钟>     aria2: BT 做种时长上限 [默认: 0 = 不限时]\n\n";
+    std::cout << "      --seed-time <分钟>     aria2: BT 做种时长上限 [默认: 0 = 不限时]\n";
+    std::cout << "      --p2sp-share[=true|false]  下载完成后向 swarm 公告本机资源（单发）\n";
+    std::cout << "      --swarm-server <host:port> Rendezvous 服务地址 [默认端口: 7800]\n";
+    std::cout << "      --p2sp-advertise <ip:port> 本机可达地址（缺省 = 服务端观测的直连地址）\n";
+    std::cout << "      --swarm-fingerprint <hex>  服务器指纹钉扎（阶段 0 client 无 TLS，告警忽略）\n";
+    std::cout << "                                 注: CLI 单发公告无续租无数据服务，资源可用\n";
+    std::cout << "                                     窗口 = min(服务器 TTL, 进程退出前)，尽力而为\n\n";
 
     std::cout << "RPC 选项 (预留):\n";
     std::cout << "      --rpc-secret <令牌>    aria2: RPC 密钥\n";
@@ -427,6 +445,21 @@ static void merge_config_with_file(CliArgs& args) {
     if (file_config.seed_time_minutes != 0 && args.seed_time_minutes == 0) {
         args.seed_time_minutes = file_config.seed_time_minutes;
     }
+    // P2SP 公告三件套（阶段 1 增量 4）：CLI 非空胜出，空 = 保留配置
+    // 文件值（p2sp_share 为三态字符串，"" 即未指定）
+    if (!file_config.p2sp_share.empty() && args.p2sp_share.empty()) {
+        args.p2sp_share = file_config.p2sp_share;
+    }
+    if (!file_config.swarm_server.empty() && args.swarm_server.empty()) {
+        args.swarm_server = file_config.swarm_server;
+    }
+    if (!file_config.p2sp_advertise.empty() && args.p2sp_advertise.empty()) {
+        args.p2sp_advertise = file_config.p2sp_advertise;
+    }
+    if (!file_config.swarm_fingerprint.empty() &&
+        args.swarm_fingerprint.empty()) {
+        args.swarm_fingerprint = file_config.swarm_fingerprint;
+    }
     if (!file_config.verify_ssl) args.verify_ssl = false;
     // 合并 headers
     for (const auto& [k, v] : file_config.headers) {
@@ -493,6 +526,9 @@ static falcon::DownloadOptions setup_download_options(const CliArgs& args) {
     options.http_password = args.http_passwd;
     options.client_certificate = args.client_cert;
     options.client_private_key = args.client_key;
+    // P2SP 公告三态透传（""/"true"/"false"）——daemon SwarmAnnouncer
+    // 消费，下载引擎侧零消费
+    options.p2sp_share = args.p2sp_share;
 
     // 添加自定义 HTTP 头
     for (const auto& header : args.headers) {
@@ -608,6 +644,220 @@ static int generate_summary(const std::vector<std::shared_ptr<falcon::DownloadTa
 }
 
 //==============================================================================
+// P2SP 单发公告（阶段 1 增量 4，§16.5，CLI 尽力而为形态）
+//==============================================================================
+
+/// 解析 --swarm-server <host:port>：host 必填，端口缺省 7800。IPv6
+/// 字面量须带括号（"[::1]:7800"，括号保留交 URL 构造）；裸 "[::1]"
+/// （无端口）同样接受。返回 false = 无法解析。
+#ifdef FALCON_HAS_SWARM
+static bool parse_swarm_server(const std::string& spec,
+                               std::string* host, int* port) {
+    if (spec.empty()) {
+        return false;
+    }
+    if (spec.front() == '[') {
+        const auto close = spec.find(']');
+        if (close == std::string::npos) {
+            return false;
+        }
+        *host = spec.substr(0, close + 1);
+        if (close + 1 == spec.size()) {
+            *port = 7800;
+            return true;
+        }
+        if (spec[close + 1] != ':') {
+            return false;
+        }
+        const std::string port_str = spec.substr(close + 2);
+        if (port_str.empty()) {
+            *port = 7800;
+            return true;
+        }
+        try {
+            std::size_t pos = 0;
+            const long value = std::stol(port_str, &pos);
+            if (pos != port_str.size() || value <= 0 || value > 65535) {
+                return false;
+            }
+            *port = static_cast<int>(value);
+        } catch (const std::exception&) {
+            return false;
+        }
+        return true;
+    }
+    const auto colon = spec.rfind(':');
+    if (colon == std::string::npos) {
+        *host = spec;
+        *port = 7800;
+        return true;
+    }
+    *host = spec.substr(0, colon);
+    if (host->empty()) {
+        return false;
+    }
+    const std::string port_str = spec.substr(colon + 1);
+    if (port_str.empty()) {
+        *port = 7800;
+        return true;
+    }
+    try {
+        std::size_t pos = 0;
+        const long value = std::stol(port_str, &pos);
+        if (pos != port_str.size() || value <= 0 || value > 65535) {
+            return false;
+        }
+        *port = static_cast<int>(value);
+    } catch (const std::exception&) {
+        return false;
+    }
+    return true;
+}
+#endif // FALCON_HAS_SWARM
+
+/**
+ * @brief 下载完成后的单发 swarm 公告（阻塞、无续租、无数据服务）
+ *
+ * CLI 单发形态（§16.5）：成功完成且有真实落盘产物的任务同步算
+ * sha256 → announce 一次 → 随进程退出失效（无心跳续租，Rendezvous 侧
+ * TTL 到期摘除；announce 失败 WARN 不失败下载）。daemon 是共享的一等
+ * 形态（SwarmAnnouncer 常驻续租），CLI 公告属尽力而为，绝不改变退出码。
+ */
+static void announce_p2sp_resources(
+    const CliArgs& args,
+    const std::vector<std::shared_ptr<falcon::DownloadTask>>& tasks) {
+    if (args.swarm_server.empty()) {
+        return;
+    }
+#ifndef FALCON_HAS_SWARM
+    (void)tasks;
+    std::cerr << term::yellow("WARN: built without swarm support, "
+                              "--swarm-server ignored") << "\n";
+#else
+    // 显式 --p2sp-share=false：本次下载不分享（单发公告的 CLI 消费点）
+    if (args.p2sp_share == "false") {
+        return;
+    }
+
+    // 收集成功完成且有真实落盘产物的任务
+    struct AnnounceItem {
+        std::string path;
+        std::string name;
+        std::uintmax_t size = 0;
+    };
+    std::vector<AnnounceItem> items;
+    for (const auto& task : tasks) {
+        if (task->status() != falcon::TaskStatus::Completed) {
+            continue;
+        }
+        const std::string& path = task->output_path();
+        if (path.empty()) {
+            continue;
+        }
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(path, ec)) {
+            continue;
+        }
+        const auto size = std::filesystem::file_size(path, ec);
+        if (ec) {
+            continue;
+        }
+        items.push_back({path, std::filesystem::path(path).filename().string(),
+                         size});
+    }
+    if (items.empty()) {
+        std::cerr << term::yellow("WARN: no completed downloads to announce, "
+                                  "swarm announce skipped") << "\n";
+        return;
+    }
+
+    // 同步哈希（CLI 无后台宿主，阻塞计算；失败跳过该条目）
+    std::vector<falcon::swarm::AnnounceResource> resources;
+    resources.reserve(items.size());
+    for (const auto& item : items) {
+        const std::string sha256 = falcon::FileHasher::calculate_streaming(
+            item.path, falcon::HashAlgorithm::SHA256);
+        if (sha256.empty()) {
+            std::cerr << term::yellow("WARN: sha256 unavailable for ")
+                      << item.path << ", skipped from swarm announce\n";
+            continue;
+        }
+        falcon::swarm::AnnounceResource res;
+        res.kind = "file";
+        res.sha256 = sha256;
+        res.name = item.name;
+        res.has_size = true;
+        res.size = item.size;
+        // 服务器缺省 TTL 档（服务端钳 [3600, 604800]）；CLI 无续租，
+        // 实际可用窗口 = min(TTL, 进程退出前)
+        res.ttl_s = std::chrono::seconds(86400);
+        resources.push_back(std::move(res));
+    }
+    if (resources.empty()) {
+        return;
+    }
+
+    // --swarm-server <host:port>
+    std::string host;
+    int port = 0;
+    if (!parse_swarm_server(args.swarm_server, &host, &port)) {
+        std::cerr << term::yellow("WARN: invalid --swarm-server value '")
+                  << args.swarm_server << "' (expected host:port), "
+                  << "swarm announce skipped\n";
+        return;
+    }
+
+    // 节点身份：与 daemon 同一密钥文件（同机共存时共享身份，Rendezvous
+    // 侧会话互踢由节点 -32003 重注册自愈收敛——设计文档披露的已知形态）
+    const std::string key_file =
+        falcon::cli::ConfigLoader::get_config_dir() + "/swarm_key.pem";
+    std::string key_error;
+    auto key = falcon::swarm::load_or_create_swarm_key(key_file, &key_error);
+    if (!key.valid()) {
+        std::cerr << term::yellow("WARN: swarm identity key unavailable (")
+                  << key_error << ")\n";
+        return;
+    }
+
+    falcon::swarm::SwarmClientConfig client_config;
+    client_config.host = host;
+    client_config.port = port;
+    client_config.agent = "falcon-cli";
+    client_config.key_file = key_file;
+    if (!args.p2sp_advertise.empty()) {
+        // 显式可达地址 = 非直连形态（服务端不再以注册连接的源地址观测）
+        client_config.advertise_addr = args.p2sp_advertise;
+        client_config.advertise_direct = false;
+    }
+
+    falcon::swarm::SwarmClient client(client_config, std::move(key));
+    std::string start_error;
+    if (!client.start(&start_error)) {
+        std::cerr << term::yellow("WARN: swarm announce failed: ")
+                  << start_error << "\n";
+        return;
+    }
+
+    nlohmann::json result;
+    const falcon::swarm::SwarmError err = client.announce(resources, &result);
+    if (!err.ok()) {
+        std::cerr << term::yellow("WARN: swarm announce failed: ")
+                  << err.code << " " << err.message << "\n";
+    } else if (result.is_object() && result.value("rejected", 0) > 0) {
+        // rejected 非错误（服务器逐条拒收形态，如哈希格式不符）
+        std::cerr << term::yellow("WARN: swarm announce: server rejected ")
+                  << result.value("rejected", 0) << " of "
+                  << resources.size() << " entries\n";
+    } else if (!args.quiet) {
+        std::cout << term::green("Announced ") << resources.size()
+                  << " resource(s) to swarm " << args.swarm_server
+                  << " (availability ends at process exit)\n";
+    }
+    client.stop();
+#endif
+}
+
+//==============================================================================
 // 主函数
 //==============================================================================
 
@@ -682,6 +932,14 @@ int main(int argc, char* argv[]) {
 
     // 合并配置文件
     merge_config_with_file(args);
+
+    // --swarm-fingerprint：阶段 0 swarm client 无 TLS，指纹钉扎无处
+    // 生效——前向声明形态，解析后 WARN 忽略（阶段 2 接线）
+    if (!args.swarm_fingerprint.empty()) {
+        std::cerr << term::yellow("WARN: swarm fingerprint ignored "
+                                  "(phase-0 client has no TLS pinning)")
+                  << "\n";
+    }
 
     // 收集 URL 列表
     std::vector<std::string> urls = collect_urls(args);
@@ -802,7 +1060,13 @@ int main(int argc, char* argv[]) {
         }
 
         // 生成摘要统计
-        return generate_summary(tasks);
+        const int exit_code = generate_summary(tasks);
+
+        // P2SP 单发公告（阶段 1 增量 4）：仅在干净退出路径执行（中断
+        // 路径已在上方 return）；公告失败仅 WARN，绝不改变下载退出码
+        announce_p2sp_resources(args, tasks);
+
+        return exit_code;
 
     } catch (const std::exception& e) {
         std::cerr << term::red("Fatal: ") << e.what() << "\n";

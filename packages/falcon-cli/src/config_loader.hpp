@@ -81,6 +81,16 @@ struct CliConfig {
     double seed_ratio = 1.0;
     /// BT 做种时长上限（分钟，aria2 --seed-time 同语义；0 = 不限时）
     int seed_time_minutes = 0;
+    /// P2SP 公告（阶段 1 增量 4，CLI 尽力而为形态）：p2sp_share 三态
+    /// ""/未指定|"true"|"false" 透传 DownloadOptions（daemon
+    /// SwarmAnnouncer 消费，引擎忽略）；swarm_server = Rendezvous 服务
+    /// host:port（端口缺省 7800）；p2sp_advertise = 本机可达地址
+    /// ip:port（空 = 服务端观测直连地址）；swarm_fingerprint = 服务器
+    /// 指纹钉扎（阶段 0 client 无 TLS，启动 WARN 忽略，前向声明）
+    std::string p2sp_share;
+    std::string swarm_server;
+    std::string p2sp_advertise;
+    std::string swarm_fingerprint;
     bool create_directory = true;
     bool overwrite_existing = false;
 

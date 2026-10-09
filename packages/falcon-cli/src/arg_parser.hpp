@@ -62,6 +62,17 @@ struct CliArgs {
     /// BT 做种时长上限（分钟，aria2 --seed-time 同语义；0 = 不限时，
     /// 仅 seed_ratio 生效）
     int seed_time_minutes = 0;
+    /// P2SP 公告（阶段 1 增量 4，CLI 尽力而为形态）：p2sp_share 三态
+    /// ""/未指定|"true"|"false" 透传 DownloadOptions（daemon
+    /// SwarmAnnouncer 消费）；swarm_server = Rendezvous 服务 host:port
+    /// （端口缺省 7800），给出即启用下载完成后的单发公告；p2sp_advertise
+    /// = 本机可达地址 ip:port（空 = 交由服务端观测直连地址）；
+    /// swarm_fingerprint = 服务器指纹钉扎（阶段 0 client 无 TLS，解析后
+    /// WARN 忽略，前向声明）
+    std::string p2sp_share;
+    std::string swarm_server;
+    std::string p2sp_advertise;
+    std::string swarm_fingerprint;
     std::string rpc_secret;
     int rpc_listen_port = 6800;
     bool rpc_allow_origin_all = false;
