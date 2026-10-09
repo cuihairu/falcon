@@ -6,7 +6,7 @@
 //     完成（share.enabled=true, hash_delay_s=0）→ 公告到达真 falcon-swarmd
 //     → 进程内 SwarmClient query 命中且元数据一致（sha256/name/size + node
 //     source node_id == daemon 报的 node_id）→ 删除成品文件 → 文件消失
-//     retract → 落空（sources 空）+ 撤销后 anuncio 再次 query 仍空
+//     retract → 落空（sources 空）+ 撤销后 announce 再次 query 仍空
 //   - 规则 (b) Rendezvous 被杀无感：A/B 两真 daemon 共享一个 Rendezvous，
 //     下载中（慢发窗口）SIGKILL rendezvous → 两端下载照常完成，成品逐字节
 //     一致（数据面零 Rendezvous 依赖）

@@ -6,6 +6,15 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-09 - P2SP 阶段 1 增量 4（RPC status/setShare + addUri p2sp-share + 真二进制 e2e，§16 收口）
+- **RPC 两新方法**（均入 `system.listMethods`，28 → 30 个）：`falcon.swarm.status`（params `[]` → announcer 快照 `{enabled, registered, node_id, session, announced_count, queue_depth}`；`registered = !session.empty()`，node_id/session 取网关现值而非 worker 私有副本）与 `falcon.swarm.setShare`（params `{enabled:bool}` → 运行时开关，语义同 SIGHUP `share.enabled` 热更：翻关全量 retract + announcer 存活、翻开现场构建启动注册）；未启 announcer（配置 off）时 status 回 `enabled:false` 快照、setShare 走 SIGHUP 同款热启用路径
+- **SwarmAnnouncer 增量**：`SwarmAnnouncerStatus` 快照结构 + `status()`；`set_share_enabled(bool)`（翻关 = 请求全量 retract + 清待处理队列，announcer 保持存活——与 `disable()` 的 retract+停机语义区分）；gateway 接缝新增 `node_id()` 虚方法
+- **main.cpp 并发纪律**：`swarm_guard` 互斥量守护 announcer 指针（SIGHUP 主线程与 `falcon.swarm.*` RPC worker 线程共享访问）；`hot_enable_announcer` lambda 统一构建路径（build + start + 引擎注册 + 指针交换，失败清理）供 SIGHUP 与 setShare 两路复用
+- **addUri per-download 选项 `p2sp-share`**：仅接受字符串 `"true"`/`"false"`（aria2 风格；json bool / `1` / `"yes"` / `"TRUE"` → -32602 严格拒绝）；消费点 = announcer 过滤链三态（`""` 跟随全局 / 显式覆写 / `"false"` 跳过公告）；持久化随 TaskStorage options JSON 尾字段——缺省空串**不落列**（旧档零变化），回读缺键回落空串
+- **e2e 真二进制验收**（新 target `falcon_daemon_swarm_e2e_tests`，POSIX-only，fork+execv 起 falcon-swarmd + 两 falcon-daemon + 内嵌 HttpMirror 回环源；每用例独立 HOME 隔离 `swarm_key.pem`/`tasks.db`）：§16.6 三铁律 + skip 占位 4 用例——(a) A 完成 → B query 命中（元数据一致）→ A 删文件 → retract → B 落空；(b) 下载中途 SIGKILL Rendezvous，A/B 下载无感完成且成品逐字节一致（rdv 被杀进程 gcda 豁免——SIGKILL 不冲刷，daemon/测试进程正常退出）；(c) 默认 off：status.enabled=false + query sources 恒空；(d) 宏缺席构建单 skip 占位（CURL/swarmd 缺席优雅降级）。**验收**：3/3 + 10/10 压测全绿
+- **构建接线（事后补链第三例）**：daemon tests 子目录先于 swarmd 处理——e2e target 在 daemon tests CMakeLists 无条件注册（POSIX），根 CMakeLists 在 swarmd 之后补链 `falcon_swarm_client` + 注入 `FALCON_SWARMD_BIN`/`FALCON_DAEMON_BIN`/`FALCON_SWARM_E2E_ENABLED`（与 `FALCON_HAS_SWARM` 同款形态；CLI 单发公告 `--swarm-server` 同批接入 `FALCON_HAS_SWARM`，缺 CURL 时 `#else` WARN 形态）
+- **测试**：rpc_tests +2（SwarmStatusSetShareHandlers 往返 / SwarmHandlersUnsetFailsCleanly 未启 announcer 干净失败）/ rpc_coverage +1（AddUriP2spShareStrictValues 严格字符串值矩阵）/ swarm_announcer +2（StatusSnapshotTracksRuntime / SetShareEnabledRuntimeToggle，19 → 21）/ storage +1（P2spShareOptionRoundTripAndLegacyRows 往返 + 旧档缺列回落）；CLI arg_parser/config_loader 解析用例随 3257029
+
 ### 2026-10-09 - P2SP 阶段 1 增量 3（SwarmAnnouncer 完成后公告 + TTL 续租，§16.4）
 - **新文件 `src/daemon/swarm_announcer.{hpp,cpp}`**（挂 falcon-daemon
   可执行，不进 falcon_daemon_core——保持 core 零 CURL 依赖）：
@@ -470,7 +479,7 @@ packages/falcon-daemon/src/
 │   │                         #   优先级 CLI > 文件 > 默认值；~ 路径展开）
 │   └── (daemonize POSIX 细节)
 ├── rpc/
-│   ├── json_rpc_server.hpp/.cpp  # aria2 兼容 JSON-RPC 2.0 服务器（28 个方法）
+│   ├── json_rpc_server.hpp/.cpp  # aria2 兼容 JSON-RPC 2.0 服务器（30 个方法）
 │   │                             #   + WebSocket 升级与通知广播（RpcEventBridge）
 │   │                             #   + /mcp 路由（McpServer 委托 + 异常边界）
 │   ├── mcp_server.hpp/.cpp       # MCP Streamable HTTP 端点（initialize 握手/
@@ -653,7 +662,7 @@ falcon-mcp [OPTIONS]
 - CORS：`--rpc-allow-origin-all` 时回显 `Access-Control-Allow-*`
 - 批量调用：`system.multicall`（结果包装为 `[result]`）
 
-方法清单（28 个，`system.listMethods` 列出 27 个，`shutdown` 为别名）：
+方法清单（30 个，`system.listMethods` 列出 29 个，`shutdown` 为别名）：
 
 | 分组 | 方法 |
 |------|------|
@@ -661,6 +670,7 @@ falcon-mcp [OPTIONS]
 | 查询 | `tellStatus`（含 Falcon 扩展字段 `priority`） `tellActive` `tellWaiting` `tellStopped` `getFiles` `getUris` `getOption` `getGlobalStat` |
 | 选项 | `getGlobalOption` `changeGlobalOption`（支持 `max-overall-download-limit`、`max-concurrent-downloads`；`"none"`/`"0"` 取消限制） |
 | 会话与清理 | `getSessionInfo` `saveSession` `purgeDownloadResult` `removeDownloadResult` `forceShutdown` `shutdown`（= forceShutdown 别名） |
+| P2SP | `falcon.swarm.status`（announcer 快照） `falcon.swarm.setShare`（运行时共享开关，语义同 SIGHUP 热更） |
 | 系统 | `system.listMethods` `system.multicall` |
 
 错误码约定（对齐 aria2）：
@@ -681,7 +691,7 @@ falcon-mcp [OPTIONS]
 - 端点：`ws://<host>:<port>/jsonrpc`（`/` 同义）——与 HTTP JSON-RPC 同端口，
   GET + `Upgrade: websocket` + `Sec-WebSocket-Key` 完成升级
 - 会话内双向 JSON-RPC：text 帧即请求，与 HTTP 走同一分发（token 认证、
-  全部 28 个方法可用）；ping/pong、close 按 RFC 6455 处理
+  全部 30 个方法可用）；ping/pong、close 按 RFC 6455 处理
 - 通知推送（服务端 → 客户端，JSON-RPC 通知格式，无 id）：
 
 | 通知 | 触发 |
@@ -825,7 +835,8 @@ RPC 的 `pauseAll`/`unpauseAll`/`removeDownloadResult`/`purgeDownloadResult`
 | `falcon_daemon_storage_tests` | `task_storage_test.cpp` `task_storage_listener_test.cpp` | 持久化与监听器 |
 | `falcon_daemon_lifecycle_tests` | `daemon_lifecycle_test.cpp` | 守护进程生命周期（POSIX） |
 | `falcon_daemon_config_tests` | `config_test.cpp` | daemon.json 解析/优先级/容错/~ 展开；`p2sp` 节（share/rendezvous 全字段往返/非法 mode 告警/类型错误/节非 object/未知键告警） |
-| `falcon_daemon_swarm_announcer_tests` | `swarm_announcer_test.cpp` | SwarmAnnouncer 状态机（FakeGateway 接缝注入）：公告内容与隐私过滤/TTL 续租/文件消失与内容变化/session 补差/失败退避/停机禁用语义 |
+| `falcon_daemon_swarm_announcer_tests` | `swarm_announcer_test.cpp` | SwarmAnnouncer 状态机（FakeGateway 接缝注入）：公告内容与隐私过滤/TTL 续租/文件消失与内容变化/session 补差/失败退避/停机禁用语义/状态快照/运行时翻关 |
+| `falcon_daemon_swarm_e2e_tests` | `swarm_daemon_e2e_test.cpp` | P2SP 真二进制 e2e（POSIX；fork+execv 起 falcon-swarmd + 两 falcon-daemon + 回环源，HOME 隔离）：§16.6 三铁律——announce→query 命中→删文件 retract 落空 / Rendezvous SIGKILL 中途下载无感且成品逐字节一致 / 默认 off 零公告；宏缺席单 skip 占位 |
 | `falcon_daemon_main_tests` | `main_integration_test.cpp` | 真实二进制参数/退出码/配置文件加载（POSIX） |
 
 ```bash

@@ -46,6 +46,10 @@
   WebSocket(可直接对接 AriaNg),实时事件流(下载开始/暂停/完成/出错/进度),
   SQLite 任务持久化与重启恢复,`daemon.json` 配置与 SIGHUP 热重载,
   MCP 工具端点(`/mcp`,供 AI 助手调用)
+- **P2SP 网络** (`falcon-swarmd`):独立部署的会合服务(节点发现:Ed25519 挑战认证、
+  Bearer + 限频、群组令牌、黑名单),daemon `p2sp.share` 把开启共享的下载向会合服务
+  公告并按 TTL 续期、完成后撤销;RPC `falcon.swarm.status`/`falcon.swarm.setShare`,
+  CLI `--swarm-server` 单发公告;默认关闭
 - **桌面应用** (Qt6):Fluent 设计语言、亮暗主题、无边框窗口、表格/网格双任务视图、
   云盘浏览、资源搜索、双后端(进程内引擎或 Daemon RPC + WebSocket 事件刷新)
 - **命令行工具** (`falcon-cli`):60+ 个 aria2 兼容参数、批量输入文件、JSON 配置
@@ -344,6 +348,7 @@ HTTP、FTP、BitTorrent、SFTP、WebDAV、Metalink、云存储、资源浏览/�
 - [x] Metalink 下载（多镜像 P2SP 分段 + 整文件哈希校验）
 - [x] 命令行工具（60+ aria2 兼容参数）
 - [x] Daemon：aria2 兼容 JSON-RPC（HTTP + WebSocket 事件流）、SQLite 持久化、SIGHUP 热重载、MCP 工具端点（10 下载工具）
+- [x] P2SP 阶段 1：falcon-swarmd 会合服务，daemon 公告/撤销 + TTL 续期，RPC falcon.swarm.status/setShare，CLI --swarm-server
 - [x] 桌面应用（Qt6，Fluent 设计、亮暗主题、云盘浏览）
 - [x] 私有协议支持（迅雷、QQDL、FlashGet、ED2K）
 - [x] SFTP、WebDAV 协议（libssh2 / libcurl 数据面）

@@ -737,4 +737,4 @@ payload = method + "\n" + session + "\n" + sha256_hex(canonical_params_without_s
 | 1 | 本节设计落文档(已完成)+ swarmd 服务端 announce/retract/sweep 联动/通知/限频/配额 | swarmd 单元+回环全绿(✅ 已完成 1b0a13f) |
 | 2 | SwarmClient announce/retract + 测试 | swarmd 四 target 全绿(✅ 已完成) |
 | 3 | SwarmAnnouncer + daemon p2sp 配置节 + main 接线 + SIGHUP | daemon 全套件 + swarmd 全绿（✅ 已完成 2026-10-09） |
-| 4 | RPC falcon.swarm.status/setShare + addUri p2sp-share + CLI 参数链 + e2e 验收四条 + 文档对账(daemon/swarmd CLAUDE.md、README) | 全仓 ctest 全绿 + e2e 铁律 |
+| 4 | RPC falcon.swarm.status/setShare + addUri p2sp-share + CLI 参数链 + e2e 验收四条 + 文档对账(daemon/swarmd CLAUDE.md、README) | 全仓 ctest 全绿 + e2e 铁律（✅ 已完成 2026-10-09：e2e 三铁律 3/3 + 10/10 压测，target `falcon_daemon_swarm_e2e_tests`） |
