@@ -2719,3 +2719,8 @@ libtorrent 强依赖（当前 FALCON_ENABLE_BITTORRENT=OFF 为默认
   CURLE_SSL_CERTPROBLEM；属后端能力限制非接线缺陷，用例加
   curl_version_info 运行时检测 skip，V2 mTLS 用例三平台全绿；
   V1 mTLS Windows 支持待 PFX 转换特性再放开
+
+### 2026-10-10 - P2SP 阶段 1+2 落地收口（swarm 公告/查询/共享 + 入站数据服务 + swarm 源注入 V2 镜像池）
+- **阶段 1（设计文档 §16）**：daemon SwarmAnnouncer（完成→SHA256→公告 R1 哈希 + R2 镜像，TTL 续租/消失 retract/内容变化重公告；`p2sp.share.*` 热更 + `falcon.swarm.status`/`setShare` RPC + addUri `p2sp-share` 三态）+ SwarmClient announce 面 + CLI `--swarm-server`；真二进制 e2e 三铁律（announce→query→retract / rdv SIGKILL 无感 / 默认 off）
+- **阶段 2（§17）**：入站只读数据服务 `GET|HEAD /by-sha256/<hex>`（Range、Connection: close、registry 随公告链同点填充、bind 从 advertise_addr 派生）+ 查询注入 V2 镜像池（公共接缝 `mirror_source.hpp` + daemon provider：NAT `direct:false` 过滤/去重/退避 30s×2^n cap 300s；metalink 桥接 doc 池 <2 才查询，坏源整文件哈希拦截回落串行；查询面独立于 share.enabled）
+- **验收**：daemon 门禁全套件 + swarm/metalink/HTTP 全量 + ASan 零告警 + e2e 4/4（Test D：doc 镜像拒 Range 416 → 串行结构性不可胜，swarm 源真实参与分段）；CI run 37996089515 8/8 绿。**教训**：e2e spawn 的全部二进制都要重建——留旧 falcon-swarmd 时 announce 恒 -32601 假红

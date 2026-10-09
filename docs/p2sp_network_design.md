@@ -5,7 +5,9 @@
 > 「P2SP 共享网络路线讨论(立项备忘)」的路线论证,将其推进为可指导实现的设计。
 
 > **状态**:阶段 0 已实现(2026-09-25,`falcon-swarmd` 包,见该包 CLAUDE.md);
-> **阶段 1 设计已收口(§16,2026-10-08),实现进行中**;阶段 2/3 未开工。
+> **阶段 1 已实现**(2026-10-09,§16,daemon 公告/查询/RPC/e2e 铁律);
+> **阶段 2 已实现**(2026-10-10,§17,数据服务 + 查询注入镜像池 + NAT 过滤);
+> 阶段 3 未开工。
 
 ## 1. 问题陈述与目标
 
@@ -738,3 +740,39 @@ payload = method + "\n" + session + "\n" + sha256_hex(canonical_params_without_s
 | 2 | SwarmClient announce/retract + 测试 | swarmd 四 target 全绿(✅ 已完成) |
 | 3 | SwarmAnnouncer + daemon p2sp 配置节 + main 接线 + SIGHUP | daemon 全套件 + swarmd 全绿（✅ 已完成 2026-10-09） |
 | 4 | RPC falcon.swarm.status/setShare + addUri p2sp-share + CLI 参数链 + e2e 验收四条 + 文档对账(daemon/swarmd CLAUDE.md、README) | 全仓 ctest 全绿 + e2e 铁律（✅ 已完成 2026-10-09：e2e 三铁律 3/3 + 10/10 压测，target `falcon_daemon_swarm_e2e_tests`） |
+
+---
+
+## 17. 阶段 2 实现收口(2026-10-10)
+
+阶段 2(入站数据服务 + P2SP 拉取)已实现,六批提交:`8c7ee56`(数据服务)、
+`e3bb66a`(查询注入镜像池)、`d141b95`(坏源拒收钉子)、`64f5097`(winsock2
+编译面修复)、`102d4e1`(查询面独立于共享开关)、`ca09aa3`(e2e 混合拉取铁律)。
+
+### 17.1 落地形态与设计条目对账
+
+| 设计条目 | 落地 | 对账/偏差 |
+|---|---|---|
+| §10.3 入站只读 HTTP `GET /by-sha256/<hex>` + Range | `swarm_data_service.{hpp,cpp}`(daemon):accept 线程 + detached 连接线程台账(沿 2026-10-01 生命周期纪律);注册表经 `ISwarmDataRegistry` 由 announcer 的「已完成 → 已哈希 → 已公告」链填充,半成品永不注册;文件名只以 sha256 对外,不暴露本地路径 | 方法白名单 GET/HEAD(HEAD 为实现增益);一连接一请求(`Connection: close`,无 keep-alive);404(未注册/路径不符)/400(非法 hex)/405 幂等语义全测 |
+| §10.3 绑定地址 | `make_data_service_config`:`p2sp.rendezvous.advertise_addr` 形如 "ip:port" → 按公告端口绑定(公告与实听一致,e2e 直探);空/解析失败 → 0.0.0.0:0 随机端口 + `port()` 回读 | 绑定失败仅告警不阻断(数据面是增量能力,对端连拒由段级换源吸收) |
+| §10.4 查询注入镜像池 | protocols 公共缝 `mirror_source.hpp`(函数回调,protocols 不反向依赖 daemon,宿主未注册即零查询面);daemon 侧 `SwarmSourceProvider`:node 源 → `http://<addr>/by-sha256/<hex>`、url 源(http/https)原样透传;metalink V2 桥接镜像池 = 文档镜像在前(If-Range 归属者) + swarm 源去重后追加 | **增强语义:文档镜像池 ≥2 时不查询**(§10.4 只说注入,未说何时查——补源只在池不足时发生,零冗余查询);恢复路径忽略 swarm 源漂移(断点不作废);段级失败换源/超时清理/If-Range 全复用既有 P2SP 机制,swarm 源零特权 |
+| §10.5 NAT 标记过滤 | provider `node_source_usable`:advertise 对象缺席 / addr 空 / 不含 ':' / `direct==false` 一律跳过;本机自身 node_id 跳过 | url 源不经 NAT 过滤(镜像 URL 仍参与,与设计一致) |
+| §11 降级 | 查询连续失败指数退避 30s×2^n 封顶 300s,抑制期内查询不发往网络;任一次成功即清除;查询失败面零外泄(异常/形状不符全收口为空表,发现面故障绝不阻断下载) | **查询面独立于共享开关**(102d4e1):进程级共享 SwarmClient 惰性创建 + start 幂等(start_mutex_);share off 时公告停/数据服务停,查询仍活——§11 one_way 语义的落地;停机回调摘缝先于排水(在途查询持 shared_ptr 拷贝延寿,无悬垂) |
+| §12 验收四条 | 见 §17.2 | 全过 |
+
+### 17.2 测试与验收对账
+
+- **门禁与日志**:文档镜像与 swarm 源合计 ≥2 才走 V2 多源,否则回落串行委托(与阶段 2 前单镜像行为一致);跳过原因分级日志(池不足/接缝未注册/查询异常)。
+- **provider 纯单元 12 用例**(`swarm_source_provider_test`):parse_sources 形状容错全分支(node/url/未知 type/非 object/去重/自身排除)/`node_source_usable` direct 矩阵/退避状态机(失败抑制 → 成功清除,抑制期查询不发网络)。
+- **数据服务 12 用例**(`swarm_data_service_test`,POSIX 回环):随机端口全量/Range 精确切片/HEAD 无体/未注册 404/非法 hex 400/路径 404/方法 405/注销与清空/成品文件缺失 404/幂等 stop/并发客户端。
+- **metalink 桥接 +7 用例**(`metalink_handler_test`):swarm 源扩展池启用多源/与文档镜像重复不收录/provider 抛异常回落串行/非 http 源过滤/空结果/池足够不查询/**坏源拒收**(d141b95:`SwarmSourceBadBytesRejectedByWholeFileHash`——swarm 源发错字节 → 整文件哈希校验失败 → 回落文档镜像串行 → 成品仍正确,§6.3 零特权的直接检验)。
+- **e2e 混合拉取铁律**(ca09aa3,`SwarmDaemonE2E.MetalinkV2BridgePullsSwarmSourceIntoMirrorPool`):A(share on + advertise_addr)从 legacy 镜像完成后公告节点源;B(share off + http_engine=v2)拿到单文档镜像且该镜像拒绝 Range(416)——串行路径结构性必败的判别器;B 经 swarm 查询注入节点源 → V2 多源分段混合拉取;断言文档镜像上 plain GET ≥1 且 Range GET ≥1(Range 只在 V2 多段轮转下出现,串行回落形态不可能)+ 成品逐字节一致 + 无 `.falcon.*` 残留 + 三进程干净退出。注册限频 per-IP 计 RPC 调用(A 公告 + 探针 + B 查询 = 3 客户端),e2e 显式调高。
+- **ASan**:swarm 全套件 + metalink 桥接 198/198、daemon/RPC 233/233 零告警(含真二进制 e2e 4/4)。
+- **CI**:8 job 全绿(ca09aa3,run 37996089515)。
+
+### 17.3 已知边界(如实披露)
+
+- 数据服务为最小手写 HTTP/1.1(状态行 + Content-Length/Content-Range),无 keep-alive;只服务完整成品,不分片级服务(§10.3 定案);
+- §11 的「多次失败节点进会话级黑名单」未做——坏源由整文件哈希兜底拒收,重复坏源仅浪费重试预算,留阶段 3 评估;
+- 查询注入只发生在下载启动(首次/回落)时刻,运行中任务不加源(§11 明文阶段一语义,动态加源留阶段三);
+- e2e 为真三进程拓扑(2 daemon + rdv,fork 依赖),POSIX-only(与阶段 1 同姿态);Windows 由 provider/data-service/bridge 的纯单元与回环用例覆盖。

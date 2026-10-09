@@ -54,8 +54,11 @@ lives in [docs/design/ui-sandbox/](docs/design/ui-sandbox/README.md).
 - **P2SP network** (`falcon-swarmd`): standalone rendezvous service for peer discovery
   (Ed25519 challenge auth, Bearer + rate limiting, group tokens, blacklist), daemon
   `p2sp.share` announces swarm-enabled downloads to the rendezvous with TTL renewal and
-  retract on completion, RPC `falcon.swarm.status`/`falcon.swarm.setShare`, CLI
-  `--swarm-server` single-shot announce; default off
+  retract on completion, inbound read-only data service (`GET /by-sha256/<hex>` with
+  Range) for peers to pull verified files, metalink mirror pools augmented with swarm
+  sources (NAT-filtered, hash-verified, works even with sharing off), RPC
+  `falcon.swarm.status`/`falcon.swarm.setShare`, CLI `--swarm-server` single-shot
+  announce; default off
 - **Desktop Application** (Qt6): Fluent-design UI, light/dark themes, frameless window,
   table & grid task views, cloud storage browsing, resource search, dual backend
   (in-process engine or daemon RPC with WebSocket event refresh)
@@ -365,7 +368,7 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 - [x] Metalink downloads (multi-mirror P2SP segmentation + whole-file hash verification)
 - [x] CLI (60+ aria2-compatible options)
 - [x] Daemon: aria2-compatible JSON-RPC (HTTP + WebSocket event stream), SQLite persistence, SIGHUP hot reload, MCP tool endpoint (10 download tools)
-- [x] P2SP phase 1: falcon-swarmd rendezvous service, daemon announce/retract with TTL renewal, RPC falcon.swarm.status/setShare, CLI --swarm-server
+- [x] P2SP phase 1+2: falcon-swarmd rendezvous service, daemon announce/retract with TTL renewal, RPC falcon.swarm.status/setShare, CLI --swarm-server, inbound /by-sha256 data service, swarm sources in metalink mirror pools (NAT-filtered, hash-verified)
 - [x] Desktop application (Qt6, Fluent design, light/dark themes, cloud drive browsing)
 - [x] Private protocol support (Thunder, QQDL, FlashGet, ED2K)
 - [x] SFTP, WebDAV protocols (libssh2 / libcurl data planes)

@@ -6,6 +6,12 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-10 - P2SP 阶段 2 收口：入站数据服务 + 查询注入镜像池 + NAT 过滤（§17）
+- **增量 1 入站只读数据服务**（`swarm_data_service.{hpp,cpp}`，8c7ee56）：`GET|HEAD /by-sha256/<64hex>` 回环语义（404 未知/400 非 hex/405 非 GET·HEAD/404 路径）+ `Range: bytes=a-b`（416 不可解析、越界截断）+ `Connection: close` 一连接一请求；`ISwarmDataRegistry` 由公告链填充（完成→SHA256→公告同一时点 register，删除/关闭/换内容 unregister/swap），注册的文件本体缺失 404；bind 地址从 `p2sp.advertise_addr` 派生（`make_data_service_config`，bind 失败仅告警不阻断 daemon）；accept 线程 + detached 连接线程台账（2026-10-01 纪律）+ stop 先 join accept 再 shutdown 存量 fd
+- **增量 2 查询注入 V2 镜像池**（e3bb66a/d141b95/102d4e1/ca09aa3）：`mirror_source.hpp` 公共接缝（`SwarmMirrorSourceFn`，protocols 不反向依赖 daemon，未注册 = 零查询面）；daemon 侧 provider（parse：node → `http://<addr>/by-sha256/<hex>`、url 仅 http/https 透传、去重、排除自身 node_id；NAT 过滤 `node_source_usable`：advertise 在位 + addr 含 ':' + direct==true；退避 30s×2^n cap 300s，抑制期不触网）；metalink 桥接仅 doc 镜像池 <2 才查询，swarm URL 去重后追加，总池 <2 回落串行；resume 忽略 swarm 漂移（不二次查询），坏源数据被整文件哈希拦截（d141b95 钉子）；查询面独立于 share.enabled（102d4e1：惰性共享 SwarmClient + start_mutex_ 幂等启动，做种关仍可查询消费）；停机摘缝先于引擎排水（在途查询持 shared_ptr 拷贝无悬垂）
+- **验收**：data service 12 用例 + provider 12 用例（fake QueryFn 零触网）+ 公告 registry-sync 8 用例 + 桥接 +7（含坏源拒绝）+ 真二进制 e2e Test D（doc 镜像拒 Range 416 → 串行结构性不可胜，断言 plain GET ≥1 + Range GET ≥1 即 swarm 源真实参与分段）；ASan 全套件零告警（教训：e2e 会 spawn 的**全部二进制**都要重建——只重建测试 target 留了 Oct 2 旧 falcon-swarmd，announce 恒 -32601 假红）；CI run 37996089515 8/8 绿
+- **文档对账**：设计文档状态行 + §17 实现收口；本文件测试表/对外接口同步
+
 ### 2026-10-09 - P2SP e2e 撤回链红面收口（query 轮询烧穿 rdv 限频预算——测试面缺陷，零产品改动）
 - **红面**：`SwarmDaemonE2E.AnnounceQueryThenDeleteRetracts` 30.4s 恒红（3/3 复现）"retract after delete never propagated"——announcer 状态机单测绿、rdv retract 语义绿，真实链路 retract 实际早已成功
 - **根因（测试轮询违反限频契约）**：rdv 默认 query 限频 120/min（per-key 1min 滑窗，§9.1）；测试 `wait_until` 固定 20ms 轮询 = 3000/min，qnode ~2.4s 烧穿预算，此后持续轮询使窗口永久饱和 → 每 query 恒 `-32002` → `query_empty` 的 `err.ok()` 永假。query_hit/元数据单查赶在预算耗尽前（~2.4s 内）通过掩盖了烧穿；滑窗老化放行呈「每 60s ~2.4s 突发」节奏，30s 断言窗内恒无 ok 响应 → 确定性红
@@ -642,6 +648,9 @@ falcon-mcp [OPTIONS]
   `announce_mirrors=false` 仅公告文件不公告镜像 URL
 - `p2sp.rendezvous` 为 SwarmClient 接入参数，**改动需重启**（SIGHUP 仅
   告警 "restart required"）；`p2sp.share.*` 全部热更（SIGHUP 立即生效）
+- 阶段 2 起，查询面（metalink 镜像池补源）**独立于 `share.enabled`**：
+  做种关闭仍会按需向 rendezvous 查询 swarm 源；数据服务（他人拉取）
+  才随 `share.enabled` 启停
 
 - 只覆盖文件中出现的键，未出现的键保持下层值
 - 路径值支持 `~/` 前缀展开（HOME / USERPROFILE）
@@ -691,6 +700,12 @@ falcon-mcp [OPTIONS]
 | -32001 | 认证失败 |
 | 1 | 任务忙/操作失败（如移除活动任务） |
 | 2 | gid 不存在 |
+
+### P2SP 数据服务与查询源（阶段 2，设计文档 `docs/p2sp_network_design.md` §10/§11）
+
+- **入站只读数据服务**（`p2sp.share.enabled=true` 时随公告链启动）：`GET|HEAD /by-sha256/<64hex>`——公告完成 → SHA256 → 公告同一时点把文件注册进 `ISwarmDataRegistry`；支持 `Range: bytes=a-b`（断点续传/分段消费），不可解析 416；未知哈希 404、非 hex 400、错路径 404、非 GET/HEAD 405；`Connection: close`（一连接一请求）；bind 地址从 `p2sp.advertise_addr` 派生（未配置则 0.0.0.0 随机端口），绑定失败仅告警不阻断 daemon；删除/关闭/换内容自动撤注册
+- **查询源接缝**（`falcon/protocols/mirror_source.hpp`，daemon 侧 `swarm_source_provider`）：metalink 多源桥接在文档镜像池不足（<2）时经接缝查询 swarm（`falcon.swarm.query`），node 源转 `http://<addr>/by-sha256/<sha>`、url 源仅 http/https 透传、NAT 标记 `direct:false` 被过滤、去重并排除自身；失败退避 30s×2^n（cap 300s）。查询面独立于 share.enabled——做种关闭时仍可查询消费（惰性共享 SwarmClient）；坏源数据由整文件哈希校验拦截（桥接回落串行）
+- **停机纪律**：`set_swarm_mirror_source_provider(nullptr)` 先于引擎排水（在途查询持 shared_ptr 拷贝，无悬垂），随后数据服务 stop
 
 ### WebSocket 事件流订阅
 
@@ -841,8 +856,10 @@ RPC 的 `pauseAll`/`unpauseAll`/`removeDownloadResult`/`purgeDownloadResult`
 | `falcon_daemon_storage_tests` | `task_storage_test.cpp` `task_storage_listener_test.cpp` | 持久化与监听器 |
 | `falcon_daemon_lifecycle_tests` | `daemon_lifecycle_test.cpp` | 守护进程生命周期（POSIX） |
 | `falcon_daemon_config_tests` | `config_test.cpp` | daemon.json 解析/优先级/容错/~ 展开；`p2sp` 节（share/rendezvous 全字段往返/非法 mode 告警/类型错误/节非 object/未知键告警） |
-| `falcon_daemon_swarm_announcer_tests` | `swarm_announcer_test.cpp` | SwarmAnnouncer 状态机（FakeGateway 接缝注入）：公告内容与隐私过滤/TTL 续租/文件消失与内容变化/session 补差/失败退避/停机禁用语义/状态快照/运行时翻关 |
-| `falcon_daemon_swarm_e2e_tests` | `swarm_daemon_e2e_test.cpp` | P2SP 真二进制 e2e（POSIX；fork+execv 起 falcon-swarmd + 两 falcon-daemon + 回环源，HOME 隔离）：§16.6 三铁律——announce→query 命中→删文件 retract 落空 / Rendezvous SIGKILL 中途下载无感且成品逐字节一致 / 默认 off 零公告；宏缺席单 skip 占位 |
+| `falcon_daemon_swarm_announcer_tests` | `swarm_announcer_test.cpp` | SwarmAnnouncer 状态机（FakeGateway 接缝注入）：公告内容与隐私过滤/TTL 续租/文件消失与内容变化/session 补差/失败退避/停机禁用语义/状态快照/运行时翻关/数据服务 registry 同步（成功注册先于公告、哈希失败不注册、文件消失 unregister、换内容 swap、关闭/翻关清表、stop 保留表） |
+| `falcon_daemon_swarm_data_service_tests` | `swarm_data_service_test.cpp` | 入站数据服务（§10.3）：随机端口起服/Range 精确切片/HEAD 无体/未知哈希 404/非 hex 400/错路径 404/非 GET·HEAD 405/unregister·clear 撤服/注册文件缺失 404/stop 幂等/并发客户端；Windows 占位 skip（POSIX-only） |
+| `falcon_daemon_swarm_source_provider_tests` | `swarm_source_provider_test.cpp` | 查询源 provider（§10.4/§10.5/§11，fake QueryFn 零触网）：node→数据 URL 构造/NAT 矩阵过滤/畸形 node 跳过/自身 node_id 排除/url 仅 http·https/未知类型容错/去重/畸形结果容错/成功解析且 sha 传参/失败退避抑制期跳过查询/缺 QueryFn 空表无状态 |
+| `falcon_daemon_swarm_e2e_tests` | `swarm_daemon_e2e_test.cpp` | P2SP 真二进制 e2e（POSIX；fork+execv 起 falcon-swarmd + 两 falcon-daemon + 回环源，HOME 隔离）：§16.6 三铁律 + §17 Test D——announce→query 命中→删文件 retract 落空 / Rendezvous SIGKILL 中途下载无感且成品逐字节一致 / 默认 off 零公告 / **做种关 + doc 镜像拒 Range（416）→ 串行结构性不可胜，断言 plain GET ≥1 + Range GET ≥1 且成品逐字节一致（swarm 源真实参与分段）**；宏缺席单 skip 占位 |
 | `falcon_daemon_main_tests` | `main_integration_test.cpp` | 真实二进制参数/退出码/配置文件加载（POSIX） |
 
 ```bash

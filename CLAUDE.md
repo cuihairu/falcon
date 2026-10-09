@@ -2,6 +2,11 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-10 - P2SP 阶段 1+2 收口（公告/查询/RPC + 入站数据服务 + swarm 源注入 V2 镜像池 + NAT 过滤）
+- **阶段 1（2026-10-09，§16）**：daemon 侧 SwarmAnnouncer（下载完成 → SHA256 → 向 rendezvous 公告 R1 哈希 + R2 镜像 URL，TTL 续租/文件消失 retract/内容变化重公告，`p2sp.share.*` 热更 + `falcon.swarm.status`/`falcon.swarm.setShare` RPC + addUri `p2sp-share` per-download 三态）+ 节点侧 SwarmClient announce 面 + 真二进制 e2e 三铁律（announce→query→retract / rdv SIGKILL 无感 / 默认 off）；CLI `--swarm-server` 单发公告
+- **阶段 2（2026-10-10，§17）**：① 入站只读数据服务 `GET|HEAD /by-sha256/<hex>`（Range + Connection: close，registry 由公告链同点填充，bind 从 advertise_addr 派生）；② 查询注入镜像池——公共接缝 `mirror_source.hpp`（protocols 不反向依赖 daemon）+ daemon provider（node→数据 URL/NAT `direct:false` 过滤/去重/退避 30s×2^n cap 300s）+ metalink 桥接 doc 池 <2 才查询，坏源被整文件哈希拦截回落串行；查询面独立于 share.enabled（做种关仍可查询消费）
+- **验证**：daemon 门禁全套件 + swarm/metalink/HTTP 全量 + ASan 全套件零告警 + e2e 4/4（Test D：doc 镜像拒 Range 416 → 串行结构性不可胜，swarm 源真实参与分段）；CI run 37996089515 8/8 绿；设计文档 §16/§17 对账 + 两包 CLAUDE.md 同步。**教训**：e2e spawn 的全部二进制都要重建——留旧 falcon-swarmd 时 announce 恒 -32601 假红
+
 ### 2026-10-08 - daemon serverInfo.version 单一事实源收口（FALCON_DAEMON_VERSION 构建期注入）
 - **漂移面消除**：MCP initialize 的 `serverInfo.version` 从 core 头文件硬编码 `FALCON_VERSION_STRING "0.1.0"` 改接 `mcp_server_version()` 访问器——构建期注入宏 `FALCON_DAEMON_VERSION`（`falcon_daemon_rpc` target_compile_definitions，源 = 本包 `project(VERSION)` 0.2.0）。**机制选型**：构建期注入而非生成头文件——falcon-cli `FALCON_CLI_VERSION` / falcon-mcp `FALCON_MCP_VERSION` 同款先例已有两处，免新增 configure_file 模板与生成目录 include 路径；宏缺失即编译错误，版本上报不允许回落到任何硬编码字面量。core 的 `falcon/version.hpp`（仍 "0.1.0"，core/desktop 消费方不在本批范围）include 一并移除
 - **测试钉子（双保险）**：`InitializeHandshakeRoundTrip` 断言 `serverInfo.version == mcp_server_version()`（防回改任何硬编码字面量）+ `== "0.2.0"`（字面钉死，沿 cli_main_integration_test "v0.2.0" 先例——升版本必须同步改测试，漂移必红）。**为什么经访问器而非测试侧同款注入**：tests/CMakeLists.txt 有自己的 `project(falcon_daemon_tests VERSION 0.1.0)`，子目录 `${PROJECT_VERSION}` 解析为 0.1.0，测试 TU 注入会注入错值——访问器让两侧共享同一编译单元的宏
