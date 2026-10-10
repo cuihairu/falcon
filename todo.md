@@ -2744,4 +2744,12 @@ libtorrent 强依赖（当前 FALCON_ENABLE_BITTORRENT=OFF 为默认
      DaemonSeedStatsSnapshotRoundtripAndStopSeeding 断言做种中快照
      seed_stop_reason 为空、停止后快照 == "manual"——钉住
      handler → engine SeedInfo → tellStatus JSON → TaskSnapshot 解析全链
-- **验证**：（待补：build-desktop backend 测试 + 全量回归绿）
+- **验证**：build-desktop 增量重建零新告警（download_page 390/392/689 三处
+  qsizetype/sign-conversion 为既有告警，与本批无关）；DownloadBackendTest
+  10/10 绿（含新增 stop_reason 断言）；DaemonSeedStatsSnapshotRoundtrip
+  AndStopSeeding 10 轮压测零失败；desktop 全量 2762 清单 2761 过——唯一红
+  `FileHashTest.PerformanceLargeFile` 为在案负载抖动惯犯（1000ms 阈值，
+  当轮外部会话满载构建 load 35-75 时串行复跑 1.17-3.67s 撞线，负载间隙
+  0.93s/0.98s 两次通过；本批零 engine/protocols 改动、该测试二进制未重建
+  ——纯环境负载非本批引入），沿 b630c89 先例「rerun 复绿 + 记录，不改阈
+  值」收口；CI run 38049163256（67cb228）8/8 job 全绿
