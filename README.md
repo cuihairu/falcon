@@ -376,7 +376,6 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 - [x] Resource search, encrypted configuration management
 
 ### In Progress
-- [ ] Default build and documentation consistency for optional protocol plugins
 - [ ] More private protocols and cloud-drive direct-link parsing
 
 ### Planned
