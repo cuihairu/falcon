@@ -7,6 +7,12 @@
 - **W1（修复到达用户的节奏）→ 项目侧已就绪，维持挂起（真实用户侧动作）**。复核证据：nightly release 全部 5 资产 updatedAt 2026-10-09T05:15Z，均晚于 adf0e58/2ee5c8e——当前 nightly 已含 B2–B7 全部修复；唯一剩余动作是用户侧升级到当前 nightly 后逐条反馈闭环，不可代验。BUGS.md W1 行已记录证据
 - **P2SP 阶段 3 → 维持未触发**。依据：设计文档明文「可选，按需求触发」+ §13 延后表逐项触发条件（动态加入源=下载中新源出现频次证明价值、mDNS=Rendezvous 不可达但同网段场景真实存在、R3=按桌面端需求评估、多群组=多圈子需求出现）+ 仓库至今无对应产品需求记录；阶段 1/2 已交付完整发现-共享-消费链，无需求信号不开工。设计文档 §12 阶段 3 节已加触发判定注记
 
+### 2026-10-10 - P0 批次遗留 ②③ 闭环（FTP 停滞看门狗 + daemon per-download timeout 选项）
+- **FTP 超时语义**（遗留 ②，`ftp_plugin.cpp` `apply_common_curl_options` 增 `bool transfer` 参数）：2026-09-30 P0 批次修复 HTTP 双站点 `CURLOPT_TIMEOUT` 总时长硬帽（B6 ①）时显式遗留的 FTP 同型映射（"FTP 路径同缺陷后续批次收口"）本批闭环——transfer 路径改 `LOW_SPEED_LIMIT=1 + LOW_SPEED_TIME=timeout_seconds` 停滞看门狗（低于 1 B/s 持续该秒数才中止，慢而健康下载不受总时长惩罚），`==0` 不设看门狗对；探测路径（get_file_info 的 SIZE 查询）保持总帽语义（探测应秒级完成）；顺带补 `CURLOPT_CONNECTTIMEOUT 10L`（FTP 路径此前无连接超时上限，curl 默认 300s，移除总帽后为有界性保障，与 HTTP 路径同值）
+- **回归钉子**：`SlowHealthyTransferSurvivesTimeoutSeconds`（ftp_handler_test 22 → 23 用例，4096B @ 16B/10ms ≈ 2.56s 总时长 > timeout 2s 照常 Completed——旧映射 2031ms 整必红即 CURLE_OPERATION_TIMEDOUT，双向往返验证；对位 HTTP 路径同名钉子）
+- **daemon per-download timeout 选项**（遗留 ③，`json_rpc_server.cpp` addUri）：aria2 风格 `timeout` 键字符串/整数双形态解析进 `options.timeout_seconds`，`getOption` 回显字符串值——此前该键零解析（超时恒走引擎默认，per-download 不可设，aria2 客户端传 `timeout` 静默无效）；对位既有 `max-connection-per-server`/`retry-wait` 同款惯例；钉子 `AddUriTimeoutOptionRoundTrip`（字符串 "25" 与整数 40 双形态经 getOption 往返断言，json_rpc_server_coverage_test 91 → 92）
+- **至此 2026-09-30 P0 批次三项如实披露全部闭环**（① 桌面设置接线已生效、② FTP 看门狗、③ daemon timeout 选项）
+
 ### 2026-10-10 - P2SP 阶段 1+2 收口（公告/查询/RPC + 入站数据服务 + swarm 源注入 V2 镜像池 + NAT 过滤）
 - **阶段 1（2026-10-09，§16）**：daemon 侧 SwarmAnnouncer（下载完成 → SHA256 → 向 rendezvous 公告 R1 哈希 + R2 镜像 URL，TTL 续租/文件消失 retract/内容变化重公告，`p2sp.share.*` 热更 + `falcon.swarm.status`/`falcon.swarm.setShare` RPC + addUri `p2sp-share` per-download 三态）+ 节点侧 SwarmClient announce 面 + 真二进制 e2e 三铁律（announce→query→retract / rdv SIGKILL 无感 / 默认 off）；CLI `--swarm-server` 单发公告
 - **阶段 2（2026-10-10，§17）**：① 入站只读数据服务 `GET|HEAD /by-sha256/<hex>`（Range + Connection: close，registry 由公告链同点填充，bind 从 advertise_addr 派生）；② 查询注入镜像池——公共接缝 `mirror_source.hpp`（protocols 不反向依赖 daemon）+ daemon provider（node→数据 URL/NAT `direct:false` 过滤/去重/退避 30s×2^n cap 300s）+ metalink 桥接 doc 池 <2 才查询，坏源被整文件哈希拦截回落串行；查询面独立于 share.enabled（做种关仍可查询消费）

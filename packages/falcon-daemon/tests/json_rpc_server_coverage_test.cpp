@@ -1547,6 +1547,27 @@ TEST_F(JsonRpcCoverageTest, GetOptionEchoesCustomHeaders) {
     EXPECT_EQ(parsed["result"]["header"]["X-Custom-B"], "two");
 }
 
+TEST_F(JsonRpcCoverageTest, AddUriTimeoutOptionRoundTrip) {
+    start_server();
+    const std::string dir = ::testing::TempDir();
+    // 字符串与整数双形态解析（aria2 addUri options 惯例），经 getOption
+    // 回显验证值真实落进 DownloadOptions——此前 timeout 键零解析
+    // （2026-09-30 P0 批次遗留：超时走引擎默认，per-download 不可设）
+    for (const auto& [val, want] :
+         {std::pair<json, std::string>{json("25"), "25"}, {json(40), "40"}}) {
+        json opts = {{"dir", dir},
+                     {"out", "falcon-timeout-rt-" + want + ".bin"},
+                     {"timeout", val}};
+        auto parsed = call("aria2.addUri",
+                           json::array({json::array({"test://local/timeout.bin"}), opts}));
+        ASSERT_TRUE(parsed.contains("result")) << parsed.dump();
+        const std::string gid = parsed["result"].get<std::string>();
+        auto got = call("aria2.getOption", json::array({gid}));
+        ASSERT_TRUE(got.contains("result")) << got.dump();
+        EXPECT_EQ(got["result"]["timeout"], want);
+    }
+}
+
 TEST_F(JsonRpcCoverageTest, ForceShutdownWithoutHandlerIgnored) {
     start_server();
     auto parsed = call("aria2.forceShutdown", json::array());

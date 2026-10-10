@@ -194,6 +194,7 @@ static json download_options_to_json(const falcon::DownloadOptions& options) {
     out["check-certificate"] = options.verify_ssl ? "true" : "false";
     out["max-tries"] = std::to_string(options.max_retries);
     out["retry-wait"] = std::to_string(options.retry_delay_seconds);
+    out["timeout"] = std::to_string(options.timeout_seconds);
     out["max-connection-per-server"] = std::to_string(options.max_connections);
     out["max-download-limit"] = std::to_string(options.speed_limit);
     out["seed-ratio"] = std::to_string(options.seed_ratio);
@@ -1490,6 +1491,10 @@ nlohmann::json JsonRpcServer::dispatch_rpc(const std::string& method, nlohmann::
             if (o.contains("retry-wait")) {
                 if (o["retry-wait"].is_string()) options.retry_delay_seconds = static_cast<std::size_t>(std::stoull(o["retry-wait"].get<std::string>()));
                 if (o["retry-wait"].is_number_integer()) options.retry_delay_seconds = static_cast<std::size_t>(o["retry-wait"].get<int>());
+            }
+            if (o.contains("timeout")) {
+                if (o["timeout"].is_string()) options.timeout_seconds = static_cast<std::size_t>(std::stoull(o["timeout"].get<std::string>()));
+                if (o["timeout"].is_number_integer()) options.timeout_seconds = static_cast<std::size_t>(o["timeout"].get<int>());
             }
             if (o.contains("max-connection-per-server")) {
                 if (o["max-connection-per-server"].is_string()) options.max_connections = static_cast<std::size_t>(std::stoull(o["max-connection-per-server"].get<std::string>()));
