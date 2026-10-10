@@ -3934,9 +3934,9 @@ SIGHUP 重载：`rpc.secret`/`allow_origin_all` 与 `download` 节立即生效�
 
 ### 📋 第三阶段（规划中）
 1. **更多协议支持**
-   - 🔄 网盘直链解析（百度/阿里云盘/夸克等）
-   - 📋 WebDAV 协议
-   - 📋 SFTP 协议
+   - 🔄 网盘直链解析（百度/阿里云盘/夸克等；需用户点名目标网盘与接入方式）
+   - ✅ WebDAV 协议（storage 浏览器插件 + 云盘页下载经 URL 走 HTTP 数据面，2026-10 前落地）
+   - ✅ SFTP 协议（protocols 插件 libssh2 真实实现 + known_hosts 验证 + 真实 sshd 走查，2026-10-01）
 
 2. **完善桌面应用**
    - 📋 设置页面完善
