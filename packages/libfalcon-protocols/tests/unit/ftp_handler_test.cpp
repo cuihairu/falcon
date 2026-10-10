@@ -270,6 +270,32 @@ TEST_F(FtpHandlerTest, DownloadReportsProgressDuringSlowTransfer) {
     server.stop();
 }
 
+TEST_F(FtpHandlerTest, SlowHealthyTransferSurvivesTimeoutSeconds) {
+    falcon::test::MockFtpServer server;
+    server.start();
+    // 4096B @ 16B/10ms ≈ 2.56s 总时长 > timeout_seconds=2：timeout 是停滞
+    // 看门狗（速度低于 1 B/s 持续该秒数才中止）而非总时长硬帽——1600 B/s
+    // 的健康传输必须照常完成。旧映射（CURLOPT_TIMEOUT）在 2s 整必杀该
+    // 下载（CURLE_OPERATION_TIMEDOUT → 抛 NetworkException），本用例即钉
+    // 住该 P0 回归（对位 HTTP 路径 SlowHealthyTransferSurvivesTimeoutSeconds）
+    server.set_file_content("/file.bin", std::string(4096, 'z'));
+    server.set_chunk_delay_us(10'000, 16);
+
+    falcon::DownloadOptions options;
+    options.timeout_seconds = 2;
+    options.max_retries = 0;
+
+    TempDir dir;
+    const std::string out = dir.file("file.bin");
+    auto task = makeTask(113, ftpUrl(server.port(), "/file.bin"), out, options);
+
+    handler()->download(task, nullptr);
+
+    EXPECT_EQ(task->status(), falcon::TaskStatus::Completed);
+    EXPECT_EQ(readFile(out), std::string(4096, 'z'));
+    server.stop();
+}
+
 TEST_F(FtpHandlerTest, DownloadThrowsWhenRenameFails) {
     falcon::test::MockFtpServer server;
     server.start();

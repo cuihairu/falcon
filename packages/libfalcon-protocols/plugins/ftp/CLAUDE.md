@@ -6,6 +6,23 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-10 - timeout_seconds 停滞看门狗语义收口（2026-09-30 P0 批次遗留 ② 的 FTP 侧闭环）
+- **同型缺陷修复**：`apply_common_curl_options` 把 `timeout_seconds` 映射
+  `CURLOPT_TIMEOUT`（总时长硬帽，默认 30s 杀死一切总时长超限的慢而健
+  康下载）——HTTP 路径 2026-09-30 已收口，FTP 路径当时显式遗留（"后续
+  批次收口"）。修复沿同款范式：transfer 路径改 `CURLOPT_LOW_SPEED_
+  LIMIT=1 + CURLOPT_LOW_SPEED_TIME=timeout_seconds`（低于 1 B/s 持续
+  该秒数才中止），`timeout_seconds==0` 不设看门狗对；探测路径
+  （get_file_info 的 SIZE 查询）保持 `CURLOPT_TIMEOUT` 总帽语义（探测
+  应秒级完成），helper 增 `bool transfer` 参数区分两路
+- **附带**：transfer/probe 统一补 `CURLOPT_CONNECTTIMEOUT 10L`（此前
+  FTP 路径无连接超时上限，curl 默认 300s——移除总帽后为唯一有界性保
+  障，与 HTTP 路径同值）
+- **回归钉子**：`SlowHealthyTransferSurvivesTimeoutSeconds`（4096B @
+  16B/10ms ≈ 2.56s 总时长 > timeout 2s 照常 Completed——旧映射 2031ms
+  整必红，双向往返验证；对位 HTTP 路径同名钉子）；ftp_handler_test
+  22 → 23 用例
+
 ### 2026-09-14 - 覆盖率批次 F：ftp_plugin.cpp 135 → 9 miss（真实测试重写）
 - 旧 `ftp_handler_test.cpp` 为 55 个自说自话的占位测试（断言字符串
   字面量，不触达产品代码），唯一真实的 registry 测试还因 weak stub

@@ -76,9 +76,22 @@ static int progress_callback(void* clientp,
     return 0;
 }
 
-static void apply_common_curl_options(CURL* curl, const DownloadOptions& options) {
+// transfer = true: download data plane uses stall watchdog semantics (aria2 --timeout):
+// only aborts when speed stays below 1 B/s for timeout_seconds, slow-but-healthy downloads
+// are not killed by total-duration cap; ==0 means no watchdog pair is set (watchdog off).
+// transfer = false: probe (SIZE query) keeps total cap semantics (probe should complete within seconds).
+static void apply_common_curl_options(CURL* curl, const DownloadOptions& options, bool transfer) {
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, static_cast<long>(options.timeout_seconds));
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+    if (transfer) {
+        if (options.timeout_seconds > 0) {
+            curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L);
+            curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME,
+                             static_cast<long>(options.timeout_seconds));
+        }
+    } else {
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, static_cast<long>(options.timeout_seconds));
+    }
 
     if (!options.proxy.empty()) {
         curl_easy_setopt(curl, CURLOPT_PROXY, options.proxy.c_str());
@@ -124,7 +137,7 @@ FileInfo FtpHandler::get_file_info(const std::string& url, const DownloadOptions
     curl_easy_setopt(curl, CURLOPT_HEADER, 0L);
     curl_easy_setopt(curl, CURLOPT_FILETIME, 1L);
 
-    apply_common_curl_options(curl, options);
+    apply_common_curl_options(curl, options, /*transfer=*/false);
 
     CURLcode res = curl_easy_perform(curl);
     if (res != CURLE_OK) {
@@ -205,7 +218,7 @@ void FtpHandler::download(DownloadTask::Ptr task, IEventListener* listener) {
         progress.last_bytes = start_offset;
         curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &progress);
 
-        apply_common_curl_options(curl, options);
+        apply_common_curl_options(curl, options, /*transfer=*/true);
 
         if (start_offset > 0) {
             curl_easy_setopt(curl, CURLOPT_RESUME_FROM_LARGE, static_cast<curl_off_t>(start_offset));
