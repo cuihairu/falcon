@@ -116,6 +116,8 @@ public:
             final_info.uploaded_bytes = kFinalUploaded;
             final_info.seeded_seconds = kFinalSeconds;
             final_info.seeding_active = false;
+            // BT 插件同语义：手动停止 → stop_reason="manual"
+            final_info.stop_reason = "manual";
             task->update_seed_info(final_info);
             task->set_status(falcon::TaskStatus::Completed);
         }
@@ -319,6 +321,8 @@ TEST_F(DownloadBackendTest, DaemonSeedStatsSnapshotRoundtripAndStopSeeding) {
     EXPECT_EQ(seeding_snap->seed_total_size, 1000u);
     EXPECT_DOUBLE_EQ(seeding_snap->seeded_seconds, SeedingHandler::kActiveSeconds);
     EXPECT_TRUE(seeding_snap->seeding_active);
+    // 做种中无停止原因（daemon 未落终态，BT 插件只在做种停止时写 stop_reason）
+    EXPECT_EQ(seeding_snap->seed_stop_reason, std::string());
     // ratio 分母 = max(downloaded, total_size) = 1000 → 2048/1000
     EXPECT_NEAR(seeding_snap->seed_ratio(), 2.048, 1e-9);
 
@@ -343,6 +347,9 @@ TEST_F(DownloadBackendTest, DaemonSeedStatsSnapshotRoundtripAndStopSeeding) {
     EXPECT_DOUBLE_EQ(stopped_snap->seeded_seconds, SeedingHandler::kFinalSeconds);
     EXPECT_FALSE(stopped_snap->seeding_active);
     EXPECT_EQ(stopped_snap->status, falcon::TaskStatus::Completed);
+    // 停止原因全链往返：handler SeedInfo.stop_reason → tellStatus
+    // seedStopReason → TaskSnapshot.seed_stop_reason
+    EXPECT_EQ(stopped_snap->seed_stop_reason, std::string("manual"));
 }
 
 TEST_F(DownloadBackendTest, DaemonStopSeedingErrorPaths) {

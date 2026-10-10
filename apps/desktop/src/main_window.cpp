@@ -309,15 +309,24 @@ void MainWindow::ensure_download_service()
     connect(download_service_, &DownloadService::task_failed,
             this, &MainWindow::on_task_failed);
     connect(download_service_, &DownloadService::seeding_stopped,
-            this, [this](falcon::TaskId id, const QString& output_path) {
+            this, [this](falcon::TaskId id, const QString& output_path,
+                        const QString& stop_reason) {
                 Q_UNUSED(id);
                 if (!settings_page_ || !settings_page_->is_notifications_enabled()) {
                     return;
                 }
                 if (system_tray_ && system_tray_->isVisible()) {
+                    QString reason_text;
+                    if (stop_reason == QLatin1String("manual")) {
+                        reason_text = tr("做种已手动停止。");
+                    } else if (stop_reason == QLatin1String("limit_reached")) {
+                        reason_text = tr("做种已达份额/时长上限，自动停止。");
+                    } else {
+                        reason_text = tr("做种已结束（达标或手动停止）。");
+                    }
                     system_tray_->showMessage(
                         tr("做种已停止"),
-                        tr("%1\n做种已结束（达标或手动停止）。").arg(output_path),
+                        tr("%1\n%2").arg(output_path, reason_text),
                         QSystemTrayIcon::Information,
                         3000);
                 }

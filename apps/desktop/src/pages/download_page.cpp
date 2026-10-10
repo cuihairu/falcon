@@ -1118,8 +1118,8 @@ QString DownloadPage::speed_display_text(
 QString DownloadPage::seeding_text(
     const falcon::daemon::rpc::TaskSnapshot& snapshot)
 {
-    // 快照只有 seeding_active 布尔量,无法区分"达标停止"与"手动停止"——
-    // 统一显示"已停止",细节(达标或手动)由 tooltip/托盘通知说明
+    // 列文本保持简短(做种中/已停止),停止原因(达标/手动)由 seed_stop_reason
+    // 经 tooltip/托盘通知区分
     if (snapshot.seeding_active) {
         return QObject::tr("做种中");
     }
@@ -1181,7 +1181,15 @@ QString DownloadPage::seed_column_tooltip(
                  .arg(format_bytes(snapshot.seed_uploaded_bytes),
                       format_bytes(snapshot.seed_downloaded_bytes));
     if (!snapshot.seeding_active) {
-        lines << tr("做种已结束(达标或手动停止)");
+        const QString reason =
+            QString::fromStdString(snapshot.seed_stop_reason);
+        if (reason == QLatin1String("manual")) {
+            lines << tr("做种已手动停止");
+        } else if (reason == QLatin1String("limit_reached")) {
+            lines << tr("做种已达份额/时长上限，自动停止");
+        } else {
+            lines << tr("做种已结束(达标或手动停止)");
+        }
     }
     return lines.join(QLatin1Char('\n'));
 }
