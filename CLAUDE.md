@@ -2,6 +2,11 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-10 - 挂起项裁定（依用户 2026-10-10 授权「自行裁定并记录依据」）
+- **B14-b（剪贴板确认框弹出期间新链接叠开第二框）→ 裁定维持叠开不改**。依据：① 确认框是模态对话框——用户指针正移向确认钮途中若框内目标被热替换，构成「确认了非所见内容」的误下载风险（按钮语义漂移），叠开无此风险（新框显式呈现新目标，旧框用户自行处置）；② 叠开零信息丢失、零新增状态机；③ 改「更新当前框」需把对话框外置为成员 + 目标刷新 + 生命周期/去重管理，为罕见边案引入常驻复杂度，收益不成比例。BUGS.md B14 行已记录
+- **W1（修复到达用户的节奏）→ 项目侧已就绪，维持挂起（真实用户侧动作）**。复核证据：nightly release 全部 5 资产 updatedAt 2026-10-09T05:15Z，均晚于 adf0e58/2ee5c8e——当前 nightly 已含 B2–B7 全部修复；唯一剩余动作是用户侧升级到当前 nightly 后逐条反馈闭环，不可代验。BUGS.md W1 行已记录证据
+- **P2SP 阶段 3 → 维持未触发**。依据：设计文档明文「可选，按需求触发」+ §13 延后表逐项触发条件（动态加入源=下载中新源出现频次证明价值、mDNS=Rendezvous 不可达但同网段场景真实存在、R3=按桌面端需求评估、多群组=多圈子需求出现）+ 仓库至今无对应产品需求记录；阶段 1/2 已交付完整发现-共享-消费链，无需求信号不开工。设计文档 §12 阶段 3 节已加触发判定注记
+
 ### 2026-10-10 - P2SP 阶段 1+2 收口（公告/查询/RPC + 入站数据服务 + swarm 源注入 V2 镜像池 + NAT 过滤）
 - **阶段 1（2026-10-09，§16）**：daemon 侧 SwarmAnnouncer（下载完成 → SHA256 → 向 rendezvous 公告 R1 哈希 + R2 镜像 URL，TTL 续租/文件消失 retract/内容变化重公告，`p2sp.share.*` 热更 + `falcon.swarm.status`/`falcon.swarm.setShare` RPC + addUri `p2sp-share` per-download 三态）+ 节点侧 SwarmClient announce 面 + 真二进制 e2e 三铁律（announce→query→retract / rdv SIGKILL 无感 / 默认 off）；CLI `--swarm-server` 单发公告
 - **阶段 2（2026-10-10，§17）**：① 入站只读数据服务 `GET|HEAD /by-sha256/<hex>`（Range + Connection: close，registry 由公告链同点填充，bind 从 advertise_addr 派生）；② 查询注入镜像池——公共接缝 `mirror_source.hpp`（protocols 不反向依赖 daemon）+ daemon provider（node→数据 URL/NAT `direct:false` 过滤/去重/退避 30s×2^n cap 300s）+ metalink 桥接 doc 池 <2 才查询，坏源被整文件哈希拦截回落串行；查询面独立于 share.enabled（做种关仍可查询消费）
