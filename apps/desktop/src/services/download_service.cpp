@@ -352,7 +352,8 @@ void DownloadService::publish_transitions(
             continue;
         }
         if (prev->second.seeding_active && !snap.seeding_active) {
-            emit seeding_stopped(id, QString::fromStdString(snap.output_path));
+            emit seeding_stopped(id, QString::fromStdString(snap.output_path),
+                                 QString::fromStdString(snap.seed_stop_reason));
         }
     }
 

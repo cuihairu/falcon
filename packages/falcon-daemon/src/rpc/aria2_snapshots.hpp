@@ -33,6 +33,9 @@ struct TaskSnapshot {
     std::uint64_t seed_total_size = 0;
     double seeded_seconds = 0.0;
     bool seeding_active = false;
+    /// 做种停止原因："" 未停止/未做种；"limit_reached" 达标自动停止；
+    /// "manual" 用户手动停止（旧版 daemon 缺省空串）
+    std::string seed_stop_reason;
 
     /// 做种份额比：uploaded / max(downloaded, total_size)；分母 0 返 0
     /// （与 seed_policy 的 ratio 分母同式）

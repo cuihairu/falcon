@@ -432,16 +432,21 @@ void BitTorrentHandler::download(DownloadTask::Ptr task, IEventListener* listene
                     task->update_progress(
                         static_cast<Bytes>(st.total_payload_download),
                         static_cast<Bytes>(st.total_wanted), 0);
-                    // 收口前最后一次快照：达标已停止（seeding_active=false）
+                    // 收口前最后一次快照：已停止（seeding_active=false）+
+                    // 停止原因（手动请求优先——用户显式动作优先呈现，
+                    // 达标与手动同时满足时按手动记录）
                     seed.seeding_active = false;
+                    seed.stop_reason = task->stop_seeding_requested()
+                                           ? "manual"
+                                           : "limit_reached";
                     task->update_seed_info(seed);
                     task->set_status(TaskStatus::Completed);
                     FALCON_LOG_INFO("BitTorrent seeding finished "
                                     "(uploaded={}, target ratio={}, "
-                                    "time={} min, manual_stop={}): {}",
+                                    "time={} min, stop_reason={}): {}",
                                     st.total_payload_upload, limits.ratio,
-                                    limits.time_minutes,
-                                    task->stop_seeding_requested(), task->id());
+                                    limits.time_minutes, seed.stop_reason,
+                                    task->id());
                     return;
                 }
             }

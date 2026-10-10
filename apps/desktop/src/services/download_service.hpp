@@ -107,8 +107,11 @@ signals:
     void task_completed(falcon::TaskId id, const QString& output_path);
     /// 任务失败（从快照变化推断）
     void task_failed(falcon::TaskId id, const QString& error_message);
-    /// 做种停止（达标自动停或手动停；从快照 seeding_active 翻转推断）
-    void seeding_stopped(falcon::TaskId id, const QString& output_path);
+    /// 做种停止（达标自动停或手动停；从快照 seeding_active 翻转推断）。
+    /// stop_reason："" 未知/旧版 daemon；"limit_reached" 达标自动停止；
+    /// "manual" 用户手动停止
+    void seeding_stopped(falcon::TaskId id, const QString& output_path,
+                         const QString& stop_reason);
     /// 回收站内容变化（入站/恢复/彻底删除/清空/过期清理）；GUI 收到后
     /// 调 trash_list() 重新拉取并刷新回收站页
     void trash_changed();

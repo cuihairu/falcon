@@ -238,6 +238,7 @@ static json task_to_status_json(const falcon::DownloadTask& task) {
     out["seedTotalSize"] = std::to_string(seed.total_size);
     out["seededSeconds"] = seed.seeded_seconds;
     out["seedingActive"] = seed.seeding_active;
+    out["seedStopReason"] = seed.stop_reason;
     return out;
 }
 

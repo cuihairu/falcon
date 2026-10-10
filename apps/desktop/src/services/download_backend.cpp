@@ -48,6 +48,7 @@ falcon::daemon::rpc::TaskSnapshot snapshot_from_download_task(
     snap.seed_total_size = seed.total_size;
     snap.seeded_seconds = seed.seeded_seconds;
     snap.seeding_active = seed.seeding_active;
+    snap.seed_stop_reason = seed.stop_reason;
     return snap;
 }
 

@@ -128,6 +128,10 @@ std::optional<TaskSnapshot> snapshot_from_status_json(const nlohmann::json& stat
         it != status.end() && it->is_boolean()) {
         snap.seeding_active = it->get<bool>();
     }
+    if (const auto it = status.find("seedStopReason");
+        it != status.end() && it->is_string()) {
+        snap.seed_stop_reason = it->get<std::string>();
+    }
     return snap;
 }
 

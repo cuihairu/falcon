@@ -25,6 +25,10 @@ struct SeedInfo {
     std::uint64_t total_size = 0;        ///< torrent 总长
     double seeded_seconds = 0.0;         ///< 已做种时长（秒）
     bool seeding_active = false;         ///< 当前是否处于做种阶段
+    /// 做种停止原因（仅 seeding_active==false 且经历过做种时非空）：
+    /// "limit_reached" = 份额/时长达标自动停止；"manual" = 用户手动停止；
+    /// 做种进行中与从未做种的任务恒空串
+    std::string stop_reason;
 };
 
 /// Download task class representing a single download operation
