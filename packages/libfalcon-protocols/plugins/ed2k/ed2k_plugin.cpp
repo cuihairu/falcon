@@ -51,7 +51,7 @@ bool ED2KHandler::can_handle(const std::string& url) const {
 }
 
 FileInfo ED2KHandler::get_file_info(const std::string& url,
-                                    const DownloadOptions& options) {
+                                    const DownloadOptions& /*options*/) {
     FileInfo info;
     info.url = url;
     info.supports_resume = true;
@@ -206,7 +206,8 @@ ED2KHandler::ED2KFileInfo ED2KHandler::parseFileLink(const std::vector<std::stri
         } else if (param.find("p=") == 0) {
             // 优先级
             try {
-                info.priority = std::stoul(param.substr(2));
+                info.priority =
+                    static_cast<uint32_t>(std::stoul(param.substr(2)));
             } catch (...) {
                 info.priority = 0;  // 默认优先级
             }
@@ -341,9 +342,15 @@ void ED2KHandler::downloadThreadMain(std::shared_ptr<TaskContext> ctx) {
 
     // 通知开始下载
     if (ctx->listener) {
-        ctx->listener->on_progress(ctx->task->id(),
-                                   ctx->downloadedBytes,
-                                   fileInfo.filesize);
+        ProgressInfo info;
+        info.task_id = ctx->task->id();
+        info.downloaded_bytes = ctx->downloadedBytes;
+        info.total_bytes = fileInfo.filesize;
+        info.progress = info.total_bytes > 0
+                            ? static_cast<float>(info.downloaded_bytes) /
+                                  static_cast<float>(info.total_bytes)
+                            : 0.0f;
+        ctx->listener->on_progress(info);
     }
 
     // 尝试从源地址下载
@@ -435,9 +442,15 @@ void ED2KHandler::delegateDownload(std::shared_ptr<TaskContext> ctx, const std::
 
             // 定期通知进度
             if (waitCount % 10 == 0 && ctx->listener) {
-                ctx->listener->on_progress(ctx->task->id(),
-                                          ctx->task->downloaded_bytes(),
-                                          ctx->task->total_size());
+                ProgressInfo info;
+                info.task_id = ctx->task->id();
+                info.downloaded_bytes = ctx->task->downloaded_bytes();
+                info.total_bytes = ctx->task->total_bytes();
+                info.progress = info.total_bytes > 0
+                                    ? static_cast<float>(info.downloaded_bytes) /
+                                          static_cast<float>(info.total_bytes)
+                                    : 0.0f;
+                ctx->listener->on_progress(info);
             }
         }
     } catch (const std::exception& e) {

@@ -99,22 +99,33 @@ endif()
 
 if(FALCON_ENABLE_ED2K)
     target_sources(falcon_protocols_tests PRIVATE unit/ed2k_plugin_test.cpp)
+    # 插件头是私有的（不在公共 include 目录），直接引用插件源目录
+    target_include_directories(falcon_protocols_tests
+                               PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../plugins/ed2k)
 endif()
 
 if(FALCON_ENABLE_FLASHGET)
     target_sources(falcon_protocols_tests PRIVATE unit/flashget_plugin_test.cpp)
+    target_include_directories(falcon_protocols_tests
+                               PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../plugins/flashget)
 endif()
 
 if(FALCON_ENABLE_HLS)
     target_sources(falcon_protocols_tests PRIVATE unit/hls_plugin_test.cpp)
+    target_include_directories(falcon_protocols_tests
+                               PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../plugins/hls)
 endif()
 
 if(FALCON_ENABLE_THUNDER)
     target_sources(falcon_protocols_tests PRIVATE unit/thunder_plugin_test.cpp)
+    target_include_directories(falcon_protocols_tests
+                               PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../plugins/thunder)
 endif()
 
 if(FALCON_ENABLE_QQDL)
     target_sources(falcon_protocols_tests PRIVATE unit/qqdl_plugin_test.cpp)
+    target_include_directories(falcon_protocols_tests
+                               PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../plugins/qqdl)
 endif()
 
 # Metalink 解析单测(handler e2e 挂到下方 falcon_http_tests 定义之后)

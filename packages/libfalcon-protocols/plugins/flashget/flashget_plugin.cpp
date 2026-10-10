@@ -56,7 +56,7 @@ bool FlashGetHandler::can_handle(const std::string& url) const {
 }
 
 FileInfo FlashGetHandler::get_file_info(const std::string& url,
-                                        const DownloadOptions& options) {
+                                        const DownloadOptions& /*options*/) {
     FileInfo info;
     info.url = url;
     info.supports_resume = true;
@@ -245,7 +245,7 @@ std::string FlashGetHandler::base64_decode(const std::string& encoded) {
         throw std::runtime_error("Base64 decode failed");
     }
 
-    decoded.resize(actual_len);
+    decoded.resize(static_cast<size_t>(actual_len));
     return decoded;
 }
 
@@ -285,7 +285,9 @@ void FlashGetHandler::delegateDownload(std::shared_ptr<TaskContext> ctx) {
 
     // 通知开始下载
     if (ctx->listener) {
-        ctx->listener->on_progress(ctx->task->id(), 0, 0);
+        ProgressInfo info;
+        info.task_id = ctx->task->id();
+        ctx->listener->on_progress(info);
     }
 
     try {
@@ -311,9 +313,15 @@ void FlashGetHandler::delegateDownload(std::shared_ptr<TaskContext> ctx) {
 
             // 定期通知进度
             if (waitCount % 10 == 0 && ctx->listener) {
-                ctx->listener->on_progress(ctx->task->id(),
-                                          ctx->task->downloaded_bytes(),
-                                          ctx->task->total_size());
+                ProgressInfo info;
+                info.task_id = ctx->task->id();
+                info.downloaded_bytes = ctx->task->downloaded_bytes();
+                info.total_bytes = ctx->task->total_bytes();
+                info.progress = info.total_bytes > 0
+                                    ? static_cast<float>(info.downloaded_bytes) /
+                                          static_cast<float>(info.total_bytes)
+                                    : 0.0f;
+                ctx->listener->on_progress(info);
             }
         }
     } catch (const std::exception& e) {

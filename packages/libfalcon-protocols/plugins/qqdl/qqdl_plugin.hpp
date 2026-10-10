@@ -101,6 +101,11 @@ private:
     std::string decodeQQUrl(const std::string& encoded);
 
     /**
+     * @brief Base64 解码
+     */
+    static std::string base64_decode(const std::string& encoded);
+
+    /**
      * @brief 下载线程主函数
      */
     void downloadThreadMain(std::shared_ptr<TaskContext> ctx);

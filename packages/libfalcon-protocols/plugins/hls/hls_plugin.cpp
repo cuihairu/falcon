@@ -54,11 +54,10 @@ bool HLSHandler::can_handle(const std::string& url) const {
 }
 
 FileInfo HLSHandler::get_file_info(const std::string& url,
-                                    const DownloadOptions& options) {
+                                    const DownloadOptions& /*options*/) {
     FileInfo info;
     info.url = url;
     info.supports_resume = true;
-    info.supports_segments = true;
     info.filename = "stream";  // HLS 通常需要从播放列表解析文件名
     info.total_size = 0;  // 需要解析播放列表才能知道总大小
 
@@ -330,7 +329,9 @@ void HLSHandler::downloadAllSegments(std::shared_ptr<TaskContext> ctx) {
     segmentFiles.reserve(ctx->segments.size());
 
     // 创建临时目录
-    std::filesystem::path tempDir = std::filesystem::temp_directory_path() / "falcon_hls_" + std::to_string(ctx->task->id());
+    std::filesystem::path tempDir =
+        std::filesystem::temp_directory_path() /
+        ("falcon_hls_" + std::to_string(ctx->task->id()));
     std::error_code ec;
     std::filesystem::create_directories(tempDir, ec);
 
@@ -360,7 +361,8 @@ void HLSHandler::downloadAllSegments(std::shared_ptr<TaskContext> ctx) {
                     std::string segmentFile = (tempDir / ("segment_" + std::to_string(j) + ".ts")).string();
                     std::ofstream out(segmentFile, std::ios::binary);
                     if (out) {
-                        out.write(reinterpret_cast<const char*>(data.data()), data.size());
+                        out.write(reinterpret_cast<const char*>(data.data()),
+                                  static_cast<std::streamsize>(data.size()));
                         out.close();
 
                         {
@@ -372,7 +374,15 @@ void HLSHandler::downloadAllSegments(std::shared_ptr<TaskContext> ctx) {
 
                         // 通知进度
                         if (ctx->listener) {
-                            ctx->listener->on_progress(ctx->task->id(), totalBytes.load(), ctx->totalSize);
+                            ProgressInfo info;
+                            info.task_id = ctx->task->id();
+                            info.downloaded_bytes = totalBytes.load();
+                            info.total_bytes = ctx->totalSize;
+                            info.progress = info.total_bytes > 0
+                                                ? static_cast<float>(info.downloaded_bytes) /
+                                                      static_cast<float>(info.total_bytes)
+                                                : 0.0f;
+                            ctx->listener->on_progress(info);
                         }
                     }
                 } catch (const std::exception& e) {
@@ -399,8 +409,9 @@ void HLSHandler::downloadAllSegments(std::shared_ptr<TaskContext> ctx) {
             FALCON_LOG_INFO("Successfully merged {} segments to: {}", segmentFiles.size(), outputFile);
 
             // 标记任务完成
+            ctx->task->set_status(TaskStatus::Completed);
             if (ctx->listener) {
-                ctx->listener->on_complete(ctx->task->id());
+                ctx->listener->on_completed(ctx->task->id(), outputFile);
             }
         } else {
             throw std::runtime_error("Failed to merge segments");

@@ -209,7 +209,6 @@ endif()
 
 # Thunder protocol
 if(FALCON_ENABLE_THUNDER)
-    add_subdirectory(plugins/thunder)
     target_sources(falcon_protocols PRIVATE plugins/thunder/thunder_plugin.cpp)
     target_compile_definitions(falcon_protocols PRIVATE FALCON_ENABLE_THUNDER_PLUGIN)
 endif()
