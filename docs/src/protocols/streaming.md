@@ -21,14 +21,13 @@ cmake -B build -S . -DFALCON_ENABLE_HLS=ON
 # HLS 播放列表
 falcon-cli "https://example.com/playlist.m3u8" -o video.mp4
 
-# 主播放列表
-falcon-cli "https://example.com/master.m3u8" -o best.mp4
-
 # 通过代理并附加头部
 falcon-cli "https://example.com/playlist.m3u8" \
   --proxy http://proxy:8080 \
   --header "Authorization: Bearer TOKEN"
 ```
+
+> 主播放列表（master.m3u8，多码率变体选择）当前插件未实现，请直接使用媒体播放列表。
 
 ## C++ API
 

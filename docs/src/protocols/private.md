@@ -1,6 +1,6 @@
 # 私有协议
 
-Falcon 代码库中包含迅雷、QQ 旋风、快车等私有协议插件实现，但这些插件在顶层 CMake 中默认是关闭的。
+Falcon 代码库中包含迅雷、QQ 旋风、快车、电驴、HLS/DASH 五个可选协议插件的实现，这些插件在顶层 CMake 中默认是关闭的。
 
 ## 支持范围
 
@@ -10,6 +10,7 @@ Falcon 代码库中包含迅雷、QQ 旋风、快车等私有协议插件实现�
 | QQ 旋风 | `qqlink://`、`qqdl://` | 关闭 |
 | 快车 | `flashget://`、`fg://` | 关闭 |
 | 电驴 | `ed2k://` | 关闭 |
+| HLS/DASH | `.m3u8` / `.mpd` 播放列表链接 | 关闭 |
 
 如果你希望在当前构建中启用它们，需要在配置阶段显式打开对应开关：
 
@@ -18,7 +19,8 @@ cmake -B build -S . \
   -DFALCON_ENABLE_THUNDER=ON \
   -DFALCON_ENABLE_QQDL=ON \
   -DFALCON_ENABLE_FLASHGET=ON \
-  -DFALCON_ENABLE_ED2K=ON
+  -DFALCON_ENABLE_ED2K=ON \
+  -DFALCON_ENABLE_HLS=ON
 ```
 
 ## 命令行示例
@@ -77,6 +79,11 @@ int main() {
 
 - 常见为 `fg://BASE64`
 - 也可能出现 `flashget://...`
+
+### HLS/DASH
+
+- `.m3u8`（HLS）与 `.mpd`（DASH）播放列表链接：插件按段逐个下载后合并。
+- 播放列表内的段地址多为相对路径，按播放列表所在 URL 解析。
 
 ## 注意事项
 
