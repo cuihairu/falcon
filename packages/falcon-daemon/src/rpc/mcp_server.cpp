@@ -147,7 +147,7 @@ const std::set<std::string>& allowed_add_uri_options() {
         "dir", "out", "header", "user-agent", "referer",
         "max-connection-per-server", "split", "continue", "max-download-limit",
         "allow-overwrite", "auto-file-renaming", "certificate", "private-key",
-        "seed-ratio", "seed-time"};
+        "seed-ratio", "seed-time", "file-allocation", "conditional-get"};
     return kAllowed;
 }
 
@@ -548,7 +548,8 @@ nlohmann::json mcp_tools_manifest() {
                     "Extra per-download options (aria2 key names). Allowed keys: dir, out, "
                     "header, user-agent, referer, max-connection-per-server, "
                     "split, continue, max-download-limit, allow-overwrite, "
-                    "auto-file-renaming, certificate, private-key, seed-ratio, seed-time.");
+                    "auto-file-renaming, certificate, private-key, seed-ratio, seed-time, "
+                    "file-allocation, conditional-get.");
                 return p;
             }(),
             json::array({"urls"}),

@@ -360,6 +360,10 @@ TEST_F(TaskStorageTest, OptionsSerialization) {
     record.options.proxy = "http://proxy:8080";
     record.options.headers["Authorization"] = "Bearer token123";
     record.options.headers["X-Custom"] = "value";
+    record.options.overwrite_existing = true;
+    record.options.auto_file_renaming = true;
+    record.options.conditional_get = true;
+    record.options.file_allocation = "prealloc";
 
     TaskId id = storage_->create_task(record);
 
@@ -373,6 +377,10 @@ TEST_F(TaskStorageTest, OptionsSerialization) {
     EXPECT_EQ(2, retrieved->options.headers.size());
     EXPECT_EQ("Bearer token123", retrieved->options.headers["Authorization"]);
     EXPECT_EQ("value", retrieved->options.headers["X-Custom"]);
+    EXPECT_TRUE(retrieved->options.overwrite_existing);
+    EXPECT_TRUE(retrieved->options.auto_file_renaming);
+    EXPECT_TRUE(retrieved->options.conditional_get);
+    EXPECT_EQ("prealloc", retrieved->options.file_allocation);
 }
 
 TEST_F(TaskStorageTest, P2spShareOptionRoundTripAndLegacyRows) {

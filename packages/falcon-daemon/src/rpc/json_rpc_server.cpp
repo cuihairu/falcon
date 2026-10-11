@@ -235,6 +235,8 @@ static json download_options_to_json(const falcon::DownloadOptions& options) {
     out["continue"] = options.resume_enabled ? "true" : "false";
     out["allow-overwrite"] = options.overwrite_existing ? "true" : "false";
     out["auto-file-renaming"] = options.auto_file_renaming ? "true" : "false";
+    out["file-allocation"] = options.file_allocation;
+    out["conditional-get"] = options.conditional_get ? "true" : "false";
     out["seed-ratio"] = std::to_string(options.seed_ratio);
     out["seed-time"] = std::to_string(options.seed_time_minutes);
     out["p2sp-share"] = options.p2sp_share;
@@ -1575,6 +1577,23 @@ nlohmann::json JsonRpcServer::dispatch_rpc(const std::string& method, nlohmann::
                 auto v = parse_bool_option(o["auto-file-renaming"]);
                 if (!v) return json{{"error", json{{"code", -32602}, {"message", "Invalid value for option: auto-file-renaming"}}}};
                 options.auto_file_renaming = *v;
+            }
+
+            // file-allocation / conditional-get：同样有真实引擎消费方
+            // （V2 request_group 预分配 / 条件下载门禁）。file-allocation
+            // 与 CLI 同 stance 裸字符串透传——非法值由引擎侧
+            // parse_file_allocation 按 none 处理（稀疏，不打扰），此处只
+            // 拒绝非字符串形状；conditional-get 走布尔解析
+            if (o.contains("file-allocation")) {
+                if (!o["file-allocation"].is_string()) {
+                    return json{{"error", json{{"code", -32602}, {"message", "Invalid value for option: file-allocation"}}}};
+                }
+                options.file_allocation = o["file-allocation"].get<std::string>();
+            }
+            if (o.contains("conditional-get")) {
+                auto v = parse_bool_option(o["conditional-get"]);
+                if (!v) return json{{"error", json{{"code", -32602}, {"message", "Invalid value for option: conditional-get"}}}};
+                options.conditional_get = *v;
             }
 
             // 做种策略（BitTorrent）：字符串（aria2 风格）与数值双

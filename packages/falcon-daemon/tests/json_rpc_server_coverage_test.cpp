@@ -1043,6 +1043,50 @@ TEST_F(JsonRpcCoverageTest, AddUriSplitContinueOverwriteRenamingOptions) {
     }
 }
 
+TEST_F(JsonRpcCoverageTest, AddUriFileAllocationConditionalGetOptions) {
+    start_server();
+
+    const std::string dir = ::testing::TempDir();
+    // file-allocation / conditional-get：与 split/continue 同族的"aria2
+    // 客户端长期发送、Falcon 静默忽略"收口。file-allocation 与 CLI 同
+    // stance 裸字符串透传（非法值由引擎侧 parse_file_allocation 按 none
+    // 处理，此处只拒绝非字符串形状）；conditional-get 走布尔双形态解析
+    struct OptionCase {
+        const char* key;
+        json value;
+        const char* echo;
+    };
+    int n = 0;
+    for (const auto& c : {OptionCase{"file-allocation", json("prealloc"), "prealloc"},
+                          OptionCase{"file-allocation", json("trunc"), "trunc"},
+                          OptionCase{"conditional-get", json("true"), "true"},
+                          OptionCase{"conditional-get", json(false), "false"}}) {
+        json opts = {{"dir", dir},
+                     {"out", "falcon-cov-alloc-" + std::to_string(n++) + ".bin"},
+                     {c.key, c.value}};
+        auto parsed = call("aria2.addUri",
+                           json::array({json::array({"test://local/alloc.bin"}), opts}));
+        ASSERT_TRUE(parsed.contains("result")) << c.key << ": " << parsed.dump();
+        const std::string gid = parsed["result"].get<std::string>();
+        auto got = call("aria2.getOption", json::array({gid}));
+        ASSERT_TRUE(got.contains("result")) << got.dump();
+        EXPECT_EQ(got["result"][c.key], std::string(c.echo)) << c.key;
+    }
+
+    // 非法形态 => -32602：布尔键拒绝数字与其余字面量，file-allocation
+    // 拒绝非字符串形状
+    for (const auto& [key, bad] :
+         {std::pair<const char*, json>{"conditional-get", json("yes")},
+          {"conditional-get", json(1)},
+          {"file-allocation", json(5)}}) {
+        json opts = {{"dir", dir}, {"out", "falcon-cov-alloc-bad.bin"}, {key, bad}};
+        auto parsed = call("aria2.addUri",
+                           json::array({json::array({"test://local/alloc-bad.bin"}), opts}));
+        ASSERT_TRUE(parsed.contains("error")) << key << ": " << parsed.dump();
+        EXPECT_EQ(parsed["error"]["code"], -32602) << key << ": " << parsed.dump();
+    }
+}
+
 // ===========================================================================
 // gid validation / task control
 // ===========================================================================

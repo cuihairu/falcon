@@ -6,11 +6,18 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-11 - addUri 同族选项补齐（file-allocation / conditional-get 映射 + 持久化补列）
+- **同族缺陷收口**：addUri 对两个同样有真实引擎消费方的 aria2 per-download 键长期静默忽略——`file-allocation`（V2 request_group 预分配门禁）与 `conditional-get`（条件下载门禁）补齐真实映射；MCP 白名单与 `falcon_add_download` docstring 同步加键（此前白名单未列、属键集现收口）
+- **形态与 stance**：`file-allocation` 与 CLI 同 stance 裸字符串透传（非法值由引擎侧 `parse_file_allocation` 按 none 处理——稀疏不打扰），addUri 侧只拒绝非字符串形状；`conditional-get` 走既有 `parse_bool_option`（JSON bool / "true"/"false" 双形态）。`getOption` 回显：`file-allocation` 原样字符串、`conditional-get` 字符串布尔——与既有 aria2 字符串值形态一致
+- **持久化补列（取代 2026-10-11 上条「conditional_get/file_allocation 不落列」立场）**：addUri 映射即真实置位点（与上条 `auto_file_renaming` 同逻辑）——`task_storage.cpp` options_json 增两键往返，重启恢复生效；上条「无置位点故不落列」的前提至此消失
+- **测试**：`AddUriFileAllocationConditionalGetOptions`（coverage 92 → 93）——4 组双形态值 addUri→getOption 往返断言 + 3 组非法形态 -32602；`OptionsSerialization` 扩展钉 `overwrite_existing`/`auto_file_renaming`/`conditional_get`/`file_allocation` 四字段持久化往返（此前仅钉 4 字段）；既有单测零改动（无整对象 getOption 断言，逐字段断言不受新增 echo 键影响）
+- 验证：build-plugins（CI 等价树）四套件 `JsonRpc|TaskStorage|StorageListener|Main` 227/227 绿（含新用例单跑绿；`id1` unused-variable warning 为既有、stash 对照实证）
+
 ### 2026-10-11 - addUri per-download 选项映射收口（白名单广告-零映射缺陷 + 解析硬化 + 持久化补列）
 - **契约缺陷收口**：MCP `falcon_add_download` 白名单与 docstring 广告的 `split`/`continue`/`allow-overwrite`/`auto-file-renaming` 此前在 `aria2.addUri` 零映射（静默丢弃）——addUri 补齐 4 键真实映射（`split`→`max_connections`、`continue`→`resume_enabled` 有 V1 消费方；`allow-overwrite`→`overwrite_existing`、`auto-file-renaming`→`auto_file_renaming` 为 V2 门禁消费，与 CLI 旗标同语义），`getOption` 以 aria2 字符串值形态回显
 - **`index-out` 白名单移除**：aria2 的 per-URI 输出名（多文件任务）在 Falcon 无对应语义，白名单放行等于广告静默无效键——现显式拒绝（"Unsupported option: index-out"）比静默吞掉更诚实
 - **解析硬化（错误码语义修正）**：`parse_numeric_option`/`parse_bool_option` 永不抛——键存在但无法解析时 addUri 回 **-32602**（"Invalid value for option: <key>"），替代裸 `std::stoull` 抛 invalid_argument 被 dispatch 兜底成 -32603 Internal error 的错位语义；数值键拒绝负整数/布尔/垃圾文本（字符串前缀解析 "12abc"→12 与既有 seed 系键一致），布尔键仅接受 JSON bool 与 "true"/"false"（trim+小写），数值键接受字符串/整数双形态（aria2 惯例）
-- **持久化补列**：`task_storage.cpp` options_json 增 `auto_file_renaming` 往返（daemon 此前无置位点故未持久化，本批 addUri 映射即真实置位点，重启恢复需要）；`overwrite_existing` 已有。`conditional_get`/`file_allocation` 维持不落列（daemon 无置位点，文档化立场不变）
+- **持久化补列**：`task_storage.cpp` options_json 增 `auto_file_renaming` 往返（daemon 此前无置位点故未持久化，本批 addUri 映射即真实置位点，重启恢复需要）；`overwrite_existing` 已有。`conditional_get`/`file_allocation` 维持不落列（daemon 无置位点——后续 addUri 映射落地后补齐，见下条）
 - **测试**：`AddUriSplitContinueOverwriteRenamingOptions`（coverage 91 → 92）——8 组双形态值经 addUri→getOption 往返断言 + 7 组非法形态 -32602 + 5 个既有数值键垃圾值回归钉子（旧路径 -32603）；mcp_server_test 零改动（无白名单枚举断言，仅 bogus-key 通用拒绝路径）
 - 验证：build-plugins（CI 等价树）三套件 `JsonRpc|TaskStorage|StorageListener` 189/189 绿 + 新用例单跑绿
 

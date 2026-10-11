@@ -703,6 +703,8 @@ private:
         j["create_directory"] = opts.create_directory;
         j["overwrite_existing"] = opts.overwrite_existing;
         j["auto_file_renaming"] = opts.auto_file_renaming;
+        j["conditional_get"] = opts.conditional_get;
+        j["file_allocation"] = opts.file_allocation;
 
         if (!opts.headers.empty()) {
             j["headers"] = opts.headers;
@@ -742,6 +744,8 @@ private:
         if (j.contains("create_directory")) opts.create_directory = j["create_directory"];
         if (j.contains("overwrite_existing")) opts.overwrite_existing = j["overwrite_existing"];
         if (j.contains("auto_file_renaming")) opts.auto_file_renaming = j["auto_file_renaming"];
+        if (j.contains("conditional_get")) opts.conditional_get = j["conditional_get"];
+        if (j.contains("file_allocation")) opts.file_allocation = j["file_allocation"];
 
         if (j.contains("headers")) {
             for (auto& [k, v] : j["headers"].items()) {
