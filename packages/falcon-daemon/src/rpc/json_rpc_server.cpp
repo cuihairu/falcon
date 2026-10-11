@@ -8,6 +8,7 @@
 #endif
 
 #include <falcon/detail/injection.hpp>
+#include <falcon/download_options.hpp>
 #include <falcon/download_task.hpp>
 #include <falcon/logger.hpp>
 
@@ -230,6 +231,7 @@ static json download_options_to_json(const falcon::DownloadOptions& options) {
     out["retry-wait"] = std::to_string(options.retry_delay_seconds);
     out["timeout"] = std::to_string(options.timeout_seconds);
     out["max-connection-per-server"] = std::to_string(options.max_connections);
+    out["min-split-size"] = std::to_string(options.min_segment_size);
     out["max-download-limit"] = std::to_string(options.speed_limit);
     out["split"] = std::to_string(options.max_connections);
     out["continue"] = options.resume_enabled ? "true" : "false";
@@ -1518,11 +1520,9 @@ nlohmann::json JsonRpcServer::dispatch_rpc(const std::string& method, nlohmann::
             if (o.contains("all-proxy-passwd") && o["all-proxy-passwd"].is_string()) options.proxy_password = o["all-proxy-passwd"].get<std::string>();
 
             if (o.contains("check-certificate")) {
-                if (o["check-certificate"].is_boolean()) {
-                    options.verify_ssl = o["check-certificate"].get<bool>();
-                } else if (o["check-certificate"].is_string()) {
-                    options.verify_ssl = (o["check-certificate"].get<std::string>() != "false");
-                }
+                auto v = parse_bool_option(o["check-certificate"]);
+                if (!v) return json{{"error", json{{"code", -32602}, {"message", "Invalid value for option: check-certificate"}}}};
+                options.verify_ssl = *v;
             }
 
             if (o.contains("max-tries")) {
@@ -1544,6 +1544,17 @@ nlohmann::json JsonRpcServer::dispatch_rpc(const std::string& method, nlohmann::
                 auto v = parse_numeric_option(o["max-connection-per-server"]);
                 if (!v) return json{{"error", json{{"code", -32602}, {"message", "Invalid value for option: max-connection-per-server"}}}};
                 options.max_connections = *v;
+            }
+            // min-split-size（aria2 同名键）：分段最小段长，接受裸字
+            // 节数与 K/M/G/T 后缀形态（复用核心 parse_size_with_suffix，
+            // 永不抛，溢出即 -32602）
+            if (o.contains("min-split-size")) {
+                if (!o["min-split-size"].is_string()) {
+                    return json{{"error", json{{"code", -32602}, {"message", "Invalid value for option: min-split-size"}}}};
+                }
+                auto v = falcon::parse_size_with_suffix(o["min-split-size"].get<std::string>());
+                if (!v) return json{{"error", json{{"code", -32602}, {"message", "Invalid value for option: min-split-size"}}}};
+                options.min_segment_size = static_cast<std::size_t>(*v);
             }
             if (o.contains("max-download-limit")) {
                 auto v = parse_numeric_option(o["max-download-limit"]);

@@ -6,6 +6,11 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-11 - parse_size_bytes 收敛到核心严格解析器
+- `--max-size`/`--min-split-size` 等尺寸旗标的 `parse_size_bytes` 改为 `falcon::parse_size_with_suffix` 的抛异常薄壳（nullopt → `std::invalid_argument`）；空串返回 0 契约不变
+- 严格化差异：旧 stoull 前缀解析静默接受 "12abc"→12、"+5" 符号放行；现拒绝并报 usage error。四后缀与 1024 幂语义不变
+- 测试：arg_parser_test 补 `ParseSizeBytes.GarbageThrows` 6 形态（"abc"/"12abc"/"M"/"1.5M"/"1X"/溢出）；全套件 97 → 105
+
 ### 2025-12-21 - 初始化模块架构
 - 创建 CLI 项目结构
 - 定义命令行参数设计

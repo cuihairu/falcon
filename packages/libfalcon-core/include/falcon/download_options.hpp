@@ -1,7 +1,10 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
+#include <limits>
 #include <map>
+#include <optional>
 #include <string>
 
 namespace falcon {
@@ -140,6 +143,52 @@ struct DownloadOptions {
     /// Engines and other handlers ignore this field entirely.
     std::string p2sp_share;
 };
+
+/// Parse a byte-size string with an optional single-letter binary suffix
+/// ("1048576", "1M", "512k", "2G", "1T"; suffix case-insensitive, powers
+/// of 1024). Plain decimal digits only — no signs, whitespace, or
+/// fractional values. Returns nullopt on empty input, a bare/unknown
+/// suffix, any non-digit character, or overflow. Never throws.
+/// Shared by the CLI size flags (which turn nullopt into a usage error)
+/// and the daemon addUri "min-split-size" mapping (which turns nullopt
+/// into -32602).
+inline std::optional<std::uint64_t> parse_size_with_suffix(const std::string& text) {
+    if (text.empty()) return std::nullopt;
+
+    std::uint64_t multiplier = 1;
+    std::string digits = text;
+    const char suffix = digits.back();
+    if (suffix == 'K' || suffix == 'k') {
+        multiplier = 1024ULL;
+        digits.pop_back();
+    } else if (suffix == 'M' || suffix == 'm') {
+        multiplier = 1024ULL * 1024ULL;
+        digits.pop_back();
+    } else if (suffix == 'G' || suffix == 'g') {
+        multiplier = 1024ULL * 1024ULL * 1024ULL;
+        digits.pop_back();
+    } else if (suffix == 'T' || suffix == 't') {
+        multiplier = 1024ULL * 1024ULL * 1024ULL * 1024ULL;
+        digits.pop_back();
+    }
+    if (digits.empty()) return std::nullopt;  // bare suffix ("M" alone)
+
+    std::uint64_t value = 0;
+    for (const char c : digits) {
+        if (c < '0' || c > '9') return std::nullopt;
+        const std::uint64_t digit = static_cast<std::uint64_t>(c - '0');
+        // Base-10 accumulate: value * 10 + digit must not overflow uint64_t.
+        if (value > (std::numeric_limits<std::uint64_t>::max() - digit) / 10) {
+            return std::nullopt;
+        }
+        value = value * 10 + digit;
+    }
+    // Apply the suffix multiplier once, with its own overflow guard.
+    if (value > std::numeric_limits<std::uint64_t>::max() / multiplier) {
+        return std::nullopt;
+    }
+    return value * multiplier;
+}
 
 /// Global engine configuration
 struct EngineConfig {

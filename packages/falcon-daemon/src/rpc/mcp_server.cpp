@@ -145,7 +145,8 @@ json wrap_tool_result(json&& dispatched) {
 const std::set<std::string>& allowed_add_uri_options() {
     static const std::set<std::string> kAllowed = {
         "dir", "out", "header", "user-agent", "referer",
-        "max-connection-per-server", "split", "continue", "max-download-limit",
+        "max-connection-per-server", "min-split-size", "check-certificate",
+        "split", "continue", "max-download-limit",
         "allow-overwrite", "auto-file-renaming", "certificate", "private-key",
         "seed-ratio", "seed-time", "file-allocation", "conditional-get"};
     return kAllowed;
@@ -547,8 +548,9 @@ nlohmann::json mcp_tools_manifest() {
                     "object",
                     "Extra per-download options (aria2 key names). Allowed keys: dir, out, "
                     "header, user-agent, referer, max-connection-per-server, "
-                    "split, continue, max-download-limit, allow-overwrite, "
-                    "auto-file-renaming, certificate, private-key, seed-ratio, seed-time, "
+                    "min-split-size, check-certificate, split, continue, "
+                    "max-download-limit, allow-overwrite, auto-file-renaming, "
+                    "certificate, private-key, seed-ratio, seed-time, "
                     "file-allocation, conditional-get.");
                 return p;
             }(),

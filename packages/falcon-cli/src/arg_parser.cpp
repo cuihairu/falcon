@@ -5,10 +5,13 @@
 
 #include "arg_parser.hpp"
 
+#include <falcon/download_options.hpp>
+
 #include <algorithm>
 #include <cctype>
 #include <fstream>
 #include <iostream>
+#include <stdexcept>
 
 namespace falcon::cli {
 
@@ -33,24 +36,15 @@ void trim_ascii_whitespace(std::string& line) {
 
 falcon::Bytes parse_size_bytes(std::string size_str) {
     if (size_str.empty()) return 0;
-
-    std::size_t multiplier = 1;
-    char suffix = size_str.back();
-    if (suffix == 'K' || suffix == 'k') {
-        multiplier = 1024;
-        size_str.pop_back();
-    } else if (suffix == 'M' || suffix == 'm') {
-        multiplier = 1024 * 1024;
-        size_str.pop_back();
-    } else if (suffix == 'G' || suffix == 'g') {
-        multiplier = 1024 * 1024 * 1024;
-        size_str.pop_back();
-    } else if (suffix == 'T' || suffix == 't') {
-        multiplier = 1024ULL * 1024ULL * 1024ULL * 1024ULL;
-        size_str.pop_back();
+    // Core helper does strict parsing; CLI surfaces failures as a usage
+    // error (the previous stoull-based version threw on garbage input in
+    // the same spirit — it just accepted a few extra junk forms such as
+    // "12abc" prefixes and "+5" signs, which strict parsing now rejects).
+    const auto parsed = falcon::parse_size_with_suffix(size_str);
+    if (!parsed) {
+        throw std::invalid_argument("invalid size: " + size_str);
     }
-
-    return static_cast<falcon::Bytes>(std::stoull(size_str) * multiplier);
+    return *parsed;
 }
 
 falcon::TaskPriority parse_priority(const std::string& value) {

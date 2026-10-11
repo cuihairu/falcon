@@ -6,6 +6,12 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-11 - 共享严格尺寸解析器 parse_size_with_suffix（download_options.hpp）
+- inline 纯函数：十进制数字 + 单个可选 K/M/G/T 二进制后缀（大小写不敏感、1024 幂），空串/裸后缀/非数字字符/前缀垃圾（"12abc"）/符号/小数/溢出一律 `std::nullopt`，永不抛
+- 溢出防护两段：十进制累加 `value > (max - digit)/10` 回落 + 尾乘后缀 `value > max/multiplier` 回落（初始批次把后缀乘数误放进逐位循环 `value = value*multiplier + digit`，"100"→1 被测试当场拦截后修正为基 10 累加 + 一次性尾乘）
+- 消费方：CLI `parse_size_bytes`（nullopt → `std::invalid_argument` usage error）与 daemon addUri `min-split-size`（nullopt → -32602）单一事实源
+- 测试：新文件 `tests/unit/download_options_test.cpp` 4 用例（纯数字/四后缀大小写/垃圾 8 形态/溢出含 "16777215T" 恰好可表示 = 2^64−2^40 边界对）
+
 ### 2026-09-14 - 覆盖率批次 H：task_manager.cpp 75 → 13 miss
 - 新 `tests/unit/task_manager_edges_test.cpp` 21 用例（挂
   falcon_core_tests）：状态持久化容错全链（损坏状态文件按

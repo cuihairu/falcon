@@ -46,6 +46,7 @@ endfunction()
 # Core unit tests (links only falcon_core)
 # ============================================================================
 add_executable(falcon_core_tests
+    unit/download_options_test.cpp
     unit/download_task_test.cpp
     unit/task_manager_test.cpp
     unit/task_manager_persistence_test.cpp

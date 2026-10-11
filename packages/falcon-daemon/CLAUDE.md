@@ -6,6 +6,14 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-11 - addUri min-split-size 映射 + check-certificate 解析硬化（共享核心严格尺寸解析器）
+- **`min-split-size` 补齐真实映射**（此前白名单外静默丢弃）：addUri 请求字符串尺寸（K/M/G/T 后缀二进制幂，大小写不敏感；aria2 风格——尺寸必带后缀才有字符串形态，非字符串形状直接 -32602，有意不做数值双形态）→ 共享核心 `falcon::parse_size_with_suffix` 严格解析 → `options.min_segment_size`；解析失败（垃圾/裸后缀/前缀解析如 "12abc"/溢出）回 -32602 "Invalid value for option: min-split-size"；`getOption` 以 aria2 字符串形态回显（`std::to_string`）
+- **`check-certificate` 解析硬化**：旧实现任意非 "false" 字符串一概置 true（"yes"/垃圾文本静默变 true）→ 改既有 `parse_bool_option`（JSON bool / "true"/"false" 双形态），非法值 -32602；`verify_ssl` 本就随 options_json 持久化，零存储改动
+- **核心共享解析器 `parse_size_with_suffix`**（`download_options.hpp` inline，永不抛）：CLI `parse_size_bytes` 与 daemon addUri 两消费方单一事实源——CLI 侧 nullopt → `std::invalid_argument` usage error（旧 stoull 前缀解析 "12abc"→12、"+5" 符号放行的宽松语义收紧为拒绝），daemon 侧 nullopt → -32602。溢出防护两段：十进制累加 `value > (max - digit)/10` + 尾乘后缀 `value > max/multiplier`
+- **MCP 同步**：`falcon_add_download` options 白名单与 docstring 加 `min-split-size`（与 addUri 键集对齐）；`falcon_get_task_options` 零改动（逐键透传 daemon 回显）
+- **测试**：`AddUriMinSplitSizeAndCheckCertificateOptions`（coverage 93 → 94）——5 组合法值 addUri→getOption 往返（"1M"→"1048576"/"524288"/"2g"→"2147483648"/check-certificate bool true/"false" 字符串）+ 8 组非法形态 -32602（min-split-size 整数形状/"abc"/"12abc"/"M"/"1.5M"/溢出 "999…999G"；check-certificate "yes"/整数 1）；核心新文件 `download_options_test.cpp` 4 用例（CLI 侧 `ParseSizeBytes.GarbageThrows` 6 形态钉严格化）
+- 验证：build-plugins（CI 等价树）`JsonRpc|TaskStorage|StorageListener|Main` 252/252 绿 + falcon_core_tests 446/446 + falcon_cli_tests 105/105（含三新 filter 单跑绿）
+
 ### 2026-10-11 - addUri 同族选项补齐（file-allocation / conditional-get 映射 + 持久化补列）
 - **同族缺陷收口**：addUri 对两个同样有真实引擎消费方的 aria2 per-download 键长期静默忽略——`file-allocation`（V2 request_group 预分配门禁）与 `conditional-get`（条件下载门禁）补齐真实映射；MCP 白名单与 `falcon_add_download` docstring 同步加键（此前白名单未列、属键集现收口）
 - **形态与 stance**：`file-allocation` 与 CLI 同 stance 裸字符串透传（非法值由引擎侧 `parse_file_allocation` 按 none 处理——稀疏不打扰），addUri 侧只拒绝非字符串形状；`conditional-get` 走既有 `parse_bool_option`（JSON bool / "true"/"false" 双形态）。`getOption` 回显：`file-allocation` 原样字符串、`conditional-get` 字符串布尔——与既有 aria2 字符串值形态一致

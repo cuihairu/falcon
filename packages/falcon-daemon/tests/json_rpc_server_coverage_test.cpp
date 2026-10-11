@@ -1087,6 +1087,59 @@ TEST_F(JsonRpcCoverageTest, AddUriFileAllocationConditionalGetOptions) {
     }
 }
 
+TEST_F(JsonRpcCoverageTest, AddUriMinSplitSizeAndCheckCertificateOptions) {
+    start_server();
+
+    const std::string dir = ::testing::TempDir();
+    // min-split-size：aria2 同名键，之前 addUri 零映射（aria2 客户端
+    // 长期发送即被静默丢弃）。接受裸字节数与 K/M/G/T 后缀，严格全串
+    // 数字形态（无前缀解析、无溢出放行）；check-certificate 收紧为
+    // 布尔双形态解析——旧实现把任何非 "false" 的字符串当 true，垃圾
+    // 值静默放行
+    struct OptionCase {
+        const char* key;
+        json value;
+        const char* echo;
+    };
+    int n = 0;
+    for (const auto& c : {OptionCase{"min-split-size", json("1M"), "1048576"},
+                          OptionCase{"min-split-size", json("524288"), "524288"},
+                          OptionCase{"min-split-size", json("2g"), "2147483648"},
+                          OptionCase{"check-certificate", json(true), "true"},
+                          OptionCase{"check-certificate", json("false"), "false"}}) {
+        json opts = {{"dir", dir},
+                     {"out", "falcon-cov-split-" + std::to_string(n++) + ".bin"},
+                     {c.key, c.value}};
+        auto parsed = call("aria2.addUri",
+                           json::array({json::array({"test://local/split.bin"}), opts}));
+        ASSERT_TRUE(parsed.contains("result")) << c.key << ": " << c.value.dump() << " => "
+                                               << parsed.dump();
+        const std::string gid = parsed["result"].get<std::string>();
+        auto got = call("aria2.getOption", json::array({gid}));
+        ASSERT_TRUE(got.contains("result")) << got.dump();
+        EXPECT_EQ(got["result"][c.key], std::string(c.echo)) << c.key;
+    }
+
+    // 非法形态 => -32602：min-split-size 拒绝非字符串形状、非数字、
+    // 裸后缀与溢出；check-certificate 拒绝其余字面量与数字
+    for (const auto& [key, bad] :
+         {std::pair<const char*, json>{"min-split-size", json(5)},
+          {"min-split-size", json("abc")},
+          {"min-split-size", json("12abc")},
+          {"min-split-size", json("M")},
+          {"min-split-size", json("1.5M")},
+          {"min-split-size", json("999999999999999999999G")},
+          {"check-certificate", json("yes")},
+          {"check-certificate", json(1)}}) {
+        json opts = {{"dir", dir}, {"out", "falcon-cov-split-bad.bin"}, {key, bad}};
+        auto parsed = call("aria2.addUri",
+                           json::array({json::array({"test://local/split-bad.bin"}), opts}));
+        ASSERT_TRUE(parsed.contains("error")) << key << ": " << bad.dump() << " => "
+                                              << parsed.dump();
+        EXPECT_EQ(parsed["error"]["code"], -32602) << key << ": " << parsed.dump();
+    }
+}
+
 // ===========================================================================
 // gid validation / task control
 // ===========================================================================

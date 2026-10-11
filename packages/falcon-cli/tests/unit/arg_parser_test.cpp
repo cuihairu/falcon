@@ -10,6 +10,7 @@
 #include <falcon/types.hpp>
 
 #include <algorithm>
+#include <stdexcept>
 #include <string>
 #include <sstream>
 #include <vector>
@@ -84,6 +85,19 @@ TEST(ParseSizeBytes, Terabytes) {
 TEST(ParseSizeBytes, LargeValues) {
     EXPECT_EQ(parse_size_bytes("100M"), 100ULL * 1024ULL * 1024ULL);
     EXPECT_EQ(parse_size_bytes("1024K"), 1024ULL * 1024ULL);  // 1024 KB = 1 MB
+}
+
+TEST(ParseSizeBytes, GarbageThrows) {
+    // parse_size_bytes delegates to the strict core helper
+    // (parse_size_with_suffix) and turns nullopt into a usage error.
+    // Legacy stoull-based parsing silently accepted a few junk forms
+    // ("12abc" prefix parse, "+5" sign) — strict parsing rejects them.
+    EXPECT_THROW(parse_size_bytes("abc"), std::invalid_argument);
+    EXPECT_THROW(parse_size_bytes("12abc"), std::invalid_argument);
+    EXPECT_THROW(parse_size_bytes("M"), std::invalid_argument);
+    EXPECT_THROW(parse_size_bytes("1.5M"), std::invalid_argument);
+    EXPECT_THROW(parse_size_bytes("1X"), std::invalid_argument);
+    EXPECT_THROW(parse_size_bytes("999999999999999999999G"), std::invalid_argument);
 }
 
 // ============================================================================
