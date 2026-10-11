@@ -273,12 +273,22 @@ public:
 
     void register_handler(std::unique_ptr<IProtocolHandler> handler) {
         if (handler) {
+            // 注册时即接线扩展接口（委托类插件注册后立即可拿到 registry）
+            setup_handler_registry(handler.get(), &protocol_registry_);
             protocol_registry_.register_handler(std::move(handler));
         }
     }
 
     void register_handler_factory(ProtocolHandlerFactory factory) {
-        handler_factories_.push_back(factory);
+        // 立即创建并注册：此前的入队路径只在构造期被消费
+        // （load_all_handlers 在构造函数中执行，此时队列恒空），
+        // 构造后注册的工厂永远不会被调用——静默无效
+        if (!factory) return;
+        auto handler = factory();
+        if (handler) {
+            setup_handler_registry(handler.get(), &protocol_registry_);
+            protocol_registry_.register_handler(std::move(handler));
+        }
     }
 
     std::vector<std::string> get_supported_protocols() const {
@@ -363,18 +373,6 @@ public:
 
         // 为已注册的处理器设置 registry
         setup_handler_registry(&protocol_registry_);
-
-        // 加载工厂函数创建的处理器
-        for (auto& factory : handler_factories_) {
-            if (factory) {
-                auto handler = factory();
-                if (handler) {
-                    // 在注册前设置 registry
-                    setup_handler_registry(handler.get(), &protocol_registry_);
-                    protocol_registry_.register_handler(std::move(handler));
-                }
-            }
-        }
     }
 
     void setup_handler_registry(IProtocolHandler* handler, ProtocolRegistry* registry) {
@@ -401,7 +399,6 @@ private:
     EventDispatcher event_dispatcher_;
     TaskManager task_manager_;
 
-    std::vector<ProtocolHandlerFactory> handler_factories_;
     std::atomic<BytesPerSecond> global_speed_limiter_;
     std::atomic<TaskId> next_task_id_;
 };

@@ -6,6 +6,11 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-12 - 协议扩展接线收口（get_extension 单测 + 构造后注册路径修复 + 工厂死路径激活）
+- `get_extension()` 辅助函数（protocol_handler_extension.hpp，dynamic_cast 检测扩展接口）此前零直接测试覆盖 → 新 `tests/unit/protocol_handler_extension_test.cpp` 7 用例挂 falcon_core_tests：dynamic_cast 契约三态（普通 handler → nullptr / 扩展 handler → 非空且可独立经接口接线 / nullptr 安全）+ 引擎接线四态（register_handler 拿到的 registry 恰为收留自己的表 / 经接线 registry 委托查询目标协议（按目标 URL scheme 查表，thunder 形态）/ 工厂创建的委托 handler 同样接线 / 空工厂·空返回值·null handler 防御）
+- 两处构造后注册陷阱修复（`Impl::register_handler` / `register_handler_factory`）：① register_handler 不调 setup_handler_registry——构造后注册的委托类插件拿不到 registry（仅构造期 load_all_handlers 路径接线）；② register_handler_factory 只入队 handler_factories_，而 load_all_handlers 仅在构造函数中执行（此时队列恒空）→ 构造后注册的工厂永不执行、静默无效（既有 api 测试 `RegisterHandlerFactoryDoesNotCrash` 注释自证"factory mechanism is complex"绕开断言）。修复：注册时即创建+接线+注册；load_all_handlers 死工厂循环与 handler_factories_ 死容器删除。`ProtocolHandlerFactory` 是裸函数指针（非 std::function），测试经命名函数 + 文件级指针传出创建结果
+- 验证：falcon_core_tests 453/453（含新 7 用例）+ falcon_protocols_tests 全量（PerformanceLargeFile 负载抖动串行复跑过，既有惯犯）+ ASan 树 extension/engine_api/registry 54 用例零告警
+
 ### 2026-10-11 - 共享严格尺寸解析器 parse_size_with_suffix（download_options.hpp）
 - inline 纯函数：十进制数字 + 单个可选 K/M/G/T 二进制后缀（大小写不敏感、1024 幂），空串/裸后缀/非数字字符/前缀垃圾（"12abc"）/符号/小数/溢出一律 `std::nullopt`，永不抛
 - 溢出防护两段：十进制累加 `value > (max - digit)/10` 回落 + 尾乘后缀 `value > max/multiplier` 回落（初始批次把后缀乘数误放进逐位循环 `value = value*multiplier + digit`，"100"→1 被测试当场拦截后修正为基 10 累加 + 一次性尾乘）
