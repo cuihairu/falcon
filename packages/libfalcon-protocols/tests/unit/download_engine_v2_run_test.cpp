@@ -2140,6 +2140,15 @@ TEST(DownloadEngineV2RunTest, CancelThenSameIdReinjectNotPollutedByZombieCommand
     server.set_bodies(512, body_a, body_b);
 
     EngineConfigV2 config = fast_poll_config();
+    // cancel 使全部组到达终态后，run() 循环在 wait_when_idle=false 时会走
+    // 「所有任务已完成」退出分支（download_engine_v2.cpp:486）——退出瞬间
+    // 同 id 重注入的新组将滞留 WAITING，轮询超时后 ASSERT 提前返回，
+    // joinable std::thread 析构即 std::terminate（macOS CI 红面
+    // 38099748270 实锤：cancel →「所有任务已完成」→ 重注入 WAITING →
+    // 停机排水 → finished==false → terminating）。生产注入宿主
+    // （V2EngineHost）wait_when_idle=true 恒真，窗口生产不可达；本行是
+    // 测试拓扑对生产形态的忠实化，不是引擎缺陷。
+    config.wait_when_idle = true;
     DownloadEngineV2 engine(config);
 
     const std::string dir = run_test_temp_dir("cancel_reinject");
