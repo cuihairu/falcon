@@ -6,6 +6,14 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-11 - addUri per-download 选项映射收口（白名单广告-零映射缺陷 + 解析硬化 + 持久化补列）
+- **契约缺陷收口**：MCP `falcon_add_download` 白名单与 docstring 广告的 `split`/`continue`/`allow-overwrite`/`auto-file-renaming` 此前在 `aria2.addUri` 零映射（静默丢弃）——addUri 补齐 4 键真实映射（`split`→`max_connections`、`continue`→`resume_enabled` 有 V1 消费方；`allow-overwrite`→`overwrite_existing`、`auto-file-renaming`→`auto_file_renaming` 为 V2 门禁消费，与 CLI 旗标同语义），`getOption` 以 aria2 字符串值形态回显
+- **`index-out` 白名单移除**：aria2 的 per-URI 输出名（多文件任务）在 Falcon 无对应语义，白名单放行等于广告静默无效键——现显式拒绝（"Unsupported option: index-out"）比静默吞掉更诚实
+- **解析硬化（错误码语义修正）**：`parse_numeric_option`/`parse_bool_option` 永不抛——键存在但无法解析时 addUri 回 **-32602**（"Invalid value for option: <key>"），替代裸 `std::stoull` 抛 invalid_argument 被 dispatch 兜底成 -32603 Internal error 的错位语义；数值键拒绝负整数/布尔/垃圾文本（字符串前缀解析 "12abc"→12 与既有 seed 系键一致），布尔键仅接受 JSON bool 与 "true"/"false"（trim+小写），数值键接受字符串/整数双形态（aria2 惯例）
+- **持久化补列**：`task_storage.cpp` options_json 增 `auto_file_renaming` 往返（daemon 此前无置位点故未持久化，本批 addUri 映射即真实置位点，重启恢复需要）；`overwrite_existing` 已有。`conditional_get`/`file_allocation` 维持不落列（daemon 无置位点，文档化立场不变）
+- **测试**：`AddUriSplitContinueOverwriteRenamingOptions`（coverage 91 → 92）——8 组双形态值经 addUri→getOption 往返断言 + 7 组非法形态 -32602 + 5 个既有数值键垃圾值回归钉子（旧路径 -32603）；mcp_server_test 零改动（无白名单枚举断言，仅 bogus-key 通用拒绝路径）
+- 验证：build-plugins（CI 等价树）三套件 `JsonRpc|TaskStorage|StorageListener` 189/189 绿 + 新用例单跑绿
+
 ### 2026-10-10 - P2SP 阶段 2 收口：入站数据服务 + 查询注入镜像池 + NAT 过滤（§17）
 - **增量 1 入站只读数据服务**（`swarm_data_service.{hpp,cpp}`，8c7ee56）：`GET|HEAD /by-sha256/<64hex>` 回环语义（404 未知/400 非 hex/405 非 GET·HEAD/404 路径）+ `Range: bytes=a-b`（416 不可解析、越界截断）+ `Connection: close` 一连接一请求；`ISwarmDataRegistry` 由公告链填充（完成→SHA256→公告同一时点 register，删除/关闭/换内容 unregister/swap），注册的文件本体缺失 404；bind 地址从 `p2sp.advertise_addr` 派生（`make_data_service_config`，bind 失败仅告警不阻断 daemon）；accept 线程 + detached 连接线程台账（2026-10-01 纪律）+ stop 先 join accept 再 shutdown 存量 fd
 - **增量 2 查询注入 V2 镜像池**（e3bb66a/d141b95/102d4e1/ca09aa3）：`mirror_source.hpp` 公共接缝（`SwarmMirrorSourceFn`，protocols 不反向依赖 daemon，未注册 = 零查询面）；daemon 侧 provider（parse：node → `http://<addr>/by-sha256/<hex>`、url 仅 http/https 透传、去重、排除自身 node_id；NAT 过滤 `node_source_usable`：advertise 在位 + addr 含 ':' + direct==true；退避 30s×2^n cap 300s，抑制期不触网）；metalink 桥接仅 doc 镜像池 <2 才查询，swarm URL 去重后追加，总池 <2 回落串行；resume 忽略 swarm 漂移（不二次查询），坏源数据被整文件哈希拦截（d141b95 钉子）；查询面独立于 share.enabled（102d4e1：惰性共享 SwarmClient + start_mutex_ 幂等启动，做种关仍可查询消费）；停机摘缝先于引擎排水（在途查询持 shared_ptr 拷贝无悬垂）

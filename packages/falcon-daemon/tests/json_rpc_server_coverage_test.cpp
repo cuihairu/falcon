@@ -978,6 +978,71 @@ TEST_F(JsonRpcCoverageTest, AddUriP2spShareStrictValues) {
     }
 }
 
+TEST_F(JsonRpcCoverageTest, AddUriSplitContinueOverwriteRenamingOptions) {
+    start_server();
+
+    const std::string dir = ::testing::TempDir();
+    // split/continue/allow-overwrite/auto-file-renaming：addUri 从"白名单
+    // 广告但零映射（静默丢弃）"收口为真实映射。数值键接受字符串/整数双
+    // 形态，布尔键接受 "true"/"false" 字符串/JSON 布尔双形态；getOption
+    // 以 aria2 字符串值形态回显
+    struct OptionCase {
+        const char* key;
+        json value;
+        const char* echo;
+    };
+    int n = 0;
+    for (const auto& c : {OptionCase{"split", json("3"), "3"},
+                          OptionCase{"split", json(4), "4"},
+                          OptionCase{"continue", json("false"), "false"},
+                          OptionCase{"continue", json(true), "true"},
+                          OptionCase{"allow-overwrite", json("true"), "true"},
+                          OptionCase{"allow-overwrite", json(false), "false"},
+                          OptionCase{"auto-file-renaming", json(true), "true"},
+                          OptionCase{"auto-file-renaming", json("false"), "false"}}) {
+        json opts = {{"dir", dir},
+                     {"out", "falcon-cov-opt-" + std::to_string(n++) + ".bin"},
+                     {c.key, c.value}};
+        auto parsed = call("aria2.addUri",
+                           json::array({json::array({"test://local/opt.bin"}), opts}));
+        ASSERT_TRUE(parsed.contains("result")) << parsed.dump();
+        const std::string gid = parsed["result"].get<std::string>();
+        auto got = call("aria2.getOption", json::array({gid}));
+        ASSERT_TRUE(got.contains("result")) << got.dump();
+        EXPECT_EQ(got["result"][c.key], std::string(c.echo)) << c.key;
+    }
+
+    // 非法形态 => -32602：布尔键拒绝数字与其余字面量，数值键拒绝负数/
+    // 布尔/垃圾文本
+    for (const auto& [key, bad] :
+         {std::pair<const char*, json>{"split", json("abc")},
+          {"split", json(true)},
+          {"split", json(-2)},
+          {"continue", json("yes")},
+          {"continue", json(1)},
+          {"allow-overwrite", json(0)},
+          {"auto-file-renaming", json(1)}}) {
+        json opts = {{"dir", dir}, {"out", "falcon-cov-opt-bad.bin"}, {key, bad}};
+        auto parsed = call("aria2.addUri",
+                           json::array({json::array({"test://local/opt-bad.bin"}), opts}));
+        ASSERT_TRUE(parsed.contains("error")) << key << ": " << parsed.dump();
+        EXPECT_EQ(parsed["error"]["code"], -32602) << key << ": " << parsed.dump();
+    }
+
+    // 回归钉子：既有数值键的垃圾值此前走裸 std::stoull 抛
+    // invalid_argument，被 dispatch 兜底成 -32603 Internal error——错误码
+    // 与"参数值非法"的语义不符，钉死为 -32602
+    for (const char* const key : {"max-tries", "retry-wait", "timeout",
+                                  "max-connection-per-server",
+                                  "max-download-limit"}) {
+        json opts = {{"dir", dir}, {key, "abc"}};
+        auto parsed = call("aria2.addUri",
+                           json::array({json::array({"test://local/opt-garbage.bin"}), opts}));
+        ASSERT_TRUE(parsed.contains("error")) << key << ": " << parsed.dump();
+        EXPECT_EQ(parsed["error"]["code"], -32602) << key << ": " << parsed.dump();
+    }
+}
+
 // ===========================================================================
 // gid validation / task control
 // ===========================================================================

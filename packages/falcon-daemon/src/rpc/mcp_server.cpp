@@ -140,9 +140,11 @@ json wrap_tool_result(json&& dispatched) {
 }
 
 /// addUri 的 per-download 选项透传白名单（aria2 兼容键位，设计文档 §3）。
+/// index-out 不在列——aria2 的 per-URI 输出名（多文件任务）在 Falcon 无对
+/// 应语义，白名单放行等于广告一个静默无效的键；显式拒绝更诚实
 const std::set<std::string>& allowed_add_uri_options() {
     static const std::set<std::string> kAllowed = {
-        "dir", "out", "header", "index-out", "user-agent", "referer",
+        "dir", "out", "header", "user-agent", "referer",
         "max-connection-per-server", "split", "continue", "max-download-limit",
         "allow-overwrite", "auto-file-renaming", "certificate", "private-key",
         "seed-ratio", "seed-time"};
@@ -544,7 +546,7 @@ nlohmann::json mcp_tools_manifest() {
                 p["options"] = prop(
                     "object",
                     "Extra per-download options (aria2 key names). Allowed keys: dir, out, "
-                    "header, index-out, user-agent, referer, max-connection-per-server, "
+                    "header, user-agent, referer, max-connection-per-server, "
                     "split, continue, max-download-limit, allow-overwrite, "
                     "auto-file-renaming, certificate, private-key, seed-ratio, seed-time.");
                 return p;

@@ -702,6 +702,7 @@ private:
         j["progress_interval_ms"] = opts.progress_interval_ms;
         j["create_directory"] = opts.create_directory;
         j["overwrite_existing"] = opts.overwrite_existing;
+        j["auto_file_renaming"] = opts.auto_file_renaming;
 
         if (!opts.headers.empty()) {
             j["headers"] = opts.headers;
@@ -740,6 +741,7 @@ private:
         if (j.contains("progress_interval_ms")) opts.progress_interval_ms = j["progress_interval_ms"];
         if (j.contains("create_directory")) opts.create_directory = j["create_directory"];
         if (j.contains("overwrite_existing")) opts.overwrite_existing = j["overwrite_existing"];
+        if (j.contains("auto_file_renaming")) opts.auto_file_renaming = j["auto_file_renaming"];
 
         if (j.contains("headers")) {
             for (auto& [k, v] : j["headers"].items()) {

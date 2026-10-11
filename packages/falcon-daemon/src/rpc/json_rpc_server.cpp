@@ -112,6 +112,40 @@ static std::optional<std::size_t> parse_content_length(const std::unordered_map<
     }
 }
 
+// per-download 数值选项的字符串/整数双形态解析（aria2 addUri options 惯例）。
+// 缺省语义由调用方以 contains 判定；key 存在但无法解析时返回 nullopt——
+// addUri 必须以 -32602 收口，而非让裸 std::stoull 抛异常被 dispatch 兜底成
+// -32603 Internal error（错误码与 JSON-RPC 参数错误语义不符）。stoull 前缀
+// 解析（"12abc" -> 12）与既有 getOption/seed 系键一致，取宽松方向
+static std::optional<std::size_t> parse_numeric_option(const json& value) {
+    if (value.is_number_unsigned()) return value.get<std::size_t>();
+    if (value.is_number_integer()) {
+        const auto n = value.get<std::int64_t>();
+        if (n < 0) return std::nullopt;
+        return static_cast<std::size_t>(n);
+    }
+    if (value.is_string()) {
+        try {
+            return static_cast<std::size_t>(std::stoull(value.get<std::string>()));
+        } catch (...) {
+            return std::nullopt;
+        }
+    }
+    return std::nullopt;
+}
+
+// per-download 布尔选项的 JSON 布尔/"true"/"false" 字符串双形态解析；
+// 其余形态（数字、非法字面量）返回 nullopt
+static std::optional<bool> parse_bool_option(const json& value) {
+    if (value.is_boolean()) return value.get<bool>();
+    if (value.is_string()) {
+        const std::string s = to_lower(trim(value.get<std::string>()));
+        if (s == "true") return true;
+        if (s == "false") return false;
+    }
+    return std::nullopt;
+}
+
 static std::string task_id_to_gid(falcon::TaskId id) {
     std::ostringstream oss;
     oss << std::hex << std::setw(16) << std::setfill('0') << static_cast<std::uint64_t>(id);
@@ -197,6 +231,10 @@ static json download_options_to_json(const falcon::DownloadOptions& options) {
     out["timeout"] = std::to_string(options.timeout_seconds);
     out["max-connection-per-server"] = std::to_string(options.max_connections);
     out["max-download-limit"] = std::to_string(options.speed_limit);
+    out["split"] = std::to_string(options.max_connections);
+    out["continue"] = options.resume_enabled ? "true" : "false";
+    out["allow-overwrite"] = options.overwrite_existing ? "true" : "false";
+    out["auto-file-renaming"] = options.auto_file_renaming ? "true" : "false";
     out["seed-ratio"] = std::to_string(options.seed_ratio);
     out["seed-time"] = std::to_string(options.seed_time_minutes);
     out["p2sp-share"] = options.p2sp_share;
@@ -1486,24 +1524,57 @@ nlohmann::json JsonRpcServer::dispatch_rpc(const std::string& method, nlohmann::
             }
 
             if (o.contains("max-tries")) {
-                if (o["max-tries"].is_string()) options.max_retries = static_cast<std::size_t>(std::stoull(o["max-tries"].get<std::string>()));
-                if (o["max-tries"].is_number_integer()) options.max_retries = static_cast<std::size_t>(o["max-tries"].get<int>());
+                auto v = parse_numeric_option(o["max-tries"]);
+                if (!v) return json{{"error", json{{"code", -32602}, {"message", "Invalid value for option: max-tries"}}}};
+                options.max_retries = *v;
             }
             if (o.contains("retry-wait")) {
-                if (o["retry-wait"].is_string()) options.retry_delay_seconds = static_cast<std::size_t>(std::stoull(o["retry-wait"].get<std::string>()));
-                if (o["retry-wait"].is_number_integer()) options.retry_delay_seconds = static_cast<std::size_t>(o["retry-wait"].get<int>());
+                auto v = parse_numeric_option(o["retry-wait"]);
+                if (!v) return json{{"error", json{{"code", -32602}, {"message", "Invalid value for option: retry-wait"}}}};
+                options.retry_delay_seconds = *v;
             }
             if (o.contains("timeout")) {
-                if (o["timeout"].is_string()) options.timeout_seconds = static_cast<std::size_t>(std::stoull(o["timeout"].get<std::string>()));
-                if (o["timeout"].is_number_integer()) options.timeout_seconds = static_cast<std::size_t>(o["timeout"].get<int>());
+                auto v = parse_numeric_option(o["timeout"]);
+                if (!v) return json{{"error", json{{"code", -32602}, {"message", "Invalid value for option: timeout"}}}};
+                options.timeout_seconds = *v;
             }
             if (o.contains("max-connection-per-server")) {
-                if (o["max-connection-per-server"].is_string()) options.max_connections = static_cast<std::size_t>(std::stoull(o["max-connection-per-server"].get<std::string>()));
-                if (o["max-connection-per-server"].is_number_integer()) options.max_connections = static_cast<std::size_t>(o["max-connection-per-server"].get<int>());
+                auto v = parse_numeric_option(o["max-connection-per-server"]);
+                if (!v) return json{{"error", json{{"code", -32602}, {"message", "Invalid value for option: max-connection-per-server"}}}};
+                options.max_connections = *v;
             }
             if (o.contains("max-download-limit")) {
-                if (o["max-download-limit"].is_string()) options.speed_limit = static_cast<falcon::BytesPerSecond>(std::stoull(o["max-download-limit"].get<std::string>()));
-                if (o["max-download-limit"].is_number_integer()) options.speed_limit = static_cast<falcon::BytesPerSecond>(o["max-download-limit"].get<std::uint64_t>());
+                auto v = parse_numeric_option(o["max-download-limit"]);
+                if (!v) return json{{"error", json{{"code", -32602}, {"message", "Invalid value for option: max-download-limit"}}}};
+                options.speed_limit = static_cast<falcon::BytesPerSecond>(*v);
+            }
+
+            // split / continue / allow-overwrite / auto-file-renaming：
+            // MCP falcon_add_download 白名单与文档长期广告、但 addUri 一直
+            // 零映射（aria2 客户端传来即被静默丢弃）。split/continue 在
+            // V1 数据面有真实消费点（http_handler 分段连接数 / http_plugin
+            // 等协议的 resume 开关）；allow-overwrite/auto-file-renaming
+            // 在 V2 引擎（request_group 覆盖门禁）生效——V1 侧与 CLI
+            // --auto-file-renaming 同姿态
+            if (o.contains("split")) {
+                auto v = parse_numeric_option(o["split"]);
+                if (!v) return json{{"error", json{{"code", -32602}, {"message", "Invalid value for option: split"}}}};
+                options.max_connections = *v;
+            }
+            if (o.contains("continue")) {
+                auto v = parse_bool_option(o["continue"]);
+                if (!v) return json{{"error", json{{"code", -32602}, {"message", "Invalid value for option: continue"}}}};
+                options.resume_enabled = *v;
+            }
+            if (o.contains("allow-overwrite")) {
+                auto v = parse_bool_option(o["allow-overwrite"]);
+                if (!v) return json{{"error", json{{"code", -32602}, {"message", "Invalid value for option: allow-overwrite"}}}};
+                options.overwrite_existing = *v;
+            }
+            if (o.contains("auto-file-renaming")) {
+                auto v = parse_bool_option(o["auto-file-renaming"]);
+                if (!v) return json{{"error", json{{"code", -32602}, {"message", "Invalid value for option: auto-file-renaming"}}}};
+                options.auto_file_renaming = *v;
             }
 
             // 做种策略（BitTorrent）：字符串（aria2 风格）与数值双
