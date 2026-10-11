@@ -18,10 +18,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          count=$(gh api "repos/${GITHUB_REPOSITORY}/dependabot/alerts?state=open" --paginate --slurp --jq 'map(length) | add // 0')
+          # gh does not allow --slurp with --jq; sum per-page counts instead
+          count=$(gh api "repos/${GITHUB_REPOSITORY}/dependabot/alerts?state=open" --paginate --jq 'length' | awk '{s+=$1} END {print s+0}')
           echo "Open dependabot alerts: ${count}"
           if [ "${count}" -gt 0 ]; then
-            gh api "repos/${GITHUB_REPOSITORY}/dependabot/alerts?state=open" --paginate --slurp \
-              --jq 'flatten[] | "alert #\(.number): \(.dependency.package.name) \(.security_vulnerability.vulnerable_version_range) -> \(.security_vulnerability.first_patched_version.identifier // "unpatched") (manifest: \(.dependency.manifest.path // "unknown"))"'
+            gh api "repos/${GITHUB_REPOSITORY}/dependabot/alerts?state=open" --paginate \
+              --jq '.[] | "alert #\(.number): \(.dependency.package.name) \(.security_vulnerability.vulnerable_version_range) -> \(.security_vulnerability.first_patched_version.identifier // "unpatched") (manifest: \(.dependency.manifest.path // "unknown"))"'
             exit 1
           fi
