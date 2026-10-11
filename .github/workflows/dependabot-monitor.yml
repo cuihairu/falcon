@@ -1,0 +1,27 @@
+name: Dependabot Monitor
+
+on:
+  schedule:
+    - cron: '23 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  security-events: read
+  contents: read
+
+jobs:
+  open-alerts:
+    name: Fail on open dependabot alerts
+    runs-on: ubuntu-latest
+    steps:
+      - name: List and count open alerts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          count=$(gh api "repos/${GITHUB_REPOSITORY}/dependabot/alerts?state=open" --paginate --slurp --jq 'map(length) | add // 0')
+          echo "Open dependabot alerts: ${count}"
+          if [ "${count}" -gt 0 ]; then
+            gh api "repos/${GITHUB_REPOSITORY}/dependabot/alerts?state=open" --paginate --slurp \
+              --jq 'flatten[] | "alert #\(.number): \(.dependency.package.name) \(.security_vulnerability.vulnerable_version_range) -> \(.security_vulnerability.first_patched_version.identifier // "unpatched") (manifest: \(.dependency.manifest.path // "unknown"))"'
+            exit 1
+          fi
