@@ -655,7 +655,10 @@ nlohmann::json rpc_call(std::uint16_t port, const std::string& method,
     http += body;
     std::size_t off = 0;
     while (off < http.size()) {
-        const ssize_t n = ::send(fd, http.data() + off, http.size() - off, 0);
+        // 服务器意外提前退出时对已关 fd 的写按 EPIPE 返回而非 SIGPIPE
+        // 杀死整个测试进程（同文件服务器侧 send 的既有纪律）
+        const ssize_t n =
+            ::send(fd, http.data() + off, http.size() - off, MSG_NOSIGNAL);
         if (n <= 0) break;
         off += static_cast<std::size_t>(n);
     }

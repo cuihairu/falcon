@@ -944,6 +944,11 @@ public:
     RangeFileServer& operator=(const RangeFileServer&) = delete;
 
     bool start() {
+        // daemon 以 SIGTERM 排水收口时其 socket 全部关闭，本服务器的慢发
+        // 线程可能仍在写——macOS 对 socket 写的 SIGPIPE 做进程级投递，
+        // 未屏蔽线程被杀即整个测试进程死亡（TlsTestServer/RangeLiarServer
+        // 既有教训）。进程级 SIG_IGN 后写失败以 EPIPE 返回值出现。
+        ::signal(SIGPIPE, SIG_IGN);
         const int s = ::socket(AF_INET, SOCK_STREAM, 0);
         if (s < 0) return false;
         int one = 1;
