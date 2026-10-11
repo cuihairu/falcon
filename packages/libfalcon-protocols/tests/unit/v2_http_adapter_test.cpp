@@ -21,6 +21,7 @@
 #include <windows.h>
 #define CLOSE_SOCKET(fd) closesocket(fd)
 #define POLL(fd_ptr, count, timeout_ms) WSAPoll((fd_ptr), (count), (timeout_ms))
+#define SHUTDOWN_SOCKET(fd) ::shutdown((fd), SD_BOTH)
 #else
 #include <unistd.h>
 #include <sys/socket.h>
@@ -28,6 +29,7 @@
 #include <poll.h>
 #define CLOSE_SOCKET(fd) close(fd)
 #define POLL(fd_ptr, count, timeout_ms) ::poll((fd_ptr), (count), (timeout_ms))
+#define SHUTDOWN_SOCKET(fd) ::shutdown((fd), SHUT_RDWR)
 #endif
 
 #include <gtest/gtest.h>
@@ -47,6 +49,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 #ifdef _WIN32
@@ -172,7 +175,9 @@ bool download_via_worker(HttpHandler& handler, const DownloadTask::Ptr& task,
  * HEAD → 200 + Content-Length + Accept-Ranges；
  * GET 无 Range → 200 全量；GET Range: bytes=A-B / A- → 206 区间。
  * /slow.bin 分块慢发（暂停窗口），其余路径快发；/missing 404。
- * 串行服务连接（每连接读请求头 → 应答 → 关闭）。
+ * 每连接一线程并发服务（读请求头 → 应答 → 关闭）——冲突探测类用例
+ * 需要「一条慢连接撑住组 ACTIVE 的同时另一条连接照常被服务」，串行
+ * accept 会把后到的请求排在慢发之后（结构性无法构造前置条件）。
  */
 class AdapterTestServer {
 public:
@@ -223,6 +228,18 @@ public:
         if (accept_thread_.joinable()) {
             accept_thread_.join();
         }
+        // 唤醒在途连接线程（阻塞在 recv/send 上）：shutdown 让其立即
+        // 出错返回并收尾；线程已 detach 不能 join，轮询计数归零兜底
+        // （有界——宁可放走迟到线程也不让析构后触碰无界化）
+        {
+            std::lock_guard<std::mutex> lock(conn_mutex_);
+            for (int fd : conn_fds_) {
+                SHUTDOWN_SOCKET(fd);
+            }
+        }
+        for (int i = 0; i < 100 && active_conns_.load() > 0; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
     }
 
     int port() const { return port_; }
@@ -257,8 +274,28 @@ private:
                 continue;
             }
             connections_.fetch_add(1);
-            serve(conn);
+            spawn_conn_thread(conn);
         }
+    }
+
+    void spawn_conn_thread(int conn) {
+        // 登记先于 spawn（台账 + 计数在锁内一次完成，spawn 与登记间
+        // 无窗口）；线程体收尾 erase 台账 + 计数递减（最后一次 this
+        // 访问）。fd 关闭与 erase 间的微窗内 accept 复用编号时 stop()
+        // 可能 shutdown 到新连接——良性竞速，flake 级
+        active_conns_.fetch_add(1);
+        {
+            std::lock_guard<std::mutex> lock(conn_mutex_);
+            conn_fds_.insert(conn);
+        }
+        std::thread([this, conn] {
+            serve(conn);
+            {
+                std::lock_guard<std::mutex> lock(conn_mutex_);
+                conn_fds_.erase(conn);
+            }
+            active_conns_.fetch_sub(1);
+        }).detach();
     }
 
     static void set_socket_timeout(int conn, int seconds) {
@@ -441,6 +478,9 @@ private:
     int port_ = 0;
     std::atomic<bool> running_{false};
     std::atomic<int> connections_{0};
+    std::atomic<int> active_conns_{0};
+    std::mutex conn_mutex_;
+    std::unordered_set<int> conn_fds_;
     std::mutex mutex_;
     std::string body_;
     std::thread accept_thread_;
@@ -985,6 +1025,10 @@ protected:
 // 非暂停态分支 → throw"任务组状态异常" → worker 收口 Failed
 TEST_F(V2HttpAdapterBridgeErrors, ConflictingActiveGroupFailsTask) {
     auto& host = V2EngineHost::instance();
+    // 外部组挂慢发路径撑住 ACTIVE 窗口（64KB ≈ 120ms 分块慢发）：冲突
+    // 检查紧随注入发生（毫秒级），窗口绰绰有余。曾用串行 accept 的
+    // 服务器——慢连接占住 accept 队列，bait 的 HEAD 被排到慢发之后，
+    // 检查永远落在外部组完成之后，前置条件结构性无法构造
     const std::string body = make_body(64 * 1024);
     AdapterTestServer server;
     ASSERT_TRUE(server.start());
