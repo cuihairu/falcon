@@ -876,8 +876,8 @@ TEST_F(V2HttpAdapterSupports, FallbackTable) {
 
     options = DownloadOptions{};
     options.referer = "http://example.com/";
-    EXPECT_FALSE(V2HttpDownloadAdapter::supports(options))
-        << "Referer（防盗链语义）V2 不发送，回退";
+    EXPECT_TRUE(V2HttpDownloadAdapter::supports(options))
+        << "Referer 已原生化：V2 prepare_http_request 发送该头，不回退";
 }
 
 // ============================================================================
@@ -996,12 +996,13 @@ TEST_F(V2HttpAdapterBridgeErrors, ConflictingActiveGroupFailsTask) {
         (std::filesystem::path(dir) / "out.bin").string();
     const std::string foreign_out = out_path + ".foreign.tmp";
 
-    // 外部组：同任务 id，挂在慢路径上保持 ACTIVE
+    // 外部组：同任务 id，挂在慢路径上保持 ACTIVE（快路径会在 bait
+    // 注入前跑完 → 终态组被回收重注入，冲突前置条件落空成竞态）
     std::error_code stale_ec;
     std::filesystem::remove(foreign_out, stale_ec);
     auto engine = host.engine();
     ASSERT_NE(engine, nullptr);
-    engine->add_download_as(50, {server.url("/foreign.bin")},
+    engine->add_download_as(50, {server.url("/slow.bin")},
                             DownloadOptions{}, foreign_out);
 
     HttpHandler handler;

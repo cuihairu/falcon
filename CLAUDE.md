@@ -2,6 +2,12 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-11 - Referer 原生化收编（V2 引擎发该头，适配层与 metalink 门禁同步摘除）
+- **背景**：V2 引擎 `prepare_http_request` 早已按 `options_.referer` 发出 Referer 头（http_commands.cpp），但 `V2HttpDownloadAdapter::supports()` 仍把 referer 列为「curl 专属能力」回退 V1——带 referer 的任务被无谓地挡在桥接外（metalink 桥接的 `v2_multi_source_gate` 本地复刻同一回退表，同缺陷双落点）
+- **修复**：两处门禁摘除 referer 回退（适配层 supports() + metalink 桥接门禁），注释改为「Referer 已原生化」；剩余回退项仅 socks/HTTPS 代理、cookie 引擎、HTTP 401 认证（均为 V2 未原生化能力，非本批范围）
+- **测试**：`FallbackTable` 断言反转（referer → supports()==true）；新增 `V2BridgeSendsRefererHeader`（双镜像 Range 分布证桥接生效 + 线上 Referer 头到达断言）；`V2GateRejectsCurlSpecificOptions` 移除 referer 用例（不再门禁）；顺带修 `ConflictingActiveGroupFailsTask` 竞态（外部组改挂 /slow.bin 慢路径，与用例注释及同族用例一致）
+- **验证**：falcon_http_tests 全量 117 绿 + bridge errors 套件 3× 绿；build-plugins 全量重建零新告警
+
 ### 2026-10-11 - CI 红面收口：黑洞超时两用例 EOF 观测收敛（run 38110927880 macOS 唯一红）
 - **红面**（run 38110927880，78e2db3 触发）：8 job 唯一红 `build (macos-latest, Release, clang)` 的 `DownloadEngineV2RunTest.BlackHoleServerTimesOutViaEngineFallback`（download_engine_v2_run_test.cpp:1509 `server.peer_closed()` 实测 0 期望 ≥1，测试总时长 2.54s = 组 2s 终态后 ~0.5s 即断言）；同 commit 的 Linux/macOS-arm/Windows/coverage 全绿 + 本机多核不复现
 - **根因定性（既有文档先例：ShutdownDrainsParkedCommandFd 的内联收敛循环注释自证同族竞速）**：`wait_group_terminal` 观测的组 FAILED 翻转是引擎侧状态（与 `close_socket_fd` 同一次 cleanup 完成内生效），而 `peer_closed` 计数由 **SilentServer 连接线程**在自己的 200ms 轮询周期（外加调度延迟）后才读到 EOF 递增——终态观测与 fd 关闭是同一次清理的两步，但服务器侧计数**滞后于引擎侧状态**；断言紧跟 wait_group_terminal 返回、零收敛窗，CI 2 核负载下连接线程未及调度即红。fd 泄漏本体不存在（peer_closed 家族 2026-09-12 批次已在位），純测试面时序缺陷

@@ -2584,8 +2584,9 @@ path-style）；网盘分享链识别（12 平台）+ 资源搜索；GUI 桌面�
 
 **记录不修的假缺口：** HTTP Digest（V1 CURLAUTH_ANY 已含，V2
 经适配层 401 回退 V1 兜底）、socks/HTTPS 代理（V2 判 Unsupported
-回退 V1）、Referer（同回退）——均为"V2 原生化"项而非生产缺口，
-随 V2 引擎成熟度逐步收编。
+回退 V1）——均为"V2 原生化"项而非生产缺口，随 V2 引擎成熟度逐
+步收编。Referer 已于 2026-10-11 原生化收编（V2 引擎
+prepare_http_request 发该头，适配层与 metalink 门禁同步摘除）。
 
 ### 2026-09-18 - P2SP 共享网络路线讨论（立项备忘）
 

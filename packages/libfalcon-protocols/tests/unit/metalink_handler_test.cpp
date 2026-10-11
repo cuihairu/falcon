@@ -782,6 +782,50 @@ TEST_F(MetalinkV2BridgeTest, V2OnTwoMirrorsDistributesSegments) {
     EXPECT_FALSE(fs::exists(final_path + ".metalink-part.falcon.ctrl"));
 }
 
+/// Referer 已原生化:带 referer 的任务不再被能力门禁拦下,桥接照常
+/// 生效,且 V2 引擎在请求线上发出该头(门禁仍在时本用例会串行回退
+/// ——首镜像成功则次镜像零请求,两镜像 Range 断言即红)
+TEST_F(MetalinkV2BridgeTest, V2BridgeSendsRefererHeader) {
+    const std::string body = v2_test_body();
+    server().set_response("/vr1.bin",
+                          v2_range_response(body));
+    server().set_response("/vr2.bin",
+                          v2_range_response(body));
+    const std::string doc = local_meta4(
+        "<file name=\"outr.bin\">"
+        "<size>32</size>"
+        "<hash type=\"sha-256\">" + sha256_hex(body) + "</hash>"
+        "<url priority=\"1\">" + server().url("/vr1.bin") + "</url>"
+        "<url priority=\"2\">" + server().url("/vr2.bin") + "</url>"
+        "</file>");
+
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    options.max_connections = 4;
+    options.min_segment_size = 8;
+    options.referer = "http://ref.example/";
+    auto task = make_task(103, doc, options);
+    task->set_status(TaskStatus::Downloading);
+
+    handler_->download(task, nullptr);
+
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(read_file((dir_.path() / "outr.bin").string()), body);
+    // 门禁未拦 referer:桥接生效(两镜像各收 Range GET)
+    const auto reqs = server().requests();
+    EXPECT_TRUE(path_received_range(reqs, "/vr1.bin"));
+    EXPECT_TRUE(path_received_range(reqs, "/vr2.bin"));
+    // V2 请求线上 Referer 头到达(prepare_http_request 按 options 发出)
+    bool saw_referer = false;
+    for (const auto& r : reqs) {
+        auto it = r.headers.find("referer");
+        if (it != r.headers.end() && it->second == "http://ref.example/") {
+            saw_referer = true;
+        }
+    }
+    EXPECT_TRUE(saw_referer);
+}
+
 /// 段级换源:uris[1] 上的段 1(起点 8)传 4B 后断连 → 换到 uris[0]
 /// 从断点(12)续传,组不连坐失败
 TEST_F(MetalinkV2BridgeTest, V2OnSegmentFailureSwapsMirror) {
@@ -1544,7 +1588,7 @@ TEST_F(MetalinkV2BridgeTest, V2OnNoHashFallsBack) {
 }
 
 } // namespace
-/// curl 专属能力门禁:cookie/HTTP 认证/Referer 任一存在 → 桥接前置
+/// curl 专属能力门禁:cookie/HTTP 认证任一存在 → 桥接前置
 /// 回退阶段1 串行,引擎全程未被拉起(try_engine 恒空)
 TEST_F(MetalinkV2BridgeTest, V2GateRejectsCurlSpecificOptions) {
     server().set_response("/gt1.bin",
@@ -1580,9 +1624,6 @@ TEST_F(MetalinkV2BridgeTest, V2GateRejectsCurlSpecificOptions) {
                  o.http_password = "pass";
              },
              "gt-auth.bin");
-    run_case(242, [](DownloadOptions& o) { o.referer = "http://ref.example/"; },
-             "gt-referer.bin");
-
     // socks 代理:门禁判 Unsupported 回退阶段1;V1 curl 走死代理 →
     // 两镜像皆不可达,干净失败(门禁行本身已被评估并命中)
     {

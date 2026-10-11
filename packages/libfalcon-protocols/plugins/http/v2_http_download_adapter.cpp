@@ -38,9 +38,8 @@ bool V2HttpDownloadAdapter::supports(const DownloadOptions& options) {
     if (!options.http_username.empty() || !options.http_password.empty()) {
         return false;  // HTTP 401 认证
     }
-    if (!options.referer.empty()) {
-        return false;  // Referer 头（防盗链语义），V2 不发送
-    }
+    // Referer 已原生化:V2 引擎在 prepare_http_request 中按
+    // options_.referer 发出该头（http_commands.cpp），无需回退
     return true;
 }
 

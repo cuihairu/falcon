@@ -691,9 +691,7 @@ bool MetalinkHandler::v2_multi_source_gate(const DownloadOptions& options,
     if (!options.http_username.empty() || !options.http_password.empty()) {
         return false;  // HTTP 401 认证
     }
-    if (!options.referer.empty()) {
-        return false;  // Referer 头(防盗链语义),V2 不发送
-    }
+    // Referer 已原生化:V2 引擎按 options_.referer 发该头,不再门禁
 
     // 3. V2 可拉的镜像(http/https;FTP 镜像留阶段1)至少 1 条——
     //    镜像池是否够分段(≥2)由调用侧并入 swarm 源(§10.4)后裁定
