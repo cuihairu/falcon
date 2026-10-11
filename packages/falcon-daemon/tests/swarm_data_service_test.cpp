@@ -23,6 +23,7 @@ using ssize_t = int;
 #include <thread>
 #include <vector>
 
+#include <csignal>
 #include <gtest/gtest.h>
 
 #ifndef _WIN32
@@ -36,6 +37,22 @@ using socket_len_t = socklen_t;
 #include <falcon/protocols/file_hash.hpp>
 
 namespace {
+/// 本文件回环基建含「写已断连 socket」剧本（客户端失败收口主动 abort
+/// 连接、服务器按剧本 drop 短 body/超限请求、超时清理关 fd 后仍有在途
+/// 写）——POSIX 默认对 socket 写的 SIGPIPE 做进程级终止，任一写命中
+/// RST 即杀死整个测试进程（RangeLiarServer / TlsTestServer /
+/// ProxyTestServer 同族红面先例）。进程级忽略让写失败以 EPIPE 返回
+/// 值出现（各 send_all 的 n<=0 分支既有吞错路径正常收口）；Windows 无
+/// SIGPIPE 语义无需处理
+struct SigpipeImmunity {
+    SigpipeImmunity() {
+#if !defined(_WIN32)
+        ::signal(SIGPIPE, SIG_IGN);
+#endif
+    }
+};
+
+const SigpipeImmunity falcon_test_sigpipe_immunity;
 
 using falcon::daemon::SwarmDataService;
 using falcon::daemon::SwarmDataServiceConfig;
