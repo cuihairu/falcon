@@ -810,6 +810,21 @@ bool wait_group_terminal(DownloadEngineV2& engine, RequestGroup* group,
     return finished;
 }
 
+/// 服务器侧 EOF 观察收敛：引擎关闭 fd 之后，SilentServer 的连接线程
+/// 要等它自己的 200ms 轮询周期（外加调度延迟）才会读到 EOF 并计入
+/// peer_closed。终态观测与 fd 关闭是同一次清理的两步，但服务器侧计数
+/// 滞后于引擎侧状态，立即断言在 CI 负载下会误报为 fd 泄漏。轮询到
+/// 计数增长或时限到点，判定交给调用方（失败消息保持归属清晰）。
+bool wait_peer_closed(SilentServer& server, int timeout_seconds) {
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::seconds(timeout_seconds);
+    while (server.peer_closed() < 1 &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return server.peer_closed() >= 1;
+}
+
 #ifdef _WIN32
 int run_test_getpid() { return _getpid(); }
 #else
@@ -1470,8 +1485,9 @@ TEST(DownloadEngineV2RunTest, BlackHoleServerTimesOutViaTaskTimeout) {
     // 不设下界——超时只会更晚、不会更早的语义由阈值保证
     EXPECT_LT(elapsed_ms, 10000)
         << "任务级 timeout_seconds=2 未生效（等待 " << elapsed_ms << "ms）";
-    // fd 必须真实关闭：进程存活期间服务器侧应观察到 EOF
-    EXPECT_GE(server.peer_closed(), 1)
+    // fd 必须真实关闭：进程存活期间服务器侧应观察到 EOF（观察有
+    // 服务器连接线程 200ms 轮询 + 调度延迟，短轮询收敛避免负载误报）
+    EXPECT_TRUE(wait_peer_closed(server, 5))
         << "超时清理未关闭 fd（泄漏的连接在服务器侧观察不到 EOF）";
 
     server.stop();
@@ -1506,7 +1522,9 @@ TEST(DownloadEngineV2RunTest, BlackHoleServerTimesOutViaEngineFallback) {
     EXPECT_LT(elapsed_ms, 10000)
         << "引擎兜底 command_wait_timeout_seconds=2 未生效（等待 "
         << elapsed_ms << "ms）";
-    EXPECT_GE(server.peer_closed(), 1)
+    // fd 必须真实关闭：进程存活期间服务器侧应观察到 EOF（观察有
+    // 服务器连接线程 200ms 轮询 + 调度延迟，短轮询收敛避免负载误报）
+    EXPECT_TRUE(wait_peer_closed(server, 5))
         << "超时清理未关闭 fd（泄漏的连接在服务器侧观察不到 EOF）";
 
     server.stop();
@@ -1825,13 +1843,8 @@ TEST(DownloadEngineV2RunTest, ShutdownDrainsParkedCommandFd) {
     engine.shutdown();
     runner.join();
 
-    // EOF 观察有服务器线程的 poll 周期延迟，短轮询等待避免误报
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-    while (server.peer_closed() < 1 &&
-           std::chrono::steady_clock::now() < deadline) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    EXPECT_GE(server.peer_closed(), 1)
+    // EOF 观察有服务器线程的 poll 周期延迟，短轮询收敛避免误报
+    EXPECT_TRUE(wait_peer_closed(server, 5))
         << "停机后挂起命令的 fd 未关闭（排水缺失，fd 静默泄漏）";
     EXPECT_EQ(group->status(), RequestGroupStatus::ACTIVE)
         << "停机排水不改变任务状态（非失败语义）";

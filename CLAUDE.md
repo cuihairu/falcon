@@ -2,6 +2,13 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-11 - CI 红面收口：黑洞超时两用例 EOF 观测收敛（run 38110927880 macOS 唯一红）
+- **红面**（run 38110927880，78e2db3 触发）：8 job 唯一红 `build (macos-latest, Release, clang)` 的 `DownloadEngineV2RunTest.BlackHoleServerTimesOutViaEngineFallback`（download_engine_v2_run_test.cpp:1509 `server.peer_closed()` 实测 0 期望 ≥1，测试总时长 2.54s = 组 2s 终态后 ~0.5s 即断言）；同 commit 的 Linux/macOS-arm/Windows/coverage 全绿 + 本机多核不复现
+- **根因定性（既有文档先例：ShutdownDrainsParkedCommandFd 的内联收敛循环注释自证同族竞速）**：`wait_group_terminal` 观测的组 FAILED 翻转是引擎侧状态（与 `close_socket_fd` 同一次 cleanup 完成内生效），而 `peer_closed` 计数由 **SilentServer 连接线程**在自己的 200ms 轮询周期（外加调度延迟）后才读到 EOF 递增——终态观测与 fd 关闭是同一次清理的两步，但服务器侧计数**滞后于引擎侧状态**；断言紧跟 wait_group_terminal 返回、零收敛窗，CI 2 核负载下连接线程未及调度即红。fd 泄漏本体不存在（peer_closed 家族 2026-09-12 批次已在位），純测试面时序缺陷
+- **修复**：抽 `wait_peer_closed(server, timeout_seconds)` 收敛 helper（10ms 短轮询到计数增长或 5s 时限，判定留调用方保失败消息归属）——两黑洞超时用例（TaskTimeout/EngineFallback）的立即断言改收敛式；ShutdownDrainsParkedCommandFd 的既有内联 2s 循环并入同一 helper（三站点单一形态，2026-09-20「修了共享头 ≠ 修了同类基建」教训的前置清扫）
+- **验证**：3 用例单跑绿 + BlackHole 家族 120 轮压测零失败；修复属测试面零生产改动
+- 验证：build-plugins（CI 等价树）falcon_protocols_tests BlackHole* 120 轮 + ShutdownDrainsParkedCommandFd 单跑全绿
+
 ### 2026-10-10 - 挂起项裁定（依用户 2026-10-10 授权「自行裁定并记录依据」）
 - **B14-b（剪贴板确认框弹出期间新链接叠开第二框）→ 裁定维持叠开不改**。依据：① 确认框是模态对话框——用户指针正移向确认钮途中若框内目标被热替换，构成「确认了非所见内容」的误下载风险（按钮语义漂移），叠开无此风险（新框显式呈现新目标，旧框用户自行处置）；② 叠开零信息丢失、零新增状态机；③ 改「更新当前框」需把对话框外置为成员 + 目标刷新 + 生命周期/去重管理，为罕见边案引入常驻复杂度，收益不成比例。BUGS.md B14 行已记录
 - **W1（修复到达用户的节奏）→ 项目侧已就绪，维持挂起（真实用户侧动作）**。复核证据：nightly release 全部 5 资产 updatedAt 2026-10-09T05:15Z，均晚于 adf0e58/2ee5c8e——当前 nightly 已含 B2–B7 全部修复；唯一剩余动作是用户侧升级到当前 nightly 后逐条反馈闭环，不可代验。BUGS.md W1 行已记录证据
