@@ -2844,13 +2844,24 @@ bool HttpDownloadCommand::publish_output(const DownloadTask::Ptr& task) {
     if (write_path_.empty() || write_path_ == task->output_path()) {
         return true;  // 直写最终名（未启用临时扩展名）或已发布
     }
-    std::error_code rename_ec;
-    std::filesystem::rename(write_path_, task->output_path(), rename_ec);
-    if (rename_ec) {
-        task->set_error("下载完成但发布失败（临时文件改名 " + write_path_ +
-                        " → " + task->output_path() + "）: " +
-                        rename_ec.message());
-        return false;
+    // Windows 实机/CI 的杀毒实时扫描与索引服务会在写入结束后短暂持有
+    // 临时文件句柄，紧随其后的发布改名报 sharing violation——有界重试
+    // 吞掉这个瞬时窗口（下载本身耗时远大于重试预算），句柄持续占用才
+    // 按失败收尾
+    constexpr int kRenameAttempts = 4;
+    for (int attempt = 1;; ++attempt) {
+        std::error_code rename_ec;
+        std::filesystem::rename(write_path_, task->output_path(), rename_ec);
+        if (!rename_ec) {
+            break;
+        }
+        if (attempt >= kRenameAttempts) {
+            task->set_error("下载完成但发布失败（临时文件改名 " + write_path_ +
+                            " → " + task->output_path() + "）: " +
+                            rename_ec.message());
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
     write_path_.clear();  // 幂等防护：重复收尾不再尝试改名
     return true;
