@@ -77,7 +77,7 @@ jobs:
 
       - name: Cache vcpkg packages (Windows)
         if: matrix.os == 'windows-latest'
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ${{ github.workspace }}/vcpkg/installed
@@ -297,7 +297,7 @@ jobs:
           .\vcpkg\bootstrap-vcpkg.bat
 
       - name: Cache vcpkg packages
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ${{ github.workspace }}/vcpkg/installed
