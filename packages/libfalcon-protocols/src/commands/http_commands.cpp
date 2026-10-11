@@ -8,6 +8,7 @@
 #include <falcon/protocols/commands/http_commands.hpp>
 #include <falcon/detail/injection.hpp>
 #include <falcon/protocols/download_engine_v2.hpp>
+#include <falcon/protocols/fs_rename.hpp>
 #include <falcon/exceptions.hpp>
 #include <falcon/logger.hpp>
 
@@ -2845,23 +2846,16 @@ bool HttpDownloadCommand::publish_output(const DownloadTask::Ptr& task) {
         return true;  // 直写最终名（未启用临时扩展名）或已发布
     }
     // Windows 实机/CI 的杀毒实时扫描与索引服务会在写入结束后短暂持有
-    // 临时文件句柄，紧随其后的发布改名报 sharing violation——有界重试
-    // 吞掉这个瞬时窗口（下载本身耗时远大于重试预算），句柄持续占用才
-    // 按失败收尾
-    constexpr int kRenameAttempts = 4;
-    for (int attempt = 1;; ++attempt) {
-        std::error_code rename_ec;
-        std::filesystem::rename(write_path_, task->output_path(), rename_ec);
-        if (!rename_ec) {
-            break;
-        }
-        if (attempt >= kRenameAttempts) {
-            task->set_error("下载完成但发布失败（临时文件改名 " + write_path_ +
-                            " → " + task->output_path() + "）: " +
-                            rename_ec.message());
-            return false;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    // 临时文件句柄，紧随其后的发布改名报 sharing violation——共享重试
+    // helper 吞掉这个瞬时窗口（CI 实测 run 38138445554 击穿了旧实现
+    // 4×200ms 的固定预算），只有"被占用"类错误重试，句柄持续占用或
+    // 永久性错误按最后一次错误收尾
+    const auto rr =
+        protocols::detail::rename_with_retry(write_path_, task->output_path());
+    if (!rr.ok) {
+        task->set_error("下载完成但发布失败（临时文件改名 " + write_path_ +
+                        " → " + task->output_path() + "）: " + rr.error);
+        return false;
     }
     write_path_.clear();  // 幂等防护：重复收尾不再尝试改名
     return true;

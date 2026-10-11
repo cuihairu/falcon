@@ -8,6 +8,7 @@
 #include "ftp_handler.hpp"
 #include <falcon/detail/injection.hpp>
 
+#include <falcon/protocols/fs_rename.hpp>
 #include <falcon/exceptions.hpp>
 #include <falcon/logger.hpp>
 
@@ -125,7 +126,8 @@ bool FtpHandler::can_handle(const std::string& url) const {
 
 FileInfo FtpHandler::get_file_info(const std::string& url, const DownloadOptions& options) {
     // 注入命中时短路真实调用，避免已创建句柄在 throw 路径泄漏
-    CURL* curl = detail::inject_failure(detail::InjectPoint::CurlEasyInit)
+    CURL* curl = falcon::detail::inject_failure(
+                     falcon::detail::InjectPoint::CurlEasyInit)
                      ? nullptr
                      : curl_easy_init();
     if (!curl) {
@@ -197,7 +199,8 @@ void FtpHandler::download(DownloadTask::Ptr task, IEventListener* listener) {
 
         // 注入命中时短路真实调用，避免已创建句柄在 throw 路径泄漏
         CURL* curl =
-            detail::inject_failure(detail::InjectPoint::CurlEasyInit)
+            falcon::detail::inject_failure(
+                falcon::detail::InjectPoint::CurlEasyInit)
                 ? nullptr
                 : curl_easy_init();
         if (!curl) {
@@ -235,8 +238,14 @@ void FtpHandler::download(DownloadTask::Ptr task, IEventListener* listener) {
         if (res != CURLE_OK) {
             last_error = curl_easy_strerror(res);
         } else {
-            if (std::rename(temp_path.c_str(), task->output_path().c_str()) != 0) {
-                throw FileIOException("Failed to move downloaded file to destination");
+            // Windows 杀毒/索引对刚写完文件的瞬时句柄占用值得重试而
+            // 不是直接判失败（数据已完整落盘）
+            const auto rr = protocols::detail::rename_with_retry(
+                temp_path, task->output_path());
+            if (!rr.ok) {
+                throw FileIOException(
+                    "Failed to move downloaded file to destination: " +
+                    rr.error);
             }
             task->set_status(TaskStatus::Completed);
             return;

@@ -17,6 +17,7 @@
 #include <falcon/protocol_registry.hpp>
 #include <falcon/protocols/commands/http_commands.hpp>
 #include <falcon/protocols/download_engine_v2.hpp>
+#include <falcon/protocols/fs_rename.hpp>
 #include <falcon/protocols/mirror_source.hpp>
 #include <falcon/protocols/request_group.hpp>
 #include <falcon/protocols/v2_engine_host.hpp>
@@ -584,8 +585,18 @@ void MetalinkHandler::download(DownloadTask::Ptr task,
             }
             if (outcome == V2BridgeOutcome::kCompleted) {
                 if (verify_or_discard(mf, part_path, errors)) {
-                    // 发布:rename 先于 Completed(完成=可信)
-                    fs::rename(part_path, final_path);
+                    // 发布:rename 先于 Completed(完成=可信)。校验过的
+                    // 产物遇到 Windows 杀毒/索引的瞬时句柄占用,重试吞
+                    // 掉窗口而不是直接毁掉一次完整下载
+                    const auto rr =
+                        protocols::detail::rename_with_retry(part_path,
+                                                             final_path);
+                    if (!rr.ok) {
+                        throw FileIOException("[metalink] 发布改名失败: " +
+                                              part_path + " -> " +
+                                              final_path.string() + " (" +
+                                              rr.error + ")");
+                    }
                     task->set_status(TaskStatus::Completed);
                     return;
                 }
@@ -636,8 +647,18 @@ void MetalinkHandler::download(DownloadTask::Ptr task,
             (void)mirror_ok;
 
             if (verify_or_discard(mf, part_path, errors)) {
-                // 发布:rename 先于 Completed(完成=可信)
-                fs::rename(part_path, final_path);
+                // 发布:rename 先于 Completed(完成=可信)。校验过的产物
+                // 遇到 Windows 杀毒/索引的瞬时句柄占用,重试吞掉窗口而
+                // 不是把这一个镜像直接判失败换下一家重下
+                const auto rr =
+                    protocols::detail::rename_with_retry(part_path,
+                                                         final_path);
+                if (!rr.ok) {
+                    throw FileIOException("[metalink] 发布改名失败: " +
+                                          part_path + " -> " +
+                                          final_path.string() + " (" +
+                                          rr.error + ")");
+                }
                 task->set_status(TaskStatus::Completed);
                 published = true;
                 break;
@@ -805,6 +826,18 @@ MetalinkHandler::V2BridgeOutcome MetalinkHandler::run_v2_multi_source(
                 engine->cancel_task(id);
             } else {
                 auto* g = engine->request_group_man()->find_group(id);
+                if (g != nullptr &&
+                    g->status() == RequestGroupStatus::COMPLETED) {
+                    // 迟到的暂停:暂停落在引擎完成之后(200ms 轮询窗内
+                    // 组已终态)时,已下载完的成品照常走完成发布——按
+                    // 挂起收口会把完整产物丢在 part 路径,resume 重注
+                    // 入还撞"输出文件已存在"覆盖门禁整活重下
+                    const auto progress = g->get_progress();
+                    parent->update_progress(progress.downloaded,
+                                            progress.total,
+                                            progress.speed);
+                    return V2BridgeOutcome::kCompleted;
+                }
                 if (g == nullptr ||
                     g->status() != RequestGroupStatus::PAUSED) {
                     engine->pause_task(id);

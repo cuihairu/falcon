@@ -4,6 +4,7 @@
 #include <falcon/protocols/segment_downloader.hpp>
 
 #include <falcon/exceptions.hpp>
+#include <falcon/protocols/fs_rename.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -593,12 +594,15 @@ bool SegmentDownloader::merge_segments() {
 
     output_file.close();
 
-    // Atomically move into place
-    std::error_code ec;
-    std::filesystem::rename(temp_output, output_path_, ec);
-    if (ec) {
+    // Atomically move into place. 这里是 V1 分段路径的发布点：合并产物
+    // 已完整落盘，Windows 杀毒/索引对刚写完文件的瞬时句柄占用值得重试
+    // 而不是把几 GB 的合并产物直接删掉（旧实现任何 rename 失败都删除
+    // temp_output）；重试耗尽或永久性错误才清理并抛出
+    const auto rr =
+        protocols::detail::rename_with_retry(temp_output, output_path_);
+    if (!rr.ok) {
         std::remove(temp_output.c_str());
-        throw FileIOException("Failed to move merged file to destination: " + ec.message());
+        throw FileIOException("Failed to move merged file to destination: " + rr.error);
     }
 
     // Clean up segment files

@@ -2,6 +2,18 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-12 - V2 桥接「迟到暂停」丢完成发布根修（B29：run 38138445554 同族红面第二根因）
+- **复现与定性**：B28 修复后的本机压测 pause 族/桥接 30 轮**实测 1 失败**（round 29 `V2PauseThenResume`——初报「零失败」系未核对完整输出，已在 BUGS/todo 台账更正）——暂停落在引擎完成之后（200ms 轮询窗内组已 COMPLETED）时桥接按挂起收口：metalink 桥接把已校验成品丢在 `.metalink-part` 路径（resume 重注入还撞「输出文件已存在」门禁整活重下），V2 适配器把已发布成品报成 Paused（resume 恒失败）。根因：两处桥接轮询 Paused 分支只转发 `pause_task` 不查组状态，pause() 先置 parent Paused、终态组被幂等拒绝，完成路径永远走不到
+- **修复**（metalink_handler.cpp run_v2_multi_source + v2_http_download_adapter.cpp run，两站点同形）：Paused 分支内先查组 COMPLETED → 照常完成收口（metalink `return kCompleted` 走既有 verify→rename→Completed 链；adapter `sync_final_progress` + Completed）；Cancelled 不变（取消优先）；「组已 PAUSED 不重复 pause_task」纪律保持
+- **确定性钉子**：`V2LatePauseAfterCompletionStillPublishes`（metalink_handler_test 17 → 18）+ scripted_http_server.hpp 新闩门 knob（`set_hold_body(path, prefix_bytes)`/`release_holds()`——段连接发 prefix 字节后挂起等放行，组完成时刻钉到测试控制点之后）：闩住全部段连接 → 4 段各持 1B 挂起 → release → 等 part 出现或桥接先收口（良性竞速两代码都绿）→ 仅任务仍 Downloading 才落迟到暂停 → 断言 Completed + 逐字节 + 三无残留。**NAIL-VERIFY 双向**：禁用完成分支钉子红（Paused `<03-00>` vs Completed `<04-00>`，与 CI/压测形态一致）→ 恢复复绿；**测量教训**：压测循环的 grep 模式必须同时容忍 `\n[  FAILED  ]` 输出且失败轮保留完整日志（本轮初报即被「只 grep 了 OK」的假绿骗过——FAIL 信号在 stderr/stdout 交错时极易漏）
+- **验证**：钉子 20 轮 + MetalinkV2BridgeTest 60 轮压测零失败；零生产告警
+
+### 2026-10-11 - 发布改名 transient 门禁重试收编（Windows sharing violation 红面 B28：10 站点全族 + 指数退避）
+- **红面与归因**：run 38138445554（c56936b）Windows cl 腿 `LateSweepAfterResumeSparesNewCommands` 唯一红（1623 例 1 例，组 FAILED vs COMPLETED，测试 911ms）——外部持有者（Defender/索引器）短窗持有刚写完的 `.falcon.tmp`，发布 `MoveFileEx` 报 ERROR_SHARING_VIOLATION (32)；既有 4×200ms 固定重试预算（f4aaca3）耗尽。Linux rename 对打开句柄零约束故本地不可复现，按「归因+加固」路径收口
+- **加固**：新公共 helper `falcon/protocols/fs_rename.hpp`——transient 门禁（Windows 32/33、POSIX EBUSY/ETXTBSY）+ 指数退避 {100..3200}ms = 7 次 ≈6.3s，永久错误（EISDIR/ENOENT/EACCES/EXDEV）首次即收口零重试（既有失败路径用例零减速），合格重试 WARN 可观测。**10 处发布改名站点全族收编**（protocols 8 文件）：http_commands publish_output（V2）/ http_handler（V1）/ segment_downloader 合并发布（旧行为任何改名失败删 GB 级成品）/ resume_control 控制文件（短档 {100,200,400}）/ metalink 两站点 / ftp、sftp、webdav 插件
+- **测试**：fs_rename_test.cpp 6 用例（`rename_with_retry_fn` 脚本化错误码注入 + 真实 fs 透传/快败）；**顺带收口回归**：fs_rename.hpp 使 `falcon::protocols::detail` 在新 TU 显形，http_handler.cpp + ftp_plugin.cpp 四处既有裸 `detail::inject_failure` 查找被俘获（编译红）→ 根限定 `falcon::detail::`（webdav 先例）。**测量教训**：在 `namespace falcon::protocols` 内引入新 `protocols::detail` 实体的头文件，必须 grep 同 TU 全部裸 `detail::` 查找核对俘获面
+- **验证**：protocols 880（879 过 + 设计内 skip）/ http 119（117 过 + 设计内 skip/disabled）/ ftp 23 / webdav 22 / sftp 12 全绿；LateSweep 60 轮零失败；pause 族/桥接 30 轮压测**实测 1 失败**（V2PauseThenResume，round 29——初报「零失败」有误，更正；定性为独立缺陷 B29，见上）零告警；BUGS.md B28+B29 / todo.md 台账同步
+
 ### 2026-10-11 - Referer 原生化收编（V2 引擎发该头，适配层与 metalink 门禁同步摘除）
 - **背景**：V2 引擎 `prepare_http_request` 早已按 `options_.referer` 发出 Referer 头（http_commands.cpp），但 `V2HttpDownloadAdapter::supports()` 仍把 referer 列为「curl 专属能力」回退 V1——带 referer 的任务被无谓地挡在桥接外（metalink 桥接的 `v2_multi_source_gate` 本地复刻同一回退表，同缺陷双落点）
 - **修复**：两处门禁摘除 referer 回退（适配层 supports() + metalink 桥接门禁），注释改为「Referer 已原生化」；剩余回退项仅 socks/HTTPS 代理、cookie 引擎、HTTP 401 认证（均为 V2 未原生化能力，非本批范围）

@@ -20,6 +20,7 @@
 #include <falcon/event_listener.hpp>
 #include <falcon/exceptions.hpp>
 #include <falcon/logger.hpp>
+#include <falcon/protocols/fs_rename.hpp>
 
 #include <libssh2.h>
 #include <libssh2_sftp.h>
@@ -756,9 +757,11 @@ void download_once(DownloadTask::Ptr task, IEventListener* listener,
     if (start_offset > total) start_offset = 0; // 远端缩小 → 全新重下
     if (total > 0 && start_offset == total) {
         // 临时文件已完整 → 直接发布（此前尝试已收满但发布前中断）
-        if (std::rename(temp_path.c_str(), task->output_path().c_str()) != 0) {
+        const auto rr = protocols::detail::rename_with_retry(
+            temp_path, task->output_path());
+        if (!rr.ok) {
             throw FileIOException("SFTP: failed to publish completed file: " +
-                                  task->output_path());
+                                  task->output_path() + " (" + rr.error + ")");
         }
         task->update_progress(total, total, 0);
         task->set_status(TaskStatus::Completed);
@@ -839,9 +842,11 @@ void download_once(DownloadTask::Ptr task, IEventListener* listener,
                                " of " + std::to_string(total) + " bytes)");
     }
 
-    if (std::rename(temp_path.c_str(), task->output_path().c_str()) != 0) {
+    const auto rr = protocols::detail::rename_with_retry(
+        temp_path, task->output_path());
+    if (!rr.ok) {
         throw FileIOException("SFTP: failed to publish file: " +
-                              task->output_path());
+                              task->output_path() + " (" + rr.error + ")");
     }
     task->update_progress(total, total, 0);
     task->set_status(TaskStatus::Completed);

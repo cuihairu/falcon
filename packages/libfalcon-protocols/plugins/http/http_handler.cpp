@@ -7,6 +7,7 @@
 #include "v2_http_download_adapter.hpp"
 
 #include <falcon/protocols/segment_downloader.hpp>
+#include <falcon/protocols/fs_rename.hpp>
 #include <falcon/protocols/v2_engine_host.hpp>
 #include <falcon/exceptions.hpp>
 #include <falcon/logger.hpp>
@@ -574,7 +575,8 @@ public:
 
 #ifdef FALCON_USE_CURL
         // 注入命中时短路真实调用，避免已创建句柄在 throw 路径泄漏
-        CURL* curl = detail::inject_failure(detail::InjectPoint::CurlEasyInit)
+        CURL* curl = falcon::detail::inject_failure(
+                         falcon::detail::InjectPoint::CurlEasyInit)
                          ? nullptr
                          : curl_easy_init();
         if (!curl) {
@@ -727,7 +729,8 @@ public:
 
             // 注入命中时短路真实调用，避免已创建句柄在 throw 路径泄漏
             CURL* curl =
-                detail::inject_failure(detail::InjectPoint::CurlEasyInit)
+                falcon::detail::inject_failure(
+                    falcon::detail::InjectPoint::CurlEasyInit)
                     ? nullptr
                     : curl_easy_init();
             if (!curl) {
@@ -857,9 +860,15 @@ public:
                             temp_path);
                     }
                 } else {
-                    // Move temp file to final destination
-                    if (std::rename(temp_path.c_str(), task->output_path().c_str()) != 0) {
-                        throw FileIOException("Failed to move downloaded file to destination");
+                    // Move temp file to final destination。Windows 杀毒/
+                    // 索引对刚写完文件的瞬时句柄占用值得重试而不是直接
+                    // 判失败（数据已完整落盘）
+                    const auto rr = protocols::detail::rename_with_retry(
+                        temp_path, task->output_path());
+                    if (!rr.ok) {
+                        throw FileIOException(
+                            "Failed to move downloaded file to destination: " +
+                            rr.error);
                     }
                     // 终态进度记账：快速下载全程落在进度回调 200ms 节流
                     // 窗外时 update_progress 一次都没触发过——按成品尺寸

@@ -2754,3 +2754,41 @@ libtorrent 强依赖（当前 FALCON_ENABLE_BITTORRENT=OFF 为默认
   0.93s/0.98s 两次通过；本批零 engine/protocols 改动、该测试二进制未重建
   ——纯环境负载非本批引入），沿 b630c89 先例「rerun 复绿 + 记录，不改阈
   值」收口；CI run 38049163256（67cb228）8/8 job 全绿
+
+### 2026-10-11 - Windows CI 红面收口：发布改名 sharing violation（transient 门禁 + 指数退避，10 站点全族收编）
+- **红面**（run 38138445554 @ HEAD c56936b）：Windows cl 腿唯一红
+  `DownloadEngineV2Pause.LateSweepAfterResumeSparesNewCommands`（1623
+  例中 1 例），组 FAILED `<04-00>` vs COMPLETED，测试总时长 911ms；
+  本地 Linux 多次重放不复现（POSIX rename 对打开句柄零约束）
+- **归因**：错误消息 "The process cannot access the file because it
+  is being used by another process." = ERROR_SHARING_VIOLATION (32)；
+  外部持有者（Defender 实时扫描/索引器）在写端关闭后的短窗持有刚写
+  完的 `.falcon.tmp`，发布 `MoveFileEx` 即拒；既有 600ms 预算（4×
+  200ms 固定重试，f4aaca3）耗尽。按台账纪律走「归因+加固」路径
+- **加固**：新公共 helper `include/falcon/protocols/fs_rename.hpp`
+  ——transient 门禁 + 指数退避：只重试占用形错误（Windows 32/33、
+  POSIX EBUSY/ETXTBSY），永久错误（EISDIR/ENOENT/EACCES/EXDEV）首
+  次即收口零重试（既有失败路径用例零减速）；默认档 {100,200,400,
+  800,1600,3200}ms = 7 次尝试 ≈6.3s，每次合格重试 WARN 可观测。
+  **10 处发布改名站点全族收编**（沿「修了共享头 ≠ 修了同类基建」
+  纪律，protocols 包 8 文件）：http_commands publish_output（V2）/
+  http_handler（V1 curl）/ segment_downloader 合并发布（旧行为任何
+  改名失败删 GB 级成品）/ resume_control 控制文件（短档 {100,200,
+  400}，引擎线程上执行）/ metalink 两站点 / ftp、sftp、webdav 插件
+- **测试**：fs_rename_test.cpp 6 用例（脚本化错误码注入
+  rename_with_retry_fn：瞬时两族成功/耗尽放弃/永久零重试/首次成功
+  零 sleep/真实改名透传/真实 ENOENT 快败）。**顺带收口回归缺陷**：
+  fs_rename.hpp include 落进 `falcon::protocols::detail` 后，
+  http_handler.cpp + ftp_plugin.cpp 四处既有裸 `detail::inject_
+  failure` 查找被新命名空间俘获（编译红）——根限定 `falcon::detail::`
+  （沿 webdav_plugin.cpp 既有注释先例）。**测量教训**：在
+  `namespace falcon::protocols` 内的 TU 引入新的
+  `falcon::protocols::detail` 命名空间实体，会把同文件既有裸
+  `detail::` 查找从 `falcon::detail` 重定向到新命名空间——新增头
+  文件后必须 grep 同 TU 全部裸 `detail::` 查找核对俘获面
+- **验证**：protocols 880（879 过 + Upnp 设计内 skip）/ http 119
+  （117 过 + 2 skip + 1 disabled 设计内）/ ftp 23 / webdav 22 /
+  sftp 12 全绿；LateSweep 60 轮零失败；pause 族/桥接 30 轮压测
+  **实测 1 失败**（V2PauseThenResume，round 29——初报「零失败」
+  有误，更正）——定性为独立缺陷 B29 并修复（见 BUGS.md B29 行）
+  零告警

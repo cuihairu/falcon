@@ -994,6 +994,76 @@ TEST_F(MetalinkV2BridgeTest, V2PauseThenResume) {
     EXPECT_FALSE(fs::exists(part + ".falcon.ctrl"));
 }
 
+/// 迟到的暂停(CI run 38138445554 压测轮曝光的 B29 根因):暂停落在
+/// 引擎完成之后(200ms 轮询窗内组已终态)时,已下载完的成品必须照常
+/// 走完成发布——按挂起收口会把完整产物丢在 part 路径(resume 重注入
+/// 还会撞"输出文件已存在"覆盖门禁整活重下)。闩门把组完成时刻钉到
+/// 放行之后,暂停由测试线程在 part 出现(引擎侧组完成改名)后落下:
+/// 目标窗 = 暂停先于桥接收口;良性竞速 = 桥接先发布(任务已离开
+/// Downloading,跳过暂停),两形态在新代码下都收敛到 Completed
+TEST_F(MetalinkV2BridgeTest, V2LatePauseAfterCompletionStillPublishes) {
+    const std::string body = v2_test_body();
+    server().set_response("/lp1.bin",
+                          v2_range_response(body));
+    server().set_response("/lp2.bin",
+                          v2_range_response(body));
+    // 闩门:全部段连接(两镜像,任意 Range)发 1B 后挂起——组完成
+    // 时刻被钉到 release_holds() 之后(HEAD 不消费,照常探测)
+    server().set_hold_body("/lp1.bin", 1);
+    server().set_hold_body("/lp2.bin", 1);
+    const std::string doc = local_meta4(
+        "<file name=\"out8.bin\">"
+        "<size>32</size>"
+        "<hash type=\"sha-256\">" + sha256_hex(body) + "</hash>"
+        "<url priority=\"1\">" + server().url("/lp1.bin") + "</url>"
+        "<url priority=\"2\">" + server().url("/lp2.bin") + "</url>"
+        "</file>");
+
+    DownloadOptions options;
+    options.output_directory = dir_.string();
+    options.max_connections = 4;
+    options.min_segment_size = 8;
+    auto task = make_task(108, doc, options);
+    RecordingListener listener;
+    task->set_listener(&listener);
+    task->set_status(TaskStatus::Downloading);
+
+    std::thread worker([&] { handler_->download(task, &listener); });
+    // 等 4 个段连接各持 1B 全部挂起(组进度=4B;桥接 200ms 粒度转发)
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (task->downloaded_bytes() < 4 &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    ASSERT_GE(task->downloaded_bytes(), 4u);
+
+    server().release_holds();
+    const std::string part =
+        (dir_.path() / "out8.bin.metalink-part").string();
+    // 等完成信号:引擎改名发布 part(组完成的确定性文件级签名),或
+    // 桥接先收口(良性竞速——任务已离开 Downloading,直接进断言)
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (fs::exists(part) || task->status() != TaskStatus::Downloading) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    // 迟到暂停:仅当桥接尚未收口(目标窗)才落——完成后再暂停把
+    // Paused 盖回 Completed 是测试自己的缺陷,绝不制造
+    if (task->status() == TaskStatus::Downloading) {
+        handler_->pause(task);
+    }
+    worker.join();
+
+    // 暂停落在完成之后:已完成的下载照常发布,不按挂起收口
+    ASSERT_EQ(task->status(), TaskStatus::Completed);
+    EXPECT_EQ(read_file((dir_.path() / "out8.bin").string()), body);
+    EXPECT_FALSE(fs::exists(part));
+    EXPECT_FALSE(fs::exists(part + ".falcon.tmp"));
+    EXPECT_FALSE(fs::exists(part + ".falcon.ctrl"));
+}
+
 /// V2 组失败回落:两镜像 GET 对 start>0 的 Range 一律 500 且重试
 /// 预算 0 → 组快速 FAILED → 清混源残留 → 阶段1 回落。镜像 1 的
 /// HEAD 探测切换 GET 剧本(无 Range 平凡响应),回落串行单连接

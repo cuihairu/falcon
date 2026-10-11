@@ -269,6 +269,19 @@ public:
         fail_immediates_[path] = SlowSpec{0, 0, range_start};
     }
 
+    /// 闩门：对匹配 Range（range_start<0 则任意请求）发送响应头与
+    /// 前 prefix_bytes 字节后挂起，直到 release_holds() 放行再发完
+    /// 剩余 body——把"组完成时刻"钉到测试线程的确定点之后（迟到
+    /// 暂停/取消类时序钉子的服务器侧控制端）
+    void set_hold_body(const std::string& path, size_t prefix_bytes,
+                       long range_start = -1) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        holds_[path] = SlowSpec{0, prefix_bytes, range_start};
+    }
+
+    /// 放行全部闩门（幂等；未挂起的连接不受影响）
+    void release_holds() { holds_released_.store(true); }
+
     /// HEAD 专用应答（GET 保持 set_response/script 剧本不变）。引擎
     /// 数据面（V2）纯 GET 不会产生 HEAD,而 HEAD 探测只出现在下载
     /// 入口——可借此按阶段切换剧本。flip_get=true 时首个 HEAD 之后
@@ -421,6 +434,7 @@ private:
             size_t slow_chunk = 32;
             size_t abort_after = 0;
             bool abort_match = false;
+            size_t hold_prefix = 0;  // 闩门前缀字节数（0 = 未挂起）
             // 查表键剥除 query（记录保留原样供断言）
             std::string route = rec.path;
             const size_t qpos = route.find('?');
@@ -509,6 +523,14 @@ private:
                     abort_after = a->second.chunk;  // 复用 chunk 存字节数
                     abort_match = true;
                     abort_.erase(a);  // 一次性
+                }
+                auto h = holds_.find(route);
+                if (h != holds_.end() && rec.method != "HEAD" &&
+                    (h->second.range_start < 0 ||
+                     h->second.range_start == request_range_start)) {
+                    // HEAD 不消费：闩门是「发部分 body 后挂起」语义，
+                    // HEAD 无 body（不一次性——重注入的新连接同样需要挂起）
+                    hold_prefix = h->second.chunk;  // 复用 chunk 存前缀字节数
                 }
             }
 
@@ -602,6 +624,19 @@ private:
             }
             if (!send_all(fd, out)) break;
             if (rec.method != "HEAD") {
+                if (hold_prefix > 0 && hold_prefix < body.size()) {
+                    // 闩门：发前缀后挂起，直到 release_holds()（或停机）
+                    // 再发完剩余——「组完成时刻」由此钉在放行之后，
+                    // 迟到暂停/取消类钉子的确定性控制端
+                    if (!send_all(fd, body.substr(0, hold_prefix))) break;
+                    while (!holds_released_.load() && running_.load()) {
+                        std::this_thread::sleep_for(
+                            std::chrono::milliseconds(10));
+                    }
+                    if (!running_.load()) break;
+                    send_all(fd, body.substr(hold_prefix));
+                    break;  // 发完即关（Content-Length 定界，客户端照常收口）
+                }
                 if (abort_match && abort_after > 0 && abort_after < body.size()) {
                     // 发出部分数据后硬断连：客户端按 Content-Length 判短传
                     send_all(fd, body.substr(0, abort_after));
@@ -636,6 +671,8 @@ private:
     std::unordered_map<std::string, SlowSpec> abort_;
     std::unordered_map<std::string, SlowSpec> black_holes_;
     std::unordered_map<std::string, SlowSpec> fail_immediates_;
+    std::unordered_map<std::string, SlowSpec> holds_;
+    std::atomic<bool> holds_released_{false};
     std::unordered_map<std::string, FakeResponse> head_responses_;
     std::unordered_map<std::string, bool> head_flip_get_;
 

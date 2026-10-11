@@ -21,6 +21,7 @@
 
 #include <falcon/exceptions.hpp>
 #include <falcon/logger.hpp>
+#include <falcon/protocols/fs_rename.hpp>
 
 #include <curl/curl.h>
 
@@ -321,8 +322,14 @@ void WebdavHandler::download(DownloadTask::Ptr task, IEventListener* listener) {
         // 未开 FAILONERROR：4xx/5xx 也走 CURLE_OK——不查状态码就会把
         // 错误页 body 改名成成品。>=400 一律按失败收口，残量留给重试。
         if (res == CURLE_OK && response_code < 400) {
-            if (std::rename(temp_path.c_str(), task->output_path().c_str()) != 0) {
-                throw FileIOException("Failed to move downloaded file to destination");
+            // Windows 杀毒/索引对刚写完文件的瞬时句柄占用值得重试而不
+            // 是直接判失败（数据已完整落盘）
+            const auto rr = detail::rename_with_retry(
+                temp_path, task->output_path());
+            if (!rr.ok) {
+                throw FileIOException(
+                    "Failed to move downloaded file to destination: " +
+                    rr.error);
             }
             task->set_status(TaskStatus::Completed);
             return;

@@ -6,6 +6,7 @@
  */
 
 #include <falcon/protocols/resume_control.hpp>
+#include <falcon/protocols/fs_rename.hpp>
 #include <falcon/logger.hpp>
 
 #include <cstdio>
@@ -91,9 +92,16 @@ bool save_resume_control(const std::string& path, const ResumeControl& control) 
         }
     }
 
-    std::error_code ec;
-    std::filesystem::rename(tmp_path, path, ec);
-    if (ec) {
+    // 控制文件保存跑在引擎线程（限频节流+暂停清扫路径），退避节奏取
+    // 短档 {100,200,400}；瞬时占用重试失败再退化为直接覆写（控制文件
+    // 丢失只影响续传起点，不影响正确性）
+    const auto rr = protocols::detail::rename_with_retry(
+        tmp_path, path, {100, 200, 400});
+    if (rr.ok) {
+        return true;
+    }
+    {
+        std::error_code ec;
         // 跨设备 rename 等异常场景：退化为直接覆写（控制文件丢失只
         // 影响续传起点，不影响正确性）
         std::filesystem::copy_file(tmp_path, path,

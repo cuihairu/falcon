@@ -95,6 +95,19 @@ void V2HttpDownloadAdapter::run() {
 
         const auto v1_status = task_->status();
         if (v1_status == TaskStatus::Paused) {
+            // 迟到的暂停：暂停落在引擎完成之后（200ms 轮询窗内组已
+            // 终态）时按完成收口——组完成即成品已由 temp_extension
+            // 发布到最终路径，按挂起收口会让 resume 重注入撞"输出
+            // 文件已存在"覆盖门禁，把完整成品报成失败
+            if (auto e = host->try_engine(); e) {
+                if (auto* g = e->request_group_man()->find_group(id);
+                    g != nullptr &&
+                    g->status() == RequestGroupStatus::COMPLETED) {
+                    sync_final_progress(*g);
+                    task_->set_status(TaskStatus::Completed);
+                    return;
+                }
+            }
             // 兜底同步（正常路径 HttpHandler::pause 已转发，幂等）
             engine->pause_task(id);
             return;
