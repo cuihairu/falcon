@@ -1,6 +1,6 @@
 <div align="center">
 
-  <img src="./assets/falcon.png" alt="Falcon Logo" width="200"/>
+  <img src="./assets/falcon.png" alt="Falcon Logo" width="64" height="64"/>
 
   # Falcon
 
