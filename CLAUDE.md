@@ -2,6 +2,12 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-12 - epoll DEL ENOENT 噪声两根因根治（teardown fd 二次摘除收口）
+- **定性**：V2 引擎 teardown 日志的 `epoll_ctl(DEL) 失败: No such file or directory`（桥接 teardown 测试 3-4 次/轮）= 两处独立的「fd 号在摘除后不作废、命令对象带旧号码留存」二次摘除：① `drain_command_fds()` 停机排水对等待表/队列残留命令的 fd 无条件 remove_event/close，其中部分已被超时清理/暂停清扫提前摘除；② 纪元守卫收口 stale 命令时，其 fd 已被事件唤醒的 one-shot 路径（handle_socket_ready）摘过注册，回队后再被守卫摘一次。前一批次仅归因为排水单点（memory 台账），本轮全量 grep 到 `V2GroupRemovedDuringBridgeFallsBackToSerial` 仍 1 次后实锤双根因
+- **修复**（download_engine_v2.cpp，零行为变化只收噪声与窗口）：① 排水改为锁内快照 `socket_command_map_`（fd-keyed）全部注册 fd，等待表与队列两条收集路径只排注册在案的 fd（`registered_fds` 快照在 run() 退出后无并发面，无需跨锁过滤）；② 纪元守卫仅当 `socket_command_map_[stale_fd] == command->id()` 才 remove_event——顺带消除 fd 号复用时误摘新命令注册的隐患（close 不受限：命令对象活着持有 fd，号码不可能被复用）
+- **A/B 验证（同树前后对照）**：`V2EngineShutdownDuringBridgeFallsBackToSerial` 修复前 3 次 ENOENT → 修复后 0；`V2GroupRemovedDuringBridgeFallsBackToSerial` 纪元守卫点 1 次 → 0；全量 falcon_http_tests 118 过 ENOENT 0 / falcon_protocols_tests 879 过（仅余 EventPollTest 负向用例 3 次设计内）；MetalinkV2BridgeTest + pause 族/ShutdownDrainsParkedCommandFd/BlackHole 族 20+20 轮压测零失败零噪声；ASan 双套件零告警
+- **测量教训**：`socket_wait_map_` 是 CommandId-keyed 不能用于 fd 归属判定——fd 归属/注册检查必须用 fd-keyed 的 `socket_command_map_`；新增 remove_event 调用点必须先校验 `socket_command_map_[fd] == 本命令 id`（one-shot 唤醒路径摘注册后命令回队的形态，任何「按命令对象里的旧 fd 号摘事件」的代码都可能双重摘除）
+
 ### 2026-10-12 - V2 桥接「迟到暂停」丢完成发布根修（B29：run 38138445554 同族红面第二根因）
 - **复现与定性**：B28 修复后的本机压测 pause 族/桥接 30 轮**实测 1 失败**（round 29 `V2PauseThenResume`——初报「零失败」系未核对完整输出，已在 BUGS/todo 台账更正）——暂停落在引擎完成之后（200ms 轮询窗内组已 COMPLETED）时桥接按挂起收口：metalink 桥接把已校验成品丢在 `.metalink-part` 路径（resume 重注入还撞「输出文件已存在」门禁整活重下），V2 适配器把已发布成品报成 Paused（resume 恒失败）。根因：两处桥接轮询 Paused 分支只转发 `pause_task` 不查组状态，pause() 先置 parent Paused、终态组被幂等拒绝，完成路径永远走不到
 - **修复**（metalink_handler.cpp run_v2_multi_source + v2_http_download_adapter.cpp run，两站点同形）：Paused 分支内先查组 COMPLETED → 照常完成收口（metalink `return kCompleted` 走既有 verify→rename→Completed 链；adapter `sync_final_progress` + Completed）；Cancelled 不变（取消优先）；「组已 PAUSED 不重复 pause_task」纪律保持

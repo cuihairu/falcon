@@ -15,6 +15,7 @@
 #include <chrono>
 #include <limits>
 #include <mutex>
+#include <set>
 #ifndef _WIN32
 #include <unistd.h>  // close
 #else
@@ -585,11 +586,18 @@ void DownloadEngineV2::run() {
 
 void DownloadEngineV2::drain_command_fds() {
     std::vector<int> fds;
+    std::set<int> registered_fds;  // 停机时刻仍在监听集注册的 fd
     {
         std::lock_guard<std::mutex> lock(socket_map_mutex_);
+        for (const auto& [fd, cmd_id] : socket_command_map_) {
+            registered_fds.insert(fd);
+        }
         for (auto& entry : waiting_commands_) {
             const int fd = entry.second ? entry.second->socket_fd() : -1;
-            if (fd >= 0) {
+            // 命令对象持有的 fd 号在摘除后不作废——已被超时清理/暂停清扫/
+            // 纪元守卫提前摘除的 fd 在此必须跳过：既消除双重摘除的
+            // epoll ENOENT 噪声，也避免停机瞬间 fd 号复用时误关新连接
+            if (fd >= 0 && registered_fds.count(fd) > 0) {
                 fds.push_back(fd);
             }
         }
@@ -608,6 +616,13 @@ void DownloadEngineV2::drain_command_fds() {
         }
         command_queue_.clear();
     }
+    // 队列残留命令的 fd 同样只排注册在案的（registered_fds 是停机时刻
+    // 的注册快照；run() 退出后映射不再变化，无并发面）
+    fds.erase(std::remove_if(fds.begin(), fds.end(),
+                             [&registered_fds](int fd) {
+                                 return registered_fds.count(fd) == 0;
+                             }),
+              fds.end());
 
     for (const int fd : fds) {
         // EventPoll::poll 在 run() 线程内同步派发回调，此处循环已退出，
@@ -662,12 +677,20 @@ void DownloadEngineV2::execute_commands() {
                                       << ", task=" << command->get_task_id());
                 const int stale_fd = command->socket_fd();
                 if (stale_fd >= 0) {
+                    bool owns_registration = false;
                     {
                         std::lock_guard<std::mutex> lock(socket_map_mutex_);
+                        auto scm = socket_command_map_.find(stale_fd);
+                        owns_registration =
+                            scm != socket_command_map_.end() &&
+                            scm->second == command->id();
                         socket_wait_map_.erase(command->id());
                         socket_command_map_.erase(stale_fd);
                     }
-                    if (event_poll_) {
+                    // 仅当本命令仍持有该 fd 的事件注册才摘除：事件唤醒
+                    // 的 one-shot 路径可能已先摘除（双重摘除 = epoll
+                    // ENOENT 噪声），fd 号复用时更不能摘掉新命令的注册
+                    if (owns_registration && event_poll_) {
                         event_poll_->remove_event(stale_fd);
                     }
                     close_socket_fd(stale_fd);
