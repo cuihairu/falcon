@@ -46,6 +46,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -599,7 +600,35 @@ TEST_F(PauseResumeE2E, RepeatedPauseResumeCyclesComplete) {
         EXPECT_TRUE(reached) << "第 " << cycle << " 轮继续后应进入下载中";
     }
 
+    // 诊断快照（无条件落 stdout，不挂断言消息——等待超时/红面时状态
+    // 快照是定位依据；CI 红面曾现终态 Failed 且无成品但日志零错误）
+    std::cout << "[diag] cycles done: status="
+              << static_cast<int>(task->status())
+              << " err='" << task->error_message() << "'"
+              << " downloaded=" << task->downloaded_bytes()
+              << " total=" << task->total_bytes() << std::endl;
+
     EXPECT_TRUE(task->wait_for(std::chrono::seconds(90)));
+
+    // 终态诊断快照 + 输出目录文件清单（半成品/段文件残留形态可见）
+    std::cout << "[diag] final: status="
+              << static_cast<int>(task->status())
+              << " err='" << task->error_message() << "'" << std::endl;
+    {
+        std::error_code iter_ec;
+        for (std::filesystem::directory_iterator it(output_dir, iter_ec),
+             end;
+             !iter_ec && it != end; it.increment(iter_ec)) {
+            std::error_code sz_ec;
+            const auto sz = std::filesystem::file_size(it->path(), sz_ec);
+            std::cout << "[diag]   " << it->path().filename().string()
+                      << " size="
+                      << (sz_ec ? 0ULL
+                                : static_cast<unsigned long long>(sz))
+                      << std::endl;
+        }
+    }
+
     EXPECT_EQ(task->status(), TaskStatus::Completed)
         << "三次反复暂停→继续后任务应完成";
 

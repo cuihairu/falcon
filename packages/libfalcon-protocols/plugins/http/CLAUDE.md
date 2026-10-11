@@ -6,6 +6,12 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-11 - 陈旧失败收口守卫（B11 镜像）+ 段失败可观测性三处收口
+- **缺陷（Windows CI 红面 PauseResumeE2E.RepeatedPauseResumeCyclesComplete，1/1618）**：download() 实际运行在 TaskManager 的 download_pool_ 线程（worker 仅出队置 Downloading 后 submit），pause→resume 可在旧 attempt 尚未收尾时把同 id 任务重新派发——旧 attempt 的失败抛出被 worker catch 改写成 Failed，覆盖已被新 attempt 接管的任务；新 attempt 的 start 前终态复查见 Failed 静默返回 → 任务永久 Failed 且无成品（循环内断言全绿、终态 Failed、成品缺失、引擎日志零错误）
+- **修复**：失败退出归类新增守卫 `downloader->cancel_preserved() || task->is_finished() || task->status() == Paused` → 静默 return 不抛——preserve 标志只在用户暂停路径（cancel_preserve_segments）置位，是本实例「经历过暂停接管」的机制级信号；段断点已保留，真正的永久失败由续跑方再次失败并如实上报。新增 `cancel_preserved()`/`failure_message()` 两个访问器（FailureState mutex 改 mutable 供 const 查询）
+- **可观测性三处收口**：① `download_segment_curl` 三个静默失败出口（400+ 状态、206 门禁拒绝、res != CURLE_OK）补 FALCON_LOG_WARN（含 response_code/range/url/curl_easy_strerror）；② `download_segment` 的 `success==false && !cancelled_` 未分类缺口补 last_error 记账（重试耗尽不再回落常量文案）；③ `RepeatedPauseResumeCyclesComplete` 终态前无条件 [diag] 快照（status/error_message/进度/输出目录文件清单）——gtest 失败时回放，红面定位不再依赖引擎日志
+- **验证**：PauseResumeE2E 20/20 绿；falcon_protocols_tests 全量（FileHashTest.PerformanceLargeFile 负载抖动惯犯串行复跑即过）；falcon_http_tests / daemon main+lifecycle / cli_integration 全绿
+
 ### 2026-09-30 - P0：timeout_seconds 改停滞看门狗（LOW_SPEED 映射，aria2 --timeout 同语义）
 - **缺陷**：`download_segment_curl`/`download_single` 两站点把
   `timeout_seconds` 映射 CURLOPT_TIMEOUT（整传输硬上限）——默认
@@ -61,6 +67,15 @@
   触碰——SegmentFileOccupied 红线）。注册侧：同 id 旧实例
   stale-wait（5s 上限）+ 指针比较 EraseGuard（迟到旧 attempt
   不得抹掉新条目）+ start 前终态复查（孤儿 attempt 防御）
+- **陈旧失败收口守卫（B11 镜像）**：失败退出（`was_failed()`）在
+  `cancel_preserved() || is_finished() || status==Paused` 时静默
+  return 不抛——download 运行在 download_pool_ 线程（worker 仅出队
+  置 Downloading 后 submit），pause→resume 可在旧 attempt 尚未收尾
+  时重派同 id 任务；旧 attempt 的失败抛出会被 worker catch 改写成
+  Failed 覆盖新 attempt 接管的任务，新 attempt 的 start 前终态复查
+  见 Failed 静默返回 → 永久 Failed 无成品。preserve 标志只在用户
+  暂停路径置位，是「经历过暂停接管」的机制级信号；段断点已保留，
+  真正的永久失败由续跑方再次失败并如实上报
 - 现代 libcurl 自带 resume 守卫：续传请求被 200 应答即
   CURLE_RANGE_ERROR 先拒——handler 内的 200-check 清空重下分支
   是老 curl 纵深防御，新 curl 下不可达

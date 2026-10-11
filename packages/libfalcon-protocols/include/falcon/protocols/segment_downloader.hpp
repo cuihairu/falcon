@@ -203,6 +203,20 @@ public:
         return failed_.load(std::memory_order_acquire);
     }
 
+    /// 段断点保留标志查询：该标志仅在用户暂停路径
+    /// （cancel_preserve_segments）置位——start() 返回 false 且
+    /// was_failed() 为真时若本标志为真，说明本实例的失败退出发生
+    /// 在暂停接管之后（旧 attempt 的迟到失败收口，任务归属已可能
+    /// 转移给同 id 的新一轮 attempt）
+    [[nodiscard]] bool cancel_preserved() const noexcept {
+        return preserve_segments_.load(std::memory_order_acquire);
+    }
+
+    /// 失败消息查询：段失败收口时最后记账的原因（重试耗尽时置位），
+    /// 供 handler 层拼进任务错误消息——替代常量文案让日志可定位；
+    /// 无记账返回空串
+    [[nodiscard]] std::string failure_message() const;
+
     /// Check if download is active
     [[nodiscard]] bool is_active() const noexcept;
 
@@ -277,7 +291,8 @@ private:
 
 private:
     struct FailureState {
-        std::mutex mutex;
+        /// failure_message() 是 const 查询——读锁经 mutable 互斥量
+        mutable std::mutex mutex;
         std::optional<std::string> message;
     };
 

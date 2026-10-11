@@ -9,6 +9,7 @@
 #include <falcon/protocols/segment_downloader.hpp>
 #include <falcon/protocols/v2_engine_host.hpp>
 #include <falcon/exceptions.hpp>
+#include <falcon/logger.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
@@ -478,6 +479,8 @@ static bool download_segment_curl(
     curl_easy_cleanup(curl);
 
     if (res == CURLE_OK && response_code >= 400) {
+        FALCON_LOG_WARN("HTTP segment failed: status {} for range {}-{} of {}",
+                        response_code, start, end, url);
         return false;
     }
 
@@ -485,11 +488,19 @@ static bool download_segment_curl(
     // 整个文件，追加进已有段文件即静默损坏——截回本次续传起点按失败
     // 收尾（重试机制接管），绝不把损坏数据留给 merge
     if (res == CURLE_OK && start > 0 && response_code != 206) {
+        FALCON_LOG_WARN(
+            "HTTP segment range ignored: status {} for range {}-{} of {}",
+            response_code, start, end, url);
         if (existing_size > 0) {
             std::error_code resize_ec;
             std::filesystem::resize_file(output_path, existing_size, resize_ec);
         }
         return false;
+    }
+
+    if (res != CURLE_OK) {
+        FALCON_LOG_WARN("HTTP segment curl error: {} for range {}-{} of {}",
+                        curl_easy_strerror(res), start, end, url);
     }
 
     return res == CURLE_OK && !cancelled.load();
@@ -1024,7 +1035,25 @@ public:
             }
             task->set_status(TaskStatus::Completed);
         } else if (downloader->was_failed()) {
-            throw FileIOException("Segmented download failed");
+            // 陈旧失败收口守卫（B11 的镜像）：download() 实际运行在
+            // TaskManager 的 download_pool_ 线程（worker 仅出队置
+            // Downloading 后 submit），pause→resume 可在旧 attempt
+            // 尚未收尾时把同 id 任务重新派发——旧 attempt 的失败抛
+            // 出会被 worker catch 改写成 Failed，覆盖已被新 attempt
+            // 接管（或已回 Pending/终态）的任务；新 attempt 的 start
+            // 前终态复查见 Failed 静默返回 → 任务永久 Failed 且无
+            // 成品（Windows CI 红面：循环内断言全绿、终态 Failed、
+            // 成品缺失）。preserve 标志只在用户暂停路径置位，是本
+            // 实例「经历过暂停接管」的机制级信号；段断点已保留，
+            // 真正的永久失败由续跑方再次失败并如实上报
+            if (downloader->cancel_preserved() || task->is_finished() ||
+                task->status() == TaskStatus::Paused) {
+                return;
+            }
+            const auto reason = downloader->failure_message();
+            throw FileIOException(reason.empty()
+                                      ? "Segmented download failed"
+                                      : reason);
         } else {
             // 用户停止（pause/cancel）的正常收口，非失败语义——任务
             // 状态归 pause/resume 调用方所有，此处不触碰

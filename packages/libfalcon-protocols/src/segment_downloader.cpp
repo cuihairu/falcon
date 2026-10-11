@@ -475,6 +475,12 @@ void SegmentDownloader::download_segment(
                              std::to_string(size_ec ? 0 : actual_size) + ")";
             } else if (cancelled_.load()) {
                 break;
+            } else if (!success) {
+                // download_func 返回 false（curl 传输失败/HTTP 状态拒绝/
+                // Range 被忽略）——异常路径已在上方 catch 记账，此处兜底
+                // 非异常失败，免得重试耗尽时只能回落常量文案
+                last_error = "Segment download attempt failed: seg" +
+                             std::to_string(segment->index);
             }
 
         } catch (const std::exception& e) {
@@ -721,6 +727,11 @@ void SegmentDownloader::update_progress() {
 
 bool SegmentDownloader::is_active() const noexcept {
     return running_.load() && !paused_.load();
+}
+
+std::string SegmentDownloader::failure_message() const {
+    std::lock_guard<std::mutex> lock(failure_.mutex);
+    return failure_.message.value_or("");
 }
 
 float SegmentDownloader::progress() const noexcept {
