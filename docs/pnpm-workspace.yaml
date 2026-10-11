@@ -1,0 +1,9 @@
+# Security pins for transitive dependencies (Dependabot alerts).
+# pnpm 10 reads overrides from this file, not from package.json.
+overrides:
+  vite: ^6.4.3
+  esbuild: ^0.25.0
+  postcss: ^8.5.23
+  nanoid: ^3.3.18
+  source-map-js: ^1.2.2
+  vue: ^3.5.42
