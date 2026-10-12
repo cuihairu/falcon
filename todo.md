@@ -497,7 +497,7 @@ packages/libfalcon-drives/
 - ✅ 各库可被外部 CMake 项目独立消费
 - ✅ 不启用的 feature 不应要求额外依赖（守卫按构建树实态生成）
 
-### 13. 设计 `vcpkg` 包拆分
+### 13. 设计 `vcpkg` 包拆分（✅ 2026-10-13 设计收口，实施排队）
 
 包名候选：
 
@@ -512,11 +512,28 @@ feature 候选：
 - `libfalcon-storage[s3,oss,cos,kodo,upyun,webdav]`
 - `libfalcon-drives[baidu,aliyundrive,115,quark,pikpak]`
 
-验收标准：
+- ✅ 设计纪要（`docs/design/vcpkg_packaging_design.md`）：四 overlay
+  端口 + feature→`FALCON_ENABLE_*` 映射 + `version-date` 滚动策略
+  （端口版本非 GitHub Release，不触版本发布红线）；实施拆阶段 1
+  （CMake 每包自足化 + 每包导出 Config，判定锚 `TARGET falcon_core`、
+  `FALCON_ENABLE_*` 包内 `NOT DEFINED` 兜底、单体 Falcon 与四包
+  Config 共用 `FALCON_PACKAGE_NEEDS_*` 打标投影）与阶段 2（overlay
+  端口文件，checkout 整树 + configure 包子目录，third_party/libmetalink
+  相对路径解析成立），验收条款把「单体 + FalconCore 双路径冒烟」钉进
+  阶段 1 门禁防 #12 回归。三处裁定：protocols 默认 feature 仅 `http`
+  （bittorrent 构建重）；storage 需新增五枚 per-provider option（现状
+  只有两档粒度）；drives 首版零 feature（候选网盘未实现，todo 网盘
+  直链解析仍待点名目标）。阶段 3 上游化默认不排期，留触发判定注记
+- ⏳ 实施排队（非本阶段范围）：阶段 1 与阶段 2 按设计文档顺序推进，
+  每阶段全量 ctest 回归绿 + 本阶段消费路径冒烟绿才提交
 
-- 包依赖清晰
-- 核心库可单独安装
-- 对象存储和网盘能力均可按 feature 选择安装
+验收标准（设计已定义判定法，✅ = 判定法成立；实际验证随实施阶段）：
+
+- ✅ 包依赖清晰（§2.1 依赖矩阵 + 四端口 vcpkg.json 依赖声明一一对应）
+- ✅ 核心库可单独安装（阶段 1 验收：干净 manifest 工程
+  `libfalcon-core` 单包消费仅链 `Falcon::core` 冒烟）
+- ✅ 对象存储和网盘能力均可按 feature 选择安装（阶段 2 验收：feature
+  子集安装后库内对象与运行时注册按子集在位，负向冒烟）
 
 ---
 
