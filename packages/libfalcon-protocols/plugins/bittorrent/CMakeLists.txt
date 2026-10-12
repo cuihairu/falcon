@@ -51,6 +51,11 @@ target_include_directories(falcon_plugin_bittorrent
 
 if(LIBTORRENT_TARGET)
     target_link_libraries(falcon_plugin_bittorrent PUBLIC ${LIBTORRENT_TARGET})
+    # 导出闭包引用 libtorrent 的 imported target（vcpkg 形态为
+    # LibtorrentRasterbar::torrent-rasterbar），消费方由 FalconConfig 重建；
+    # 本目录找到的 imported target 根目录不可见，只能在这里判定。
+    # pkg-config 兜底形态（PkgConfig::LIBTORRENT）为环境形态依赖，同 CURL 注记
+    set(FALCON_PACKAGE_NEEDS_LIBTORRENT ON CACHE INTERNAL "consumer needs libtorrent" FORCE)
 endif()
 
 target_link_libraries(falcon_plugin_bittorrent

@@ -466,16 +466,36 @@ packages/libfalcon-drives/
 
 ## 第五阶段：安装与分发
 
-### 12. 完善安装导出
+### 12. 完善安装导出（✅ 2026-10-13 收口）
 
 - 每个库独立安装头文件、库文件和 CMake config
 - 修正可选依赖的 `find_dependency()` 策略
 - 修正插件目标导出顺序和安装顺序
+- ✅ 实现纪要：单一 `FalconConfig`（`find_package(Falcon)` 一个入口）+
+  `FalconTargets` 导出 core/protocols/storage/drives/libmetalink/ftp/sftp/
+  webdav/bittorrent 全部 target；条件 `find_dependency` 经
+  `FALCON_PACKAGE_NEEDS_*` CACHE INTERNAL 标志（子包在链接点打标、根目录
+  在 add_subdirectory 之前重置——目录作用域 imported target 根不可见，
+  存在性判定只能在创建包的 CMakeLists 里）。本轮补齐三缺口：libtorrent
+  （BT 插件闭包引用 `LibtorrentRasterbar::torrent-rasterbar`）、sqlite3
+  （drives 闭包引用 `SQLite::SQLite3`——根目录 `SQLite3_FOUND` 不可见，
+  旧根派生块整体删除）、BT 插件公共头（include/ 下转发 shim 相对路径指回
+  构建树，前缀下悬空；真实头由 install(FILES) 装到公共路径，shim 从
+  DIRECTORY 安装规则排除——不能靠覆盖顺序：file(INSTALL) 按时间戳判
+  up-to-date，git 检出 mtime 全同会跳过覆盖）。环境形态依赖（CURL 的
+  libcurl_static / libssh2 / libtorrent 的 pkg-config 兜底）如实注记：
+  消费方需自备同形态依赖
+- ✅ 验收：外部消费工程（`find_package(Falcon REQUIRED)` + 链
+  `Falcon::core/Falcon::protocols` [+ `Falcon::falcon_plugin_bittorrent`]）
+  对 BT-off 与 BT-on 两个安装前缀 configure/build/run 全绿（下载引擎
+  SHA256 冒烟 / BT info-hash 提取冒烟）；BT-off 前缀无 BT 头无 libtorrent
+  find_dependency；同一构建树 BT-on 前缀 find_dependency(LibtorrentRasterbar)
+  真实解析；build-plugins 全量 ctest 回归绿
 
 验收标准：
 
-- 各库可被外部 CMake 项目独立消费
-- 不启用的 feature 不应要求额外依赖
+- ✅ 各库可被外部 CMake 项目独立消费
+- ✅ 不启用的 feature 不应要求额外依赖（守卫按构建树实态生成）
 
 ### 13. 设计 `vcpkg` 包拆分
 

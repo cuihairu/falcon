@@ -34,6 +34,10 @@ add_library(falcon_core
 
 add_library(Falcon::core ALIAS falcon_core)
 
+# 导出名与文档/别名一致（Falcon::core）——默认导出名为真实 target 名
+# （Falcon::falcon_core），外部消费方按别名找不到目标
+set_target_properties(falcon_core PROPERTIES EXPORT_NAME core)
+
 target_include_directories(falcon_core
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

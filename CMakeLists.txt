@@ -144,6 +144,15 @@ endif()
 # ============================================================================
 
 # 核心库（拆分为四个独立包）
+# 导出闭包重建标志的消费方重置：必须在 add_subdirectory 之前（子包 CMakeLists
+# 在链接发生时 FORCE 置 ON，根目录在 configure_package_config_file 时读取）。
+# 目录作用域的 imported target（子目录 find_package 创建的）根不可见，
+# 存在性判定只能放在创建它的包 CMakeLists 里。
+set(FALCON_PACKAGE_NEEDS_MINIUPNPC OFF CACHE INTERNAL "consumer needs miniupnpc" FORCE)
+set(FALCON_PACKAGE_NEEDS_NATPMP OFF CACHE INTERNAL "consumer needs libnatpmp" FORCE)
+set(FALCON_PACKAGE_NEEDS_LIBSSH2 OFF CACHE INTERNAL "consumer needs libssh2" FORCE)
+set(FALCON_PACKAGE_NEEDS_LIBTORRENT OFF CACHE INTERNAL "consumer needs libtorrent" FORCE)
+set(FALCON_PACKAGE_NEEDS_SQLITE3 OFF CACHE INTERNAL "consumer needs sqlite3" FORCE)
 add_subdirectory(packages/libfalcon-core)
 add_subdirectory(packages/libfalcon-protocols)
 add_subdirectory(packages/libfalcon-storage)
@@ -292,9 +301,14 @@ elseif(OPENSSL_FOUND)
     set(FALCON_PACKAGE_NEEDS_OPENSSL ON)
 endif()
 
-set(FALCON_PACKAGE_NEEDS_SQLITE3 OFF)
-if(SQLite3_FOUND AND FALCON_ENABLE_CONFIG_MANAGER)
-    set(FALCON_PACKAGE_NEEDS_SQLITE3 ON)
+# sqlite3 标志由 libfalcon-drives 在链接点打标（其 find_package 的结果
+# 目录作用域内，根目录 SQLite3_FOUND 不可见），见 drives CMakeLists
+
+# vendored libmetalink 的 PRIVATE 静态依赖 expat：libmetalink 是普通（非
+# imported）目标，根目录可见，可在此判定
+set(FALCON_PACKAGE_NEEDS_EXPAT OFF)
+if(TARGET libmetalink)
+    set(FALCON_PACKAGE_NEEDS_EXPAT ON)
 endif()
 
 configure_package_config_file(

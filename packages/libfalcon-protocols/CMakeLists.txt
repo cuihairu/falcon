@@ -37,6 +37,9 @@ endif()
 
 add_library(Falcon::protocols ALIAS falcon_protocols)
 
+# 导出名与文档/别名一致（Falcon::protocols），理由同 falcon_core
+set_target_properties(falcon_protocols PROPERTIES EXPORT_NAME protocols)
+
 target_include_directories(falcon_protocols
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -143,6 +146,10 @@ if(FALCON_ENABLE_SFTP AND LIBSSH2_TARGET)
     add_subdirectory(plugins/sftp)
     target_link_libraries(falcon_protocols PRIVATE falcon_plugin_sftp)
     target_compile_definitions(falcon_protocols PRIVATE FALCON_ENABLE_SFTP_PLUGIN)
+    # 导出闭包引用 libssh2 的 imported target（vcpkg 形态为
+    # libssh2::libssh2_static），消费方由 FalconConfig 重建；
+    # 本目录的 imported target 根目录不可见，只能在这里判定
+    set(FALCON_PACKAGE_NEEDS_LIBSSH2 ON CACHE INTERNAL "consumer needs libssh2" FORCE)
 elseif(FALCON_ENABLE_SFTP)
     message(WARNING "SFTP plugin requires libssh2; disabling FALCON_ENABLE_SFTP")
     set(FALCON_ENABLE_SFTP OFF CACHE BOOL "Enable SFTP plugin" FORCE)
@@ -169,10 +176,12 @@ if(FALCON_ENABLE_METALINK)
         plugins/metalink/metalink_handler.cpp
     )
     target_compile_definitions(falcon_protocols PRIVATE FALCON_ENABLE_METALINK_PLUGIN)
-    # BUILD_INTERFACE 包裹：libmetalink 是 vendored 构建内部件，不进
-    # install(EXPORT FalconTargets) 的依赖闭包（导出时该表达式为空）
+    # vendored libmetalink 随本导出集一起 install（third_party
+    # CMakeLists 内 install(TARGETS ... EXPORT FalconTargets)）：
+    # PRIVATE 静态链接在导出接口里是 $<LINK_ONLY:Falcon::libmetalink>，
+    # 消费方经 FalconConfig 的 find_dependency(expat) 拿到 expat 目标
     target_link_libraries(falcon_protocols PRIVATE
-        $<BUILD_INTERFACE:Metalink::libmetalink>)
+        Metalink::libmetalink)
 endif()
 
 # NAT 端口映射门面（miniupnpc = UPnP IGD + libnatpmp = NAT-PMP）。
@@ -182,15 +191,26 @@ if(FALCON_ENABLE_NAT)
     find_package(miniupnpc CONFIG QUIET)
     find_path(NATPMP_INCLUDE_DIR natpmp.h)
     find_library(NATPMP_LIBRARY NAMES natpmp)
+    # libnatpmp 无 config 包（纯 C 库），手工派生 imported target：
+    # 导出闭包需要目标名而非绝对路径（绝对路径导出不可重定位），
+    # 消费方由 FalconConfig 按同一逻辑重建该目标
+    if(NATPMP_INCLUDE_DIR AND NATPMP_LIBRARY AND NOT TARGET natpmp::natpmp)
+        add_library(natpmp::natpmp UNKNOWN IMPORTED)
+        set_target_properties(natpmp::natpmp PROPERTIES
+            IMPORTED_LOCATION "${NATPMP_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${NATPMP_INCLUDE_DIR}")
+    endif()
     target_sources(falcon_protocols PRIVATE src/net/port_mapper.cpp)
-    if(TARGET miniupnpc::miniupnpc AND NATPMP_INCLUDE_DIR AND NATPMP_LIBRARY)
+    if(TARGET miniupnpc::miniupnpc AND TARGET natpmp::natpmp)
         target_link_libraries(falcon_protocols
-            PRIVATE miniupnpc::miniupnpc ${NATPMP_LIBRARY})
-        target_include_directories(falcon_protocols
-            PRIVATE ${NATPMP_INCLUDE_DIR})
+            PRIVATE miniupnpc::miniupnpc natpmp::natpmp)
         target_compile_definitions(falcon_protocols
             PRIVATE FALCON_ENABLE_NAT_UPNP FALCON_ENABLE_NAT_NATPMP)
         set(FALCON_NAT_BACKENDS_ENABLED ON)
+        # 导出闭包引用这两个 imported target，消费方由 FalconConfig 重建；
+        # 本目录创建/找到的 imported target 根目录不可见，只能在这里判定
+        set(FALCON_PACKAGE_NEEDS_MINIUPNPC ON CACHE INTERNAL "consumer needs miniupnpc" FORCE)
+        set(FALCON_PACKAGE_NEEDS_NATPMP ON CACHE INTERNAL "consumer needs libnatpmp" FORCE)
         if(WIN32)
             # 两库静态链接时的 Winsock 依赖与 dllexport 抑制宏
             # （vcpkg usage 要求消费方显式定义 *_STATICLIB）
@@ -299,10 +319,29 @@ install(TARGETS falcon_protocols
     INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 
+# include/ 下的 BT 转发 shim（plugins/bittorrent 两枚）用相对路径指回构建树
+# 源码，安装前缀下悬空，排除安装；真实头文件由下方 install(FILES) 装到
+# 同一公共路径。不能靠「先装 shim 再覆盖」：file(INSTALL) 按时间戳判
+# up-to-date，git 检出的源文件 mtime 全同，后装的覆盖会被跳过
 install(DIRECTORY include/falcon
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-    FILES_MATCHING PATTERN "*.hpp"
+    FILES_MATCHING
+        REGEX "/[^/]*\\.hpp$"
+        REGEX "/plugins/bittorrent" EXCLUDE
 )
+
+# BT 插件公共头安装（bittorrent_plugin.hpp quote-include 同目录的
+# dht_node/pex_protocol，必须同装）。构建树不受影响（消费者仍经 include/
+# 的 shim 解析）
+if(TARGET falcon_plugin_bittorrent)
+    install(FILES
+        plugins/bittorrent/bittorrent_plugin.hpp
+        plugins/bittorrent/dht_node.hpp
+        plugins/bittorrent/pex_protocol.hpp
+        plugins/bittorrent/bencode.hpp
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/falcon/plugins/bittorrent
+    )
+endif()
 
 # ============================================================================
 # Tests

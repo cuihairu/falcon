@@ -16,6 +16,9 @@ add_library(falcon_drives
 
 add_library(Falcon::drives ALIAS falcon_drives)
 
+# 导出名与文档/别名一致（Falcon::drives），理由同 falcon_core
+set_target_properties(falcon_drives PROPERTIES EXPORT_NAME drives)
+
 target_include_directories(falcon_drives
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -88,6 +91,14 @@ if(FALCON_ENABLE_CONFIG_MANAGER)
         else()
             target_include_directories(falcon_drives PRIVATE ${SQLite3_INCLUDE_DIRS})
             target_link_libraries(falcon_drives PUBLIC ${SQLite3_LIBRARIES})
+        endif()
+
+        # 导出闭包引用 SQLite 的 imported target，消费方由 FalconConfig 的
+        # find_dependency(SQLite3) 重建（同一查找器定义同一目标名，无需别名）；
+        # 本目录 find_package 的结果根目录不可见，只能在这里判定。
+        # 裸 ${SQLite3_LIBRARIES} 兜底形态闭包是绝对路径，不做导出支持
+        if(TARGET SQLite::SQLite3 OR TARGET SQLite3::SQLite3)
+            set(FALCON_PACKAGE_NEEDS_SQLITE3 ON CACHE INTERNAL "consumer needs sqlite3" FORCE)
         endif()
 
         target_link_libraries(falcon_drives PUBLIC OpenSSL::Crypto OpenSSL::SSL nlohmann_json::nlohmann_json)

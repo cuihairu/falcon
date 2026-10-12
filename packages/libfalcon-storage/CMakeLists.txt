@@ -18,6 +18,9 @@ add_library(falcon_storage
 
 add_library(Falcon::storage ALIAS falcon_storage)
 
+# 导出名与文档/别名一致（Falcon::storage），理由同 falcon_core
+set_target_properties(falcon_storage PROPERTIES EXPORT_NAME storage)
+
 target_include_directories(falcon_storage
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
