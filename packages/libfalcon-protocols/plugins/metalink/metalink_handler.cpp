@@ -827,7 +827,12 @@ MetalinkHandler::V2BridgeOutcome MetalinkHandler::run_v2_multi_source(
             } else {
                 auto* g = engine->request_group_man()->find_group(id);
                 if (g != nullptr &&
-                    g->status() == RequestGroupStatus::COMPLETED) {
+                    (g->status() == RequestGroupStatus::COMPLETED ||
+                     // 文件级完成信号：引擎完成改名后、状态翻转前的
+                     // 窗口（clear_resume_tracking 的 fs I/O 是可抢
+                     // 占点）——组已 PAUSED 但成品已落盘
+                     (!g->temp_file_path().empty() &&
+                      fs::exists(part_path)))) {
                     // 迟到的暂停:暂停落在引擎完成之后(200ms 轮询窗内
                     // 组已终态)时,已下载完的成品照常走完成发布——按
                     // 挂起收口会把完整产物丢在 part 路径,resume 重注

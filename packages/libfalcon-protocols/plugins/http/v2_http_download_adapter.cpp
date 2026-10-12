@@ -12,9 +12,12 @@
 #include <falcon/protocols/v2_engine_host.hpp>
 
 #include <chrono>
+#include <filesystem>
 #include <stdexcept>
 #include <thread>
 #include <utility>
+
+namespace fs = std::filesystem;
 
 namespace falcon {
 namespace {
@@ -102,7 +105,12 @@ void V2HttpDownloadAdapter::run() {
             if (auto e = host->try_engine(); e) {
                 if (auto* g = e->request_group_man()->find_group(id);
                     g != nullptr &&
-                    g->status() == RequestGroupStatus::COMPLETED) {
+                    (g->status() == RequestGroupStatus::COMPLETED ||
+                     // 文件级完成信号：引擎完成改名后、状态翻转前的
+                     // 窗口（clear_resume_tracking 的 fs I/O 是可抢
+                     // 占点）——组已 PAUSED 但成品已落盘
+                     (!g->temp_file_path().empty() &&
+                      fs::exists(task_->output_path())))) {
                     sync_final_progress(*g);
                     task_->set_status(TaskStatus::Completed);
                     return;
