@@ -2,6 +2,13 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-12 - SFTP 纯函数 detail 提升（批次 Q 模式：known_hosts 安全路径首次可测 + 12 用例）
+- **改动**（沿批次 Q detail 提升先例，生产行为零变化）：sftp_plugin.cpp 匿名命名空间 7 个纯函数（percent_decode / base64_encode / remote_basename / trim_copy / parse_port / host_entry_covers / expand_home_path）提升到 `falcon::protocols::detail`（声明进 sftp_handler.hpp，单测经 detail:: 直达）；verify_host_key 的扫描循环抽取为纯函数 `scan_known_hosts(istream&, ...)` → `KnownHostsVerdict{kMatch, kMismatch, kUnknown}` 三态裁决。调用点 `detail::` 全部显式限定（grep 审计通过——匿名命名空间函数在 detail 内可裸调保持 parse_sftp_url 不加前缀）；**B28 俘获陷阱前置核对**：本 TU 既有 `falcon::protocols::detail` 命名空间，全部裸 `detail::` 查找本就指向它，提升零俘获风险
+- **known_hosts 安全关键路径首测**（此前 24 门禁用例全部未触及 MITM 检测语义）：匹配/覆盖条目 blob 或 keytype 不符 → kMismatch（硬失败）/ 无覆盖条目 → kUnknown（accept-new）/ 注释空行两 token 行跳过不构成 mismatch 证据 / `|1|` 哈希条目跳过（跳过≠mismatch）/ 逗号列表 + `[host]:port` 非默认端口形态 / 早退 kMatch 优先于更早条目的 mismatch 记账
+- **测试 +12**（SftpDetailUtil 新 suite；falcon_sftp_tests 12 → 24 用例）：RFC 4648 §10 base64 向量 8 组（期望值独立生成防同 bug 自我印证）/ percent-decode 合法+截断+非法 hex 原样回退 / parse_port 矩阵（""=22、65535 合法；abc/12x/-1/0/65536/20 位溢出全拒）/ host_entry_covers 含 `"a.com, b.com"` 逐字比对不命中（条目内 trim 不做——known_hosts 空白分隔字段语义，初版测试期望错已纠正）/ expand_home_path 运行时 HOME 推导不改环境（~user 非语义形态原样）
+- **门禁**：falcon_sftp_tests 24/24（cov 树 + ASan 树零告警）；build-cov 全量重建成绿（SFTP=ON 重配后顺带修正 sftp_plugin.cpp 脱离覆盖率分母的旧配置）；gcov 对象级核对 8 提升函数入口行全命中（60/18/6/42/34/40/10/22 hits，零 #####）；build-cov 全量 ctest 见工作汇报
+- **测量教训**：GCC 15 gcov 传对象文件的工作形态是 `cd <objdir> && gcov -b foo.cpp.o`——绝对路径 `-o` 调用因 notes 文件名推导（CMake 的 `foo.cpp.gcno` 命名）恒报 cannot open notes file；`FALCON_ENABLE_SFTP` 是 configure 期缓存变量，覆盖率树 2026-10-01 前配置的旧值 OFF 会静默把 sftp_plugin.cpp 挡在分母外，改插件代码前必须核对该树 option
+
 ### 2026-10-12 - epoll DEL ENOENT 噪声两根因根治（teardown fd 二次摘除收口）
 - **定性**：V2 引擎 teardown 日志的 `epoll_ctl(DEL) 失败: No such file or directory`（桥接 teardown 测试 3-4 次/轮）= 两处独立的「fd 号在摘除后不作废、命令对象带旧号码留存」二次摘除：① `drain_command_fds()` 停机排水对等待表/队列残留命令的 fd 无条件 remove_event/close，其中部分已被超时清理/暂停清扫提前摘除；② 纪元守卫收口 stale 命令时，其 fd 已被事件唤醒的 one-shot 路径（handle_socket_ready）摘过注册，回队后再被守卫摘一次。前一批次仅归因为排水单点（memory 台账），本轮全量 grep 到 `V2GroupRemovedDuringBridgeFallsBackToSerial` 仍 1 次后实锤双根因
 - **修复**（download_engine_v2.cpp，零行为变化只收噪声与窗口）：① 排水改为锁内快照 `socket_command_map_`（fd-keyed）全部注册 fd，等待表与队列两条收集路径只排注册在案的 fd（`registered_fds` 快照在 run() 退出后无并发面，无需跨锁过滤）；② 纪元守卫仅当 `socket_command_map_[stale_fd] == command->id()` 才 remove_event——顺带消除 fd 号复用时误摘新命令注册的隐患（close 不受限：命令对象活着持有 fd，号码不可能被复用）

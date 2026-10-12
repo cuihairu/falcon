@@ -16,8 +16,10 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <sstream>
 #include <string>
 
 namespace {
@@ -229,6 +231,195 @@ TEST_F(SftpHandlerTest, ParseInvalidUrlFailsBeforeAnyConnection) {
     // 与 NetworkException 是兄弟类，不是派生关系）
     EXPECT_THROW(handler()->download(task, nullptr), InvalidURLException);
     EXPECT_FALSE(fs::exists(dir.file("out.bin")));
+}
+
+//==============================================================================
+// detail 纯函数工具（单元直达；原匿名命名空间，提升到 detail 供测试链接）
+//==============================================================================
+
+TEST(SftpDetailUtil, PercentDecodeValidAndLiteralFallback) {
+    EXPECT_EQ(detail::percent_decode("%41%42"), "AB");
+    EXPECT_EQ(detail::percent_decode("%3a%2F"), ":/");
+    // NUL 字节也是合法转义目标
+    EXPECT_EQ(detail::percent_decode("%00"), std::string(1, '\0'));
+    // '+' 原样保留（非表单语义）
+    EXPECT_EQ(detail::percent_decode("a+b%2Bc"), "a+b+c");
+    // 截断尾部 %4（i+2 越界）原样输出
+    EXPECT_EQ(detail::percent_decode("a%2"), "a%2");
+    EXPECT_EQ(detail::percent_decode("%"), "%");
+    // 非法 hex 字符原样输出
+    EXPECT_EQ(detail::percent_decode("%G1xyz"), "%G1xyz");
+    EXPECT_EQ(detail::percent_decode("%2g"), "%2g");
+    EXPECT_EQ(detail::percent_decode("plain"), "plain");
+}
+
+TEST(SftpDetailUtil, Base64Rfc4648Vectors) {
+    // RFC 4648 §10 测试向量（期望值独立于被测实现生成）
+    const unsigned char f[] = {'f'};
+    const unsigned char fo[] = {'f', 'o'};
+    const unsigned char foo[] = {'f', 'o', 'o'};
+    const unsigned char foob[] = {'f', 'o', 'o', 'b'};
+    const unsigned char fooba[] = {'f', 'o', 'o', 'b', 'a'};
+    const unsigned char foobar[] = {'f', 'o', 'o', 'b', 'a', 'r'};
+    const unsigned char bin[] = {0x14, 0xfb, 0x9c, 0x03, 0xd9, 0x7e};
+    unsigned char longblob[32];
+    for (int i = 0; i < 32; ++i) longblob[i] = static_cast<unsigned char>(i);
+
+    EXPECT_EQ(detail::base64_encode(nullptr, 0), "");
+    EXPECT_EQ(detail::base64_encode(f, 1), "Zg==");
+    EXPECT_EQ(detail::base64_encode(fo, 2), "Zm8=");
+    EXPECT_EQ(detail::base64_encode(foo, 3), "Zm9v");
+    EXPECT_EQ(detail::base64_encode(foob, 4), "Zm9vYg==");
+    EXPECT_EQ(detail::base64_encode(fooba, 5), "Zm9vYmE=");
+    EXPECT_EQ(detail::base64_encode(foobar, 6), "Zm9vYmFy");
+    EXPECT_EQ(detail::base64_encode(bin, sizeof(bin)), "FPucA9l+");
+    EXPECT_EQ(detail::base64_encode(longblob, 32),
+              "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=");
+}
+
+TEST(SftpDetailUtil, RemoteBasenameAndTrim) {
+    EXPECT_EQ(detail::remote_basename("/data/report.pdf"), "report.pdf");
+    EXPECT_EQ(detail::remote_basename("/a/b/"), "");
+    EXPECT_EQ(detail::remote_basename("noslash.txt"), "noslash.txt");
+    EXPECT_EQ(detail::trim_copy("  x  \t"), "x");
+    EXPECT_EQ(detail::trim_copy("inner  text"), "inner  text");
+    EXPECT_EQ(detail::trim_copy("   "), "");
+    EXPECT_EQ(detail::trim_copy(""), "");
+}
+
+TEST(SftpDetailUtil, ParsePortMatrix) {
+    EXPECT_EQ(detail::parse_port("", "u"), 22);
+    EXPECT_EQ(detail::parse_port("2222", "u"), 2222);
+    EXPECT_EQ(detail::parse_port("65535", "u"), 65535);
+    // 非数字 / 部分数字 / 越界 / 溢出全部拒绝
+    EXPECT_THROW(detail::parse_port("abc", "u"), InvalidURLException);
+    EXPECT_THROW(detail::parse_port("12x", "u"), InvalidURLException);
+    EXPECT_THROW(detail::parse_port("-1", "u"), InvalidURLException);
+    EXPECT_THROW(detail::parse_port("0", "u"), InvalidURLException);
+    EXPECT_THROW(detail::parse_port("65536", "u"), InvalidURLException);
+    EXPECT_THROW(detail::parse_port("99999999999999999999", "u"),
+                 InvalidURLException);
+}
+
+TEST(SftpDetailUtil, HostEntryCoversMatrix) {
+    // 明文精确匹配；裸 host 对任意端口生效（OpenSSH 检索顺序语义）
+    EXPECT_TRUE(detail::host_entry_covers("example.com", "example.com", 22));
+    EXPECT_TRUE(detail::host_entry_covers("example.com", "example.com", 2222));
+    EXPECT_TRUE(detail::host_entry_covers("a.com,b.com", "b.com", 22));
+    // 条目逐字比对不做条目内 trim——known_hosts 以空白分隔字段，
+    // hosts 字段内含空格属非法语法，" b.com" 不命中
+    EXPECT_FALSE(detail::host_entry_covers("a.com, b.com", "b.com", 22));
+    // 非 22 端口的 [host]:port 形态；port==22 时该形态不参与
+    EXPECT_TRUE(
+        detail::host_entry_covers("[example.com]:2222", "example.com", 2222));
+    EXPECT_FALSE(detail::host_entry_covers("[example.com]:22", "example.com", 22));
+    EXPECT_FALSE(detail::host_entry_covers("[example.com]:2222", "example.com", 22));
+    // 不覆盖 / 通配符不支持 / 空表
+    EXPECT_FALSE(detail::host_entry_covers("example.com", "other.com", 22));
+    EXPECT_FALSE(detail::host_entry_covers("*.example.com", "a.example.com", 22));
+    EXPECT_FALSE(detail::host_entry_covers("", "example.com", 22));
+}
+
+TEST(SftpDetailUtil, ExpandHomePathFollowsHomeEnv) {
+    // 不改环境变量：期望值由运行时 HOME 推导（HOME 缺失时 "~/" 原样返回）
+    const char* home_c = std::getenv("HOME");
+    const std::string home = (home_c && *home_c) ? home_c : std::string();
+    EXPECT_EQ(detail::expand_home_path("~/x/y"),
+              home.empty() ? std::string("~/x/y") : home + "/x/y");
+    // 非 "~/" 前缀原样返回（含 "~user" 与裸 "~"）
+    EXPECT_EQ(detail::expand_home_path("/abs/path"), "/abs/path");
+    EXPECT_EQ(detail::expand_home_path("rel"), "rel");
+    EXPECT_EQ(detail::expand_home_path("~user/x"), "~user/x");
+    EXPECT_EQ(detail::expand_home_path("~"), "~");
+}
+
+// ---- scan_known_hosts：known_hosts 扫描裁决矩阵（安全关键路径）----
+
+namespace {
+
+constexpr const char* kKeyType = "ssh-ed25519";
+constexpr const char* kB64 = "AAAAed25519keyblob";
+
+} // namespace
+
+TEST(SftpDetailUtil, ScanKnownHostsMatch) {
+    std::istringstream in(
+        std::string("example.com ssh-ed25519 ") + kB64 + "\n");
+    EXPECT_EQ(detail::scan_known_hosts(in, kKeyType, kB64, "example.com", 22),
+              detail::KnownHostsVerdict::kMatch);
+}
+
+TEST(SftpDetailUtil, ScanKnownHostsMismatchOnBlobAndKeytype) {
+    // 覆盖条目 blob 不同 → mismatch（MITM 嫌疑）
+    std::istringstream blob_diff(
+        std::string("example.com ssh-ed25519 AAAAdifferentblob\n"));
+    EXPECT_EQ(detail::scan_known_hosts(blob_diff, kKeyType, kB64,
+                                       "example.com", 22),
+              detail::KnownHostsVerdict::kMismatch);
+    // 覆盖条目键类型不同 → mismatch
+    std::istringstream type_diff(
+        std::string("example.com ssh-rsa ") + kB64 + "\n");
+    EXPECT_EQ(detail::scan_known_hosts(type_diff, kKeyType, kB64,
+                                       "example.com", 22),
+              detail::KnownHostsVerdict::kMismatch);
+}
+
+TEST(SftpDetailUtil, ScanKnownHostsUnknownAndSkips) {
+    // 他机条目不构成覆盖 → unknown
+    std::istringstream other("other.com ssh-ed25519 AAAAxyz\n");
+    EXPECT_EQ(detail::scan_known_hosts(other, kKeyType, kB64, "example.com", 22),
+              detail::KnownHostsVerdict::kUnknown);
+    // 注释/空行/缺 blob 行全部跳过，不构成 mismatch 证据
+    std::istringstream junk(
+        "# comment\n"
+        "\n"
+        "   \n"
+        "example.com ssh-ed25519\n" // 两个 token，无 blob
+        "unrelated ssh-rsa\n");
+    EXPECT_EQ(detail::scan_known_hosts(junk, kKeyType, kB64, "example.com", 22),
+              detail::KnownHostsVerdict::kUnknown);
+}
+
+TEST(SftpDetailUtil, ScanKnownHostsHashedEntriesSkippedNotMismatch) {
+    // |1| 哈希条目跳过（跳过不构成 mismatch 证据），后续明文命中
+    std::istringstream hashed_then_match(
+        std::string("|1|saltish|hashed= ssh-ed25519 AAAAother\n") +
+        "example.com ssh-ed25519 " + kB64 + "\n");
+    EXPECT_EQ(detail::scan_known_hosts(hashed_then_match, kKeyType, kB64,
+                                       "example.com", 22),
+              detail::KnownHostsVerdict::kMatch);
+    // 只有哈希条目 → unknown
+    std::istringstream hashed_only("|1|saltish|hashed= ssh-ed25519 AAAAother\n");
+    EXPECT_EQ(detail::scan_known_hosts(hashed_only, kKeyType, kB64,
+                                       "example.com", 22),
+              detail::KnownHostsVerdict::kUnknown);
+}
+
+TEST(SftpDetailUtil, ScanKnownHostsCommaListAndBracketedPortForms) {
+    // hosts 字段逗号分隔列表；行首空白 trim
+    std::istringstream comma(
+        std::string("  other.com,example.com ssh-ed25519 ") + kB64 + "\n");
+    EXPECT_EQ(detail::scan_known_hosts(comma, kKeyType, kB64, "example.com", 22),
+              detail::KnownHostsVerdict::kMatch);
+    // 非默认端口：[host]:port 形态与裸 host 形态都覆盖
+    std::istringstream bracketed(
+        std::string("[example.com]:2222 ssh-ed25519 ") + kB64 + "\n");
+    EXPECT_EQ(detail::scan_known_hosts(bracketed, kKeyType, kB64,
+                                       "example.com", 2222),
+              detail::KnownHostsVerdict::kMatch);
+    std::istringstream bare(
+        std::string("example.com ssh-ed25519 ") + kB64 + "\n");
+    EXPECT_EQ(detail::scan_known_hosts(bare, kKeyType, kB64, "example.com", 2222),
+              detail::KnownHostsVerdict::kMatch);
+}
+
+TEST(SftpDetailUtil, ScanKnownHostsFirstMatchWinsOverEarlierMismatch) {
+    // 前一覆盖条目不匹配、后一匹配 → kMatch（早退优先于 mismatch 记账）
+    std::istringstream mixed(
+        std::string("example.com ssh-ed25519 AAAAold\n") +
+        "example.com ssh-ed25519 " + kB64 + "\n");
+    EXPECT_EQ(detail::scan_known_hosts(mixed, kKeyType, kB64, "example.com", 22),
+              detail::KnownHostsVerdict::kMatch);
 }
 
 } // namespace

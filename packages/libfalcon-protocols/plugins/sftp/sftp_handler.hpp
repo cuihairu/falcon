@@ -2,6 +2,9 @@
 
 #include <falcon/protocol_handler.hpp>
 
+#include <cstddef>
+#include <cstdint>
+#include <iosfwd>
 #include <string>
 
 namespace falcon::protocols {
@@ -51,6 +54,44 @@ struct SftpEndpoint {
 /// 解析失败（无 host / 空 path / 非法端口）抛 InvalidURLException。
 SftpEndpoint parse_sftp_url(const std::string& url,
                             const DownloadOptions& options);
+
+// ---- 纯函数工具（单元测试直达；实现在 sftp_plugin.cpp）----
+
+/// RFC 3986 percent-decoding（'+' 原样保留，非表单语义；截断/非法转义原样输出）。
+std::string percent_decode(const std::string& s);
+
+/// RFC 4648 标准 base64（含 '=' 填充）。
+std::string base64_encode(const unsigned char* data, std::size_t len);
+
+/// 远端路径末段（rfind('/')；无 '/' 返回整串）。
+std::string remote_basename(const std::string& path);
+
+/// 两侧空白裁剪（std::isspace）。
+std::string trim_copy(const std::string& s);
+
+/// 端口解析：空 = 22；非数字 / 越界（0 或 >65535）抛 InvalidURLException。
+std::uint16_t parse_port(const std::string& text, const std::string& url);
+
+/// known_hosts hosts 字段（逗号分隔列表）是否覆盖 host:port
+///（port==22 仅裸 host 形态命中；"[host]:port" 仅 port!=22 时参与）。
+bool host_entry_covers(const std::string& entries, const std::string& host,
+                       std::uint16_t port);
+
+/// "~/..." 展开到家目录（HOME 缺失/为空原样返回；"~user" 非语义形态原样返回）。
+std::string expand_home_path(const std::string& path);
+
+/// known_hosts 逐条扫描裁决。
+enum class KnownHostsVerdict {
+    kMatch,    ///< 覆盖条目且 keytype+keyblob 全等
+    kMismatch, ///< 覆盖条目但键不匹配（MITM 嫌疑，硬失败）
+    kUnknown   ///< 无覆盖条目（accept-new）
+};
+
+/// 扫描 known_hosts 流内容（明文条目；哈希 |1| 条目跳过、注释/空行/
+/// 字段不足行跳过），返回覆盖 host:port 的裁决。
+KnownHostsVerdict scan_known_hosts(std::istream& in, const std::string& key_type,
+                                   const std::string& key_b64,
+                                   const std::string& host, std::uint16_t port);
 
 } // namespace detail
 

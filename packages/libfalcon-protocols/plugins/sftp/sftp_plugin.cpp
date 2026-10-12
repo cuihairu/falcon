@@ -119,13 +119,6 @@ std::string home_dir() {
     return (h && *h) ? h : std::string();
 }
 
-/// 展开开头的 "~/"（无法解析 HOME 时原样返回）
-std::string expand_home_path(const std::string& path) {
-    if (path.rfind("~/", 0) != 0) return path;
-    std::string home = home_dir();
-    return home.empty() ? path : home + path.substr(1);
-}
-
 std::string default_username() {
 #ifdef _WIN32
     const char* u = std::getenv("USERNAME");
@@ -146,66 +139,6 @@ std::uint64_t file_size_or_zero(const std::string& path) {
     if (!std::filesystem::is_regular_file(path, ec)) return 0;
     auto size = std::filesystem::file_size(path, ec);
     return ec ? 0 : static_cast<std::uint64_t>(size);
-}
-
-/// RFC 3986 percent-decode（'+' 不作空格——SFTP 路径语义）
-std::string percent_decode(const std::string& s) {
-    auto hex_value = [](char c) -> int {
-        if (c >= '0' && c <= '9') return c - '0';
-        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-        return -1;
-    };
-    std::string out;
-    out.reserve(s.size());
-    for (std::size_t i = 0; i < s.size(); ++i) {
-        if (s[i] == '%' && i + 2 < s.size()) {
-            int hi = hex_value(s[i + 1]);
-            int lo = hex_value(s[i + 2]);
-            if (hi >= 0 && lo >= 0) {
-                out.push_back(static_cast<char>(hi * 16 + lo));
-                i += 2;
-                continue;
-            }
-        }
-        out.push_back(s[i]);
-    }
-    return out;
-}
-
-/// RFC 4648 标准 base64（known_hosts 键 blob 比对用）
-std::string base64_encode(const unsigned char* data, std::size_t len) {
-    static const char* kAlphabet =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    std::string out;
-    out.reserve(((len + 2) / 3) * 4);
-    for (std::size_t i = 0; i < len; i += 3) {
-        const bool has_two = i + 1 < len;
-        const bool has_three = i + 2 < len;
-        unsigned int value = static_cast<unsigned int>(data[i]) << 16;
-        if (has_two) value |= static_cast<unsigned int>(data[i + 1]) << 8;
-        if (has_three) value |= static_cast<unsigned int>(data[i + 2]);
-        out.push_back(kAlphabet[(value >> 18) & 0x3F]);
-        out.push_back(kAlphabet[(value >> 12) & 0x3F]);
-        out.push_back(has_two ? kAlphabet[(value >> 6) & 0x3F] : '=');
-        out.push_back(has_three ? kAlphabet[value & 0x3F] : '=');
-    }
-    return out;
-}
-
-std::string remote_basename(const std::string& path) {
-    const std::size_t slash = path.rfind('/');
-    return slash == std::string::npos ? path : path.substr(slash + 1);
-}
-
-std::string trim_copy(const std::string& s) {
-    std::size_t begin = 0;
-    std::size_t end = s.size();
-    while (begin < end &&
-           std::isspace(static_cast<unsigned char>(s[begin]))) ++begin;
-    while (end > begin &&
-           std::isspace(static_cast<unsigned char>(s[end - 1]))) --end;
-    return s.substr(begin, end - begin);
 }
 
 /// libssh2 主机键类型 → known_hosts 键类型名；未知返回空串
@@ -231,42 +164,6 @@ std::string session_error(LIBSSH2_SESSION* session, const std::string& what) {
         (msg && len > 0) ? std::string(msg, static_cast<std::size_t>(len))
                          : std::string("unknown error");
     return what + ": " + detail;
-}
-
-std::uint16_t parse_port(const std::string& text, const std::string& url) {
-    if (text.empty()) return 22;
-    if (text.find_first_not_of("0123456789") != std::string::npos) {
-        throw InvalidURLException("SFTP URL has invalid port '" + text +
-                                  "': " + url);
-    }
-    unsigned long value = 0;
-    try {
-        value = std::stoul(text);
-    } catch (const std::exception&) {
-        throw InvalidURLException("SFTP URL has invalid port '" + text +
-                                  "': " + url);
-    }
-    if (value == 0 || value > 65535) {
-        throw InvalidURLException("SFTP URL port out of range '" + text +
-                                  "': " + url);
-    }
-    return static_cast<std::uint16_t>(value);
-}
-
-/// known_hosts hosts 字段（逗号分隔）是否覆盖 endpoint 的 host:port。
-/// 只做明文精确匹配：host == 主机名，或非 22 端口的 [host]:port 形态
-/// （OpenSSH 写法）。通配符/哈希形态不支持。
-bool host_entry_covers(const std::string& hosts_token,
-                       const std::string& host, std::uint16_t port) {
-    std::istringstream iss(hosts_token);
-    std::string entry;
-    const std::string bracketed =
-        "[" + host + "]:" + std::to_string(port);
-    while (std::getline(iss, entry, ',')) {
-        if (entry == host) return true;
-        if (port != 22 && entry == bracketed) return true;
-    }
-    return false;
 }
 
 /// libssh2 全局初始化守卫（libssh2_init/exit 自 1.2.5 起引用计数，
@@ -392,8 +289,8 @@ void verify_host_key(LIBSSH2_SESSION* session,
         return;
     }
     const std::string key_b64 =
-        base64_encode(reinterpret_cast<const unsigned char*>(key_blob),
-                      key_len);
+        detail::base64_encode(reinterpret_cast<const unsigned char*>(key_blob),
+                              key_len);
 
     const std::string hosts_path = home_dir() + "/.ssh/known_hosts";
     std::ifstream in(hosts_path);
@@ -403,28 +300,11 @@ void verify_host_key(LIBSSH2_SESSION* session,
         return;
     }
 
-    bool mismatch = false;
-    std::string line;
-    while (std::getline(in, line)) {
-        std::string trimmed = trim_copy(line);
-        if (trimmed.empty() || trimmed[0] == '#') continue;
-        std::istringstream iss(trimmed);
-        std::string hosts_token;
-        std::string keytype_token;
-        std::string keyblob_token;
-        iss >> hosts_token >> keytype_token >> keyblob_token;
-        if (keyblob_token.empty()) continue;
-        if (hosts_token.rfind("|1|", 0) == 0) continue; // 哈希条目跳过
-        if (!host_entry_covers(hosts_token, endpoint.host, endpoint.port)) {
-            continue;
-        }
-        if (keytype_token == type_name && keyblob_token == key_b64) {
-            return; // 校验通过
-        }
-        mismatch = true;
-    }
+    const detail::KnownHostsVerdict verdict = detail::scan_known_hosts(
+        in, type_name, key_b64, endpoint.host, endpoint.port);
+    if (verdict == detail::KnownHostsVerdict::kMatch) return;
 
-    if (mismatch) {
+    if (verdict == detail::KnownHostsVerdict::kMismatch) {
         throw NetworkException(
             "SFTP: host key mismatch for " + endpoint.host +
             " (possible man-in-the-middle). If the server key legitimately "
@@ -461,7 +341,7 @@ void authenticate(LIBSSH2_SESSION* session,
     if (supports("publickey")) {
         std::vector<std::string> keys;
         if (!options.client_private_key.empty()) {
-            keys.push_back(expand_home_path(options.client_private_key));
+            keys.push_back(detail::expand_home_path(options.client_private_key));
         }
         const std::string home = home_dir();
         if (!home.empty()) {
@@ -540,6 +420,134 @@ open_sftp_connection(const detail::SftpEndpoint& endpoint,
 } // namespace
 
 namespace detail {
+
+// ---- 纯函数工具（单元测试直达；原为匿名命名空间，提升到此供测试链接）----
+
+std::string percent_decode(const std::string& s) {
+    auto hex_value = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    };
+    std::string out;
+    out.reserve(s.size());
+    for (std::size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '%' && i + 2 < s.size()) {
+            int hi = hex_value(s[i + 1]);
+            int lo = hex_value(s[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                out.push_back(static_cast<char>(hi * 16 + lo));
+                i += 2;
+                continue;
+            }
+        }
+        out.push_back(s[i]);
+    }
+    return out;
+}
+
+std::string base64_encode(const unsigned char* data, std::size_t len) {
+    static const char* kAlphabet =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve(((len + 2) / 3) * 4);
+    for (std::size_t i = 0; i < len; i += 3) {
+        const bool has_two = i + 1 < len;
+        const bool has_three = i + 2 < len;
+        unsigned int value = static_cast<unsigned int>(data[i]) << 16;
+        if (has_two) value |= static_cast<unsigned int>(data[i + 1]) << 8;
+        if (has_three) value |= static_cast<unsigned int>(data[i + 2]);
+        out.push_back(kAlphabet[(value >> 18) & 0x3F]);
+        out.push_back(kAlphabet[(value >> 12) & 0x3F]);
+        out.push_back(has_two ? kAlphabet[(value >> 6) & 0x3F] : '=');
+        out.push_back(has_three ? kAlphabet[value & 0x3F] : '=');
+    }
+    return out;
+}
+
+std::string remote_basename(const std::string& path) {
+    const std::size_t slash = path.rfind('/');
+    return slash == std::string::npos ? path : path.substr(slash + 1);
+}
+
+std::string trim_copy(const std::string& s) {
+    std::size_t begin = 0;
+    std::size_t end = s.size();
+    while (begin < end &&
+           std::isspace(static_cast<unsigned char>(s[begin]))) ++begin;
+    while (end > begin &&
+           std::isspace(static_cast<unsigned char>(s[end - 1]))) --end;
+    return s.substr(begin, end - begin);
+}
+
+std::uint16_t parse_port(const std::string& text, const std::string& url) {
+    if (text.empty()) return 22;
+    if (text.find_first_not_of("0123456789") != std::string::npos) {
+        throw InvalidURLException("SFTP URL has invalid port '" + text +
+                                  "': " + url);
+    }
+    unsigned long value = 0;
+    try {
+        value = std::stoul(text);
+    } catch (const std::exception&) {
+        throw InvalidURLException("SFTP URL has invalid port '" + text +
+                                  "': " + url);
+    }
+    if (value == 0 || value > 65535) {
+        throw InvalidURLException("SFTP URL port out of range '" + text +
+                                  "': " + url);
+    }
+    return static_cast<std::uint16_t>(value);
+}
+
+bool host_entry_covers(const std::string& hosts_token,
+                       const std::string& host, std::uint16_t port) {
+    std::istringstream iss(hosts_token);
+    std::string entry;
+    const std::string bracketed =
+        "[" + host + "]:" + std::to_string(port);
+    while (std::getline(iss, entry, ',')) {
+        if (entry == host) return true;
+        if (port != 22 && entry == bracketed) return true;
+    }
+    return false;
+}
+
+std::string expand_home_path(const std::string& path) {
+    if (path.rfind("~/", 0) != 0) return path;
+    std::string home = home_dir();
+    return home.empty() ? path : home + path.substr(1);
+}
+
+KnownHostsVerdict scan_known_hosts(std::istream& in,
+                                   const std::string& key_type,
+                                   const std::string& key_b64,
+                                   const std::string& host,
+                                   std::uint16_t port) {
+    bool mismatch = false;
+    std::string line;
+    while (std::getline(in, line)) {
+        std::string trimmed = trim_copy(line);
+        if (trimmed.empty() || trimmed[0] == '#') continue;
+        std::istringstream iss(trimmed);
+        std::string hosts_token;
+        std::string keytype_token;
+        std::string keyblob_token;
+        iss >> hosts_token >> keytype_token >> keyblob_token;
+        if (keyblob_token.empty()) continue;
+        if (hosts_token.rfind("|1|", 0) == 0) continue; // 哈希条目跳过
+        if (!host_entry_covers(hosts_token, host, port)) {
+            continue;
+        }
+        if (keytype_token == key_type && keyblob_token == key_b64) {
+            return KnownHostsVerdict::kMatch; // 校验通过
+        }
+        mismatch = true;
+    }
+    return mismatch ? KnownHostsVerdict::kMismatch
+                    : KnownHostsVerdict::kUnknown;
+}
 
 SftpEndpoint parse_sftp_url(const std::string& url,
                             const DownloadOptions& options) {
@@ -714,7 +722,7 @@ FileInfo SftpHandler::get_file_info(const std::string& url,
     }
     FileInfo info;
     info.url = url;
-    info.filename = remote_basename(endpoint.path);
+    info.filename = detail::remote_basename(endpoint.path);
     info.total_size = attrs.filesize;
     info.supports_resume = true;
     return info;
@@ -743,7 +751,7 @@ void download_once(DownloadTask::Ptr task, IEventListener* listener,
     {
         FileInfo info;
         info.url = task->url();
-        info.filename = remote_basename(endpoint.path);
+        info.filename = detail::remote_basename(endpoint.path);
         info.total_size = total;
         info.supports_resume = true;
         task->set_file_info(info);
