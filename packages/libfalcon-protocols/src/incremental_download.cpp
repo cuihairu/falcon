@@ -14,6 +14,8 @@
 #include <iomanip>
 #include <cctype>
 #include <cstring>
+#include <filesystem>
+#include <system_error>
 
 #ifdef FALCON_USE_CURL
 #include <curl/curl.h>
@@ -108,27 +110,35 @@ std::string IncrementalDownloader::serializeHashList(
     const std::vector<ChunkInfo>& chunks,
     uint64_t chunkSize,
     const std::string& algorithm,
-    uint64_t fileSize) {
+    uint64_t fileSize,
+    const std::string& fileHash) {
     std::ostringstream ss;
     ss << "# falcon-hash-list v1\n";
     ss << "# chunkSize: " << chunkSize << "\n";
     ss << "# algorithm: " << algorithm << "\n";
     ss << "# fileSize: " << fileSize << "\n";
     ss << "# chunks: " << chunks.size() << "\n";
+    if (!fileHash.empty()) {
+        ss << "# fileHash: " << fileHash << "\n";
+    }
     for (const auto& chunk : chunks) {
         ss << chunk.hash << "\n";
     }
     return ss.str();
 }
 
-std::vector<ChunkInfo> IncrementalDownloader::parseHashList(
+bool IncrementalDownloader::parseHashListEx(
     const std::string& text,
     uint64_t defaultChunkSize,
-    const std::string& defaultAlgorithm) {
+    const std::string& defaultAlgorithm,
+    HashListData& out) {
+    out = HashListData{};
+
     uint64_t chunk_size = defaultChunkSize;
     uint64_t file_size = 0;
     bool has_file_size = false;
     uint64_t expected_chunks = 0;
+    std::string file_hash;
     std::vector<std::string> hashes;
 
     std::istringstream iss(text);
@@ -154,35 +164,41 @@ std::vector<ChunkInfo> IncrementalDownloader::parseHashList(
                     // 列表声明了不同算法则两者不可比较
                     if (!value.empty() &&
                         to_lower_copy(value) != to_lower_copy(defaultAlgorithm)) {
-                        return {};
+                        return false;
                     }
                 } else if (key == "filesize") {
                     file_size = std::stoull(value);
                     has_file_size = true;
                 } else if (key == "chunks") {
                     expected_chunks = std::stoull(value);
+                } else if (key == "filehash") {
+                    // 整文件哈希用于下载后的端到端校验，格式非法则列表无效
+                    if (!is_hex_string(value)) {
+                        return false;
+                    }
+                    file_hash = to_lower_copy(value);
                 }
             } catch (const std::exception&) {
-                return {};  // 元数据数值非法 → 列表无效
+                return false;  // 元数据数值非法 → 列表无效
             }
             continue;
         }
 
         // 哈希行：严格校验，任何非法行都使整个列表无效
         if (!is_hex_string(trimmed)) {
-            return {};
+            return false;
         }
         hashes.push_back(trimmed);
     }
 
     if (hashes.empty()) {
-        return {};
+        return false;
     }
     if (expected_chunks > 0 && hashes.size() != expected_chunks) {
-        return {};
+        return false;
     }
     if (chunk_size == 0) {
-        return {};
+        return false;
     }
 
     std::vector<ChunkInfo> chunks;
@@ -199,7 +215,21 @@ std::vector<ChunkInfo> IncrementalDownloader::parseHashList(
         info.changed = false;
         chunks.push_back(std::move(info));
     }
-    return chunks;
+
+    out.chunks = std::move(chunks);
+    out.fileHash = std::move(file_hash);
+    return true;
+}
+
+std::vector<ChunkInfo> IncrementalDownloader::parseHashList(
+    const std::string& text,
+    uint64_t defaultChunkSize,
+    const std::string& defaultAlgorithm) {
+    HashListData data;
+    if (!parseHashListEx(text, defaultChunkSize, defaultAlgorithm, data)) {
+        return {};
+    }
+    return std::move(data.chunks);
 }
 
 std::string IncrementalDownloader::calculateHash(const std::string& data,
@@ -315,7 +345,7 @@ std::vector<ChunkInfo> IncrementalDownloader::calculateChunkHashes(
     return chunks;
 }
 
-std::vector<ChunkInfo> IncrementalDownloader::downloadRemoteHashList(
+IncrementalDownloader::HashListData IncrementalDownloader::downloadRemoteHashList(
     const std::string& url,
     uint64_t chunkSize,
     const std::string& algorithm) {
@@ -329,11 +359,12 @@ std::vector<ChunkInfo> IncrementalDownloader::downloadRemoteHashList(
         return {};
     }
 
-    auto chunks = parseHashList(text, chunkSize, algorithm);
-    if (chunks.empty()) {
+    HashListData list;
+    if (!parseHashListEx(text, chunkSize, algorithm, list)) {
         FALCON_LOG_WARN("Invalid or mismatching hash list: {}", list_url);
+        return {};
     }
-    return chunks;
+    return list;
 #else
     (void)url;
     (void)chunkSize;
@@ -413,6 +444,8 @@ FileDiff IncrementalDownloader::compare(const std::string& localPath,
     diff.remoteSize = 0;
     diff.totalChanged = 0;
     diff.ratio = 0.0;
+    diff.hashAlgorithm = options.hashAlgorithm;
+    diff.verifyDownload = options.verifyDownload;
 
     // 获取本地文件大小
     std::ifstream localFile(localPath, std::ios::binary | std::ios::ate);
@@ -427,22 +460,23 @@ FileDiff IncrementalDownloader::compare(const std::string& localPath,
                                             options.hashAlgorithm);
 
     // 下载远程文件哈希列表
-    auto remoteChunks = downloadRemoteHashList(remoteUrl, options.chunkSize,
-                                               options.hashAlgorithm);
+    auto remoteList = downloadRemoteHashList(remoteUrl, options.chunkSize,
+                                             options.hashAlgorithm);
 
-    if (remoteChunks.empty()) {
+    if (remoteList.chunks.empty()) {
         FALCON_LOG_WARN("Failed to get remote hash list, falling back to full download");
-        diff.chunks = remoteChunks;
+        diff.chunks = std::move(remoteList.chunks);
         return diff;
     }
 
     // 计算远程文件大小
-    for (const auto& chunk : remoteChunks) {
+    for (const auto& chunk : remoteList.chunks) {
         diff.remoteSize += chunk.size;
     }
 
     // 比较哈希列表
-    diff.chunks = compareHashLists(localChunks, remoteChunks);
+    diff.chunks = compareHashLists(localChunks, remoteList.chunks);
+    diff.fileHash = std::move(remoteList.fileHash);
 
     // 计算变化统计
     for (const auto& chunk : diff.chunks) {
@@ -553,6 +587,17 @@ bool IncrementalDownloader::downloadChanged(const FileDiff& diff,
                 return false;
             }
 
+            // 分块哈希校验：哈希可用即启用（保护增量机制自身的完整性；
+            // verifyDownload 只门控最后的整文件校验）
+            if (!diff.hashAlgorithm.empty() && !chunk.hash.empty()) {
+                const std::string chunk_data(reinterpret_cast<const char*>(data.data()),
+                                             data.size());
+                if (calculateHash(chunk_data, diff.hashAlgorithm) != chunk.hash) {
+                    FALCON_LOG_ERROR("Chunk hash mismatch at offset {}", chunk.offset);
+                    return false;
+                }
+            }
+
             // 写入到对应位置
             std::memcpy(localData.data() + chunk.offset, data.data(), data.size());
 
@@ -575,6 +620,19 @@ bool IncrementalDownloader::downloadChanged(const FileDiff& diff,
     outFile.write(reinterpret_cast<const char*>(localData.data()),
                   static_cast<std::streamsize>(diff.remoteSize));
     outFile.close();
+
+    // 端到端整文件校验：分块校验只覆盖变化部分，未变化的本地区域
+    // 在比较与下载之间可能被修改（成品 = 本地区域 + 下载块，任何一侧
+    // 损坏都应拦在发布前）；不匹配绝不把损坏成品当成功留下
+    if (diff.verifyDownload && !diff.fileHash.empty()) {
+        if (!verifyFile(outputPath, diff.fileHash)) {
+            FALCON_LOG_ERROR("Incremental output failed verification, removing: {}",
+                             outputPath);
+            std::error_code ec;
+            std::filesystem::remove(outputPath, ec);
+            return false;
+        }
+    }
 
     FALCON_LOG_INFO("Incremental download completed: {}", outputPath);
     return true;
@@ -624,12 +682,12 @@ std::vector<ChunkInfo> IncrementalDownloader::generateHashList(
     return calculateChunkHashes(filePath, chunkSize, "sha256");
 }
 
-bool IncrementalDownloader::verifyFile(const std::string& filePath,
-                                      const std::string& expectedHash) {
+std::string IncrementalDownloader::calculateFileHash(const std::string& filePath,
+                                                    const std::string& algorithm) {
     std::ifstream file(filePath, std::ios::binary);
     if (!file.is_open()) {
-        FALCON_LOG_ERROR("Failed to open file for verification: {}", filePath);
-        return false;
+        FALCON_LOG_ERROR("Failed to open file for hashing: {}", filePath);
+        return "";
     }
 
     file.seekg(0, std::ios::end);
@@ -638,12 +696,23 @@ bool IncrementalDownloader::verifyFile(const std::string& filePath,
     file.seekg(0, std::ios::beg);
 
     std::string fileData(fileSize, '\0');
-    file.read(&fileData[0], static_cast<std::streamsize>(fileSize));
+    if (fileSize > 0) {
+        file.read(&fileData[0], static_cast<std::streamsize>(fileSize));
+    }
     file.close();
 
-    std::string actualHash = calculateHash(fileData, "sha256");
+    return calculateHash(fileData, algorithm);
+}
 
-    bool valid = (actualHash == expectedHash);
+bool IncrementalDownloader::verifyFile(const std::string& filePath,
+                                      const std::string& expectedHash) {
+    const std::string actualHash = calculateFileHash(filePath, "sha256");
+    if (actualHash.empty()) {
+        // 文件不可读或哈希计算失败（含注入）→ 无法判定为有效
+        return false;
+    }
+
+    const bool valid = (actualHash == expectedHash);
     if (!valid) {
         FALCON_LOG_ERROR("File verification failed: expected {}, got {}",
                         expectedHash, actualHash);

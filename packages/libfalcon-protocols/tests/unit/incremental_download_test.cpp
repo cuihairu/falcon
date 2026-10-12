@@ -626,6 +626,10 @@ public:
     /// 的尺寸校验兜底——Range 尺寸不匹配失败路由）
     void set_range_short(bool v) { range_short_ = v; }
 
+    /// Range 请求投毒：尺寸正确但每个字节翻转（0xFF XOR）——
+    /// 尺寸校验通过、分块哈希校验必须拦下（数据损坏路由）
+    void set_corrupt_ranges(bool v) { corrupt_ranges_ = v; }
+
     ~IncrementalTestServer() { stop(); }
 
 private:
@@ -700,15 +704,21 @@ private:
             if (has_range) {
                 const Bytes slice_len = range_end - range_start + 1;
                 const Bytes actual = range_short_ ? slice_len / 2 : slice_len;
+                std::string slice = body_.substr(
+                    static_cast<std::size_t>(range_start),
+                    static_cast<std::size_t>(actual));
+                if (corrupt_ranges_) {
+                    for (auto& byte : slice) {
+                        byte = static_cast<char>(static_cast<unsigned char>(byte) ^ 0xFF);
+                    }
+                }
                 send_all(conn,
                          "HTTP/1.1 206 Partial Content\r\n"
                          "Content-Range: bytes " + std::to_string(range_start) + "-" +
                              std::to_string(range_end) + "/" +
                              std::to_string(body_.size()) + "\r\n"
                          "Content-Length: " + std::to_string(actual) +
-                         "\r\nConnection: close\r\n\r\n" +
-                         body_.substr(static_cast<std::size_t>(range_start),
-                                      static_cast<std::size_t>(actual)));
+                         "\r\nConnection: close\r\n\r\n" + slice);
             } else {
                 send_all(conn,
                          "HTTP/1.1 200 OK\r\n"
@@ -729,6 +739,7 @@ private:
     std::string body_;
     std::string hash_list_;
     bool range_short_ = false;
+    bool corrupt_ranges_ = false;
     int listen_fd_ = -1;
     uint16_t port_ = 0;
     std::thread thread_;
@@ -887,6 +898,223 @@ TEST_F(IncrementalDownloadTest, CompareMissingLocalDownloadsEverything) {
     const std::string out_path = testDir_ + "/fresh_out.bin";
     ASSERT_TRUE(downloader.downloadChanged(diff, out_path));
     EXPECT_EQ(read_file(out_path), content);
+}
+
+// ============================================================================
+// 端到端哈希校验（fileHash 元数据 + verifyDownload 选项）
+// ============================================================================
+
+// fileHash 元数据序列化/解析往返；calculateFileHash 对缺失文件返回空串
+TEST_F(IncrementalDownloadTest, SerializeParseFileHashRoundTrip) {
+    const std::string content = make_content(2048, 3);
+    const std::string file_path = testDir_ + "/roundtrip.bin";
+    {
+        std::ofstream file(file_path, std::ios::binary);
+        file.write(content.data(), static_cast<std::streamsize>(content.size()));
+    }
+
+    IncrementalDownloader downloader;
+    const auto chunks = downloader.generateHashList(file_path, 1024);
+    ASSERT_EQ(chunks.size(), std::size_t{2});
+
+    const std::string file_hash = downloader.calculateFileHash(file_path);
+    ASSERT_EQ(file_hash.size(), std::size_t{64});
+
+    const std::string text = IncrementalDownloader::serializeHashList(
+        chunks, 1024, "sha256", 2048, file_hash);
+    EXPECT_NE(text.find("# fileHash: " + file_hash), std::string::npos);
+
+    IncrementalDownloader::HashListData data;
+    ASSERT_TRUE(IncrementalDownloader::parseHashListEx(text, 1024, "sha256", data));
+    EXPECT_EQ(data.chunks.size(), std::size_t{2});
+    EXPECT_EQ(data.fileHash, file_hash);
+
+    // 旧接口仍可用（fileHash 对旧调用方不可见）
+    const auto legacy = IncrementalDownloader::parseHashList(text, 1024, "sha256");
+    ASSERT_EQ(legacy.size(), std::size_t{2});
+    EXPECT_EQ(legacy[1].hash, chunks[1].hash);
+
+    // 旧格式列表（无 fileHash 行）→ 解析成功且 fileHash 为空
+    const std::string legacy_text =
+        IncrementalDownloader::serializeHashList(chunks, 1024, "sha256", 2048);
+    IncrementalDownloader::HashListData legacy_data;
+    ASSERT_TRUE(IncrementalDownloader::parseHashListEx(
+        legacy_text, 1024, "sha256", legacy_data));
+    EXPECT_TRUE(legacy_data.fileHash.empty());
+
+    // 缺失文件的整文件哈希 → 空串
+    EXPECT_TRUE(downloader.calculateFileHash(testDir_ + "/missing.bin").empty());
+}
+
+// fileHash 行存在但值非十六进制 → 整个列表无效
+TEST_F(IncrementalDownloadTest, ParseHashListRejectsInvalidFileHashValue) {
+    const std::string text =
+        "# algorithm: sha256\r\n# fileHash: not-hex-value\r\n" + std::string(64, 'a');
+    IncrementalDownloader::HashListData data;
+    EXPECT_FALSE(
+        IncrementalDownloader::parseHashListEx(text, 100, "sha256", data));
+    EXPECT_TRUE(IncrementalDownloader::parseHashList(text, 100, "sha256").empty());
+}
+
+// 带正确 fileHash 的端到端：下载后整文件校验通过，成品与远程逐字节一致
+TEST_F(IncrementalDownloadTest, DownloadChangedVerifiesFileHashEndToEnd) {
+    const std::string remote_content = make_content(2500, 7);
+    std::string local_content = remote_content;
+    for (std::size_t i = 1024; i < 2048; ++i) {
+        local_content[i] = static_cast<char>((local_content[i] + 11) % 251);
+    }
+
+    const std::string local_path = testDir_ + "/verify_local.bin";
+    {
+        std::ofstream file(local_path, std::ios::binary);
+        file.write(local_content.data(),
+                   static_cast<std::streamsize>(local_content.size()));
+    }
+
+    const std::string remote_path = testDir_ + "/verify_remote.bin";
+    {
+        std::ofstream file(remote_path, std::ios::binary);
+        file.write(remote_content.data(),
+                   static_cast<std::streamsize>(remote_content.size()));
+    }
+    IncrementalDownloader list_generator;
+    const auto remote_chunks = list_generator.generateHashList(remote_path, 1024);
+    const std::string file_hash = list_generator.calculateFileHash(remote_path);
+    ASSERT_EQ(file_hash.size(), std::size_t{64});
+
+    IncrementalTestServer server;
+    ASSERT_TRUE(server.start(
+        remote_content,
+        IncrementalDownloader::serializeHashList(
+            remote_chunks, 1024, "sha256", 2500, file_hash)));
+
+    IncrementalDownloader downloader;
+    IncrementalDownloader::Options options;
+    options.chunkSize = 1024;
+    options.hashAlgorithm = "sha256";
+
+    const FileDiff diff = downloader.compare(
+        local_path,
+        "http://127.0.0.1:" + std::to_string(server.port()) + "/file.bin", options);
+    ASSERT_FALSE(diff.chunks.empty());
+    // compare 应把列表声明的整文件哈希带回 diff
+    EXPECT_EQ(diff.fileHash, file_hash);
+
+    const std::string out_path = testDir_ + "/verify_out.bin";
+    ASSERT_TRUE(downloader.downloadChanged(diff, out_path));
+    EXPECT_EQ(read_file(out_path), remote_content);
+}
+
+// 错误 fileHash（分块内容与分块哈希全部正确）→ 整文件校验拦截，
+// 失败且输出被删除——损坏成品绝不顶着成功语义留下
+TEST_F(IncrementalDownloadTest, DownloadChangedDetectsFileHashMismatch) {
+    const std::string remote_content = make_content(2048, 11);
+    const std::string remote_path = testDir_ + "/mismatch_remote.bin";
+    {
+        std::ofstream file(remote_path, std::ios::binary);
+        file.write(remote_content.data(),
+                   static_cast<std::streamsize>(remote_content.size()));
+    }
+    IncrementalDownloader generator;
+    const auto chunks = generator.generateHashList(remote_path, 1024);
+
+    const std::string wrong_hash(64, '0');
+    IncrementalTestServer server;
+    ASSERT_TRUE(server.start(
+        remote_content,
+        IncrementalDownloader::serializeHashList(
+            chunks, 1024, "sha256", 2048, wrong_hash)));
+
+    const std::string local_path =
+        createTestFile("mismatch_local.bin", 2048);
+
+    IncrementalDownloader downloader;
+    IncrementalDownloader::Options options;
+    options.chunkSize = 1024;
+    options.hashAlgorithm = "sha256";
+    const FileDiff diff = downloader.compare(
+        local_path,
+        "http://127.0.0.1:" + std::to_string(server.port()) + "/file.bin", options);
+    ASSERT_FALSE(diff.chunks.empty());
+    EXPECT_EQ(diff.fileHash, wrong_hash);
+
+    const std::string out_path = testDir_ + "/mismatch_out.bin";
+    EXPECT_FALSE(downloader.downloadChanged(diff, out_path));
+    EXPECT_FALSE(std::filesystem::exists(out_path));
+}
+
+// verifyDownload=false：显式关闭整文件校验（开关方向钉住）
+TEST_F(IncrementalDownloadTest, VerifyDownloadDisabledSkipsFileHashCheck) {
+    const std::string remote_content = make_content(2048, 17);
+    const std::string remote_path = testDir_ + "/noskip_remote.bin";
+    {
+        std::ofstream file(remote_path, std::ios::binary);
+        file.write(remote_content.data(),
+                   static_cast<std::streamsize>(remote_content.size()));
+    }
+    IncrementalDownloader generator;
+    const auto chunks = generator.generateHashList(remote_path, 1024);
+
+    const std::string wrong_hash(64, '0');
+    IncrementalTestServer server;
+    ASSERT_TRUE(server.start(
+        remote_content,
+        IncrementalDownloader::serializeHashList(
+            chunks, 1024, "sha256", 2048, wrong_hash)));
+
+    const std::string local_path =
+        createTestFile("noskip_local.bin", 2048);
+
+    IncrementalDownloader downloader;
+    IncrementalDownloader::Options options;
+    options.chunkSize = 1024;
+    options.hashAlgorithm = "sha256";
+    options.verifyDownload = false;
+    const FileDiff diff = downloader.compare(
+        local_path,
+        "http://127.0.0.1:" + std::to_string(server.port()) + "/file.bin", options);
+    ASSERT_FALSE(diff.chunks.empty());
+    EXPECT_FALSE(diff.verifyDownload);
+
+    const std::string out_path = testDir_ + "/noskip_out.bin";
+    ASSERT_TRUE(downloader.downloadChanged(diff, out_path));
+    EXPECT_EQ(read_file(out_path), remote_content);
+}
+
+// 服务器投毒（尺寸正确、字节翻转）→ 分块哈希校验拦下，失败且无输出
+TEST_F(IncrementalDownloadTest, DownloadChangedDetectsChunkHashMismatch) {
+    const std::string remote_content = make_content(2048, 23);
+    const std::string remote_path = testDir_ + "/poison_remote.bin";
+    {
+        std::ofstream file(remote_path, std::ios::binary);
+        file.write(remote_content.data(),
+                   static_cast<std::streamsize>(remote_content.size()));
+    }
+    IncrementalDownloader generator;
+    const auto chunks = generator.generateHashList(remote_path, 1024);
+
+    IncrementalTestServer server;
+    server.set_corrupt_ranges(true);
+    ASSERT_TRUE(server.start(
+        remote_content,
+        IncrementalDownloader::serializeHashList(chunks, 1024, "sha256", 2048)));
+
+    const std::string local_path =
+        createTestFile("poison_local.bin", 2048);
+
+    IncrementalDownloader downloader;
+    IncrementalDownloader::Options options;
+    options.chunkSize = 1024;
+    options.hashAlgorithm = "sha256";
+    const FileDiff diff = downloader.compare(
+        local_path,
+        "http://127.0.0.1:" + std::to_string(server.port()) + "/file.bin", options);
+    ASSERT_FALSE(diff.chunks.empty());
+    ASSERT_GT(diff.totalChanged, 0u);
+
+    const std::string out_path = testDir_ + "/poison_out.bin";
+    EXPECT_FALSE(downloader.downloadChanged(diff, out_path));
+    EXPECT_FALSE(std::filesystem::exists(out_path));
 }
 
 // ============================================================================

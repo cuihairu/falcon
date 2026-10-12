@@ -48,6 +48,9 @@ struct FileDiff {
     std::vector<ChunkInfo> chunks;   // 分块差异
     uint64_t totalChanged;           // 变化的总字节数
     double ratio;                    // 变化比例 (0.0 - 1.0)
+    std::string fileHash;            // 远程整文件哈希（哈希列表提供时）
+    std::string hashAlgorithm;       // 哈希算法名
+    bool verifyDownload = true;      // 下载完成后整文件校验
 };
 
 /**
@@ -58,11 +61,14 @@ struct FileDiff {
  *   # algorithm: sha256
  *   # fileSize: 12345678
  *   # chunks: 12
+ *   # fileHash: <整文件 hex 哈希（可选行）>
  *   <hex hash line 1>
  *   <hex hash line 2>
  *   ...
  *
  * 以 '#' 开头的行是元数据；其余非空行为按分块顺序排列的十六进制哈希。
+ * fileHash 提供时 downloadChanged() 在写出成品后做整文件校验，不匹配
+ * 删除输出并报告失败（verifyDownload 选项可关闭该校验）。
  * compare() 使用的哈希列表 URL 约定为 <file url> + ".falconhash"。
  */
 
@@ -148,6 +154,14 @@ public:
                    const std::string& expectedHash);
 
     /**
+     * @brief 完整哈希列表（分块 + 可选整文件哈希）
+     */
+    struct HashListData {
+        std::vector<ChunkInfo> chunks;  // 分块信息
+        std::string fileHash;           // 整文件哈希（列表未提供时为空）
+    };
+
+    /**
      * @brief 将哈希列表序列化为文本格式
      *
      * 输出可直接部署为服务端的 .falconhash 文件，供
@@ -157,12 +171,33 @@ public:
      * @param chunkSize 分块大小
      * @param algorithm 哈希算法名
      * @param fileSize 文件总大小（用于计算最后一块的实际大小）
+     * @param fileHash 整文件哈希（可选，非空时写出 fileHash 元数据行）
      * @return 文本内容
      */
     static std::string serializeHashList(const std::vector<ChunkInfo>& chunks,
                                          uint64_t chunkSize,
                                          const std::string& algorithm,
-                                         uint64_t fileSize);
+                                         uint64_t fileSize,
+                                         const std::string& fileHash = std::string());
+
+    /**
+     * @brief 解析哈希列表文本（扩展版）
+     *
+     * 元数据行可覆盖默认参数；哈希行必须是偶数长度的十六进制串；
+     * fileHash 行存在时必须是合法十六进制（否则整个列表无效）。
+     * 校验失败（无哈希行 / chunks 计数不符 / 哈希格式非法 /
+     * 算法与 defaultAlgorithm 不一致）返回 false。
+     *
+     * @param text 哈希列表文本
+     * @param defaultChunkSize 元数据缺失时的分块大小
+     * @param defaultAlgorithm 期望的哈希算法（不一致视为列表无效）
+     * @param out 解析结果（成功时写入）
+     * @return 解析是否成功
+     */
+    static bool parseHashListEx(const std::string& text,
+                                uint64_t defaultChunkSize,
+                                const std::string& defaultAlgorithm,
+                                HashListData& out);
 
     /**
      * @brief 解析哈希列表文本
@@ -179,6 +214,16 @@ public:
     static std::vector<ChunkInfo> parseHashList(const std::string& text,
                                                 uint64_t defaultChunkSize,
                                                 const std::string& defaultAlgorithm);
+
+    /**
+     * @brief 计算文件整文件哈希
+     *
+     * @param filePath 文件路径
+     * @param algorithm 哈希算法名
+     * @return 十六进制哈希；文件打开失败返回空串
+     */
+    std::string calculateFileHash(const std::string& filePath,
+                                  const std::string& algorithm = "sha256");
 
 private:
 
@@ -201,9 +246,9 @@ private:
      * 实际请求 <url> + ".falconhash"；解析结果与传入的 chunkSize /
      * algorithm 约束不匹配时返回空。
      */
-    std::vector<ChunkInfo> downloadRemoteHashList(const std::string& url,
-                                                  uint64_t chunkSize,
-                                                  const std::string& algorithm);
+    HashListData downloadRemoteHashList(const std::string& url,
+                                        uint64_t chunkSize,
+                                        const std::string& algorithm);
 
     /**
      * @brief 比较哈希列表
