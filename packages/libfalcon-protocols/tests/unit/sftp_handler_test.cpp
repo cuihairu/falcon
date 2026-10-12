@@ -321,9 +321,9 @@ TEST(SftpDetailUtil, HostEntryCoversMatrix) {
 }
 
 TEST(SftpDetailUtil, ExpandHomePathFollowsHomeEnv) {
-    // 不改环境变量：期望值由运行时 HOME 推导（HOME 缺失时 "~/" 原样返回）
-    const char* home_c = std::getenv("HOME");
-    const std::string home = (home_c && *home_c) ? home_c : std::string();
+    // 不改环境变量：期望值由 detail::home_dir() 推导
+    //（HOME/USERPROFILE 缺失时 "~/" 原样返回）
+    const std::string home = detail::home_dir();
     EXPECT_EQ(detail::expand_home_path("~/x/y"),
               home.empty() ? std::string("~/x/y") : home + "/x/y");
     // 非 "~/" 前缀原样返回（含 "~user" 与裸 "~"）

@@ -110,15 +110,6 @@ int wait_socket(socket_t s, short events, int timeout_ms) {
 #endif
 }
 
-std::string home_dir() {
-#ifdef _WIN32
-    const char* h = std::getenv("USERPROFILE");
-#else
-    const char* h = std::getenv("HOME");
-#endif
-    return (h && *h) ? h : std::string();
-}
-
 std::string default_username() {
 #ifdef _WIN32
     const char* u = std::getenv("USERNAME");
@@ -292,7 +283,7 @@ void verify_host_key(LIBSSH2_SESSION* session,
         detail::base64_encode(reinterpret_cast<const unsigned char*>(key_blob),
                               key_len);
 
-    const std::string hosts_path = home_dir() + "/.ssh/known_hosts";
+    const std::string hosts_path = detail::home_dir() + "/.ssh/known_hosts";
     std::ifstream in(hosts_path);
     if (!in.is_open()) {
         FALCON_LOG_WARN_STREAM("[sftp] known_hosts 不存在,接受新主机"
@@ -343,7 +334,7 @@ void authenticate(LIBSSH2_SESSION* session,
         if (!options.client_private_key.empty()) {
             keys.push_back(detail::expand_home_path(options.client_private_key));
         }
-        const std::string home = home_dir();
+        const std::string home = detail::home_dir();
         if (!home.empty()) {
             keys.push_back(home + "/.ssh/id_ed25519");
             keys.push_back(home + "/.ssh/id_rsa");
@@ -512,6 +503,15 @@ bool host_entry_covers(const std::string& hosts_token,
         if (port != 22 && entry == bracketed) return true;
     }
     return false;
+}
+
+std::string home_dir() {
+#ifdef _WIN32
+    const char* h = std::getenv("USERPROFILE");
+#else
+    const char* h = std::getenv("HOME");
+#endif
+    return (h && *h) ? h : std::string();
 }
 
 std::string expand_home_path(const std::string& path) {

@@ -77,6 +77,9 @@ std::uint16_t parse_port(const std::string& text, const std::string& url);
 bool host_entry_covers(const std::string& entries, const std::string& host,
                        std::uint16_t port);
 
+/// HOME / USERPROFILE 环境变量（平台相关；缺失或为空返回空串）。
+std::string home_dir();
+
 /// "~/..." 展开到家目录（HOME 缺失/为空原样返回；"~user" 非语义形态原样返回）。
 std::string expand_home_path(const std::string& path);
 
