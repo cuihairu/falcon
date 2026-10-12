@@ -1,0 +1,22 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# 闭包与包 CMakeLists 的链接点同源（构建时链接了什么，这里才找什么）。
+# nlohmann_json 不在列：core 构建侧从不链接它（根目录的 QUIET find 是
+# 存量遗留，导出闭包零引用）
+find_dependency(Threads)
+
+# 可选依赖按构建实态投影（monorepo 缺库降级时打标 OFF，消费方同样不找）
+if(@FALCON_CORE_PACKAGE_NEEDS_SPDLOG@)
+    find_dependency(spdlog)
+endif()
+
+if(@FALCON_CORE_PACKAGE_NEEDS_OPENSSL@)
+    find_dependency(OpenSSL)
+endif()
+
+# 导入目标（Falcon::core，EXPORT_NAME 与别名一致）
+include("${CMAKE_CURRENT_LIST_DIR}/FalconCoreTargets.cmake")
+
+check_required_components(FalconCore)
