@@ -456,6 +456,11 @@ int main(int argc, char** argv)
             app.processEvents();
             app.sendPostedEvents(nullptr, QEvent::LayoutRequest);
         }
+        // 本沙盒从不进入 app.exec()：DeferredDelete 事件在同层
+        // processEvents() 中不会被投递（仅在返回更低层事件循环或此处
+        // 显式冲刷时才清理），网格视图 deleteLater() 摘除的旧卡片会
+        // 以孤儿形态残留在截图里——显式冲刷后再抓帧
+        app.sendPostedEvents(nullptr, QEvent::DeferredDelete);
         const QString path = out_dir + "/" + name + ".png";
         if (!shell.root->grab().save(path)) {
             std::fprintf(stderr, "failed to save %s\n", qPrintable(path));
