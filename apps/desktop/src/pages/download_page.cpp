@@ -43,6 +43,16 @@ constexpr int kSummaryCardHeight = 72;
 // 空态卡最小展示高度（用户 bug 反馈：自然高度 ~90px 塌缩挤压，给足 ≥200px）
 constexpr int kEmptyStateMinHeight = 232;
 
+// 表格列索引（与 create_task_table 的表头顺序对齐）：
+// 下载中视图隐藏「做种」（本视图恒空），已完成视图隐藏「进度」「速度」（恒 100%/—）
+constexpr int kColFilename = 0;
+constexpr int kColProgress = 1;
+constexpr int kColSize = 2;
+constexpr int kColSpeed = 3;
+constexpr int kColStatus = 4;
+constexpr int kColSeed = 5;
+constexpr int kColAction = 6;
+
 // 快照状态 → 界面中文文案（引擎状态名不外露）
 QString status_display_text(falcon::TaskStatus status)
 {
@@ -160,7 +170,9 @@ void DownloadPage::create_summary_cards()
     auto* summary_layout = new QHBoxLayout();
     summary_layout->setSpacing(12);
 
-    auto create_card = [this, summary_layout](const QString& caption, QLabel** value_label) {
+    auto create_card = [this, summary_layout](const QString& caption,
+                                               QLabel** value_label,
+                                               QLabel** caption_label) {
         auto* card = new QWidget(this);
         card->setObjectName("summaryCard");
         card->setFixedWidth(kSummaryCardWidth);
@@ -180,12 +192,15 @@ void DownloadPage::create_summary_cards()
         card_layout->addWidget(label);
 
         *value_label = value;
+        *caption_label = label;
         summary_layout->addWidget(card);
     };
 
-    create_card(tr("活跃任务"), &active_summary_value_);
-    create_card(tr("已完成"), &completed_summary_value_);
-    create_card(tr("当前速度"), &speed_summary_value_);
+    // 两张卡按视图分派 caption+value（update_summary_cards）：
+    // 下载中 = 活跃任务 + 当前速度；已完成 = 已完成 + 总大小。
+    // 初始 caption 对应构造默认视图（Downloading）
+    create_card(tr("活跃任务"), &summary_value_first_, &summary_caption_first_);
+    create_card(tr("当前速度"), &summary_value_second_, &summary_caption_second_);
     summary_layout->addStretch();
 
     auto* root_layout = qobject_cast<QVBoxLayout*>(layout());
@@ -327,15 +342,18 @@ void DownloadPage::create_task_table()
             this, &DownloadPage::on_drag_session);
 
     // 列宽:文件名列弹性伸缩跟随窗口,其余列固定内容宽
-    task_table_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
-    task_table_->setColumnWidth(1, 200);  // 进度(条 + 百分比)
-    task_table_->setColumnWidth(2, 100);  // 大小
-    task_table_->setColumnWidth(3, 100);  // 速度
-    task_table_->setColumnWidth(4, 88);   // 状态
-    task_table_->setColumnWidth(5, 200);  // 做种(状态 · ratio · 时长;单行不折)
-    task_table_->setColumnWidth(6, 80);   // 操作
+    task_table_->horizontalHeader()->setSectionResizeMode(kColFilename, QHeaderView::Stretch);
+    task_table_->setColumnWidth(kColProgress, 200);  // 进度(条 + 百分比)
+    task_table_->setColumnWidth(kColSize, 100);      // 大小
+    task_table_->setColumnWidth(kColSpeed, 100);     // 速度
+    task_table_->setColumnWidth(kColStatus, 88);     // 状态
+    task_table_->setColumnWidth(kColSeed, 200);      // 做种(状态 · ratio · 时长;单行不折)
+    task_table_->setColumnWidth(kColAction, 80);     // 操作
 
     task_table_->setObjectName("taskTable");
+
+    // 初始列显隐(构造默认视图 Downloading → 隐藏做种列)
+    update_column_visibility();
 }
 
 void DownloadPage::set_view_mode(DownloadViewMode mode)
@@ -343,6 +361,8 @@ void DownloadPage::set_view_mode(DownloadViewMode mode)
     const bool changed = (view_mode_ != mode);
     view_mode_ = mode;
     update_header_for_mode();
+    // 列显隐随视图切换（重插行之前生效，避免错误列闪现）
+    update_column_visibility();
 
     // 同步页头分段切换器选中态(setChecked 不触发 clicked,无递归)
     if (view_segment_downloading_ && view_segment_completed_) {
@@ -469,6 +489,7 @@ void DownloadPage::rerender()
     }
 
     update_summary_cards();
+    update_column_visibility();
     update_empty_state();
 
     // 如果是网格视图，刷新网格显示
@@ -872,31 +893,55 @@ void DownloadPage::open_completed_target(const QString& save_path, bool open_fol
 
 void DownloadPage::update_summary_cards()
 {
-    int active_count = 0;
-    int completed_count = 0;
-    uint64_t total_speed = 0;
+    // 两卡按视图分派（用户反馈：下载中视图出现已完成信息、反之亦然）：
+    // - 下载中 = 活跃任务数 + 当前速度合计
+    // - 已完成 = 已完成数 + 总大小合计
+    // 计数口径 = should_show 全集（含 Failed 等 task_visibility 判定 +
+    // 顶栏过滤词），卡数字与列表行数自洽，不再泄漏另一视图的信息
+    int count = 0;
+    uint64_t aggregate = 0;
+    const bool downloading_view = (view_mode_ == DownloadViewMode::Downloading);
 
     for (auto it = task_records_.cbegin(); it != task_records_.cend(); ++it) {
         const auto& snap = it.value().snapshot;
-        if (snap.status == falcon::TaskStatus::Downloading ||
-            snap.status == falcon::TaskStatus::Preparing) {
-            ++active_count;
+        if (!should_show(snap)) {
+            continue;
         }
-        if (snap.status == falcon::TaskStatus::Completed) {
-            ++completed_count;
-        }
-        total_speed += snap.speed;
+        ++count;
+        aggregate += downloading_view ? snap.speed : snap.total_bytes;
     }
 
-    if (active_summary_value_) {
-        active_summary_value_->setText(QString::number(active_count));
+    if (summary_value_first_) {
+        summary_value_first_->setText(QString::number(count));
     }
-    if (completed_summary_value_) {
-        completed_summary_value_->setText(QString::number(completed_count));
+    if (summary_value_second_) {
+        summary_value_second_->setText(downloading_view ? format_speed(aggregate)
+                                                        : format_bytes(aggregate));
     }
-    if (speed_summary_value_) {
-        speed_summary_value_->setText(format_speed(total_speed));
+
+    // caption 随视图切换（标签构造期只建一次，文本在此统一更新）
+    if (summary_caption_first_ && summary_caption_second_) {
+        if (downloading_view) {
+            summary_caption_first_->setText(tr("活跃任务"));
+            summary_caption_second_->setText(tr("当前速度"));
+        } else {
+            summary_caption_first_->setText(tr("已完成"));
+            summary_caption_second_->setText(tr("总大小"));
+        }
     }
+}
+
+void DownloadPage::update_column_visibility()
+{
+    if (!task_table_) {
+        return;
+    }
+    const bool completed = (view_mode_ == DownloadViewMode::Completed);
+    // 已完成视图：进度（恒 100%）与速度（恒 "—"）是无信息量噪音 → 隐藏；
+    // 下载中视图：做种列恒空（做种任务只出现在已完成视图）→ 隐藏
+    task_table_->setColumnHidden(kColProgress, completed);
+    task_table_->setColumnHidden(kColSpeed, completed);
+    task_table_->setColumnHidden(kColSeed, !completed);
 }
 
 void DownloadPage::update_empty_state()

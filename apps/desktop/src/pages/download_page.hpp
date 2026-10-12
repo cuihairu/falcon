@@ -125,6 +125,7 @@ private:
     void create_task_grid();  // 创建网格视图
     void update_header_for_mode();
     void update_summary_cards();
+    void update_column_visibility();
     void update_empty_state();
     void show_context_menu(const QPoint& pos);
     void show_grid_context_menu(const QPoint& pos);  // 网格视图右键菜单
@@ -185,9 +186,11 @@ private:
     QWidget* view_segmented_ = nullptr;
     QPushButton* view_segment_downloading_ = nullptr;
     QPushButton* view_segment_completed_ = nullptr;
-    QLabel* active_summary_value_ = nullptr;
-    QLabel* completed_summary_value_ = nullptr;
-    QLabel* speed_summary_value_ = nullptr;
+    // 两张汇总卡随视图切换 caption+value(下载中:活跃任务/当前速度; 已完成:已完成/总大小)
+    QLabel* summary_value_first_ = nullptr;
+    QLabel* summary_caption_first_ = nullptr;
+    QLabel* summary_value_second_ = nullptr;
+    QLabel* summary_caption_second_ = nullptr;
     QWidget* empty_state_widget_ = nullptr;
     QLabel* empty_state_title_ = nullptr;
     QLabel* empty_state_body_ = nullptr;
