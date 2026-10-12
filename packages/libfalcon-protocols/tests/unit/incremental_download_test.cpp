@@ -1321,3 +1321,512 @@ TEST_F(IncrementalDownloadTest, InjectedCurlInitFailFailsDownloadChanged) {
 }
 
 #endif  // FALCON_FAILURE_INJECTION
+
+// ============================================================================
+// rsync 滚动校验和（v2 块列表：生成 / 序列化 / 解析 / 计划 / 端到端比较）
+// ============================================================================
+
+namespace {
+
+/// 与实现独立重导的 Adler 风格弱校验和（防同一 bug 自我印证的对照 oracle）
+uint32_t naive_weak(const std::string& data, std::size_t off, std::size_t len) {
+    uint32_t a = 0;
+    uint32_t b = 0;
+    for (std::size_t i = 0; i < len; ++i) {
+        const auto byte = static_cast<uint8_t>(data[off + i]);
+        a += byte;
+        b += a;
+    }
+    return (a & 0xFFFFu) | ((b & 0xFFFFu) << 16);
+}
+
+/// 替换第一处出现的行片段（构造损坏变体用）
+std::string replace_first(std::string text, const std::string& from,
+                          const std::string& to) {
+    const auto pos = text.find(from);
+    EXPECT_NE(pos, std::string::npos);
+    if (pos != std::string::npos) {
+        text.replace(pos, from.size(), to);
+    }
+    return text;
+}
+
+/// 生成一个「5 整块 + 100 字节尾巴」的远端内容（blockSize=1024）
+std::string make_rsync_remote(unsigned seed) {
+    // 伪随机字节（LCG，uint32 溢出回绕确定性）：不能用 make_content——
+    // 其 (i*13+seed)%251 序列以 251 为周期，周期内容会让错位扫描在预期
+    // 位置之前命中别名窗口（内容真相同，强哈希照常确认），破坏偏移断言
+    constexpr std::size_t kSize = 5 * 1024 + 100;
+    std::string content;
+    content.reserve(kSize);
+    uint32_t x = seed * 2654435761u + 1u;
+    for (std::size_t i = 0; i < kSize; ++i) {
+        x = x * 1103515245u + 12345u;
+        content.push_back(static_cast<char>((x >> 16) & 0xFFu));
+    }
+    return content;
+}
+
+}  // namespace
+
+// init 与连续 roll 必须等价：对 data[k..k+1024) 直接 init 的值 == 从
+// data[0..1024) init 后滑 k 格的值；且两者都与独立重导的 oracle 一致
+TEST_F(IncrementalDownloadTest, RollingChecksumRollEqualsInitAtOffset) {
+    const std::string data = make_content(4096 + 16, 5);
+    const uint32_t window = 1024;
+
+    RollingChecksum rc;
+    rc.init(reinterpret_cast<const uint8_t*>(data.data()), window);
+    EXPECT_EQ(rc.value(), naive_weak(data, 0, window));
+
+    for (uint32_t k = 1; k <= 8; ++k) {
+        rc.roll(static_cast<uint8_t>(data[k - 1]),
+                static_cast<uint8_t>(data[window + k - 1]));
+        EXPECT_EQ(rc.value(), naive_weak(data, k, window));
+
+        // 直接以偏移 k 重算（init 路径）必须与滚动结果一致
+        RollingChecksum direct;
+        direct.init(reinterpret_cast<const uint8_t*>(data.data()) + k, window);
+        EXPECT_EQ(direct.value(), rc.value());
+    }
+}
+
+// v2 块列表生成：整块切分、尾巴排除、weak 与 oracle 一致、strong 为 64 位
+// hex、fileHash 为整文件 sha256
+TEST_F(IncrementalDownloadTest, GenerateRsyncBlockListCoversFullBlocksOnly) {
+    const std::string content = make_rsync_remote(1);
+    const std::string path = testDir_ + "/rsync_remote.bin";
+    {
+        std::ofstream file(path, std::ios::binary);
+        file.write(content.data(), static_cast<std::streamsize>(content.size()));
+    }
+
+    IncrementalDownloader downloader;
+    RsyncBlockList list;
+    ASSERT_TRUE(downloader.generateRsyncBlockList(path, 1024, list));
+    EXPECT_EQ(list.blockSize, 1024u);
+    EXPECT_EQ(list.fileSize, content.size());
+    EXPECT_EQ(list.blocks.size(), std::size_t{5});  // 100 字节尾巴不进列表
+    EXPECT_EQ(list.fileHash, downloader.calculateFileHash(path, "sha256"));
+    EXPECT_EQ(list.fileHash.size(), std::size_t{64});
+
+    for (std::size_t i = 0; i < list.blocks.size(); ++i) {
+        EXPECT_EQ(list.blocks[i].offset, i * 1024u);
+        EXPECT_EQ(list.blocks[i].weak,
+                  naive_weak(content, i * 1024, 1024));
+        EXPECT_EQ(list.blocks[i].strong.size(), std::size_t{64});
+    }
+}
+
+TEST_F(IncrementalDownloadTest, GenerateRsyncBlockListRejectsBadBlockSize) {
+    const std::string path = createTestFile("rsync_bad_bs.bin", 4096);
+    IncrementalDownloader downloader;
+    RsyncBlockList list;
+    EXPECT_FALSE(downloader.generateRsyncBlockList(path, 0, list));
+    EXPECT_FALSE(downloader.generateRsyncBlockList(
+        path, 17ull * 1024 * 1024, list));
+}
+
+// 空文件：无整块，但 fileHash 必须仍是合法 sha256（RFC 独立向量：
+// sha256("") 的已知常量，防空输入退化成空哈希被当失败）
+TEST_F(IncrementalDownloadTest, GenerateRsyncBlockListEmptyFile) {
+    const std::string path = testDir_ + "/rsync_empty.bin";
+    {
+        std::ofstream file(path, std::ios::binary);
+    }
+
+    IncrementalDownloader downloader;
+    RsyncBlockList list;
+    ASSERT_TRUE(downloader.generateRsyncBlockList(path, 1024, list));
+    EXPECT_TRUE(list.blocks.empty());
+    EXPECT_EQ(list.fileHash,
+              "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+}
+
+// 序列化 → 解析往返（版本魔数行修复的回归钉子：魔数行无冒号，必须
+// 在 parse_metadata_line 之前直接串比较命中）
+TEST_F(IncrementalDownloadTest, RsyncSerializeParseRoundTrip) {
+    const std::string content = make_rsync_remote(2);
+    const std::string path = testDir_ + "/rsync_roundtrip.bin";
+    {
+        std::ofstream file(path, std::ios::binary);
+        file.write(content.data(), static_cast<std::streamsize>(content.size()));
+    }
+
+    IncrementalDownloader downloader;
+    RsyncBlockList list;
+    ASSERT_TRUE(downloader.generateRsyncBlockList(path, 1024, list));
+
+    const std::string text =
+        IncrementalDownloader::serializeRsyncBlockList(list);
+    EXPECT_NE(text.find("# falcon-hash-list v2\n"), std::string::npos);
+
+    RsyncBlockList parsed;
+    ASSERT_TRUE(IncrementalDownloader::parseRsyncBlockList(text, parsed));
+    EXPECT_EQ(parsed.blockSize, list.blockSize);
+    EXPECT_EQ(parsed.fileSize, list.fileSize);
+    EXPECT_EQ(parsed.fileHash, list.fileHash);
+    ASSERT_EQ(parsed.blocks.size(), list.blocks.size());
+    for (std::size_t i = 0; i < list.blocks.size(); ++i) {
+        EXPECT_EQ(parsed.blocks[i].offset, list.blocks[i].offset);
+        EXPECT_EQ(parsed.blocks[i].weak, list.blocks[i].weak);
+        EXPECT_EQ(parsed.blocks[i].strong, list.blocks[i].strong);
+    }
+}
+
+// 解析面拒绝矩阵：v1 列表、缺魔数、mode 错、缺 fileHash、fileHash 非 hex、
+// 算法非 sha256、blocks 计数不符、weak 非 8 位 hex、块偏移不连续、
+// 数值垃圾——任何一处损坏都使整个列表无效
+TEST_F(IncrementalDownloadTest, ParseRsyncBlockListRejectsCorruptions) {
+    const std::string content = make_rsync_remote(3);
+    const std::string path = testDir_ + "/rsync_corrupt.bin";
+    {
+        std::ofstream file(path, std::ios::binary);
+        file.write(content.data(), static_cast<std::streamsize>(content.size()));
+    }
+
+    IncrementalDownloader downloader;
+    RsyncBlockList list;
+    ASSERT_TRUE(downloader.generateRsyncBlockList(path, 1024, list));
+    const std::string valid =
+        IncrementalDownloader::serializeRsyncBlockList(list);
+
+    // v1 分块哈希列表必须被拒（magic 后无 v2 元数据 → 数据行前置门禁）
+    const auto chunks = downloader.generateHashList(path, 1024);
+    const std::string v1_text = IncrementalDownloader::serializeHashList(
+        chunks, 1024, "sha256", content.size());
+    RsyncBlockList out;
+    EXPECT_FALSE(IncrementalDownloader::parseRsyncBlockList(v1_text, out));
+
+    const auto drop_magic = [](const std::string& text) {
+        const auto pos = text.find('\n');
+        return text.substr(pos + 1);
+    };
+    // 重写首条数据行（offset 0）的 weak 字段——确定性破坏，不依赖具体
+    // 哈希内容。数据行以 "\n0:" 开头（元数据行都以 '#' 开头）
+    const auto rewrite_first_row = [](const std::string& text,
+                                      const std::string& weak) {
+        const auto start = text.find("\n0:");
+        EXPECT_NE(start, std::string::npos);
+        if (start == std::string::npos) return text;
+        const auto end = text.find('\n', start + 1);
+        const std::string row = text.substr(start + 1, end - start - 1);
+        const auto c1 = row.find(':');
+        const auto c2 = row.find(':', c1 + 1);
+        return text.substr(0, start + 1) + row.substr(0, c1 + 1) + weak +
+               row.substr(c2) + text.substr(end);
+    };
+
+    const std::vector<std::string> corrupt = {
+        drop_magic(valid),
+        replace_first(valid, "# mode: rsync", "# mode: chunk"),
+        replace_first(valid, "# fileHash: ", "# xfileHash: "),
+        replace_first(valid, "# fileHash: ", "# fileHash: zz"),
+        replace_first(valid, "# algorithm: sha256", "# algorithm: md5"),
+        replace_first(valid, "# blocks: 5", "# blocks: 4"),
+        rewrite_first_row(valid, "0011223"),   // weak 7 位 hex
+        rewrite_first_row(valid, "zz112233"),  // weak 非十六进制
+        replace_first(valid, "\n2048:", "\n2049:"),  // 块偏移非连续
+        replace_first(valid, "# blockSize: 1024", "# blockSize: zz"),
+    };
+    for (const auto& text : corrupt) {
+        EXPECT_FALSE(IncrementalDownloader::parseRsyncBlockList(text, out))
+            << "corrupt variant accepted:\n"
+            << text;
+    }
+
+    // 第二块偏移非连续（错位一格同样拒绝）
+    RsyncBlockList shifted;
+    EXPECT_FALSE(IncrementalDownloader::parseRsyncBlockList(
+        replace_first(valid, "\n1024:", "\n1025:"), shifted));
+}
+
+// 完全相同的本地与远端：单一 LocalCopy 段覆盖整块区 + 尾巴下载段
+TEST_F(IncrementalDownloadTest, PlanRsyncIdenticalFilesSingleCopy) {
+    const std::string content = make_rsync_remote(4);
+    const std::string remote_path = testDir_ + "/rsync_same_remote.bin";
+    const std::string local_path = testDir_ + "/rsync_same_local.bin";
+    for (const auto& p : {remote_path, local_path}) {
+        std::ofstream file(p, std::ios::binary);
+        file.write(content.data(), static_cast<std::streamsize>(content.size()));
+    }
+
+    IncrementalDownloader downloader;
+    RsyncBlockList list;
+    ASSERT_TRUE(downloader.generateRsyncBlockList(remote_path, 1024, list));
+
+    const RsyncPlan plan = downloader.planRsync(local_path, list);
+    ASSERT_EQ(plan.segments.size(), std::size_t{2});
+    EXPECT_EQ(plan.segments[0].kind, RsyncSegment::Kind::LocalCopy);
+    EXPECT_EQ(plan.segments[0].outputOffset, 0u);
+    EXPECT_EQ(plan.segments[0].localOffset, 0u);
+    EXPECT_EQ(plan.segments[0].length, 5u * 1024);
+    EXPECT_EQ(plan.segments[1].kind, RsyncSegment::Kind::Download);
+    EXPECT_EQ(plan.segments[1].outputOffset, 5u * 1024);
+    EXPECT_EQ(plan.segments[1].length, 100u);
+    EXPECT_EQ(plan.copyBytes, 5u * 1024);
+    EXPECT_EQ(plan.downloadBytes, 100u);
+}
+
+// 中间块变化：只重下该块与尾巴，其余按原位拷贝（v1 布局 localOffset==offset）
+TEST_F(IncrementalDownloadTest, PlanRsyncChangedMiddleBlockDownloadsOnlyIt) {
+    std::string remote_content = make_rsync_remote(5);
+    std::string local_content = remote_content;
+    for (std::size_t i = 2048; i < 3072; ++i) {
+        local_content[i] = static_cast<char>((local_content[i] + 17) % 251);
+    }
+    const std::string remote_path = testDir_ + "/rsync_mid_remote.bin";
+    const std::string local_path = testDir_ + "/rsync_mid_local.bin";
+    {
+        std::ofstream file(remote_path, std::ios::binary);
+        file.write(remote_content.data(),
+                   static_cast<std::streamsize>(remote_content.size()));
+        std::ofstream local(local_path, std::ios::binary);
+        local.write(local_content.data(),
+                    static_cast<std::streamsize>(local_content.size()));
+    }
+
+    IncrementalDownloader downloader;
+    RsyncBlockList list;
+    ASSERT_TRUE(downloader.generateRsyncBlockList(remote_path, 1024, list));
+
+    const RsyncPlan plan = downloader.planRsync(local_path, list);
+    ASSERT_EQ(plan.segments.size(), std::size_t{4});
+    EXPECT_EQ(plan.segments[0].kind, RsyncSegment::Kind::LocalCopy);
+    EXPECT_EQ(plan.segments[0].outputOffset, 0u);
+    EXPECT_EQ(plan.segments[0].localOffset, 0u);
+    EXPECT_EQ(plan.segments[0].length, 2048u);
+    EXPECT_EQ(plan.segments[1].kind, RsyncSegment::Kind::Download);
+    EXPECT_EQ(plan.segments[1].outputOffset, 2048u);
+    EXPECT_EQ(plan.segments[1].length, 1024u);
+    EXPECT_EQ(plan.segments[2].kind, RsyncSegment::Kind::LocalCopy);
+    EXPECT_EQ(plan.segments[2].outputOffset, 3072u);
+    EXPECT_EQ(plan.segments[2].localOffset, 3072u);
+    EXPECT_EQ(plan.segments[2].length, 2048u);
+    EXPECT_EQ(plan.segments[3].kind, RsyncSegment::Kind::Download);
+    EXPECT_EQ(plan.segments[3].outputOffset, 5u * 1024);
+    EXPECT_EQ(plan.segments[3].length, 100u);
+    EXPECT_EQ(plan.downloadBytes, 1124u);
+    EXPECT_EQ(plan.copyBytes, 4096u);
+}
+
+// 远端中部插入 3 字节：块错位后滚动扫描仍能恢复（LocalCopy 的本地源
+// 偏移与输出位置分叉），只有插入处与尾巴需要下载
+TEST_F(IncrementalDownloadTest, PlanRsyncShiftedMatchRecoversWithDivergentOffsets) {
+    const std::string local_content = make_rsync_remote(6);
+    // 在块 0 之后插入 "PRE"：块 0 原位匹配，块 1 错位丢失，块 2-4 在
+    // local 位置 2045 起连续命中（1024k-3）
+    std::string remote_content = local_content.substr(0, 1024) + "PRE" +
+                                 local_content.substr(1024);
+    const std::string remote_path = testDir_ + "/rsync_shift_remote.bin";
+    const std::string local_path = testDir_ + "/rsync_shift_local.bin";
+    {
+        std::ofstream file(remote_path, std::ios::binary);
+        file.write(remote_content.data(),
+                   static_cast<std::streamsize>(remote_content.size()));
+        std::ofstream local(local_path, std::ios::binary);
+        local.write(local_content.data(),
+                    static_cast<std::streamsize>(local_content.size()));
+    }
+
+    IncrementalDownloader downloader;
+    RsyncBlockList list;
+    ASSERT_TRUE(downloader.generateRsyncBlockList(remote_path, 1024, list));
+
+    const RsyncPlan plan = downloader.planRsync(local_path, list);
+    ASSERT_EQ(plan.segments.size(), std::size_t{4});
+    EXPECT_EQ(plan.segments[0].kind, RsyncSegment::Kind::LocalCopy);
+    EXPECT_EQ(plan.segments[0].outputOffset, 0u);
+    EXPECT_EQ(plan.segments[0].localOffset, 0u);
+    EXPECT_EQ(plan.segments[0].length, 1024u);
+    EXPECT_EQ(plan.segments[1].kind, RsyncSegment::Kind::Download);
+    EXPECT_EQ(plan.segments[1].outputOffset, 1024u);
+    EXPECT_EQ(plan.segments[1].length, 1024u);
+    // 错位恢复：本地源 2045 → 输出 2048（divergent）
+    EXPECT_EQ(plan.segments[2].kind, RsyncSegment::Kind::LocalCopy);
+    EXPECT_EQ(plan.segments[2].outputOffset, 2048u);
+    EXPECT_EQ(plan.segments[2].localOffset, 2045u);
+    EXPECT_EQ(plan.segments[2].length, 3072u);
+    EXPECT_EQ(plan.segments[3].kind, RsyncSegment::Kind::Download);
+    EXPECT_EQ(plan.segments[3].outputOffset, 5u * 1024);
+    EXPECT_EQ(plan.segments[3].length, 103u);
+    // 下载字节 = 插入区 1024 + 尾巴 103
+    EXPECT_EQ(plan.downloadBytes, 1127u);
+    EXPECT_EQ(plan.copyBytes, 4096u);
+}
+
+TEST_F(IncrementalDownloadTest, PlanRsyncUnreadableLocalFallsBackToFullDownload) {
+    const std::string content = make_rsync_remote(7);
+    const std::string remote_path = testDir_ + "/rsync_dead_remote.bin";
+    {
+        std::ofstream file(remote_path, std::ios::binary);
+        file.write(content.data(), static_cast<std::streamsize>(content.size()));
+    }
+
+    IncrementalDownloader downloader;
+    RsyncBlockList list;
+    ASSERT_TRUE(downloader.generateRsyncBlockList(remote_path, 1024, list));
+
+    const RsyncPlan plan =
+        downloader.planRsync(testDir_ + "/no_such_local.bin", list);
+    ASSERT_EQ(plan.segments.size(), std::size_t{1});
+    EXPECT_EQ(plan.segments[0].kind, RsyncSegment::Kind::Download);
+    EXPECT_EQ(plan.segments[0].outputOffset, 0u);
+    EXPECT_EQ(plan.segments[0].length, content.size());
+    EXPECT_EQ(plan.downloadBytes, content.size());
+    EXPECT_EQ(plan.copyBytes, 0u);
+}
+
+TEST_F(IncrementalDownloadTest, PlanRsyncEmptyLocalDownloadsEverything) {
+    const std::string content = make_rsync_remote(8);
+    const std::string remote_path = testDir_ + "/rsync_empty_local_remote.bin";
+    {
+        std::ofstream file(remote_path, std::ios::binary);
+        file.write(content.data(), static_cast<std::streamsize>(content.size()));
+    }
+    const std::string local_path = testDir_ + "/rsync_local_empty.bin";
+    {
+        std::ofstream file(local_path, std::ios::binary);
+    }
+
+    IncrementalDownloader downloader;
+    RsyncBlockList list;
+    ASSERT_TRUE(downloader.generateRsyncBlockList(remote_path, 1024, list));
+
+    const RsyncPlan plan = downloader.planRsync(local_path, list);
+    ASSERT_EQ(plan.segments.size(), std::size_t{2});
+    EXPECT_EQ(plan.segments[0].kind, RsyncSegment::Kind::Download);
+    EXPECT_EQ(plan.segments[0].length, 5u * 1024);
+    EXPECT_EQ(plan.segments[1].kind, RsyncSegment::Kind::Download);
+    EXPECT_EQ(plan.segments[1].length, 100u);
+    EXPECT_EQ(plan.downloadBytes, content.size());
+    EXPECT_EQ(plan.copyBytes, 0u);
+}
+
+// 端到端：v2 块列表经 compareRsync → downloadChanged 逐字节重建错位远端
+// （错位 LocalCopy 走独立输出缓冲路径；尾巴与插入处走 Range 下载；最后
+// 整文件哈希校验放行）
+TEST_F(IncrementalDownloadTest, CompareRsyncEndToEndRebuildsShiftedRemote) {
+    const std::string local_content = make_rsync_remote(9);
+    std::string remote_content =
+        local_content.substr(0, 1024) + "PRE" + local_content.substr(1024);
+    const std::string local_path = testDir_ + "/rsync_e2e_local.bin";
+    {
+        std::ofstream file(local_path, std::ios::binary);
+        file.write(local_content.data(),
+                   static_cast<std::streamsize>(local_content.size()));
+    }
+
+    IncrementalDownloader downloader;
+    RsyncBlockList list;
+    // 生成块列表必须在 writer 作用域关闭之后：ofstream 未 flush 时数据仍在
+    // 用户态缓冲，生成器 seekg-end 读到 0 会产出「合法的空列表」（fileHash
+    // 为 sha256("")，parse 照常通过），e2e 即被远端 0 字节假象污染
+    {
+        const std::string remote_path = testDir_ + "/rsync_e2e_remote.bin";
+        std::ofstream file(remote_path, std::ios::binary);
+        file.write(remote_content.data(),
+                   static_cast<std::streamsize>(remote_content.size()));
+    }
+    ASSERT_TRUE(downloader.generateRsyncBlockList(
+        testDir_ + "/rsync_e2e_remote.bin", 1024, list));
+
+    IncrementalTestServer server;
+    ASSERT_TRUE(server.start(
+        remote_content, IncrementalDownloader::serializeRsyncBlockList(list)));
+
+    IncrementalDownloader::Options options;
+    options.chunkSize = 1024;
+    options.hashAlgorithm = "sha256";
+    FileDiff diff;
+    ASSERT_TRUE(downloader.compareRsync(
+        local_path,
+        "http://127.0.0.1:" + std::to_string(server.port()) + "/file.bin",
+        options, diff));
+    EXPECT_EQ(diff.remoteSize, remote_content.size());
+    EXPECT_EQ(diff.fileHash, list.fileHash);
+    // 插入处 + 尾巴 = 下载字节；其余全部本地拷贝
+    EXPECT_EQ(diff.totalChanged, 1127u);
+    ASSERT_EQ(diff.chunks.size(), std::size_t{4});
+    EXPECT_FALSE(diff.chunks[0].changed);
+    EXPECT_EQ(diff.chunks[0].localOffset, 0u);
+    EXPECT_TRUE(diff.chunks[1].changed);
+    EXPECT_FALSE(diff.chunks[2].changed);
+    EXPECT_EQ(diff.chunks[2].offset, 2048u);
+    EXPECT_EQ(diff.chunks[2].localOffset, 2045u);  // divergent copy
+    EXPECT_TRUE(diff.chunks[3].changed);
+
+    const std::string out_path = testDir_ + "/rsync_e2e_out.bin";
+    EXPECT_TRUE(downloader.downloadChanged(diff, out_path));
+    EXPECT_EQ(read_file(out_path), remote_content);
+}
+
+TEST_F(IncrementalDownloadTest, CompareRsyncFailsWithoutValidBlockList) {
+    const std::string local_path = createTestFile("rsync_fail_local.bin", 2048);
+    const std::string content = make_rsync_remote(10);
+    const std::string remote_path = testDir_ + "/rsync_fail_remote.bin";
+    {
+        std::ofstream file(remote_path, std::ios::binary);
+        file.write(content.data(), static_cast<std::streamsize>(content.size()));
+    }
+
+    IncrementalDownloader downloader;
+    RsyncBlockList list;
+    ASSERT_TRUE(downloader.generateRsyncBlockList(remote_path, 1024, list));
+
+    IncrementalDownloader::Options options;
+    // 服务器在位但 .falconhash 为空 → 解析失败
+    IncrementalTestServer empty_list_server;
+    ASSERT_TRUE(empty_list_server.start(content, ""));
+    FileDiff diff;
+    EXPECT_FALSE(downloader.compareRsync(
+        local_path,
+        "http://127.0.0.1:" + std::to_string(empty_list_server.port()) +
+            "/file.bin",
+        options, diff));
+    // 无服务器（连接拒绝）同样干净失败
+    FileDiff diff2;
+    EXPECT_FALSE(downloader.compareRsync(
+        local_path, "http://127.0.0.1:1/remote.bin", options, diff2));
+}
+
+// 独立输出缓冲回归钉子：两段 LocalCopy 交换顺序——先执行的段把目标
+// 压在另一段的源上。就地写会先毁掉尚未读取的数据；独立缓冲下无论
+// 顺序都逐字节正确（成品 = 本地缓冲的两段轮换）
+TEST_F(IncrementalDownloadTest, DownloadChangedDivergentCopySurvivesSwappedOrder) {
+    const std::string local_content = make_content(4096, 3);
+    const std::string local_path = testDir_ + "/rsync_swap_local.bin";
+    {
+        std::ofstream file(local_path, std::ios::binary);
+        file.write(local_content.data(),
+                   static_cast<std::streamsize>(local_content.size()));
+    }
+
+    FileDiff diff;
+    diff.localPath = local_path;
+    diff.remotePath = "unused://swap";
+    diff.localSize = local_content.size();
+    diff.remoteSize = local_content.size();
+    diff.verifyDownload = false;  // 手工构造，无整文件哈希可校验
+
+    // 段 A：读 local[0,2048) 写 out[2048,4096)（覆盖段 B 的源）
+    ChunkInfo first;
+    first.offset = 2048;
+    first.size = 2048;
+    first.changed = false;
+    first.localOffset = 0;
+    // 段 B：读 local[2048,4096) 写 out[0,2048)
+    ChunkInfo second;
+    second.offset = 0;
+    second.size = 2048;
+    second.changed = false;
+    second.localOffset = 2048;
+    diff.chunks.push_back(first);   // 先执行段 A（clobber 段 B 的源）
+    diff.chunks.push_back(second);
+
+    const std::string out_path = testDir_ + "/rsync_swap_out.bin";
+    IncrementalDownloader downloader;
+    EXPECT_TRUE(downloader.downloadChanged(diff, out_path));
+    EXPECT_EQ(read_file(out_path),
+              local_content.substr(2048) + local_content.substr(0, 2048));
+}
