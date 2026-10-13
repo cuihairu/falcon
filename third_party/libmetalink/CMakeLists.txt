@@ -91,9 +91,14 @@ endif()
 
 # 安装与导出：metalink_handler 的 PRIVATE 静态依赖进 install(EXPORT
 # FalconTargets) 的依赖闭包（导出接口里为 $<LINK_ONLY:Falcon::libmetalink>，
-# 消费方链接 Falcon::protocols 时需要本库的归档文件）
+# 消费方链接 Falcon::protocols 时需要本库的归档文件）。
+# 导出集由消费方注入（protocols 包独立 configure 时传
+# FalconProtocolsTargets；monorepo/未注入时维持 FalconTargets）
+if(NOT DEFINED FALCON_METALINK_EXPORT_SET)
+    set(FALCON_METALINK_EXPORT_SET FalconTargets)
+endif()
 include(GNUInstallDirs)
-install(TARGETS libmetalink EXPORT FalconTargets
+install(TARGETS libmetalink EXPORT ${FALCON_METALINK_EXPORT_SET}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )

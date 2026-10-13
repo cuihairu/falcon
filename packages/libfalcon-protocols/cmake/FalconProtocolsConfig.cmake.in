@@ -1,0 +1,76 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# 上游闭包先建（falcon_core 的 FalconCoreConfig 自行展开 Threads/spdlog/
+# OpenSSL 的可选项投影，本文件不重复）
+find_dependency(FalconCore)
+
+# 查找依赖：闭包与包 CMakeLists 的链接点同源（构建时链接了什么，这里
+# 才找什么）。打标与根 FalconConfig 同款按位投影，8 个可选项中 4 个
+# （LIBTORRENT/MINIUPNPC/NATPMP/LIBSSH2）直接复用包内链接点的 CACHE
+# INTERNAL 标记，零二次判定
+if(@FALCON_PROTOCOLS_PACKAGE_NEEDS_SPDLOG@)
+    find_dependency(spdlog)
+endif()
+
+if(@FALCON_PROTOCOLS_PACKAGE_NEEDS_CURL@)
+    find_dependency(CURL)
+endif()
+
+if(@FALCON_PROTOCOLS_PACKAGE_NEEDS_OPENSSL@)
+    find_dependency(OpenSSL)
+endif()
+
+# BT 插件的 PRIVATE 静态依赖（导出闭包引用 LibtorrentRasterbar::torrent-
+# rasterbar；vcpkg config 形态）。pkg-config 兜底形态（PkgConfig::LIBTORRENT）
+# 为环境形态依赖，同 CURL/libssh2 注记
+if(@FALCON_PACKAGE_NEEDS_LIBTORRENT@)
+    find_dependency(LibtorrentRasterbar 2.0)
+endif()
+
+# vendored libmetalink 的 PRIVATE 依赖（导出闭包引用 expat::expat）。
+# 与构建侧同款两段解析：CONFIG 优先，落空按 FindEXPAT 变量手工派生
+# expat::expat imported target（模块模式定义的名字是 EXPAT::EXPAT，
+# 与导出引用不一致，必须重建同名目标）
+if(@FALCON_PROTOCOLS_PACKAGE_NEEDS_EXPAT@)
+    find_dependency(expat CONFIG)
+    if(NOT TARGET expat::expat)
+        find_dependency(EXPAT)
+        add_library(expat::expat UNKNOWN IMPORTED)
+        set_target_properties(expat::expat PROPERTIES
+            IMPORTED_LOCATION "${EXPAT_LIBRARIES}"
+            INTERFACE_INCLUDE_DIRECTORIES "${EXPAT_INCLUDE_DIRS}")
+    endif()
+endif()
+
+if(@FALCON_PACKAGE_NEEDS_MINIUPNPC@)
+    find_dependency(miniupnpc CONFIG)
+endif()
+
+# SFTP 插件的 PRIVATE 静态依赖（导出闭包引用 libssh2 的 imported target；
+# vcpkg config 定义 libssh2::libssh2_static）。pkg-config 兜底形态下导出
+# 引用 PkgConfig::LIBSSH2，消费方需自行 pkg_check_modules——环境形态
+# 依赖，与 CURL 的 libcurl_static 同类
+if(@FALCON_PACKAGE_NEEDS_LIBSSH2@)
+    find_dependency(libssh2 CONFIG)
+endif()
+
+# libnatpmp 无 config 包，按构建侧同款逻辑手工派生 imported target
+if(@FALCON_PACKAGE_NEEDS_NATPMP@)
+    find_path(NATPMP_INCLUDE_DIR natpmp.h)
+    find_library(NATPMP_LIBRARY NAMES natpmp)
+    if(NOT NATPMP_INCLUDE_DIR OR NOT NATPMP_LIBRARY)
+        set(FalconProtocols_FOUND OFF)
+    elseif(NOT TARGET natpmp::natpmp)
+        add_library(natpmp::natpmp UNKNOWN IMPORTED)
+        set_target_properties(natpmp::natpmp PROPERTIES
+            IMPORTED_LOCATION "${NATPMP_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${NATPMP_INCLUDE_DIR}")
+    endif()
+endif()
+
+# 导入目标
+include("${CMAKE_CURRENT_LIST_DIR}/FalconProtocolsTargets.cmake")
+
+check_required_components(FalconProtocols)

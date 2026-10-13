@@ -7,6 +7,100 @@ project(libfalcon-protocols
 )
 
 # ============================================================================
+# Export set anchor（先于一切 install/add_subdirectory 计算）
+#
+# monorepo 树内（根已建 falcon_core）沿用 FalconTargets 单体导出（#12
+# 消费路径零变化）；独立 configure（vcpkg 端口形态，本包为顶层 project）
+# 自带 FalconProtocolsTargets 每包导出集。判定锚 = TARGET falcon_core
+# （根必然已建该目标，端口树内必然没有——不引入第二个真值来源）。
+# 插件与 vendored libmetalink 的 install 同随此锚分支——一个目标不能
+# 同时进两个导出集
+# ============================================================================
+
+if(TARGET falcon_core)
+    set(FALCON_PROTOCOLS_EXPORT_SET FalconTargets)
+    set(FALCON_PROTOCOLS_STANDALONE OFF)
+else()
+    set(FALCON_PROTOCOLS_EXPORT_SET FalconProtocolsTargets)
+    set(FALCON_PROTOCOLS_STANDALONE ON)
+endif()
+
+# ============================================================================
+# 独立 configure 自足块（vcpkg 端口形态）
+#
+# monorepo 树内根已做过全部 find_package，整块跳过（零行为变化）；
+# 独立形态下补齐本包消费的 finder 与上游包。option 只在未定义时兜底
+# （与根 CMakeLists 的 option 同值）——定义权留根目录，避免两处描述
+# 漂移。libssh2/miniupnpc/natpmp/libtorrent/expat 的查找在下方插件块
+# 或 vendored 子目录内自带（目录作用域内执行），无需在此重复
+# ============================================================================
+
+if(NOT DEFINED FALCON_ENABLE_HTTP)
+    set(FALCON_ENABLE_HTTP ON)
+endif()
+if(NOT DEFINED FALCON_ENABLE_FTP)
+    set(FALCON_ENABLE_FTP ON)
+endif()
+if(NOT DEFINED FALCON_ENABLE_BITTORRENT)
+    set(FALCON_ENABLE_BITTORRENT ON)
+endif()
+if(NOT DEFINED FALCON_ENABLE_SFTP)
+    set(FALCON_ENABLE_SFTP ON)
+endif()
+if(NOT DEFINED FALCON_ENABLE_WEBDAV)
+    set(FALCON_ENABLE_WEBDAV ON)
+endif()
+if(NOT DEFINED FALCON_ENABLE_METALINK)
+    set(FALCON_ENABLE_METALINK ON)
+endif()
+if(NOT DEFINED FALCON_ENABLE_NAT)
+    set(FALCON_ENABLE_NAT ON)
+endif()
+if(NOT DEFINED FALCON_ENABLE_THUNDER)
+    set(FALCON_ENABLE_THUNDER OFF)
+endif()
+if(NOT DEFINED FALCON_ENABLE_QQDL)
+    set(FALCON_ENABLE_QQDL OFF)
+endif()
+if(NOT DEFINED FALCON_ENABLE_FLASHGET)
+    set(FALCON_ENABLE_FLASHGET OFF)
+endif()
+if(NOT DEFINED FALCON_ENABLE_ED2K)
+    set(FALCON_ENABLE_ED2K OFF)
+endif()
+if(NOT DEFINED FALCON_ENABLE_HLS)
+    set(FALCON_ENABLE_HLS OFF)
+endif()
+if(NOT DEFINED FALCON_ENABLE_FAILURE_INJECTION)
+    set(FALCON_ENABLE_FAILURE_INJECTION OFF)
+endif()
+
+if(NOT TARGET falcon_core)
+    find_package(FalconCore CONFIG REQUIRED)
+    # 本包与插件的既有链接点全部裸写 falcon_core——独立 configure 下以
+    # 别名对齐 Falcon::core（目录级即可：消费方全在本目录子树内）
+    add_library(falcon_core ALIAS Falcon::core)
+    find_package(spdlog QUIET)
+    find_package(nlohmann_json QUIET)
+    # 查找门与根 cmake/Dependencies.cmake 同款（HTTP/FTP；WEBDAV 沿用
+    # 同一结果的既有行为——两门全关时不找 curl）
+    if(FALCON_ENABLE_HTTP OR FALCON_ENABLE_FTP)
+        find_package(CURL QUIET)
+    endif()
+    find_package(OpenSSL QUIET)
+endif()
+
+# 故障注入宏与根目录同款触发条件，且必须先于本目录一切 add_library
+# （add_compile_definitions 只作用于其后创建的目标——放晚了会导致
+# falcon_protocols 与 tests 的 injection.hpp 内联布局分叉，ODR 红线）。
+# monorepo 下根目录已在 add_subdirectory 前全局定义，此处跳过以免
+# 重复 -D 令本包全部 TU 重编
+if(NOT TARGET falcon_core
+        AND (FALCON_ENABLE_FAILURE_INJECTION OR FALCON_BUILD_TESTS))
+    add_compile_definitions(FALCON_FAILURE_INJECTION=1)
+endif()
+
+# ============================================================================
 # Protocols library
 # ============================================================================
 
@@ -170,6 +264,9 @@ endif()
 if(FALCON_ENABLE_METALINK)
     # Metalink 文档语义解析交给 vendored libmetalink（aria2 同款，MIT）；
     # XML 格式预检（行列号错误）与字段映射在 metalink_handler.cpp
+    # vendored 子目录的 install 导出集由本包注入（独立形态随
+    # FalconProtocolsTargets；monorepo 树内维持 FalconTargets）
+    set(FALCON_METALINK_EXPORT_SET ${FALCON_PROTOCOLS_EXPORT_SET})
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/libmetalink
                      ${CMAKE_BINARY_DIR}/third_party/libmetalink)
     target_sources(falcon_protocols PRIVATE
@@ -312,12 +409,32 @@ target_sources(falcon_protocols PRIVATE
 include(GNUInstallDirs)
 
 install(TARGETS falcon_protocols
-    EXPORT FalconTargets
+    EXPORT ${FALCON_PROTOCOLS_EXPORT_SET}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
+
+# 独立形态专属：静态 PRIVATE 链接的插件随本导出集一起 install
+# （PRIVATE 依赖经 $<LINK_ONLY> 传播进导出闭包——不装则消费方链接缺
+# 目标）。monorepo 树内这些 install 由根目录负责，此分支跳过。
+# HTTP 插件是 OBJECT 库（对象并入 falcon_protocols 归档），永不单独
+# install；falcon_builtin_protocol_handlers 同为 OBJECT 库
+if(FALCON_PROTOCOLS_STANDALONE)
+    foreach(_plugin falcon_plugin_ftp falcon_plugin_sftp
+                    falcon_plugin_webdav falcon_plugin_bittorrent)
+        if(TARGET ${_plugin})
+            install(TARGETS ${_plugin}
+                EXPORT ${FALCON_PROTOCOLS_EXPORT_SET}
+                LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+                ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+                RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+                INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+            )
+        endif()
+    endforeach()
+endif()
 
 # include/ 下的 BT 转发 shim（plugins/bittorrent 两枚）用相对路径指回构建树
 # 源码，安装前缀下悬空，排除安装；真实头文件由下方 install(FILES) 装到
@@ -340,6 +457,52 @@ if(TARGET falcon_plugin_bittorrent)
         plugins/bittorrent/pex_protocol.hpp
         plugins/bittorrent/bencode.hpp
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/falcon/plugins/bittorrent
+    )
+endif()
+
+# 独立形态专属：每包 Config（monorepo 树内根目录负责 FalconConfig）
+if(FALCON_PROTOCOLS_STANDALONE)
+    # 消费侧闭包打标：与上方链接点同条件（target 存在性，非 FOUND 布尔
+    # ——构建侧要求 targets 齐备才链接，导出闭包只在链接时才引用它们）。
+    # LIBTORRENT/MINIUPNPC/NATPMP/LIBSSH2 复用链接点已写入的 CACHE
+    # INTERNAL 标记（单一事实源），此处零二次判定
+    set(FALCON_PROTOCOLS_PACKAGE_NEEDS_SPDLOG OFF)
+    if(TARGET spdlog::spdlog)
+        set(FALCON_PROTOCOLS_PACKAGE_NEEDS_SPDLOG ON)
+    endif()
+    set(FALCON_PROTOCOLS_PACKAGE_NEEDS_CURL OFF)
+    if(TARGET CURL::libcurl)
+        set(FALCON_PROTOCOLS_PACKAGE_NEEDS_CURL ON)
+    endif()
+    set(FALCON_PROTOCOLS_PACKAGE_NEEDS_OPENSSL OFF)
+    if(TARGET OpenSSL::Crypto AND TARGET OpenSSL::SSL)
+        set(FALCON_PROTOCOLS_PACKAGE_NEEDS_OPENSSL ON)
+    endif()
+    set(FALCON_PROTOCOLS_PACKAGE_NEEDS_EXPAT OFF)
+    if(TARGET libmetalink)
+        set(FALCON_PROTOCOLS_PACKAGE_NEEDS_EXPAT ON)
+    endif()
+
+    include(CMakePackageConfigHelpers)
+    configure_package_config_file(
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/FalconProtocolsConfig.cmake.in
+        ${CMAKE_CURRENT_BINARY_DIR}/FalconProtocolsConfig.cmake
+        INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/FalconProtocols
+    )
+    write_basic_package_version_file(
+        ${CMAKE_CURRENT_BINARY_DIR}/FalconProtocolsConfigVersion.cmake
+        VERSION ${PROJECT_VERSION}
+        COMPATIBILITY SameMajorVersion
+    )
+    install(EXPORT FalconProtocolsTargets
+        FILE FalconProtocolsTargets.cmake
+        NAMESPACE Falcon::
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/FalconProtocols
+    )
+    install(FILES
+        ${CMAKE_CURRENT_BINARY_DIR}/FalconProtocolsConfig.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/FalconProtocolsConfigVersion.cmake
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/FalconProtocols
     )
 endif()
 
