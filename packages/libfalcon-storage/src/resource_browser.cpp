@@ -6,13 +6,23 @@
  */
 
 #include <falcon/storage/resource_browser.hpp>
+#ifdef FALCON_ENABLE_STORAGE_S3
 #include <falcon/storage/s3_browser.hpp>
+#endif
 #include <falcon/storage/webdav_browser.hpp>
 #ifdef FALCON_ENABLE_CRYPTO_STORAGE_BROWSERS
+#ifdef FALCON_ENABLE_STORAGE_OSS
 #include <falcon/storage/oss_browser.hpp>
+#endif
+#ifdef FALCON_ENABLE_STORAGE_COS
 #include <falcon/storage/cos_browser.hpp>
+#endif
+#ifdef FALCON_ENABLE_STORAGE_KODO
 #include <falcon/storage/kodo_browser.hpp>
+#endif
+#ifdef FALCON_ENABLE_STORAGE_UPYUN
 #include <falcon/storage/upyun_browser.hpp>
+#endif
 #endif
 #include <falcon/logger.hpp>
 #include <algorithm>
@@ -47,9 +57,11 @@ void register_default_browsers() {
     static std::once_flag once;
     std::call_once(once, []() {
 #ifdef FALCON_ENABLE_RESOURCE_BROWSER
+#ifdef FALCON_ENABLE_STORAGE_S3
         BrowserFactory::register_browser(
             {"s3", "Amazon S3", "Amazon Simple Storage Service"},
             [] { return std::make_unique<S3Browser>(); });
+#endif
         BrowserFactory::register_browser(
             {"webdav", "WebDAV / Alist",
              "WebDAV endpoints and Alist aggregates (坚果云/OneDrive/"
@@ -65,21 +77,29 @@ void register_default_browsers() {
             {"webdavs", "WebDAV (HTTPS)", "Alias for WebDAV (webdavs scheme)"},
             [] { return std::make_unique<WebDavBrowser>(); });
 #ifdef FALCON_ENABLE_CRYPTO_STORAGE_BROWSERS
+#ifdef FALCON_ENABLE_STORAGE_OSS
         BrowserFactory::register_browser(
             {"oss", "Alibaba OSS", "Alibaba Cloud Object Storage Service"},
             [] { return std::make_unique<OSSBrowser>(); });
+#endif
+#ifdef FALCON_ENABLE_STORAGE_COS
         BrowserFactory::register_browser(
             {"cos", "Tencent COS", "Tencent Cloud Object Storage"},
             [] { return std::make_unique<COSBrowser>(); });
+#endif
+#ifdef FALCON_ENABLE_STORAGE_KODO
         BrowserFactory::register_browser(
             {"kodo", "Qiniu Kodo", "Qiniu Cloud Object Storage"},
             [] { return std::make_unique<KodoBrowser>(); });
         BrowserFactory::register_browser(
             {"qiniu", "Qiniu Kodo", "Alias for Qiniu Kodo"},
             [] { return std::make_unique<KodoBrowser>(); });
+#endif
+#ifdef FALCON_ENABLE_STORAGE_UPYUN
         BrowserFactory::register_browser(
             {"upyun", "Upyun USS", "Upyun Cloud Storage"},
             [] { return std::make_unique<UpyunBrowser>(); });
+#endif
 #endif
 #endif
     });

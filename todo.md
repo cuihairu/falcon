@@ -539,8 +539,19 @@ feature 候选：
   `describe_builtin_protocols` 强实现，批次 F 陷阱的安装形态）；
   ② 单体路径（全新非插桩树 install → `find_package(Falcon)` 同一
   消费工程）同样绿。全量 ctest 回归绿
-- ⏳ 阶段 2 排队：overlay 端口文件（checkout 整树 + configure 包子
-  目录，third_party/libmetalink 相对路径解析成立），每端口一提交
+- 🔄 阶段 2 实施中（2026-10-13 批次，授权「上轮巡检点火续做」）：
+  ① §5.2 storage per-provider option 前置小改动（五枚
+  `FALCON_ENABLE_STORAGE_{S3,OSS,COS,KODO,UPYUN}`，默认 ON 行为零变
+  化，浏览器对象与 mock 测试按 provider 挂门禁）；② 四 overlay 端口
+  文件（`ports/libfalcon-{core,protocols,storage,drives}`：vcpkg.json
+  `version-date` 滚动 + portfile checkout 整树 configure 包子目录 +
+  usage；libnatpmp 复用仓库既有 overlay）。**验收口径**（§7 + 每阶段
+  门禁）：① 全量 ctest 回归绿；② `libfalcon-core` 干净 manifest 工程
+  单装单链冒烟；③ `libfalcon-storage[s3]` 装后仅 s3 浏览器对象在库
+  （nm 核对）；④ `libfalcon-protocols[bittorrent]` 装后
+  `Falcon::falcon_plugin_bittorrent` 在位、未选 feature handler 不
+  注册（can_handle 负向冒烟）；⑤ 每端口一提交，端口 REF 锁 commit；
+  端口版本非 Release 不触红线
 
 验收标准（设计已定义判定法，✅ = 判定法成立；实际验证随实施阶段）：
 

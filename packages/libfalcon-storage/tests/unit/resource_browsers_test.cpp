@@ -1,7 +1,9 @@
 // Falcon Resource Browser Implementations Unit Tests
 
 #include <falcon/storage/ftp_browser.hpp>
+#ifdef FALCON_ENABLE_STORAGE_S3
 #include <falcon/storage/s3_browser.hpp>
+#endif
 
 #include <gtest/gtest.h>
 
@@ -10,6 +12,8 @@
 //==============================================================================
 // URL 解析测试
 //==============================================================================
+
+#ifdef FALCON_ENABLE_STORAGE_S3
 
 TEST(ResourceBrowsersTest, UrlParsers) {
     auto parsed = falcon::S3UrlParser::parse("s3://my-bucket/path/to/key.txt");
@@ -45,6 +49,8 @@ TEST(S3UrlParserTest, ParseNestedPath) {
     EXPECT_EQ(parsed.key, "a/b/c/d/e/file.txt");
 }
 
+#endif // FALCON_ENABLE_STORAGE_S3
+
 //==============================================================================
 // 协议处理测试
 //==============================================================================
@@ -55,10 +61,12 @@ TEST(ResourceBrowsersTest, CanHandleSchemes) {
     EXPECT_TRUE(ftp.can_handle("ftps://example.com/pub"));
     EXPECT_FALSE(ftp.can_handle("https://example.com/pub"));
 
+#ifdef FALCON_ENABLE_STORAGE_S3
     falcon::S3Browser s3;
     EXPECT_TRUE(s3.can_handle("s3://bucket/key"));
     EXPECT_TRUE(s3.can_handle("https://bucket.s3.us-east-1.amazonaws.com/key"));
     EXPECT_FALSE(s3.can_handle("ftp://example.com/pub"));
+#endif
 }
 
 TEST(ResourceBrowsersTest, CanHandleWithPort) {
@@ -93,14 +101,17 @@ TEST(ResourceBrowserName, GetBrowserNames) {
     falcon::FTPBrowser ftp;
     EXPECT_EQ(ftp.get_name(), "FTP");
 
+#ifdef FALCON_ENABLE_STORAGE_S3
     falcon::S3Browser s3;
     EXPECT_EQ(s3.get_name(), "S3");
+#endif
 }
 
 TEST(BrowserFactoryTest, AvailableBrowsersExposeMetadata) {
     const auto browsers = falcon::BrowserFactory::available_browsers();
     ASSERT_FALSE(browsers.empty());
 
+#ifdef FALCON_ENABLE_STORAGE_S3
     const auto s3_it = std::find_if(
         browsers.begin(), browsers.end(),
         [](const falcon::BrowserFactory::BrowserInfo& info) {
@@ -109,26 +120,33 @@ TEST(BrowserFactoryTest, AvailableBrowsersExposeMetadata) {
     ASSERT_NE(s3_it, browsers.end());
     EXPECT_EQ(s3_it->display_name, "Amazon S3");
     EXPECT_FALSE(s3_it->description.empty());
+#endif
 }
 
 TEST(BrowserFactoryTest, SupportsKnownProtocols) {
+#ifdef FALCON_ENABLE_STORAGE_S3
     EXPECT_TRUE(falcon::BrowserFactory::is_supported("s3"));
+#endif
     EXPECT_FALSE(falcon::BrowserFactory::is_supported("unknown"));
 }
 
 TEST(BrowserFactoryTest, CreateBrowserByProtocol) {
+#ifdef FALCON_ENABLE_STORAGE_S3
     auto s3 = falcon::BrowserFactory::create_browser("s3");
     ASSERT_NE(s3, nullptr);
     EXPECT_EQ(s3->get_name(), "S3");
+#endif
 
     auto unknown = falcon::BrowserFactory::create_browser("unknown");
     EXPECT_EQ(unknown, nullptr);
 }
 
 TEST(BrowserFactoryTest, CreateBrowserFromUrl) {
+#ifdef FALCON_ENABLE_STORAGE_S3
     auto s3 = falcon::BrowserFactory::create_from_url("s3://example-bucket/path/file.txt");
     ASSERT_NE(s3, nullptr);
     EXPECT_EQ(s3->get_name(), "S3");
+#endif
 
     auto invalid = falcon::BrowserFactory::create_from_url("not-a-url");
     EXPECT_EQ(invalid, nullptr);
@@ -153,6 +171,7 @@ TEST(SupportedProtocols, FTPBrowserProtocols) {
     EXPECT_TRUE(has_ftp);
 }
 
+#ifdef FALCON_ENABLE_STORAGE_S3
 TEST(SupportedProtocols, S3BrowserProtocols) {
     falcon::S3Browser s3;
     auto protocols = s3.get_supported_protocols();
@@ -166,6 +185,7 @@ TEST(SupportedProtocols, S3BrowserProtocols) {
     }
     EXPECT_TRUE(has_s3);
 }
+#endif
 
 //==============================================================================
 // FilePermissions 测试
@@ -432,6 +452,7 @@ TEST(ResourceBrowserBoundary, VeryLongUrl) {
     EXPECT_TRUE(ftp.can_handle(long_url));
 }
 
+#ifdef FALCON_ENABLE_STORAGE_S3
 TEST(S3UrlParserBoundary, EmptyUrl) {
     auto parsed = falcon::S3UrlParser::parse("");
     EXPECT_TRUE(parsed.bucket.empty());
@@ -448,6 +469,7 @@ TEST(S3UrlParserBoundary, OnlyScheme) {
     EXPECT_TRUE(parsed.bucket.empty());
     EXPECT_TRUE(parsed.key.empty());
 }
+#endif // FALCON_ENABLE_STORAGE_S3
 
 //==============================================================================
 // 主函数

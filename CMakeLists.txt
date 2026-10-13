@@ -62,6 +62,14 @@ option(FALCON_ENABLE_HLS "Enable HLS/DASH protocol plugin" OFF)
 
 # Storage/Drives 功能开关
 option(FALCON_ENABLE_RESOURCE_BROWSER "Enable resource browser functionality" ON)
+# Per-provider browser switches（vcpkg feature 映射面，见
+# docs/design/vcpkg_packaging_design.md §5.2）；仅 RESOURCE_BROWSER
+# 生效时有效，默认 ON 保持现行为
+option(FALCON_ENABLE_STORAGE_S3 "Enable S3 resource browser" ON)
+option(FALCON_ENABLE_STORAGE_OSS "Enable Aliyun OSS resource browser" ON)
+option(FALCON_ENABLE_STORAGE_COS "Enable Tencent COS resource browser" ON)
+option(FALCON_ENABLE_STORAGE_KODO "Enable Qiniu Kodo resource browser" ON)
+option(FALCON_ENABLE_STORAGE_UPYUN "Enable Upyun resource browser" ON)
 option(FALCON_ENABLE_CLOUD_STORAGE "Enable cloud storage plugins" ON)
 option(FALCON_ENABLE_RESOURCE_SEARCH "Enable resource search functionality" ON)
 option(FALCON_ENABLE_CONFIG_MANAGER "Enable encrypted config manager (SQLite3)" ON)

@@ -36,6 +36,13 @@ endif()
 if(NOT DEFINED FALCON_ENABLE_RESOURCE_BROWSER)
     set(FALCON_ENABLE_RESOURCE_BROWSER ON)
 endif()
+# per-provider 兜底（vcpkg feature 映射面，§5.2；monorepo 下根目录
+# option 已定义，端口树内在此补默认 ON）
+foreach(_provider S3 OSS COS KODO UPYUN)
+    if(NOT DEFINED FALCON_ENABLE_STORAGE_${_provider})
+        set(FALCON_ENABLE_STORAGE_${_provider} ON)
+    endif()
+endforeach()
 if(NOT DEFINED FALCON_ENABLE_FAILURE_INJECTION)
     set(FALCON_ENABLE_FAILURE_INJECTION OFF)
 endif()
@@ -112,24 +119,53 @@ if(FALCON_ENABLE_RESOURCE_BROWSER)
         message(WARNING "Resource browser requires libcurl and nlohmann_json; disabling FALCON_ENABLE_RESOURCE_BROWSER")
         set(FALCON_ENABLE_RESOURCE_BROWSER OFF CACHE BOOL "Enable resource browser functionality" FORCE)
     else()
+        # per-provider 拆分（§5.2）：宏定义点 = 对应源文件编译点（宏为真
+        # 必有对象存在——注册 lambda 与测试 TU 才可安全引用类名）
         target_sources(falcon_storage PRIVATE
             plugins/ftp_browser.cpp
-            plugins/s3/s3_browser.cpp
             plugins/webdav/webdav_browser.cpp
         )
+        if(FALCON_ENABLE_STORAGE_S3)
+            target_sources(falcon_storage PRIVATE plugins/s3/s3_browser.cpp)
+            target_compile_definitions(falcon_storage PRIVATE FALCON_ENABLE_STORAGE_S3)
+        endif()
         target_link_libraries(falcon_storage PUBLIC CURL::libcurl nlohmann_json::nlohmann_json)
         target_compile_definitions(falcon_storage PRIVATE FALCON_ENABLE_RESOURCE_BROWSER)
 
-        if(OPENSSL_FOUND AND TARGET OpenSSL::Crypto)
-            target_sources(falcon_storage PRIVATE
-                plugins/s3/s3_authenticator.cpp
-                plugins/oss/oss_browser.cpp
-                plugins/cos/cos_browser.cpp
-                plugins/kodo/kodo_browser.cpp
-                plugins/upyun/upyun_browser.cpp
-            )
+        # 签名/哈希五浏览器（OSS/COS/Kodo/Upyun 走 OpenSSL；S3 匿名路径
+        # 可无 OpenSSL，SigV4 签名面同块）——五 provider 全关时整块跳过
+        set(FALCON_STORAGE_CRYPTO_PROVIDERS OFF)
+        if(FALCON_ENABLE_STORAGE_S3
+                OR FALCON_ENABLE_STORAGE_OSS
+                OR FALCON_ENABLE_STORAGE_COS
+                OR FALCON_ENABLE_STORAGE_KODO
+                OR FALCON_ENABLE_STORAGE_UPYUN)
+            set(FALCON_STORAGE_CRYPTO_PROVIDERS ON)
+        endif()
+        if(OPENSSL_FOUND AND TARGET OpenSSL::Crypto AND FALCON_STORAGE_CRYPTO_PROVIDERS)
+            if(FALCON_ENABLE_STORAGE_S3)
+                target_sources(falcon_storage PRIVATE plugins/s3/s3_authenticator.cpp)
+            endif()
+            if(FALCON_ENABLE_STORAGE_OSS)
+                target_sources(falcon_storage PRIVATE plugins/oss/oss_browser.cpp)
+                target_compile_definitions(falcon_storage PRIVATE FALCON_ENABLE_STORAGE_OSS)
+            endif()
+            if(FALCON_ENABLE_STORAGE_COS)
+                target_sources(falcon_storage PRIVATE plugins/cos/cos_browser.cpp)
+                target_compile_definitions(falcon_storage PRIVATE FALCON_ENABLE_STORAGE_COS)
+            endif()
+            if(FALCON_ENABLE_STORAGE_KODO)
+                target_sources(falcon_storage PRIVATE plugins/kodo/kodo_browser.cpp)
+                target_compile_definitions(falcon_storage PRIVATE FALCON_ENABLE_STORAGE_KODO)
+            endif()
+            if(FALCON_ENABLE_STORAGE_UPYUN)
+                target_sources(falcon_storage PRIVATE plugins/upyun/upyun_browser.cpp)
+                target_compile_definitions(falcon_storage PRIVATE FALCON_ENABLE_STORAGE_UPYUN)
+            endif()
             target_link_libraries(falcon_storage PUBLIC OpenSSL::Crypto)
             target_compile_definitions(falcon_storage PRIVATE FALCON_ENABLE_CRYPTO_STORAGE_BROWSERS)
+        elseif(NOT FALCON_STORAGE_CRYPTO_PROVIDERS)
+            message(STATUS "All crypto storage providers disabled: OSS/COS/Kodo/Upyun/S3-auth browsers will not be built")
         else()
             message(STATUS "OpenSSL not found: OSS/COS/Kodo/Upyun browsers will not be built")
         endif()
@@ -169,7 +205,7 @@ if(FALCON_STORAGE_STANDALONE)
         set(FALCON_STORAGE_PACKAGE_NEEDS_NLOHMANN_JSON ON)
     endif()
     set(FALCON_STORAGE_PACKAGE_NEEDS_OPENSSL OFF)
-    if(TARGET OpenSSL::Crypto)
+    if(TARGET OpenSSL::Crypto AND FALCON_STORAGE_CRYPTO_PROVIDERS)
         set(FALCON_STORAGE_PACKAGE_NEEDS_OPENSSL ON)
     endif()
 

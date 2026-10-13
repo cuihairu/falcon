@@ -56,35 +56,49 @@ std::map<std::string, std::string> connect_options(const std::string& base) {
 // curl 句柄创建失败：浏览器构造即抛（Impl 构造函数内 curl_easy_init 防御）
 //==============================================================================
 
+// per-provider 门禁：provider option 关停时类对象不存在于库中，
+// 构造/签名用例随对象一同出编译单元（宏与库侧同值透传）
+
+#ifdef FALCON_ENABLE_STORAGE_UPYUN
 TEST(StorageInjectionTest, UpyunBrowserConstructorThrowsOnCurlInitFailure) {
     ScopedInjection guard(InjectPoint::CurlEasyInit);
     EXPECT_THROW(falcon::UpyunBrowser browser, std::runtime_error);
 }
+#endif
 
+#ifdef FALCON_ENABLE_STORAGE_OSS
 TEST(StorageInjectionTest, OssBrowserConstructorThrowsOnCurlInitFailure) {
     ScopedInjection guard(InjectPoint::CurlEasyInit);
     EXPECT_THROW(falcon::OSSBrowser browser, std::runtime_error);
 }
+#endif
 
+#ifdef FALCON_ENABLE_STORAGE_COS
 TEST(StorageInjectionTest, CosBrowserConstructorThrowsOnCurlInitFailure) {
     ScopedInjection guard(InjectPoint::CurlEasyInit);
     EXPECT_THROW(falcon::COSBrowser browser, std::runtime_error);
 }
+#endif
 
+#ifdef FALCON_ENABLE_STORAGE_KODO
 TEST(StorageInjectionTest, KodoBrowserConstructorThrowsOnCurlInitFailure) {
     ScopedInjection guard(InjectPoint::CurlEasyInit);
     EXPECT_THROW(falcon::KodoBrowser browser, std::runtime_error);
 }
+#endif
 
+#ifdef FALCON_ENABLE_STORAGE_S3
 TEST(StorageInjectionTest, S3BrowserConstructorThrowsOnCurlInitFailure) {
     ScopedInjection guard(InjectPoint::CurlEasyInit);
     EXPECT_THROW(falcon::S3Browser browser, std::runtime_error);
 }
+#endif
 
 //==============================================================================
 // upyun 请求签名（MD5 + HMAC-MD5）防御链：签名失败经公开请求路径命中
 //==============================================================================
 
+#ifdef FALCON_ENABLE_STORAGE_UPYUN
 namespace {
 
 /// 签名防御注入后请求仍以空签名发出（mock 一律 200），断言调用不崩
@@ -144,11 +158,13 @@ TEST(StorageInjectionTest, UpyunSignatureHmacNullFailureIsAbsorbed) {
     ScopedInjection guard(InjectPoint::UpyunSigHmacNull);
     EXPECT_NO_THROW(exercise_upyun_request(browser));
 }
+#endif  // FALCON_ENABLE_STORAGE_UPYUN
 
 //==============================================================================
 // cos 请求签名（SHA-256）防御链
 //==============================================================================
 
+#ifdef FALCON_ENABLE_STORAGE_COS
 namespace {
 
 void exercise_cos_request(falcon::COSBrowser& browser) {
@@ -207,5 +223,6 @@ TEST(StorageInjectionTest, CosSignatureDigestFinalFailureIsAbsorbed) {
     ScopedInjection guard(InjectPoint::CosShaDigestFinal);
     EXPECT_NO_THROW(exercise_cos_request(browser));
 }
+#endif  // FALCON_ENABLE_STORAGE_COS
 
 #endif  // FALCON_FAILURE_INJECTION

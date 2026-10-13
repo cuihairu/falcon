@@ -5,6 +5,9 @@
 // ".." 折叠分支。注意 FALCON_ENABLE_CRYPTO_STORAGE_BROWSERS 是库的
 // PRIVATE 宏（测试 TU 不可见），crypto 浏览器的注册探测一律走运行时
 // BrowserFactory::is_supported，环境缺 OpenSSL 时自然跳过对应断言块。
+// provider option 维度例外：FALCON_ENABLE_STORAGE_* 由测试 target 与
+// 库侧同值透传，s3 断言块按宏门禁；crypto provider 仍走运行时探测
+// （兼顾 OpenSSL 缺席与 provider 关停两种降级形态）。
 
 #include <falcon/storage/resource_browser.hpp>
 
@@ -61,10 +64,12 @@ std::vector<falcon::RemoteResource> make_sample_resources() {
 //==============================================================================
 
 TEST(BrowserFactoryEdges, CreatesEveryRegisteredDefaultBrowser) {
+#ifdef FALCON_ENABLE_STORAGE_S3
     ASSERT_TRUE(falcon::BrowserFactory::is_supported("s3"));
     auto s3 = falcon::BrowserFactory::create_browser("s3");
     ASSERT_NE(s3, nullptr);
     EXPECT_EQ(s3->get_name(), "S3");
+#endif
 
     // crypto 浏览器按运行时注册情况探测（PRIVATE 宏对测试 TU 不可见）。
     const char* crypto_protocols[] = {"oss", "cos", "kodo", "qiniu", "upyun"};
@@ -92,9 +97,14 @@ TEST(BrowserFactoryEdges, AvailableBrowsersAreSortedAndDescribed) {
         [](const falcon::BrowserFactory::BrowserInfo& info) {
             return info.protocol == "s3";
         });
+#ifdef FALCON_ENABLE_STORAGE_S3
     ASSERT_NE(it, browsers.end());
     EXPECT_FALSE(it->display_name.empty());
     EXPECT_FALSE(it->description.empty());
+#else
+    // S3 关停时 s3 条目不应注册，find_if 落空是合法终态
+    EXPECT_EQ(it, browsers.end());
+#endif
 }
 
 TEST(BrowserFactoryEdges, CreateFromUrlDistinguishesProtocolPresence) {
@@ -102,8 +112,10 @@ TEST(BrowserFactoryEdges, CreateFromUrlDistinguishesProtocolPresence) {
     EXPECT_EQ(falcon::BrowserFactory::create_from_url("://bucket/key"), nullptr);
     EXPECT_EQ(falcon::BrowserFactory::create_from_url("no-scheme-at-all"), nullptr);
 
+#ifdef FALCON_ENABLE_STORAGE_S3
     ASSERT_TRUE(falcon::BrowserFactory::is_supported("s3"));
     EXPECT_NE(falcon::BrowserFactory::create_from_url("s3://bucket/key"), nullptr);
+#endif
 }
 
 TEST(BrowserFactoryEdges, RegisterBrowserRejectsInvalidEntries) {

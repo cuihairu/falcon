@@ -1,14 +1,28 @@
 // Falcon Cloud Resource Browsers Unit Tests (requires OpenSSL)
+//
+// per-provider 门禁（vcpkg feature 映射面 §5.2）：provider option 关停
+// 时对应解析器类对象不存在于库中，解析/边界用例随对象一同出编译单元
+// （宏由测试 target 与库侧同值透传）。
 
+#ifdef FALCON_ENABLE_STORAGE_COS
 #include <falcon/storage/cos_browser.hpp>
+#endif
+#ifdef FALCON_ENABLE_STORAGE_KODO
 #include <falcon/storage/kodo_browser.hpp>
+#endif
+#ifdef FALCON_ENABLE_STORAGE_OSS
 #include <falcon/storage/oss_browser.hpp>
+#endif
+#ifdef FALCON_ENABLE_STORAGE_UPYUN
 #include <falcon/storage/upyun_browser.hpp>
+#endif
 
 #include <gtest/gtest.h>
 
 #include <string>
 #include <vector>
+
+#ifdef FALCON_ENABLE_STORAGE_OSS
 
 //==============================================================================
 // OSS (阿里云对象存储) URL 解析测试
@@ -130,9 +144,14 @@ TEST(OssUrlParser, BucketWithHyphens) {
     EXPECT_EQ(parsed.bucket, "my-bucket");
 }
 
+#endif // FALCON_ENABLE_STORAGE_OSS
+
 //==============================================================================
 // COS (腾讯云对象存储) URL 解析测试
 //==============================================================================
+
+#ifdef FALCON_ENABLE_STORAGE_COS
+
 
 TEST(CosUrlParser, StandardUrl) {
     auto parsed = falcon::COSUrlParser::parse("cos://mybucket-ap-guangzhou/a/b.txt");
@@ -221,9 +240,14 @@ TEST(CosUrlParser, MultipleExtensions) {
     EXPECT_EQ(parsed.key, "archive.tar.gz");
 }
 
+#endif // FALCON_ENABLE_STORAGE_COS
+
 //==============================================================================
 // Kodo (七牛云存储) URL 解析测试
 //==============================================================================
+
+#ifdef FALCON_ENABLE_STORAGE_KODO
+
 
 TEST(KodoUrlParser, StandardUrl) {
     auto parsed = falcon::KodoUrlParser::parse("kodo://mybucket/path/to/key");
@@ -291,9 +315,14 @@ TEST(KodoUrlParser, QueryParameters) {
     EXPECT_NE(parsed.key.find("file.txt"), std::string::npos);
 }
 
+#endif // FALCON_ENABLE_STORAGE_KODO
+
 //==============================================================================
 // Upyun (又拍云存储) URL 解析测试
 //==============================================================================
+
+#ifdef FALCON_ENABLE_STORAGE_UPYUN
+
 
 TEST(UpyunUrlParser, StandardUrl) {
     auto parsed = falcon::UpyunUrlParser::parse("upyun://myspace/path/to/file");
@@ -355,79 +384,110 @@ TEST(UpyunUrlParser, QueryParameters) {
     EXPECT_NE(parsed.key.find("file.txt"), std::string::npos);
 }
 
+#endif // FALCON_ENABLE_STORAGE_UPYUN
+
 //==============================================================================
 // 边界条件测试
 //==============================================================================
 
 TEST(CloudStorageBoundaryConditions, EmptyBucket) {
+#ifdef FALCON_ENABLE_STORAGE_OSS
     // OSS
     auto oss = falcon::OSSUrlParser::parse("oss://.oss-cn-beijing.aliyuncs.com/file.txt");
     EXPECT_TRUE(oss.bucket.empty());
+#endif
 
+#ifdef FALCON_ENABLE_STORAGE_COS
     // COS
     auto cos = falcon::COSUrlParser::parse("cos://-ap-guangzhou/file.txt");
     EXPECT_TRUE(cos.bucket.empty());
+#endif
 
+#ifdef FALCON_ENABLE_STORAGE_KODO
     // Kodo
     auto kodo = falcon::KodoUrlParser::parse("kodo:///file.txt");
     EXPECT_TRUE(kodo.bucket.empty());
+#endif
 
+#ifdef FALCON_ENABLE_STORAGE_UPYUN
     // Upyun
     auto upyun = falcon::UpyunUrlParser::parse("upyun:///file.txt");
     EXPECT_TRUE(upyun.bucket.empty());
+#endif
 }
 
 TEST(CloudStorageBoundaryConditions, VeryLongPath) {
+#if defined(FALCON_ENABLE_STORAGE_OSS) || defined(FALCON_ENABLE_STORAGE_COS) \
+    || defined(FALCON_ENABLE_STORAGE_KODO) || defined(FALCON_ENABLE_STORAGE_UPYUN)
     std::string long_path = "/";
     for (int i = 0; i < 100; i++) {
         long_path += "verylongdirectoryname/";
     }
     long_path += "file.txt";
+#endif
 
+#ifdef FALCON_ENABLE_STORAGE_OSS
     // OSS
     auto oss = falcon::OSSUrlParser::parse(
         "oss://bucket.oss-cn-beijing.aliyuncs.com" + long_path);
     EXPECT_EQ(oss.bucket, "bucket");
     EXPECT_GT(oss.key.length(), 1000);
+#endif
 
+#ifdef FALCON_ENABLE_STORAGE_COS
     // COS
     auto cos = falcon::COSUrlParser::parse("cos://bucket-ap-guangzhou" + long_path);
     EXPECT_EQ(cos.bucket, "bucket");
     EXPECT_GT(cos.key.length(), 1000);
+#endif
 
+#ifdef FALCON_ENABLE_STORAGE_KODO
     // Kodo
     auto kodo = falcon::KodoUrlParser::parse("kodo://bucket" + long_path);
     EXPECT_EQ(kodo.bucket, "bucket");
     EXPECT_GT(kodo.key.length(), 1000);
+#endif
 
+#ifdef FALCON_ENABLE_STORAGE_UPYUN
     // Upyun
     auto upyun = falcon::UpyunUrlParser::parse("upyun://bucket" + long_path);
     EXPECT_EQ(upyun.bucket, "bucket");
     EXPECT_GT(upyun.key.length(), 1000);
+#endif
 }
 
 TEST(CloudStorageBoundaryConditions, PathWithSlashes) {
+#ifdef FALCON_ENABLE_STORAGE_OSS
     // Multiple consecutive slashes
     auto oss = falcon::OSSUrlParser::parse(
         "oss://bucket.oss-cn-beijing.aliyuncs.com///path///to///file.txt");
     EXPECT_EQ(oss.bucket, "bucket");
+#endif
 
+#ifdef FALCON_ENABLE_STORAGE_COS
     auto cos = falcon::COSUrlParser::parse(
         "cos://bucket-ap-guangzhou///path///to///file.txt");
     EXPECT_EQ(cos.bucket, "bucket");
+#endif
 
+#ifdef FALCON_ENABLE_STORAGE_KODO
     auto kodo = falcon::KodoUrlParser::parse("kodo://bucket///path///to///file.txt");
     EXPECT_EQ(kodo.bucket, "bucket");
+#endif
 
+#ifdef FALCON_ENABLE_STORAGE_UPYUN
     auto upyun = falcon::UpyunUrlParser::parse("upyun://bucket///path///to///file.txt");
     EXPECT_EQ(upyun.bucket, "bucket");
+#endif
 }
 
 TEST(CloudStorageBoundaryConditions, UrlWithSpaces) {
+#ifdef FALCON_ENABLE_STORAGE_OSS
     auto oss = falcon::OSSUrlParser::parse(
         "oss://bucket.oss-cn-beijing.aliyuncs.com/path/to/file%20with%20spaces.txt");
     EXPECT_EQ(oss.bucket, "bucket");
     EXPECT_NE(oss.key.find("%20"), std::string::npos);
+#endif
 }
 
 //==============================================================================
@@ -435,6 +495,7 @@ TEST(CloudStorageBoundaryConditions, UrlWithSpaces) {
 //==============================================================================
 
 TEST(CloudStorageFeatures, OssDifferentEndpoints) {
+#ifdef FALCON_ENABLE_STORAGE_OSS
     auto standard = falcon::OSSUrlParser::parse(
         "oss://bucket.oss-cn-beijing.aliyuncs.com/file.txt");
     EXPECT_EQ(standard.endpoint, "oss-cn-beijing.aliyuncs.com");
@@ -446,25 +507,31 @@ TEST(CloudStorageFeatures, OssDifferentEndpoints) {
     auto accelerate = falcon::OSSUrlParser::parse(
         "oss://bucket.oss-accelerate.aliyuncs.com/file.txt");
     EXPECT_EQ(accelerate.endpoint, "oss-accelerate.aliyuncs.com");
+#endif
 }
 
 TEST(CloudStorageFeatures, CosDifferentAppIds) {
+#ifdef FALCON_ENABLE_STORAGE_COS
     auto cos1 = falcon::COSUrlParser::parse("cos://1234567890-ap-guangzhou/my-bucket/file.txt");
     EXPECT_EQ(cos1.bucket, "1234567890-my-bucket");
 
     auto cos2 = falcon::COSUrlParser::parse("cos://mybucket-1234567890-ap-guangzhou/file.txt");
     EXPECT_NE(cos2.bucket.find("1234567890"), std::string::npos);
+#endif
 }
 
 TEST(CloudStorageFeatures, KodoDomainAliases) {
+#ifdef FALCON_ENABLE_STORAGE_KODO
     auto kodo = falcon::KodoUrlParser::parse("kodo://bucket/file.txt");
     EXPECT_EQ(kodo.bucket, "bucket");
 
     auto qiniu = falcon::KodoUrlParser::parse("qiniu://bucket/file.txt");
     EXPECT_EQ(qiniu.bucket, "bucket");
+#endif
 }
 
 TEST(CloudStorageFeatures, UpyunServiceTypes) {
+#ifdef FALCON_ENABLE_STORAGE_UPYUN
     auto telecomb = falcon::UpyunUrlParser::parse("upyun://bucket/file.txt");
     EXPECT_EQ(telecomb.bucket, "bucket");
 
@@ -473,6 +540,7 @@ TEST(CloudStorageFeatures, UpyunServiceTypes) {
 
     auto unicom = falcon::UpyunUrlParser::parse("upyun://bucket/file.txt");
     EXPECT_EQ(unicom.bucket, "bucket");
+#endif
 }
 
 //==============================================================================
@@ -480,59 +548,91 @@ TEST(CloudStorageFeatures, UpyunServiceTypes) {
 //==============================================================================
 
 TEST(CloudStorageFileTypes, Images) {
+#ifdef FALCON_ENABLE_STORAGE_OSS
     auto oss = falcon::OSSUrlParser::parse("oss://bucket.oss-cn-beijing.aliyuncs.com/image.jpg");
     EXPECT_EQ(oss.key, "image.jpg");
+#endif
 
+#ifdef FALCON_ENABLE_STORAGE_COS
     auto cos = falcon::COSUrlParser::parse("cos://bucket-ap-guangzhou/image.png");
     EXPECT_EQ(cos.key, "image.png");
+#endif
 
+#ifdef FALCON_ENABLE_STORAGE_KODO
     auto kodo = falcon::KodoUrlParser::parse("kodo://bucket/image.gif");
     EXPECT_EQ(kodo.key, "image.gif");
+#endif
 
+#ifdef FALCON_ENABLE_STORAGE_UPYUN
     auto upyun = falcon::UpyunUrlParser::parse("upyun://bucket/image.webp");
     EXPECT_EQ(upyun.key, "image.webp");
+#endif
 }
 
 TEST(CloudStorageFileTypes, Videos) {
+#ifdef FALCON_ENABLE_STORAGE_OSS
     auto oss = falcon::OSSUrlParser::parse("oss://bucket.oss-cn-beijing.aliyuncs.com/video.mp4");
     EXPECT_EQ(oss.key, "video.mp4");
+#endif
 
+#ifdef FALCON_ENABLE_STORAGE_COS
     auto cos = falcon::COSUrlParser::parse("cos://bucket-ap-guangzhou/video.avi");
     EXPECT_EQ(cos.key, "video.avi");
+#endif
 
+#ifdef FALCON_ENABLE_STORAGE_KODO
     auto kodo = falcon::KodoUrlParser::parse("kodo://bucket/video.mkv");
     EXPECT_EQ(kodo.key, "video.mkv");
+#endif
 
+#ifdef FALCON_ENABLE_STORAGE_UPYUN
     auto upyun = falcon::UpyunUrlParser::parse("upyun://bucket/video.mov");
     EXPECT_EQ(upyun.key, "video.mov");
+#endif
 }
 
 TEST(CloudStorageFileTypes, Archives) {
+#ifdef FALCON_ENABLE_STORAGE_OSS
     auto oss = falcon::OSSUrlParser::parse("oss://bucket.oss-cn-beijing.aliyuncs.com/archive.zip");
     EXPECT_EQ(oss.key, "archive.zip");
+#endif
 
+#ifdef FALCON_ENABLE_STORAGE_COS
     auto cos = falcon::COSUrlParser::parse("cos://bucket-ap-guangzhou/archive.tar.gz");
     EXPECT_EQ(cos.key, "archive.tar.gz");
+#endif
 
+#ifdef FALCON_ENABLE_STORAGE_KODO
     auto kodo = falcon::KodoUrlParser::parse("kodo://bucket/archive.7z");
     EXPECT_EQ(kodo.key, "archive.7z");
+#endif
 
+#ifdef FALCON_ENABLE_STORAGE_UPYUN
     auto upyun = falcon::UpyunUrlParser::parse("upyun://bucket/archive.rar");
     EXPECT_EQ(upyun.key, "archive.rar");
+#endif
 }
 
 TEST(CloudStorageFileTypes, Documents) {
+#ifdef FALCON_ENABLE_STORAGE_OSS
     auto oss = falcon::OSSUrlParser::parse("oss://bucket.oss-cn-beijing.aliyuncs.com/doc.pdf");
     EXPECT_EQ(oss.key, "doc.pdf");
+#endif
 
+#ifdef FALCON_ENABLE_STORAGE_COS
     auto cos = falcon::COSUrlParser::parse("cos://bucket-ap-guangzhou/doc.docx");
     EXPECT_EQ(cos.key, "doc.docx");
+#endif
 
+#ifdef FALCON_ENABLE_STORAGE_KODO
     auto kodo = falcon::KodoUrlParser::parse("kodo://bucket/doc.xlsx");
     EXPECT_EQ(kodo.key, "doc.xlsx");
+#endif
 
+#ifdef FALCON_ENABLE_STORAGE_UPYUN
     auto upyun = falcon::UpyunUrlParser::parse("upyun://bucket/doc.pptx");
     EXPECT_EQ(upyun.key, "doc.pptx");
+#endif
 }
 
 //==============================================================================
@@ -540,28 +640,40 @@ TEST(CloudStorageFileTypes, Documents) {
 //==============================================================================
 
 TEST(CloudStorageErrorHandling, InvalidUrls) {
+#ifdef FALCON_ENABLE_STORAGE_OSS
     // Missing protocol
     EXPECT_THROW(falcon::OSSUrlParser::parse("bucket.oss-cn-beijing.aliyuncs.com/file.txt"),
                  std::exception);
+#endif
 
+#ifdef FALCON_ENABLE_STORAGE_COS
     // Empty URL
     EXPECT_THROW(falcon::COSUrlParser::parse(""), std::exception);
+#endif
 
+#ifdef FALCON_ENABLE_STORAGE_KODO
     // Only protocol
     EXPECT_THROW(falcon::KodoUrlParser::parse("kodo://"), std::exception);
+#endif
 
+#ifdef FALCON_ENABLE_STORAGE_UPYUN
     // Missing bucket keeps the parsed shape but should not crash.
     auto upyun = falcon::UpyunUrlParser::parse("upyun:///file.txt");
     EXPECT_TRUE(upyun.bucket.empty());
+#endif
 }
 
 TEST(CloudStorageErrorHandling, MalformedUrls) {
+#ifdef FALCON_ENABLE_STORAGE_OSS
     // Invalid characters
     EXPECT_THROW(falcon::OSSUrlParser::parse("oss://bucket@oss-cn-beijing.aliyuncs.com/file.txt"),
                  std::exception);
+#endif
 
+#ifdef FALCON_ENABLE_STORAGE_COS
     // Missing region
     EXPECT_THROW(falcon::COSUrlParser::parse("cos://bucket-/file.txt"), std::exception);
+#endif
 }
 
 //==============================================================================
