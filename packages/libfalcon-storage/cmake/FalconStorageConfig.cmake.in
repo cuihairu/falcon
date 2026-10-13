@@ -1,0 +1,27 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# 上游闭包先建（falcon_core 的 FalconCoreConfig 自行展开 Threads/spdlog/
+# OpenSSL 的可选项投影，本文件不重复）
+find_dependency(FalconCore)
+
+# 查找依赖：闭包与包 CMakeLists 的链接点同源（构建时链接了什么，这里
+# 才找什么）。RESOURCE_BROWSER 链路（CURL + nlohmann_json）与加密浏览器
+# 链路（OpenSSL::Crypto，s3 鉴权 + OSS/COS/Kodo/Upyun）按构建实态投影
+if(@FALCON_STORAGE_PACKAGE_NEEDS_CURL@)
+    find_dependency(CURL)
+endif()
+
+if(@FALCON_STORAGE_PACKAGE_NEEDS_NLOHMANN_JSON@)
+    find_dependency(nlohmann_json)
+endif()
+
+if(@FALCON_STORAGE_PACKAGE_NEEDS_OPENSSL@)
+    find_dependency(OpenSSL)
+endif()
+
+# 导入目标
+include("${CMAKE_CURRENT_LIST_DIR}/FalconStorageTargets.cmake")
+
+check_required_components(FalconStorage)
