@@ -1,0 +1,35 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# 上游闭包先建（falcon_core 的 FalconCoreConfig 自行展开 Threads/spdlog/
+# OpenSSL 的可选项投影，本文件不重复）
+find_dependency(FalconCore)
+
+# 查找依赖：闭包与包 CMakeLists 的链接点同源（构建时链接了什么，这里
+# 才找什么）。前三个按位投影同 FalconStorageConfig；SQLITE3 直接复用
+# 包内 config_manager 链接点的 CACHE INTERNAL 标记
+# （FALCON_PACKAGE_NEEDS_SQLITE3，与单体 FalconConfig 同一事实源）。
+# 注记：本包消费 sqlite3/openssl 的 imported target（SQLite::SQLite3 或
+# SQLite3::SQLite3 按 finder 形态），消费方 find_dependency 跑构建时
+# 同一 finder 定义同一目标名，无需重建
+if(@FALCON_DRIVES_PACKAGE_NEEDS_NLOHMANN_JSON@)
+    find_dependency(nlohmann_json)
+endif()
+
+if(@FALCON_DRIVES_PACKAGE_NEEDS_CURL@)
+    find_dependency(CURL)
+endif()
+
+if(@FALCON_DRIVES_PACKAGE_NEEDS_OPENSSL@)
+    find_dependency(OpenSSL)
+endif()
+
+if(@FALCON_PACKAGE_NEEDS_SQLITE3@)
+    find_dependency(SQLite3)
+endif()
+
+# 导入目标
+include("${CMAKE_CURRENT_LIST_DIR}/FalconDrivesTargets.cmake")
+
+check_required_components(FalconDrives)

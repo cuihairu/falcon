@@ -7,6 +7,69 @@ project(libfalcon-drives
 )
 
 # ============================================================================
+# Export set anchor（先于一切 install 计算）
+#
+# monorepo 树内（根已建 falcon_core）沿用 FalconTargets 单体导出（#12
+# 消费路径零变化）；独立 configure（vcpkg 端口形态，本包为顶层 project）
+# 自带 FalconDrivesTargets 每包导出集。判定锚 = TARGET falcon_core
+# （根必然已建该目标，端口树内必然没有——不引入第二个真值来源）。
+# 与 protocols/storage 的 *_EXPORT_SET 同构
+# ============================================================================
+
+if(TARGET falcon_core)
+    set(FALCON_DRIVES_EXPORT_SET FalconTargets)
+    set(FALCON_DRIVES_STANDALONE OFF)
+else()
+    set(FALCON_DRIVES_EXPORT_SET FalconDrivesTargets)
+    set(FALCON_DRIVES_STANDALONE ON)
+endif()
+
+# ============================================================================
+# 独立 configure 自足块（vcpkg 端口形态）
+#
+# monorepo 树内根已做过全部 find_package，整块跳过（零行为变化）；
+# 独立形态下补齐本包消费的 finder 与上游包。option 只在未定义时兜底
+# （与根 CMakeLists 的 option 同值）。OpenSSL / SQLite3 的查找在下方
+# 既有位置（monorepo/独立两形态同走，不在此重复）
+# ============================================================================
+
+if(NOT DEFINED FALCON_ENABLE_CLOUD_STORAGE)
+    set(FALCON_ENABLE_CLOUD_STORAGE ON)
+endif()
+if(NOT DEFINED FALCON_ENABLE_RESOURCE_SEARCH)
+    set(FALCON_ENABLE_RESOURCE_SEARCH ON)
+endif()
+if(NOT DEFINED FALCON_ENABLE_CONFIG_MANAGER)
+    set(FALCON_ENABLE_CONFIG_MANAGER ON)
+endif()
+if(NOT DEFINED FALCON_ENABLE_FAILURE_INJECTION)
+    set(FALCON_ENABLE_FAILURE_INJECTION OFF)
+endif()
+
+if(NOT TARGET falcon_core)
+    find_package(FalconCore CONFIG REQUIRED)
+    # 本包既有链接点裸写 falcon_core——独立 configure 下以别名对齐
+    # Falcon::core（目录级即可：消费方全在本目录子树内）
+    add_library(falcon_core ALIAS Falcon::core)
+    find_package(nlohmann_json QUIET)
+    # 查找门与链接点同条件（CLOUD_STORAGE 与 RESOURCE_SEARCH 是本包仅有的
+    # 两个 curl 消费方；config_manager 不走网络）
+    if(FALCON_ENABLE_CLOUD_STORAGE OR FALCON_ENABLE_RESOURCE_SEARCH)
+        find_package(CURL QUIET)
+    endif()
+endif()
+
+# 故障注入宏与根目录同款触发条件，且必须先于本目录一切 add_library
+# （injection.hpp 被 resource_search.cpp / config_manager.cpp 与
+# config_manager_test 消费——放晚了会导致库与测试 TU 的内联布局分叉，
+# ODR 红线）。monorepo 下根目录已在 add_subdirectory 前全局定义，此处
+# 跳过以免重复 -D 令本包全部 TU 重编
+if(NOT TARGET falcon_core
+        AND (FALCON_ENABLE_FAILURE_INJECTION OR FALCON_BUILD_TESTS))
+    add_compile_definitions(FALCON_FAILURE_INJECTION=1)
+endif()
+
+# ============================================================================
 # Drives library
 # ============================================================================
 
@@ -113,7 +176,7 @@ endif()
 include(GNUInstallDirs)
 
 install(TARGETS falcon_drives
-    EXPORT FalconTargets
+    EXPORT ${FALCON_DRIVES_EXPORT_SET}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
@@ -124,6 +187,48 @@ install(DIRECTORY include/falcon
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     FILES_MATCHING PATTERN "*.hpp"
 )
+
+# 独立形态专属：每包 Config（monorepo 树内根目录负责 FalconConfig）
+if(FALCON_DRIVES_STANDALONE)
+    # 消费侧闭包打标：与上方链接点同条件（target 存在性，非 FOUND 布尔
+    # ——构建侧要求 targets 齐备才链接，导出闭包只在链接时才引用它们）。
+    # SQLITE3 复用 config_manager 链接点的 CACHE INTERNAL 标记
+    # （FALCON_PACKAGE_NEEDS_SQLITE3，单一事实源收敛）
+    set(FALCON_DRIVES_PACKAGE_NEEDS_NLOHMANN_JSON OFF)
+    if(TARGET nlohmann_json::nlohmann_json)
+        set(FALCON_DRIVES_PACKAGE_NEEDS_NLOHMANN_JSON ON)
+    endif()
+    set(FALCON_DRIVES_PACKAGE_NEEDS_CURL OFF)
+    if(TARGET CURL::libcurl)
+        set(FALCON_DRIVES_PACKAGE_NEEDS_CURL ON)
+    endif()
+    set(FALCON_DRIVES_PACKAGE_NEEDS_OPENSSL OFF)
+    if(TARGET OpenSSL::Crypto)
+        set(FALCON_DRIVES_PACKAGE_NEEDS_OPENSSL ON)
+    endif()
+
+    include(CMakePackageConfigHelpers)
+    configure_package_config_file(
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/FalconDrivesConfig.cmake.in
+        ${CMAKE_CURRENT_BINARY_DIR}/FalconDrivesConfig.cmake
+        INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/FalconDrives
+    )
+    write_basic_package_version_file(
+        ${CMAKE_CURRENT_BINARY_DIR}/FalconDrivesConfigVersion.cmake
+        VERSION ${PROJECT_VERSION}
+        COMPATIBILITY SameMajorVersion
+    )
+    install(EXPORT FalconDrivesTargets
+        FILE FalconDrivesTargets.cmake
+        NAMESPACE Falcon::
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/FalconDrives
+    )
+    install(FILES
+        ${CMAKE_CURRENT_BINARY_DIR}/FalconDrivesConfig.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/FalconDrivesConfigVersion.cmake
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/FalconDrives
+    )
+endif()
 
 # ============================================================================
 # Tests
