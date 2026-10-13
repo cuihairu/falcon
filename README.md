@@ -87,6 +87,18 @@ lives in [docs/design/ui-sandbox/](docs/design/ui-sandbox/README.md).
 Installs the desktop app from the daily build (anonymous download, idempotent — rerun to upgrade):
 
 ```bash
+
+## 本地测试口径
+
+CI 与本地开发按改动面三路分流——改一行文档不该全量编译。
+
+1. **文档改动**（`*.md`、`docs/**`、图片）：不编译。主 CI workflow 的
+   `paths-ignore` 已跳过这些路径。
+2. **代码改动**：只跑改动子集，不全量。
+   - `ctest -R '<改动测试>' -C Debug`
+3. **全量**（`ctest --build-config Debug --output-on-failure`）：仅以下情形触发——CMakeLists.txt、
+   `.github/**`、Docker/Compose 配置、发布前。
+
 # Linux / macOS
 curl -fsSL https://raw.githubusercontent.com/cuihairu/falcon/main/scripts/install.sh | bash
 ```
