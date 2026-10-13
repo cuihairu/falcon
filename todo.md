@@ -497,7 +497,7 @@ packages/libfalcon-drives/
 - ✅ 各库可被外部 CMake 项目独立消费
 - ✅ 不启用的 feature 不应要求额外依赖（守卫按构建树实态生成）
 
-### 13. 设计 `vcpkg` 包拆分（✅ 2026-10-13 设计收口，实施排队）
+### 13. 设计 `vcpkg` 包拆分（✅ 2026-10-13 设计收口；阶段 1 已实施，阶段 2 排队）
 
 包名候选：
 
@@ -524,8 +524,23 @@ feature 候选：
   （bittorrent 构建重）；storage 需新增五枚 per-provider option（现状
   只有两档粒度）；drives 首版零 feature（候选网盘未实现，todo 网盘
   直链解析仍待点名目标）。阶段 3 上游化默认不排期，留触发判定注记
-- ⏳ 实施排队（非本阶段范围）：阶段 1 与阶段 2 按设计文档顺序推进，
-  每阶段全量 ctest 回归绿 + 本阶段消费路径冒烟绿才提交
+- ✅ 阶段 1 已实施（2026-10-13，13433cf/05e44fc/75752e9/6ea88ae）：
+  四包 standalone package config 全落地（export 锚 `TARGET falcon_core`
+  → monorepo 沿用 FalconTargets / 独立 configure 出 FalconCore/
+  FalconProtocols/FalconStorage/FalconDrives 四导出集；`FALCON_ENABLE_*`
+  包内 `NOT DEFINED` 兜底；自足块 `find_package(FalconCore)` + 目录级
+  `falcon_core` ALIAS；`FALCON_FAILURE_INJECTION` 独立形态按根同款
+  条件补定义且先于本包 add_library；闭包打标沿 target 存在性，drives
+  复用 `FALCON_PACKAGE_NEEDS_SQLITE3` CACHE INTERNAL 标记）。验收双
+  路径冒烟绿：① 四包独立 configure + install → 单一消费工程
+  `find_package` 四包各取所需，`engine ok version=1.2.3 protocols=11
+  presets=19`（注意消费侧链接序：只显式链顶层包，core 经闭包殿后——
+  core 的 weak 空 stub 若先于 protocols 归档出现会吞
+  `describe_builtin_protocols` 强实现，批次 F 陷阱的安装形态）；
+  ② 单体路径（全新非插桩树 install → `find_package(Falcon)` 同一
+  消费工程）同样绿。全量 ctest 回归绿
+- ⏳ 阶段 2 排队：overlay 端口文件（checkout 整树 + configure 包子
+  目录，third_party/libmetalink 相对路径解析成立），每端口一提交
 
 验收标准（设计已定义判定法，✅ = 判定法成立；实际验证随实施阶段）：
 

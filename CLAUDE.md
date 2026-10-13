@@ -2,6 +2,16 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-10-13 - vcpkg 拆分阶段 1：四包 standalone package config（todo #13，设计 `docs/design/vcpkg_packaging_design.md` §4）
+- **目标**：外部工程可按包粒度 `find_package` 消费（阶段 2 overlay 端口的前置）；继 13433cf（core）/05e44fc（protocols）后，本批补齐 storage（75752e9）与 drives（6ea88ae）——§4.2 四包清单收口
+- **同构四件套**（每包 CMakeLists 头部 + 尾部，monorepo 树内全部跳过零行为变化）：① export 锚 `TARGET falcon_core`（根必然已建/端口树必然没有，不引入第二真值源）→ monorepo 沿用 FalconTargets / 独立 configure 出 `FalconStorageTargets`/`FalconDrivesTargets`；② `FALCON_ENABLE_*` 包头 `NOT DEFINED` 兜底（option 定义权留根目录）；③ 自足块 `find_package(FalconCore CONFIG REQUIRED)` + 目录级 `falcon_core` ALIAS 对齐既有裸链接点（目录级即可——消费方全在本目录子树内，不触 CMP0107 全局 imported ALIAS 限制）；④ `FALCON_FAILURE_INJECTION` 独立形态按根同款条件补定义，**必须先于本包一切 add_library**（库与测试 TU 内联布局分叉即 ODR 红线）
+- **闭包打标沿 target 存在性**（非 FOUND 布尔——构建侧要求 targets 齐备才链接，导出闭包只在链接时才引用它们）：storage 三枚 `FALCON_STORAGE_PACKAGE_NEEDS_{CURL,NLOHMANN_JSON,OPENSSL}`；drives 四枚 + SQLITE3 直接复用 config_manager 链接点的既有 `FALCON_PACKAGE_NEEDS_SQLITE3` CACHE INTERNAL 标记（§4.3 单一事实源收敛，不另起名）；storage 的 curl 查找门与链接点同条件（RESOURCE_BROWSER 是该包唯一 curl 消费方，与根 Dependencies.cmake 的全包并集门不同）
+- **独立 configure 验证（每包一树）**：`cmake -S packages/<pkg>` + `CMAKE_PREFIX_PATH=prefix-core;vcpkg_installed` → 构建 install 干净；drives 闭包投影 `if(ON)×4`（NLOHMANN_JSON+CURL+OPENSSL+SQLITE3）与 monorepo 闭包一致；storage 同构三枚
+- **验收（双消费路径端到端，§4.3 门禁）**：① 四包独立前缀 + 单一消费工程四 `find_package` → `engine ok version=1.2.3 protocols=11 presets=19`（Version round-trip / FileHasher sha256("") / describe_builtin_protocols=11 / storage_presets=19 + ResourceSearchManager 构造析构）；② 单体路径：全新非插桩树 install → `find_package(Falcon)` 同一消费工程同样绿
+- **消费侧链接序陷阱（安装形态的批次 F 重现，写进消费工程注释）**：只显式链顶层包（protocols/storage/drives），`Falcon::core` 经闭包殿后——若手写 core 在前，GNU ld 归档单次扫描下 core 的 weak 空 stub 先满足 `describe_builtin_protocols` 引用，protocols 归档内强实现成员不再拉入 → 运行时 0 handler。sha256 强符号拉入 + 链接序两措施缺一不可（单用 FileHasher 拉入实测仍 0，单调序也不够）；monorepo 同语义既有形态，非本批回归
+- **门禁**：build-cov 全量重建 + 全量 ctest **2849/2849 过零失败**（864s 串行，12 skip 设计内：Upnp 真实 IGD / 网络依赖集成 / disabled 各归其位）；单体路径消费树须非插桩——build-cov（--coverage Debug）的库链进无插桩消费方即 `__gcov_init` 未定义，/tmp 全新 libs-only 树承担该验收
+- **CI**：run 38323162038（13433cf）Windows cl 唯一红 `DhtClientTest.FindPeersIteratesThroughTwoHops`（UDP 回环两跳 5s future 超时）——该 commit 仅 core CMake 打包零生产代码，后续 05e44fc 的 run 38325995151 同用例绿，按负载抖动定性已 --failed rerun 收口；run 38325995151（05e44fc）8/8 全绿
+
 ### 2026-10-13 - 安装导出对外可消费收口（todo #12：FalconConfig 依赖闭包三缺口 + BT 插件公共头安装）
 - **目标**（todo.md 第五阶段 #12「完善安装导出」）：安装后的 Falcon 包能被外部工程 `find_package(Falcon)` 一手消费——此前 FalconConfig.cmake.in 只覆盖 spdlog/nlohmann/CURL/OpenSSL 四个依赖，protocols/drives 的 PRIVATE 静态依赖（libtorrent/libssh2/sqlite3/expat/miniupnpc/natpmp）在导出闭包里引用了消费方不存在的 imported target，`Falcon::protocols` 链接即红
 - **机制选型（FALCON_PACKAGE_NEEDS_\* CACHE INTERNAL 标志）**：imported target 目录作用域不可见于根目录，export 闭包引用哪些目标只能在**创建它的子包 CMakeLists** 里判定（protocols 判 libssh2/libtorrent、drives 判 sqlite3、bittorrent 插件判 libtorrent）——各子包在链接/查找点 `set(... ON CACHE INTERNAL ... FORCE)` 打标，根 CMakeLists 在 `add_subdirectory(packages/libfalcon-core)` 前重置五枚标志，install(EXPORT) 后按标志生成 FalconConfig 的 find_dependency 块（configure_package_config_file 把 `@VAR@` 替换为字面 `if(ON)/if(OFF)`，消费方所见即安装时形态）

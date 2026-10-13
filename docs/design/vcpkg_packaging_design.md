@@ -1,7 +1,10 @@
 # vcpkg 包拆分设计（todo 第五阶段 #13）
 
-状态：**设计完成，实施排队**（阶段 1 CMake 自足化 → 阶段 2 overlay 端口；
-触发条件与验收见文末）。前置成果：#12 安装导出收口（2cd0dc2）已让
+状态：**阶段 1 已实施**（2026-10-13：四包 standalone package config，
+13433cf core / 05e44fc protocols / 75752e9 storage / 6ea88ae drives；
+验收双路径冒烟绿——四包独立 configure 单消费工程 + 单体
+`find_package(Falcon)` 同工程形态）。阶段 2 overlay 端口排队中。
+设计全貌与验收条款见文末。前置成果：#12 安装导出收口（2cd0dc2）已让
 `find_package(Falcon)` 单包消费端到端可用，本设计把该能力拆到 vcpkg
 包粒度。
 
