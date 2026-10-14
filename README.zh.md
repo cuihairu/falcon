@@ -80,6 +80,8 @@
 
 ```bash
 # Linux / macOS
+
+> [English](README.md) | **中文**
 curl -fsSL https://raw.githubusercontent.com/cuihairu/falcon/main/scripts/install.sh | bash
 ```
 

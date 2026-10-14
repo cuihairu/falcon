@@ -100,6 +100,8 @@ CI 与本地开发按改动面三路分流——改一行文档不该全量编�
    `.github/**`、Docker/Compose 配置、发布前。
 
 # Linux / macOS
+
+> **English** | [中文](README.zh.md)
 curl -fsSL https://raw.githubusercontent.com/cuihairu/falcon/main/scripts/install.sh | bash
 ```
 
