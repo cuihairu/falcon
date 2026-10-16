@@ -1,101 +1,103 @@
-# Falcon 文档
+[中文](README.zh.md) | **English**
 
-本目录使用 **VitePress** 构建项目文档，源码位于 `docs/src`。
+# Falcon Documentation
+
+This directory builds the project documentation with **VitePress**; the source lives in `docs/src`.
 
 > [!WARNING]
-> `docs/src/` 是当前维护中的主文档来源。
-> 根目录下的 `docs/*.md` 多数属于历史设计稿、迁移记录或归档材料，不应再被视为当前 API、CLI 或构建方式的权威说明。
+> `docs/src/` is the actively maintained source of truth for documentation.
+> Most files at the root of `docs/*.md` are historical design drafts, migration notes, or archived material. They should no longer be treated as authoritative references for the current API, CLI, or build process.
 
-归档文档索引见 `docs/ARCHIVE.md`。
+See `docs/ARCHIVE.md` for an index of archived documents.
 
-## 快速开始
+## Quick Start
 
-### 安装依赖
+### Install Dependencies
 
 ```bash
 cd docs
 pnpm install
 ```
 
-### 开发模式
+### Development Mode
 
 ```bash
 pnpm docs:dev
 ```
 
-访问终端输出中的本地地址查看文档。
+Open the local address printed in the terminal to view the docs.
 
-### 构建文档
+### Build the Docs
 
 ```bash
 pnpm docs:build
 ```
 
-构建后的文件位于 `docs/src/.vitepress/dist/`。
+The build output is written to `docs/src/.vitepress/dist/`.
 
-## 文档结构
+## Documentation Structure
 
 ```
 docs/
-├── package.json              # pnpm / Node 配置
-├── README.md                 # 本文件
-├── ARCHIVE.md                # 根目录历史文档索引
-├── src/                      # VitePress 源文件
-│   ├── index.md              # 首页
-│   ├── .vitepress/           # VitePress 配置
-│   │   └── config.mts        # 主配置
-│   ├── guide/                # 用户指南
-│   │   ├── index.md          # 项目介绍
-│   │   ├── getting-started.md # 快速开始
-│   │   ├── installation.md    # 安装说明
-│   │   └── usage.md          # 使用指南
-│   ├── protocols/            # 协议文档
-│   │   ├── index.md          # 协议概述
+├── package.json              # pnpm / Node config
+├── README.md                 # This file
+├── ARCHIVE.md                # Index of historical docs at the root
+├── src/                      # VitePress source files
+│   ├── index.md              # Home page
+│   ├── .vitepress/           # VitePress configuration
+│   │   └── config.mts        # Main config
+│   ├── guide/                # User guide
+│   │   ├── index.md          # Project introduction
+│   │   ├── getting-started.md # Quick start
+│   │   ├── installation.md    # Installation
+│   │   └── usage.md          # Usage guide
+│   ├── protocols/            # Protocol docs
+│   │   ├── index.md          # Protocol overview
 │   │   ├── http.md           # HTTP/HTTPS
 │   │   ├── ftp.md            # FTP
 │   │   ├── bittorrent.md     # BitTorrent
-│   │   ├── private.md        # 私有协议
+│   │   ├── private.md        # Private protocols
 │   │   └── streaming.md      # HLS/DASH
-│   ├── developer/            # 开发者文档
-│   │   ├── index.md          # 开发者指南
-│   │   ├── architecture.md   # 架构设计
-│   │   ├── coding-standards.md # 编码规范
-│   │   ├── testing.md        # 测试指南
-│   │   ├── plugins.md        # 插件开发
-│   │   ├── debugging.md      # 调试技巧
-│   │   └── release.md        # 发布流程
-│   ├── api/                  # API 参考
-│   │   ├── index.md          # API 概述
-│   │   ├── core.md           # 核心 API
-│   │   ├── plugins.md        # 插件 API
-│   │   └── events.md         # 事件 API
-│   └── faq.md                # 常见问题
-└── [旧文档保留在根目录]
+│   ├── developer/            # Developer docs
+│   │   ├── index.md          # Developer guide
+│   │   ├── architecture.md   # Architecture
+│   │   ├── coding-standards.md # Coding standards
+│   │   ├── testing.md        # Testing guide
+│   │   ├── plugins.md        # Plugin development
+│   │   ├── debugging.md      # Debugging tips
+│   │   └── release.md        # Release process
+│   ├── api/                  # API reference
+│   │   ├── index.md          # API overview
+│   │   ├── core.md           # Core API
+│   │   ├── plugins.md        # Plugin API
+│   │   └── events.md         # Event API
+│   └── faq.md                # FAQ
+└── [Legacy docs retained at the root]
     ├── api_guide.md
     ├── developer_guide.md
     ├── protocols_guide.md
     └── ...
 ```
 
-## VitePress 组件
+## VitePress Components
 
-### 提示框
+### Callouts
 
 ```markdown
-::: tip 提示
-这是一个提示
+::: tip Tip
+This is a tip.
 :::
 
-::: warning 注意
-这是一个警告
+::: warning Warning
+This is a warning.
 :::
 
-::: danger 危险
-这是一个危险提示
+::: danger Danger
+This is a danger callout.
 :::
 ```
 
-### 代码块
+### Code Blocks
 
 ```cpp
 #include <iostream>
@@ -104,23 +106,23 @@ int main() {
 }
 ```
 
-### 自定义容器
+### Custom Containers
 
 ```md
-::: details 点击查看详情
-隐藏的内容
+::: details Click to view details
+Hidden content
 :::
 ```
 
-## 部署
+## Deployment
 
 ### GitHub Pages
 
 ```bash
-# 构建
+# Build
 pnpm docs:build
 
-# 推送到 gh-pages 分支
+# Push to the gh-pages branch
 cd src/.vitepress/dist
 git init
 git add .
@@ -130,36 +132,36 @@ git push -f git@github.com:cuihairu/falcon.git master:gh-pages
 
 ### Vercel/Netlify
 
-直接连接 GitHub 仓库，设置构建命令为：
+Connect the GitHub repository directly and set the build command to:
 
 ```bash
 cd docs && pnpm install --frozen-lockfile && pnpm docs:build
 ```
 
-设置发布目录为 `docs/src/.vitepress/dist`。
+Set the publish directory to `docs/src/.vitepress/dist`.
 
 ### GitHub Actions
 
-仓库已提供 GitHub Pages 部署工作流，推荐直接使用：
+The repository already includes a GitHub Pages deployment workflow; use it directly:
 
 ```bash
 .github/workflows/docs-deploy.yml
 ```
 
-文档校验工作流：
+Documentation validation workflow:
 
 ```bash
 .github/workflows/docs-check.yml
 ```
 
-默认行为：
+Default behavior:
 
-- 推送到 `main` 时自动构建并部署
-- 使用 `pnpm` 安装依赖
-- 将 `docs/src/.vitepress/dist` 上传到 GitHub Pages
-- 自动根据仓库名设置 VitePress `base`
-- 在 PR / push 中独立执行文档构建校验
+- Builds and deploys automatically on push to `main`
+- Installs dependencies with `pnpm`
+- Uploads `docs/src/.vitepress/dist` to GitHub Pages
+- Sets the VitePress `base` automatically based on the repository name
+- Runs documentation build validation independently on PR / push
 
-## 更多信息
+## Learn More
 
-- [VitePress 官方文档](https://vitepress.dev/)
+- [VitePress documentation](https://vitepress.dev/)

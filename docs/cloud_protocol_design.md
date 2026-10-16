@@ -1,88 +1,90 @@
-# 云存储协议设计对比
+[中文](cloud_protocol_design.zh.md) | **English**
+
+# Cloud Storage Protocol Design Comparison
 
 > [!NOTE]
-> 本文档为设计材料，部分内容可能尚未进入当前公开 API。
+> This document is design material; parts of it may not yet be exposed in the current public API.
 
-## 当前问题
+## Current Problem
 
-所有云存储解析器都使用"魔法数字"来跳过协议前缀：
+All cloud storage parsers use "magic numbers" to skip over the protocol prefix:
 
 ```cpp
-// 反例：当前代码（容易出错）
-size_t bucket_start = 5;  // 为什么是 5？需要手动数 "oss://"
+// Bad example: current code (error-prone)
+size_t bucket_start = 5;  // Why 5? You have to manually count "oss://"
 ```
 
-**问题**：
-1. 需要手动计算 `://` 的长度
-2. 容易数错（如本次 bug）
-3. 代码可读性差
-4. 难以维护
+**Problems**:
+1. The length of `://` must be counted by hand
+2. Easy to miscount (as in this bug)
+3. Poor readability
+4. Hard to maintain
 
-## 解决方案对比
+## Solution Comparison
 
-### 方案 1：constexpr 常量（推荐用于当前项目）
+### Option 1: constexpr Constants (Recommended for This Project)
 
-**优点**：
-- 简单直接，易于理解
-- 编译期计算，零运行时开销
-- 不改变现有架构
-- 容易迁移现有代码
+**Advantages**:
+- Simple and direct, easy to understand
+- Computed at compile time, zero runtime overhead
+- Requires no changes to the existing architecture
+- Easy to migrate existing code
 
-**实现**：
+**Implementation**:
 ```cpp
 namespace falcon::cloud {
     inline constexpr std::string_view PROTOCOL_OSS = "oss://";
 
-    // 使用时
-    size_t bucket_start = PROTOCOL_OSS.size();  // 自动 = 6
+    // At the call site
+    size_t bucket_start = PROTOCOL_OSS.size();  // automatically = 6
 }
 ```
 
-**适用场景**：
-- 当前项目的渐进式重构
-- 需要保持向后兼容
+**Best suited for**:
+- Incremental refactoring of the current project
+- Situations that must preserve backward compatibility
 
 ---
 
-### 方案 2：枚举类 + 类型安全
+### Option 2: Enum Class + Type Safety
 
-**优点**：
-- 最强的类型安全
-- 编译期检查
-- 避免拼写错误
-- 可扩展性好
+**Advantages**:
+- Strongest type safety
+- Checked at compile time
+- Prevents typos
+- Highly extensible
 
-**实现**：
+**Implementation**:
 ```cpp
 enum class CloudProtocol : uint8_t {
     S3, OSS, COS, Kodo, Upyun, Unknown
 };
 
-// 使用时
+// At the call site
 auto protocol = CloudProtocol::OSS;
 size_t bucket_start = CloudProtocolUtils::get_prefix(protocol).size();
 ```
 
-**适用场景**：
-- 新项目或大规模重构
-- 需要运行时协议切换
-- 协议作为配置参数
+**Best suited for**:
+- New projects or large-scale refactoring
+- Runtime protocol switching
+- Passing protocols as configuration parameters
 
 ---
 
-### 方案 3：模板元编程（最通用）
+### Option 3: Template Metaprogramming (Most General)
 
-**优点**：
-- 编译期生成代码
-- 零运行时开销
-- 类型安全
+**Advantages**:
+- Code generated at compile time
+- Zero runtime overhead
+- Type-safe
 
-**实现**：
+**Implementation**:
 ```cpp
 template<std::string_view Protocol>
 class CloudUrlParser {
     static auto parse(std::string_view url) {
-        constexpr size_t skip = Protocol.size();  // 编译期计算
+        constexpr size_t skip = Protocol.size();  // computed at compile time
         // ...
     }
 };
@@ -90,36 +92,36 @@ class CloudUrlParser {
 using OSSUrlParser = CloudUrlParser<"oss://">;
 ```
 
-**适用场景**：
-- 需要为每个协议生成特化代码
-- 性能极度敏感的代码
+**Best suited for**:
+- Generating specialized code per protocol
+- Extremely performance-sensitive code
 
 ---
 
-## 推荐实施步骤
+## Recommended Implementation Steps
 
-### 阶段 1：立即可行（已完成）
+### Phase 1: Immediate (Done)
 
-修复当前的魔法数字 bug
+Fix the current magic-number bug.
 
-### 阶段 2：渐进式重构（推荐）
+### Phase 2: Incremental Refactoring (Recommended)
 
-1. 创建 `cloud_url_protocols.hpp` 定义常量
-2. 逐步迁移现有解析器使用 `PROTOCOL_XXX.size()`
-3. 保持现有 API 不变
+1. Create `cloud_url_protocols.hpp` defining the constants
+2. Gradually migrate existing parsers to `PROTOCOL_XXX.size()`
+3. Leave the existing API unchanged
 
 ```cpp
-// 迁移前
-size_t bucket_start = 5;  // 不好
+// Before migration
+size_t bucket_start = 5;  // bad
 
-// 迁移后
+// After migration
 using namespace cloud;
-size_t bucket_start = PROTOCOL_OSS.size();  // 好
+size_t bucket_start = PROTOCOL_OSS.size();  // good
 ```
 
-### 阶段 3：统一接口（可选）
+### Phase 3: Unified Interface (Optional)
 
-如果未来需要添加更多协议，考虑使用枚举类方案：
+If more protocols need to be added in the future, consider the enum-class approach:
 
 ```cpp
 enum class CloudProtocol { S3, OSS, COS, ... };
@@ -132,9 +134,9 @@ class CloudUrlParser {
 
 ---
 
-## 代码示例
+## Code Examples
 
-### 使用方案 1 重构后
+### After Refactoring with Option 1
 
 ```cpp
 #include <falcon/cloud_url_protocols.hpp>
@@ -146,15 +148,15 @@ OSSUrl OSSUrlParser::parse(const std::string& url) {
         return {};
     }
 
-    // 自动计算，无需魔法数字！
+    // Computed automatically — no magic numbers!
     size_t bucket_start = PROTOCOL_OSS.size();
     size_t bucket_end = url.find('/', bucket_start);
 
-    // ... 解析逻辑
+    // ... parsing logic
 }
 ```
 
-### 使用方案 2 重构后
+### After Refactoring with Option 2
 
 ```cpp
 #include <falcon/cloud_protocol.hpp>
@@ -172,20 +174,20 @@ std::pair<std::string, std::string> parse_s3_url(std::string_view url) {
 
 ---
 
-## 性能对比
+## Performance Comparison
 
-| 方案 | 编译期开销 | 运行时开销 | 代码大小 |
-|------|-----------|-----------|---------|
-| 当前（魔法数字） | 无 | 无 | 最小 |
-| constexpr 常量 | 无 | 无 | 相同 |
-| 枚举类 + 表查找 | 小 | 小 | +64 bytes |
-| 模板元编程 | 中 | 无 | 每个实例化 +N bytes |
+| Option | Compile-time Cost | Runtime Cost | Code Size |
+|--------|------------------|--------------|-----------|
+| Current (magic numbers) | None | None | Smallest |
+| constexpr constants | None | None | Same |
+| Enum class + table lookup | Small | Small | +64 bytes |
+| Template metaprogramming | Medium | None | +N bytes per instantiation |
 
-**结论**：constexpr 常量方案在性能和可维护性之间达到最佳平衡。
+**Conclusion**: The constexpr-constants option strikes the best balance between performance and maintainability.
 
 ---
 
-## 测试用例
+## Test Cases
 
 ```cpp
 #include <gtest/gtest.h>
@@ -199,7 +201,7 @@ TEST(CloudProtocolTest, ProtocolPrefixes) {
     EXPECT_EQ(PROTOCOL_COS.size(), 6);
     EXPECT_EQ(PROTOCOL_UPYUN.size(), 8);
 
-    // 确保 .size() 自动正确计算
+    // Ensure .size() computes the correct value automatically
     EXPECT_EQ(PROTOCOL_OSS, "oss://");
     EXPECT_EQ(PROTOCOL_OSS.size(), std::string("oss://").size());
 }
@@ -216,12 +218,12 @@ TEST(CloudProtocolTest, ParseBucket) {
 
 ---
 
-## 结论
+## Conclusion
 
-**推荐使用方案 1（constexpr 常量）**，因为：
-1. 最小改动，易于迁移
-2. 零运行时开销
-3. 解决了魔法数字问题
-4. 提高代码可读性和可维护性
+**Option 1 (constexpr constants) is recommended**, because:
+1. Minimal changes, easy migration
+2. Zero runtime overhead
+3. Solves the magic-number problem
+4. Improves code readability and maintainability
 
-如果未来需要更强的类型安全或运行时协议切换，可以考虑迁移到方案 2（枚举类）。
+If stronger type safety or runtime protocol switching is needed later, consider migrating to Option 2 (enum class).

@@ -1,27 +1,29 @@
-# Falcon 下载器 - aria2 风格架构文档
+[中文](aria2_architecture.zh.md) | **English**
+
+# Falcon Downloader - aria2-Style Architecture Document
 
 > [!NOTE]
-> 本文档为架构研究材料，不是当前实现的权威接口说明。
+> This document is architecture research material, not an authoritative interface description of the current implementation.
 
-## 概述
+## Overview
 
-Falcon 下载器采用与 aria2 类似的事件驱动架构。本文档说明其核心架构设计。
+The Falcon downloader adopts an event-driven architecture similar to aria2. This document describes its core architecture design.
 
-## 架构设计原则
+## Architecture Design Principles
 
-1. **命令模式 (Command Pattern)**: 所有下载操作都封装为命令对象
-2. **事件驱动 (Event-Driven)**: 基于 I/O 多路复用的异步 I/O 模型
-3. **连接复用 (Connection Pooling)**: Socket 连接池减少连接建立开销
-4. **分段下载 (Segmented Download)**: 支持多线程分块下载提高速度
-5. **任务队列 (Task Queue)**: 请求组管理实现任务调度和并发控制
+1. **Command Pattern**: All download operations are encapsulated as command objects
+2. **Event-Driven**: An asynchronous I/O model based on I/O multiplexing
+3. **Connection Pooling**: A socket connection pool that reduces connection establishment overhead
+4. **Segmented Download**: Multi-threaded block downloads that increase speed
+5. **Task Queue**: Request groups implement task scheduling and concurrency control
 
-## 核心组件
+## Core Components
 
-### 1. 命令系统 (Command System)
+### 1. Command System
 
-命令系统是 Falcon 的核心，所有下载操作都通过命令执行。
+The command system is the heart of Falcon; every download operation runs through commands.
 
-#### 命令基类
+#### Command Base Class
 
 ```cpp
 class Command {
@@ -37,52 +39,52 @@ protected:
 };
 ```
 
-#### HTTP 命令链
+#### HTTP Command Chain
 
-HTTP 下载通过命令链实现：
+An HTTP download runs through a chain of commands:
 
 ```
-HttpInitiateConnectionCommand (建立连接)
+HttpInitiateConnectionCommand (establish connection)
     ↓
-HttpResponseCommand (解析响应头)
+HttpResponseCommand (parse response headers)
     ↓
-HttpDownloadCommand (下载数据)
+HttpDownloadCommand (download data)
     ↓
-HttpRetryCommand (失败重试，可选)
+HttpRetryCommand (retry on failure, optional)
 ```
 
-**命令状态转换:**
+**Command state transitions:**
 - READY → ACTIVE → COMPLETED
 - READY → ACTIVE → ERROR
 
-### 2. 事件轮询 (Event Poll)
+### 2. Event Poll
 
-跨平台 I/O 多路复用实现：
+Cross-platform I/O multiplexing implementation:
 
-| 平台 | 实现 | 特点 |
+| Platform | Implementation | Characteristics |
 |------|------|------|
-| Linux | EPollEventPoll | 支持大量连接 |
-| macOS/BSD | KqueueEventPoll | 系统原生接口 |
-| 其他 | PollEventPoll | 可移植，性能较低 |
+| Linux | EPollEventPoll | Supports a large number of connections |
+| macOS/BSD | KqueueEventPoll | Native system interface |
+| Other | PollEventPoll | Portable, lower performance |
 
-#### 使用示例
+#### Usage Example
 
 ```cpp
 auto poll = EventPoll::create();
 
-// 注册读事件
+// Register a read event
 poll->add_event(fd, static_cast<int>(IOEvent::READ),
     [](int fd, int events, void* user_data) {
-        // 处理可读事件
+        // Handle readable event
     });
 
-// 等待事件（100ms 超时）
+// Wait for events (100ms timeout)
 int num_events = poll->poll(100);
 ```
 
-### 3. Socket 连接池 (Socket Pool)
+### 3. Socket Pool
 
-连接复用减少 TCP/TLS 握手开销：
+Connection reuse reduces TCP/TLS handshake overhead:
 
 #### SocketKey
 
@@ -95,39 +97,39 @@ struct SocketKey {
 };
 ```
 
-#### 使用示例
+#### Usage Example
 
 ```cpp
-SocketPool pool(std::chrono::seconds(30), 16);  // 30s超时，最大16个空闲连接
+SocketPool pool(std::chrono::seconds(30), 16);  // 30s timeout, at most 16 idle connections
 
-// 获取连接
+// Acquire a connection
 SocketKey key{"example.com", 80};
 auto socket = pool.acquire(key);
 if (socket && socket->is_valid()) {
-    // 复用现有连接
+    // Reuse the existing connection
 } else {
-    // 创建新连接
+    // Create a new connection
 }
 
-// 释放连接回池
+// Release the connection back to the pool
 pool.release(socket);
 ```
 
-### 4. 请求组 (Request Group)
+### 4. Request Group
 
-RequestGroup 表示一个完整的下载任务：
+A `RequestGroup` represents a complete download task:
 
-#### 生命周期
+#### Lifecycle
 
 ```
-WAITING (等待执行)
+WAITING (waiting to run)
     ↓
-ACTIVE (正在下载)
+ACTIVE (downloading)
     ↓
 PAUSED / COMPLETED / ERROR / REMOVED
 ```
 
-#### 多镜像支持
+#### Multi-Mirror Support
 
 ```cpp
 std::vector<std::string> urls = {
@@ -138,81 +140,81 @@ std::vector<std::string> urls = {
 
 RequestGroup group(1, urls, options);
 
-// 自动尝试下一个镜像
+// Automatically try the next mirror
 if (download_failed) {
     group.try_next_uri();
 }
 ```
 
-### 5. 请求组管理器 (RequestGroupMan)
+### 5. RequestGroupMan
 
-管理多个下载任务的调度和并发控制：
+Manages scheduling and concurrency control for multiple download tasks:
 
-#### 并发控制
+#### Concurrency Control
 
 ```cpp
-RequestGroupMan manager(5);  // 最多同时下载 5 个任务
+RequestGroupMan manager(5);  // At most 5 concurrent downloads
 
-// 添加10个任务
+// Add 10 tasks
 for (int i = 0; i < 10; ++i) {
     manager.add_request_group(std::make_unique<RequestGroup>(...));
 }
 
-// 从等待队列激活任务（最多5个）
+// Activate tasks from the waiting queue (at most 5)
 manager.fill_request_group_from_reserver(engine);
 ```
 
-### 6. 文件哈希验证 (File Hasher)
+### 6. File Hasher
 
-支持多种哈希算法验证文件完整性：
+Supports multiple hash algorithms for verifying file integrity:
 
 ```cpp
-// 计算 SHA256 哈希
+// Calculate a SHA256 hash
 auto hash = FileHasher::calculate("file.zip", HashAlgorithm::SHA256);
 
-// 验证文件
+// Verify a file
 auto result = FileHasher::verify("file.zip",
     "dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f",
     HashAlgorithm::SHA256);
 
 if (result.valid) {
-    std::cout << "文件验证通过\n";
+    std::cout << "File verified\n";
 }
 ```
 
-## 事件驱动循环
+## Event-Driven Loop
 
-DownloadEngineV2 的主事件循环：
+The main event loop of DownloadEngineV2:
 
 ```cpp
 void DownloadEngineV2::run() {
     running_ = true;
 
     while (!is_shutdown_requested()) {
-        // 1. 检查所有任务是否完成
+        // 1. Check whether all tasks are complete
         if (request_group_man_->all_completed()) {
             break;
         }
 
-        // 2. 执行例程命令（定期任务）
+        // 2. Execute routine commands (periodic work)
         execute_routine_commands();
 
-        // 3. 等待 I/O 事件
+        // 3. Wait for I/O events
         int events = event_poll_->poll(config_.poll_timeout_ms);
 
-        // 4. 处理就绪事件
+        // 4. Process ready events
         process_ready_events();
 
-        // 5. 执行命令队列
+        // 5. Execute the command queue
         execute_commands();
 
-        // 6. 清理已完成的命令
+        // 6. Clean up completed commands
         cleanup_completed_commands();
 
-        // 7. 更新任务状态
+        // 7. Update task status
         update_task_status();
 
-        // 8. 从等待队列激活新任务
+        // 8. Activate new tasks from the waiting queue
         request_group_man_->fill_request_group_from_reserver(this);
     }
 
@@ -220,102 +222,102 @@ void DownloadEngineV2::run() {
 }
 ```
 
-## 与 aria2 的对比
+## Comparison with aria2
 
-| 特性 | aria2 | Falcon |
+| Feature | aria2 | Falcon |
 |------|-------|--------|
-| 架构 | 事件驱动 + 命令模式 | 事件驱动 + 命令模式 |
-| I/O 多路复用 | epoll/kqueue/IOCP | epoll/kqueue/poll |
-| 连接池 | 有 | 有 |
-| 分段下载 | 有 | 有 |
-| 多镜像支持 | 有 | 有 |
-| 命令行参数 | 丰富 | 60+ aria2 兼容参数 |
-| RPC 接口 | XML-RPC/JSON-RPC | JSON-RPC（HTTP 与 WebSocket 同端口，由 falcon-daemon 提供） |
-| BitTorrent | 有 | 有（libtorrent） |
-| Metalink | 有 | 有（vendored libmetalink） |
+| Architecture | Event-driven + command pattern | Event-driven + command pattern |
+| I/O multiplexing | epoll/kqueue/IOCP | epoll/kqueue/poll |
+| Connection pool | Yes | Yes |
+| Segmented download | Yes | Yes |
+| Multi-mirror support | Yes | Yes |
+| CLI arguments | Extensive | 60+ aria2-compatible arguments |
+| RPC interface | XML-RPC/JSON-RPC | JSON-RPC (HTTP and WebSocket on the same port, provided by falcon-daemon) |
+| BitTorrent | Yes | Yes (libtorrent) |
+| Metalink | Yes | Yes (vendored libmetalink) |
 
-## 性能优化
+## Performance Optimization
 
-### 1. 连接复用
+### 1. Connection Reuse
 
-- 复用 HTTP/HTTPS 连接，避免重复握手
-- 30 秒空闲超时，最多保留 16 个空闲连接
+- Reuse HTTP/HTTPS connections to avoid repeated handshakes
+- 30-second idle timeout, at most 16 idle connections kept
 
-### 2. 非阻塞 I/O
+### 2. Non-Blocking I/O
 
-- 所有 Socket 设置为非阻塞模式
-- 事件驱动避免线程阻塞
+- All sockets are set to non-blocking mode
+- Event-driven design avoids thread blocking
 
-### 3. 零拷贝
+### 3. Zero Copy
 
-- 使用 `sendfile`/`splice` 系统调用（计划中）
-- 减少用户态/内核态数据拷贝
+- Use `sendfile`/`splice` system calls (planned)
+- Reduce data copies between user space and kernel space
 
-### 4. 内存管理
+### 4. Memory Management
 
-- 智能指针自动管理内存
-- RAII 确保资源正确释放
+- Smart pointers manage memory automatically
+- RAII ensures resources are released correctly
 
-## 扩展性
+## Extensibility
 
-### 添加新的协议处理器
+### Adding a New Protocol Handler
 
-1. 继承 `AbstractCommand`
-2. 实现 `execute()` 方法
-3. 在 `RequestGroup::create_initial_command()` 中注册
+1. Inherit from `AbstractCommand`
+2. Implement the `execute()` method
+3. Register it in `RequestGroup::create_initial_command()`
 
-### 添加新的命令类型
+### Adding a New Command Type
 
 ```cpp
 class MyCustomCommand : public AbstractCommand {
 public:
     bool execute(DownloadEngineV2* engine) override {
-        // 实现命令逻辑
+        // Implement command logic
         return handle_result(ExecutionResult::OK);
     }
 };
 ```
 
-## 线程安全
+## Thread Safety
 
-### 线程模型
+### Thread Model
 
-- **主线程**: 事件循环和命令调度
-- **工作线程**: 文件 I/O 和哈希计算（计划中）
+- **Main thread**: Event loop and command scheduling
+- **Worker threads**: File I/O and hash computation (planned)
 
-### 锁策略
+### Locking Strategy
 
-- 命令队列使用 `std::mutex` 保护
-- Socket 连接池使用线程安全队列
-- 请求组管理器使用读写锁（计划中）
+- The command queue is protected by `std::mutex`
+- The socket pool uses a thread-safe queue
+- The request group manager uses a read-write lock (planned)
 
-## 错误处理
+## Error Handling
 
-### 命令执行错误
+### Command Execution Errors
 
 ```cpp
 bool execute(DownloadEngineV2* engine) override {
     try {
-        // 执行逻辑
+        // Execution logic
     } catch (const std::exception& e) {
-        FALCON_LOG_ERROR("命令执行失败: " << e.what());
+        FALCON_LOG_ERROR("Command execution failed: " << e.what());
         return handle_result(ExecutionResult::ERROR_OCCURRED);
     }
 }
 ```
 
-### 重试机制
+### Retry Mechanism
 
 ```cpp
 HttpRetryCommand retry_cmd(task_id, url, options, retry_count);
 if (retry_cmd.should_retry()) {
-    // 自动重试
+    // Retry automatically
 }
 ```
 
-## 配置选项
+## Configuration Options
 
-### 引擎配置
+### Engine Configuration
 
 ```cpp
 struct EngineConfigV2 {
@@ -327,7 +329,7 @@ struct EngineConfigV2 {
 };
 ```
 
-### 下载选项
+### Download Options
 
 ```cpp
 struct DownloadOptions {
@@ -341,12 +343,12 @@ struct DownloadOptions {
 };
 ```
 
-## 最佳实践
+## Best Practices
 
-### 1. 使用连接池
+### 1. Use the Connection Pool
 
 ```cpp
-// 推荐：复用连接
+// Recommended: reuse connections
 auto socket = socket_pool->acquire(key);
 if (socket && socket->is_valid()) {
     use_existing_connection(socket);
@@ -355,77 +357,76 @@ if (socket && socket->is_valid()) {
 }
 ```
 
-### 2. 错误处理
+### 2. Error Handling
 
 ```cpp
-// 推荐：捕获并处理异常
+// Recommended: catch and handle exceptions
 try {
     engine->run();
 } catch (const std::exception& e) {
-    std::cerr << "下载失败: " << e.what() << std::endl;
+    std::cerr << "Download failed: " << e.what() << std::endl;
 }
 ```
 
-### 3. 资源清理
+### 3. Resource Cleanup
 
 ```cpp
-// 推荐：使用 RAII
+// Recommended: use RAII
 {
     auto poll = EventPoll::create();
-    // 使用 poll
-} // 自动清理
+    // Use poll
+} // Cleaned up automatically
 ```
 
-## 未来计划
+## Future Plans
 
-以下清单写于 V2 引擎设计阶段，仅作存档。清单中的 RPC、BitTorrent、Metalink、
-SFTP、图形界面此后均已落地，当前进展以 [README](../README.md) 的路线图为准。
+The following list was written during the V2 engine design phase and is kept for archival purposes only. The RPC interface, BitTorrent, Metalink, SFTP, and the graphical interface have all shipped since then; for current progress see the roadmap in [README](../README.md).
 
-### 短期 (1-3 个月)
+### Short Term (1-3 months)
 
-- [ ] 完善分段下载实现
-- [ ] 添加 RPC 接口
-- [ ] 支持 BitTorrent 协议
-- [ ] 添加更多单元测试
+- [ ] Complete the segmented download implementation
+- [ ] Add an RPC interface
+- [ ] Support the BitTorrent protocol
+- [ ] Add more unit tests
 
-### 中期 (3-6 个月)
+### Mid Term (3-6 months)
 
-- [ ] 支持 Metalink
-- [ ] 实现 SFTP 协议
-- [ ] 添加图形界面 (GUI)
-- [ ] 性能优化和基准测试
+- [ ] Support Metalink
+- [ ] Implement the SFTP protocol
+- [ ] Add a graphical interface (GUI)
+- [ ] Performance optimization and benchmarking
 
-### 长期 (6-12 个月)
+### Long Term (6-12 months)
 
-- [ ] 支持 P2P 协议
-- [ ] 分布式下载
-- [ ] 云存储集成
-- [ ] 移动端支持
+- [ ] Support P2P protocols
+- [ ] Distributed downloading
+- [ ] Cloud storage integration
+- [ ] Mobile support
 
-## 参考资料
+## References
 
-- [aria2 源码](https://github.com/aria2/aria2)
-- [aria2 设计文档](https://aria2.github.io/manual/en/html/aria2c.html)
-- [libevent 文档](https://libevent.org/)
-- [Linux epoll 手册](https://man7.org/linux/man-pages/man7/epoll.7.html)
+- [aria2 source code](https://github.com/aria2/aria2)
+- [aria2 design document](https://aria2.github.io/manual/en/html/aria2c.html)
+- [libevent documentation](https://libevent.org/)
+- [Linux epoll manual](https://man7.org/linux/man-pages/man7/epoll.7.html)
 
-## 贡献指南
+## Contributing
 
-欢迎贡献代码！请遵循以下步骤：
+Contributions are welcome! Please follow these steps:
 
-1. Fork 本仓库
-2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 开启 Pull Request
+1. Fork this repository
+2. Create a feature branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
 
-### 代码规范
+### Code Style
 
-- 遵循 Google C++ Style Guide
-- 使用 clang-format 格式化代码
-- 添加单元测试覆盖新功能
-- 更新相关文档
+- Follow the Google C++ Style Guide
+- Format code with clang-format
+- Add unit tests covering new features
+- Update the relevant documentation
 
-## 许可证
+## License
 
-Apache License 2.0 - 详见 [LICENSE](../LICENSE) 文件
+Apache License 2.0 - see the [LICENSE](../LICENSE) file

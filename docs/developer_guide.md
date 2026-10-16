@@ -1,25 +1,27 @@
-# Falcon 开发者指南
+[中文](developer_guide.zh.md) | **English**
+
+# Falcon Developer Guide
 
 > [!WARNING]
-> 本文档属于旧版开发者指南归档。
-> 当前维护中的开发者文档请以 `docs/src/developer/` 下页面为准。
+> This document is an archived version of the old developer guide.
+> For the currently maintained developer documentation, refer to the pages under `docs/src/developer/`.
 
-## 开发环境搭建
+## Setting Up the Development Environment
 
-### 前置要求
+### Prerequisites
 
 - **CMake** 3.15+
-- **C++ 编译器** (GCC 7+, Clang 5+, MSVC 2017+)
-- **vcpkg** (可选，用于依赖管理)
+- **C++ compiler** (GCC 7+, Clang 5+, MSVC 2017+)
+- **vcpkg** (optional, for dependency management)
 
-### 获取源码
+### Obtaining the Source Code
 
 ```bash
 git clone https://github.com/cuihairu/falcon.git
 cd falcon
 ```
 
-### 安装依赖 (使用 vcpkg)
+### Installing Dependencies (with vcpkg)
 
 ```bash
 # macOS/Linux
@@ -29,30 +31,30 @@ cd falcon
 vcpkg install spdlog nlohmann-json curl openssl gtest
 ```
 
-### 编译项目
+### Building the Project
 
 ```bash
-# 配置 CMake
+# Configure CMake
 cmake -B build -S . \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_TOOLCHAIN_FILE=[vcpkg-root]/scripts/buildsystems/vcpkg.cmake
 
-# 编译
+# Build
 cmake --build build --config Release
 
-# 运行测试
+# Run tests
 ctest --test-dir build --output-on-failure
 ```
 
-### IDE 配置
+### IDE Configuration
 
 #### VS Code
 
-安装扩展：
+Install the extensions:
 - C/C++ Extension Pack
 - CMake Tools
 
-配置 `.vscode/settings.json`:
+Configure `.vscode/settings.json`:
 ```json
 {
     "cmake.configureArgs": [
@@ -67,53 +69,53 @@ File → Settings → Build, Execution, Deployment → CMake
 - CMake options: `-DCMAKE_TOOLCHAIN_FILE=[vcpkg-root]/scripts/buildsystems/vcpkg.cmake`
 - Build directory: `build`
 
-## 项目结构
+## Project Structure
 
 ```
 falcon/
 ├── packages/
-│   ├── libfalcon/          # 核心库
-│   │   ├── include/falcon/ # 公共头文件
-│   │   ├── src/            # 实现文件
-│   │   └── tests/          # 单元测试
-│   ├── falcon-cli/         # 命令行工具
-│   └── falcon-daemon/      # 守护进程
-├── apps/                   # 应用层
-│   ├── desktop/            # 桌面应用
-│   └── browser_extension/  # 浏览器扩展
-├── docs/                   # 文档
-└── examples/               # 示例代码
+│   ├── libfalcon/          # Core library
+│   │   ├── include/falcon/ # Public headers
+│   │   ├── src/            # Implementation files
+│   │   └── tests/          # Unit tests
+│   ├── falcon-cli/         # Command-line tool
+│   └── falcon-daemon/      # Daemon
+├── apps/                   # Application layer
+│   ├── desktop/            # Desktop application
+│   └── browser_extension/  # Browser extension
+├── docs/                   # Documentation
+└── examples/               # Example code
 ```
 
-## 编码规范
+## Coding Standards
 
-### C++ 风格
+### C++ Style
 
-遵循 **Google C++ Style Guide**：
+Follow the **Google C++ Style Guide**:
 
 ```cpp
-// 类名：PascalCase
+// Class names: PascalCase
 class DownloadEngine {
 public:
-    // 函数名：snake_case
+    // Function names: snake_case
     void add_download(const std::string& url);
 
-    // 成员变量：下划线后缀
+    // Member variables: trailing underscore
     int task_count_;
 
 private:
-    // 私有成员：下划线后缀
+    // Private members: trailing underscore
     std::string config_path_;
 };
 
-// 常量：全大写 + 下划线
+// Constants: UPPER_SNAKE_CASE
 const int MAX_RETRIES = 5;
 
-// 文件名：snake_case
+// File names: snake_case
 // download_engine.cpp
 ```
 
-### 命名空间
+### Namespaces
 
 ```cpp
 namespace falcon {
@@ -127,21 +129,22 @@ class EventPoll {
 } // namespace falcon
 ```
 
-### 注释规范
+### Comment Conventions
 
 ```cpp
 /**
  * @file download_engine.hpp
- * @brief 下载引擎类定义
+ * @brief Download engine class definition
  * @author Falcon Team
  * @date 2025-12-25
  */
 
 /**
  * @class DownloadEngine
- * @brief 高性能下载引擎
+ * @brief High-performance download engine
  *
- * 支持多协议、多线程、断点续传等功能
+ * Supports multi-protocol, multi-threaded downloading, resumable
+ * transfers, and more.
  *
  * @example
  * DownloadEngine engine;
@@ -151,13 +154,13 @@ class EventPoll {
 class DownloadEngine {
 public:
     /**
-     * @brief 添加下载任务
+     * @brief Add a download task
      *
-     * @param url 下载 URL
-     * @param options 下载选项（可选）
-     * @return 任务 ID
+     * @param url The download URL
+     * @param options Download options (optional)
+     * @return The task ID
      *
-     * @throws InvalidURLException 当 URL 格式错误时
+     * @throws InvalidURLException when the URL format is invalid
      *
      * @code
      * TaskId id = engine.add_download("http://example.com/file.zip");
@@ -168,37 +171,37 @@ public:
 };
 ```
 
-### 格式化
+### Formatting
 
-使用 **clang-format** 自动格式化：
+Use **clang-format** for automatic formatting:
 
 ```bash
-# 格式化所有文件
+# Format all files
 find . -name "*.cpp" -o -name "*.hpp" | xargs clang-format -i
 ```
 
-配置文件 `.clang-format`:
+Configuration file `.clang-format`:
 ```yaml
 BasedOnStyle: Google
 IndentWidth: 4
 ColumnLimit: 100
 ```
 
-## 开发工作流
+## Development Workflow
 
-### 1. 创建功能分支
+### 1. Create a Feature Branch
 
 ```bash
 git checkout -b feature/my-feature
 ```
 
-### 2. 编写代码
+### 2. Write Code
 
-- 添加公共 API 到 `include/falcon/`
-- 添加实现到 `src/`
-- 添加测试到 `tests/unit/` 或 `tests/integration/`
+- Add public APIs to `include/falcon/`
+- Add implementations to `src/`
+- Add tests to `tests/unit/` or `tests/integration/`
 
-### 3. 编写测试
+### 3. Write Tests
 
 ```cpp
 // tests/unit/my_feature_test.cpp
@@ -211,45 +214,45 @@ TEST(MyFeatureTest, BasicOperation) {
 }
 ```
 
-### 4. 运行测试
+### 4. Run Tests
 
 ```bash
-# 运行所有测试
+# Run all tests
 ctest --test-dir build
 
-# 运行特定测试
+# Run a specific test
 ./build/bin/falcon_core_tests --gtest_filter="MyFeatureTest*"
 
-# 查看测试覆盖率
+# View test coverage
 cmake --build build --target coverage
 ```
 
-### 5. 提交代码
+### 5. Commit Code
 
 ```bash
 git add .
-git commit -m "feat: 添加新功能 XXX"
+git commit -m "feat: add new feature XXX"
 git push origin feature/my-feature
 ```
 
-### 提交信息规范
+### Commit Message Conventions
 
-遵循 **Conventional Commits**:
+Follow **Conventional Commits**:
 
 ```
-feat: 添加 XXX 功能
-fix: 修复 YYY 问题
-docs: 更新 ZZZ 文档
-test: 添加 AAA 测试
-refactor: 重构 BBB 模块
-perf: 优化 CCC 性能
+feat: add XXX feature
+fix: fix YYY issue
+docs: update ZZZ documentation
+test: add AAA tests
+refactor: refactor BBB module
+perf: optimize CCC performance
 ```
 
-## 测试指南
+## Testing Guide
 
-### 单元测试
+### Unit Tests
 
-使用 **Google Test** 框架：
+Use the **Google Test** framework:
 
 ```cpp
 #include <gtest/gtest.h>
@@ -257,11 +260,11 @@ perf: 优化 CCC 性能
 class MyTestFixture : public ::testing::Test {
 protected:
     void SetUp() override {
-        // 测试前初始化
+        // Initialize before each test
     }
 
     void TearDown() override {
-        // 测试后清理
+        // Clean up after each test
     }
 
     falcon::MyClass* obj_;
@@ -272,9 +275,9 @@ TEST_F(MyTestFixture, TestCase1) {
 }
 ```
 
-### Mock 测试
+### Mock Tests
 
-使用 **GMock** 进行依赖隔离：
+Use **GMock** for dependency isolation:
 
 ```cpp
 class MockNetwork : public NetworkInterface {
@@ -293,41 +296,41 @@ TEST(HttpClientTest, SendRequest) {
 }
 ```
 
-### 集成测试
+### Integration Tests
 
-测试完整流程：
+Test the complete workflow:
 
 ```cpp
 TEST(IntegrationTest, DownloadCompleteWorkflow) {
-    // 1. 创建测试服务器
+    // 1. Create a test server
     TestServer server(8080);
     server.start();
 
-    // 2. 创建下载引擎
+    // 2. Create a download engine
     DownloadEngineV2 engine;
     TaskId id = engine.add_download("http://localhost:8080/test.zip");
 
-    // 3. 运行下载
+    // 3. Run the download
     engine.run();
 
-    // 4. 验证结果
+    // 4. Verify the result
     EXPECT_TRUE(file_exists("/tmp/downloads/test.zip"));
 }
 ```
 
-## 调试技巧
+## Debugging Techniques
 
-### 使用 gdb
+### Using gdb
 
 ```bash
-# 编译 Debug 版本
+# Build a Debug version
 cmake -B build -S . -DCMAKE_BUILD_TYPE=Debug
 cmake --build build
 
-# 启动 gdb
+# Start gdb
 gdb ./build/bin/falcon-cli
 
-# gdb 命令
+# gdb commands
 (gdb) break main
 (gdb) run
 (gdb) next
@@ -335,12 +338,12 @@ gdb ./build/bin/falcon-cli
 (gdb) continue
 ```
 
-### 使用 lldb (macOS/LLVM)
+### Using lldb (macOS/LLVM)
 
 ```bash
 lldb ./build/bin/falcon-cli
 
-# lldb 命令
+# lldb commands
 (lldb) breakpoint set --name main
 (lldb) run
 (lldb) next
@@ -348,64 +351,64 @@ lldb ./build/bin/falcon-cli
 (lldb) continue
 ```
 
-### 日志调试
+### Log Debugging
 
 ```cpp
-// 使用日志宏
-FALCON_LOG_DEBUG("调试信息: " << value);
-FALCON_LOG_INFO("普通信息");
-FALCON_LOG_WARN("警告信息");
-FALCON_LOG_ERROR("错误信息");
+// Use the logging macros
+FALCON_LOG_DEBUG("Debug info: " << value);
+FALCON_LOG_INFO("Normal info");
+FALCON_LOG_WARN("Warning info");
+FALCON_LOG_ERROR("Error info");
 
-// 设置日志级别
+// Set the log level
 // export FALCON_LOG_LEVEL=DEBUG
 ```
 
-### Valgrind 内存检查
+### Valgrind Memory Checks
 
 ```bash
-# 编译带符号信息的版本
+# Build with symbols
 cmake -B build -S . -DCMAKE_BUILD_TYPE=Debug -DFALCON_ENABLE_ASAN=OFF
 
-# 运行 Valgrind
+# Run Valgrind
 valgrind --leak-check=full --show-leak-kinds=all ./build/bin/falcon-cli
 ```
 
 ### AddressSanitizer
 
 ```bash
-# 启用 ASan
+# Enable ASan
 cmake -B build -S . -DCMAKE_BUILD_TYPE=Debug -DFALCON_ENABLE_ASAN=ON
 
-# 运行程序
+# Run the program
 ./build/bin/falcon-cli
 ```
 
-## 性能分析
+## Performance Analysis
 
-### 使用 perf (Linux)
+### Using perf (Linux)
 
 ```bash
-# 记录性能数据
+# Record performance data
 perf record -g ./build/bin/falcon-cli
 
-# 查看报告
+# View the report
 perf report
 
-# 可视化火焰图
+# Visualize a flame graph
 perf script | ./FlameGraph/flamegraph.pl > flamegraph.svg
 ```
 
-### 使用 Instruments (macOS)
+### Using Instruments (macOS)
 
 ```bash
-# 启动 Instruments
+# Launch Instruments
 instruments -t "Time Profiler" ./build/bin/falcon-cli
 ```
 
-### 基准测试
+### Benchmarks
 
-使用 **Google Benchmark**:
+Use **Google Benchmark**:
 
 ```cpp
 #include <benchmark/benchmark.h>
@@ -422,11 +425,11 @@ BENCHMARK(BM_DownloadSpeed);
 BENCHMARK_MAIN();
 ```
 
-## 插件开发
+## Plugin Development
 
-### 创建新协议插件
+### Creating a New Protocol Plugin
 
-1. **定义插件接口**:
+1. **Define the plugin interface**:
 
 ```cpp
 // plugins/myprotocol/myprotocol_plugin.hpp
@@ -448,7 +451,7 @@ public:
 };
 ```
 
-2. **实现插件逻辑**:
+2. **Implement the plugin logic**:
 
 ```cpp
 // plugins/myprotocol/myprotocol_plugin.cpp
@@ -459,14 +462,14 @@ std::shared_ptr<DownloadTask> MyProtocolPlugin::download(
     const DownloadOptions& options,
     IEventListener* listener) {
 
-    // 解析 URL
-    // 建立连接
-    // 下载数据
-    // 通知进度
+    // Parse the URL
+    // Establish the connection
+    // Download the data
+    // Report progress
 }
 ```
 
-3. **注册插件**:
+3. **Register the plugin**:
 
 ```cpp
 // src/plugin_manager.cpp
@@ -475,24 +478,24 @@ void PluginManager::load_builtin_plugins() {
 }
 ```
 
-## 发布流程
+## Release Process
 
-### 版本号规范
+### Version Numbering
 
-遵循 **语义化版本** (Semantic Versioning):
+Follow **Semantic Versioning**:
 
 ```
 MAJOR.MINOR.PATCH
 
-1.0.0 - 初始稳定版本
-1.1.0 - 添加新功能（向后兼容）
-1.1.1 - Bug 修复
-2.0.0 - 破坏性更改
+1.0.0 - Initial stable release
+1.1.0 - New features added (backward compatible)
+1.1.1 - Bug fixes
+2.0.0 - Breaking changes
 ```
 
-### 发布步骤
+### Release Steps
 
-1. **更新版本号**:
+1. **Update the version number**:
 
 ```cpp
 // include/falcon/version.hpp
@@ -501,27 +504,27 @@ MAJOR.MINOR.PATCH
 #define FALCON_VERSION_PATCH 0
 ```
 
-2. **更新 ChangeLog**:
+2. **Update the ChangeLog**:
 
 ```markdown
 ## [1.0.0] - 2025-12-25
 
 ### Added
-- XXX 功能
-- YYY 功能
+- XXX feature
+- YYY feature
 
 ### Fixed
-- 修复 ZZZ 问题
+- Fix ZZZ issue
 ```
 
-3. **创建 Git 标签**:
+3. **Create a Git tag**:
 
 ```bash
 git tag -a v1.0.0 -m "Release version 1.0.0"
 git push origin v1.0.0
 ```
 
-4. **构建发布包**:
+4. **Build the release package**:
 
 ```bash
 # Linux
@@ -537,9 +540,9 @@ cmake --build build --config Release
 cpack
 ```
 
-### 持续集成
+### Continuous Integration
 
-GitHub Actions 配置 `.github/workflows/ci.yml`:
+GitHub Actions configuration in `.github/workflows/ci.yml`:
 
 ```yaml
 name: CI
@@ -569,39 +572,39 @@ jobs:
       run: ctest --test-dir build
 ```
 
-## 常见问题
+## Frequently Asked Questions
 
-### Q: 如何添加新的依赖？
+### Q: How do I add a new dependency?
 
-A: 在 `CMakeLists.txt` 中添加：
+A: Add it in `CMakeLists.txt`:
 
 ```cmake
 find_package(SomePackage REQUIRED)
 target_link_libraries(falcon PRIVATE SomePackage::SomePackage)
 ```
 
-### Q: 如何调试链接错误？
+### Q: How do I debug link errors?
 
-A: 使用详细模式：
+A: Use verbose mode:
 
 ```bash
 cmake --build build --verbose
 ```
 
-### Q: 如何解决编译错误？
+### Q: How do I fix compilation errors?
 
-A: 检查：
-1. C++ 标准版本是否匹配
-2. 头文件是否正确包含
-3. 库是否正确链接
+A: Check the following:
+1. Whether the C++ standard version matches
+2. Whether the headers are included correctly
+3. Whether the libraries are linked correctly
 
-## 社区资源
+## Community Resources
 
 - **GitHub**: https://github.com/cuihairu/falcon
 - **Issues**: https://github.com/cuihairu/falcon/issues
 - **Discussions**: https://github.com/cuihairu/falcon/discussions
 - **Wiki**: https://github.com/cuihairu/falcon/wiki
 
-## 许可证
+## License
 
 Apache License 2.0

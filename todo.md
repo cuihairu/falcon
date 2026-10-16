@@ -616,6 +616,28 @@ feature 候选：
 
 ---
 
+## 文档双语（docs 补双语）
+
+**口径**：本仓 `docs/` 下实质文档需中英配对（英文版 = 基名 `X.md`，中文版 = `X.zh.md`），
+两份顶部均有语言切换器且置于首屏前 3 行。排除 `CHANGELOG` / `CONTRIBUTING` / `LICENSE` /
+`CODE_OF_CONDUCT` / `SECURITY` 及 `node_modules` / `dist` / `build` / `target` / `coverage` /
+`vendor` 下文件。`hello-*` 教学仓不做双语；本仓不在该名单。
+超 1000 行的审计型长文档只标「暂无译版」，不硬造劣质翻译。
+
+- ✅ 2026-10-16：`docs/` 根目录 12 份文档全部完成配对与切换器
+  （英文 `.md` + 中文 `.zh.md`）；`aria2c-migration-plan`（1326 行）因过长
+  英文侧只作占位说明并标注「该文档暂无英文译版」
+- 🔄 下一轮（子目录，本轮范围外）：
+  - 🔄 `docs/design/` 中英配对（vcpkg_packaging_design / mcp_server_design /
+    p2sp_network_design 等）
+  - 🔄 `docs/api/` 中英配对
+  - 🔄 `docs/src/`（VitePress 站源，当前维护中的对外文档）中英配对
+- 🔄 遗留：文档-源码一致性审计（`docs/审计-文档一致性.md` 尚未落盘；
+  README / developer_guide / protocols_guide / api_guide / private_protocols
+  的幽灵 API 与过期描述待按审计结论修正）
+
+---
+
 ## Desktop 应用开发进度
 
 ### 2026-04-15 - 迅雷风格 UI 重构

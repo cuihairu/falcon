@@ -1,54 +1,56 @@
-# Falcon 私有协议支持
+[中文](private_protocols.zh.md) | **English**
+
+# Falcon Private Protocol Support
 
 > [!NOTE]
-> 本文档偏设计与背景说明；当前可用说明请优先查看 `docs/src/protocols/private.md`。
+> This document is oriented toward design and background; for currently available information, refer first to `docs/src/protocols/private.md`.
 
-本文档介绍了 Falcon 下载器对各种私有下载协议的支持。
+This document describes Falcon's support for various private download protocols.
 
-## 支持的协议列表
+## Supported Protocols
 
-### 1. 迅雷协议 (Thunder)
+### 1. Thunder Protocol
 
-**协议标识**: `thunder://` 和 `thunderxl://`
+**Protocol identifiers**: `thunder://` and `thunderxl://`
 
-**说明**: 迅雷是国内广泛使用的下载工具，使用特殊的编码方式来分享下载链接。
+**Description**: Thunder is a widely used download tool in China that employs a special encoding scheme for sharing download links.
 
-**链接格式**:
-- 经典格式: `thunder://[Base64编码的内容]`
-- 离线格式: `thunderxl://[Base64编码的内容]`
+**Link format**:
+- Classic format: `thunder://[Base64-encoded content]`
+- Offline format: `thunderxl://[Base64-encoded content]`
 
-**实现细节**:
-- Base64解码
-- 移除 AA/ZZ 标记（经典格式）
-- 自动转换为原始 HTTP/FTP 链接
+**Implementation details**:
+- Base64 decoding
+- Removal of AA/ZZ markers (classic format)
+- Automatic conversion to the original HTTP/FTP link
 
-**示例**:
+**Example**:
 ```cpp
-// 创建迅雷插件并注册
+// Create the Thunder plugin and register it
 auto thunderPlugin = std::make_unique<ThunderPlugin>();
 engine.registerPlugin(std::move(thunderPlugin));
 
-// 下载迅雷链接
+// Download a Thunder link
 std::string url = "thunder://QUFodHRwOi8vZXhhbXBsZS5jb20vZmlsZS56aXAuWg==";
 auto task = engine.startDownload(url, options);
 ```
 
-### 2. QQ旋风协议 (QQDL)
+### 2. QQDL Protocol
 
-**协议标识**: `qqlink://` 和 `qqdl://`
+**Protocol identifiers**: `qqlink://` and `qqdl://`
 
-**说明**: QQ旋风是腾讯推出的下载工具，支持通过特殊链接分享资源。
+**Description**: QQDL is a download tool from Tencent that supports sharing resources through special links.
 
-**链接格式**:
-- GID格式: `qqlink://[GID]|[文件信息]`
-- Base64格式: `qqlink://[Base64编码的URL]`
+**Link format**:
+- GID format: `qqlink://[GID]|[file info]`
+- Base64 format: `qqlink://[Base64-encoded URL]`
 
-**实现细节**:
-- 支持GID（群组ID）解析
-- Base64解码支持
-- 文件信息提取（文件名、大小、CID等）
+**Implementation details**:
+- GID (group ID) resolution
+- Base64 decoding
+- File info extraction (filename, size, CID, etc.)
 
-**示例**:
+**Example**:
 ```cpp
 auto qqPlugin = std::make_unique<QQDLPlugin>();
 engine.registerPlugin(std::move(qqPlugin));
@@ -57,48 +59,48 @@ std::string url = "qqlink://aHR0cDovL2V4YW1wbGUuY29tL3ZpZGVvLm1wNA==";
 auto task = engine.startDownload(url, options);
 ```
 
-### 3. 快车协议 (FlashGet)
+### 3. FlashGet Protocol
 
-**协议标识**: `flashget://` 和 `fg://`
+**Protocol identifiers**: `flashget://` and `fg://`
 
-**说明**: 快车（FlashGet）是一款老牌的下载管理器。
+**Description**: FlashGet is a veteran download manager.
 
-**链接格式**:
-- 完整格式: `flashget://[URL]&ref=[引用页面]`
-- 短格式: `fg://[URL]`
-- Base64格式: `flashget://[Base64编码的URL]`
+**Link format**:
+- Full format: `flashget://[URL]&ref=[referring page]`
+- Short format: `fg://[URL]`
+- Base64 format: `flashget://[Base64-encoded URL]`
 
-**实现细节**:
-- URL解码支持
-- 引用页面提取
-- 自动转换为标准HTTP下载
+**Implementation details**:
+- URL decoding
+- Referring page extraction
+- Automatic conversion to a standard HTTP download
 
-**示例**:
+**Example**:
 ```cpp
 auto flashgetPlugin = std::make_unique<FlashGetPlugin>();
 engine.registerPlugin(std::move(flashgetPlugin));
 
-std::string url = "flashget://W10=";  // 示例链接
+std::string url = "flashget://W10=";  // example link
 auto task = engine.startDownload(url, options);
 ```
 
-### 4. ED2K协议 (eDonkey2000)
+### 4. ED2K Protocol (eDonkey2000)
 
-**协议标识**: `ed2k://`
+**Protocol identifier**: `ed2k://`
 
-**说明**: ED2K是eDonkey2000网络使用的协议，也被称为电驴协议，用于P2P文件共享。
+**Description**: ED2K is the protocol used by the eDonkey2000 network, also known as the eDonkey protocol, for P2P file sharing.
 
-**链接格式**:
-- 文件链接: `ed2k://file|[文件名]|[文件大小]|[MD4哈希]|/`
-- 服务器链接: `ed2k://server|[服务器地址]|[端口]|[服务器名称]/`
+**Link format**:
+- File link: `ed2k://file|[filename]|[file size]|[MD4 hash]|/`
+- Server link: `ed2k://server|[server address]|[port]|[server name]/`
 
-**实现细节**:
-- MD4哈希验证
-- 文件大小解析
-- 源地址提取
-- 支持AICH（高级完整性检验）哈希
+**Implementation details**:
+- MD4 hash verification
+- File size parsing
+- Source address extraction
+- Support for AICH (Advanced Intelligent Corruption Handling) hashes
 
-**示例**:
+**Example**:
 ```cpp
 auto ed2kPlugin = std::make_unique<ED2KPlugin>();
 engine.registerPlugin(std::move(ed2kPlugin));
@@ -107,41 +109,41 @@ std::string url = "ed2k://file|example.zip|1048576|A1B2C3D4E5F678901234567890123
 auto task = engine.startDownload(url, options);
 ```
 
-### 5. HLS/DASH流媒体协议
+### 5. HLS/DASH Streaming Protocols
 
-**协议标识**: 通过文件扩展名识别（`.m3u8`, `.mpd`）
+**Protocol identification**: by file extension (`.m3u8`, `.mpd`)
 
-**说明**: HTTP Live Streaming (HLS) 和 Dynamic Adaptive Streaming over HTTP (DASH) 是常用的流媒体协议。
+**Description**: HTTP Live Streaming (HLS) and Dynamic Adaptive Streaming over HTTP (DASH) are commonly used streaming protocols.
 
-**HLS格式**: `.m3u8` 播放列表文件
-**DASH格式**: `.mpd` 媒体呈现描述文件
+**HLS format**: `.m3u8` playlist file
+**DASH format**: `.mpd` media presentation description file
 
-**实现细节**:
-- 播放列表/清单解析
-- 媒体段下载
-- 自动质量选择
-- 使用ffmpeg合并媒体段
+**Implementation details**:
+- Playlist/manifest parsing
+- Media segment download
+- Automatic quality selection
+- Media segment merging using ffmpeg
 
-**示例**:
+**Example**:
 ```cpp
 auto hlsPlugin = std::make_unique<HLSPlugin>();
 engine.registerPlugin(std::move(hlsPlugin));
 
-// 下载HLS流
+// Download an HLS stream
 std::string hlsUrl = "https://example.com/playlist.m3u8";
 auto task1 = engine.startDownload(hlsUrl, options);
 
-// 下载DASH流
+// Download a DASH stream
 std::string dashUrl = "https://example.com/manifest.mpd";
 auto task2 = engine.startDownload(dashUrl, options);
 ```
 
-## 编译配置
+## Build Configuration
 
-使用 CMake 配置选项来启用/禁用特定协议：
+Use CMake options to enable or disable specific protocols:
 
 ```bash
-# 启用所有私有协议
+# Enable all private protocols
 cmake -B build \
   -DFALCON_ENABLE_THUNDER=ON \
   -DFALCON_ENABLE_QQDL=ON \
@@ -149,7 +151,7 @@ cmake -B build \
   -DFALCON_ENABLE_ED2K=ON \
   -DFALCON_ENABLE_HLS=ON
 
-# 仅启用需要的协议
+# Enable only the protocols you need
 cmake -B build \
   -DFALCON_ENABLE_THUNDER=ON \
   -DFALCON_ENABLE_ED2K=ON \
@@ -158,19 +160,19 @@ cmake -B build \
   -DFALCON_ENABLE_FLASHGET=OFF
 ```
 
-## CLI使用示例
+## CLI Usage Examples
 
 ```bash
-# 下载迅雷链接
+# Download a Thunder link
 falcon-cli "thunder://QUFodHRwOi8vZXhhbXBsZS5jb20vZmlsZS56aXAuWg=="
 
-# 下载ED2K链接
+# Download an ED2K link
 falcon-cli "ed2k://file|example.zip|1048576|A1B2C3D4E5F6789012345678901234AB|/"
 
-# 下载HLS流媒体
+# Download HLS streaming content
 falcon-cli "https://example.com/playlist.m3u8" -o video.mp4
 
-# 批量下载（包含各种协议）
+# Batch download (mixing protocols)
 cat urls.txt
 thunder://QUFodHRwOi8vZXhhbXBsZS5jb20vZmlsGUucmFyWg==
 qqlink://aHR0cDovL2V4YW1wbGUuY29tL3ZpZGVvLm1wNA==
@@ -180,7 +182,7 @@ https://example.com/stream.m3u8
 falcon-cli -i urls.txt
 ```
 
-## API编程示例
+## API Programming Example
 
 ```cpp
 #include <falcon/falcon.hpp>
@@ -189,23 +191,23 @@ falcon-cli -i urls.txt
 #include <falcon/hls_plugin.hpp>
 
 int main() {
-    // 创建下载引擎
+    // Create the download engine
     falcon::DownloadEngine engine;
 
-    // 注册私有协议插件
+    // Register private protocol plugins
     engine.registerPlugin(std::make_unique<falcon::ThunderPlugin>());
     engine.registerPlugin(std::make_unique<falcon::ED2KPlugin>());
     engine.registerPlugin(std::make_unique<falcon::HLSPlugin>());
 
-    // 检查支持的协议
+    // Check which protocols are supported
     auto protocols = engine.listSupportedProtocols();
-    std::cout << "支持的协议: ";
+    std::cout << "Supported protocols: ";
     for (const auto& p : protocols) {
         std::cout << p << " ";
     }
     std::cout << std::endl;
 
-    // 下载不同类型的链接
+    // Download links of different types
     falcon::DownloadOptions options;
     options.output_directory = "./downloads";
 
@@ -221,13 +223,13 @@ int main() {
         if (engine.supportsUrl(url)) {
             auto task = engine.startDownload(url, options);
             tasks.push_back(task);
-            std::cout << "开始下载: " << url << std::endl;
+            std::cout << "Starting download: " << url << std::endl;
         } else {
-            std::cout << "不支持的URL: " << url << std::endl;
+            std::cout << "Unsupported URL: " << url << std::endl;
         }
     }
 
-    // 等待所有下载完成
+    // Wait for all downloads to finish
     for (auto& task : tasks) {
         task->wait();
     }
@@ -236,35 +238,35 @@ int main() {
 }
 ```
 
-## 注意事项
+## Notes
 
-1. **安全性**: 私有协议链接可能包含任意URL，请确保来源可信
-2. **法律合规**: 仅使用这些协议下载合法内容
-3. **网络要求**: 某些协议可能需要特定的网络环境或代理
-4. **性能**: ED2K等P2P协议的下载速度取决于网络中的源数量
+1. **Security**: Private protocol links can contain arbitrary URLs; make sure the source is trustworthy.
+2. **Legal compliance**: Use these protocols only to download lawful content.
+3. **Network requirements**: Some protocols may require a specific network environment or proxy.
+4. **Performance**: Download speed for P2P protocols such as ED2K depends on the number of sources available on the network.
 
-## 测试
+## Testing
 
-运行私有协议的单元测试：
+Run the unit tests for private protocols:
 
 ```bash
-# 编译测试
+# Build the tests
 cmake -B build -DFALCON_BUILD_TESTS=ON
 cmake --build build
 
-# 运行特定协议测试
+# Run tests for specific protocols
 ctest --test-dir build -R "thunder_plugin_test"
 ctest --test-dir build -R "ed2k_plugin_test"
 ctest --test-dir build -R "hls_plugin_test"
 
-# 运行所有私有协议测试
+# Run all private protocol tests
 ctest --test-dir build -R "private_protocol"
 ```
 
-## 未来计划
+## Future Plans
 
-- [ ] 支持更多私有协议（如：网盘链接解析）
-- [ ] 增强ED2K网络的搜索和源发现
-- [ ] 支持HLS的DRM保护内容
-- [ ] 添加协议自动检测功能
-- [ ] 支持协议转换工具
+- [ ] Support additional private protocols (e.g., cloud drive link parsing)
+- [ ] Enhance ED2K network search and source discovery
+- [ ] Support DRM-protected content in HLS
+- [ ] Add automatic protocol detection
+- [ ] Provide a protocol conversion utility

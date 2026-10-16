@@ -1,57 +1,59 @@
-# 文档归档索引
+[中文](ARCHIVE.zh.md) | **English**
 
-本页用于说明 `docs/` 根目录下历史文档的定位。
+# Document Archive Index
 
-## 当前主文档
+This page describes the purpose of the historical documents kept in the `docs/` root directory.
 
-当前维护中的主文档位于：
+## Current Main Documentation
+
+The actively maintained documentation lives at:
 
 - `docs/src/`
 
-对应主题包括：
+It covers:
 
-- 用户指南
-- 协议文档
-- 开发者文档
-- API 参考
+- User guide
+- Protocol documentation
+- Developer documentation
+- API reference
 - FAQ
 
-## 归档与历史材料
+## Archived and Historical Materials
 
-以下文件仍然保留，但不再作为当前权威入口。
+The following files are retained, but they are no longer the authoritative source.
 
-### 旧版指南
+### Older Guides
 
 - `api_guide.md`
-  旧版 API 指南与迁移材料。
+  Legacy API guide and migration material.
 - `developer_guide.md`
-  旧版开发者指南归档。
+  Archived legacy developer guide.
 - `protocols_guide.md`
-  旧版协议说明归档。
+  Archived legacy protocols guide.
 
-### 架构与设计材料
+### Architecture and Design Material
 
 - `aria2_architecture.md`
-  aria2 风格架构研究材料。
+  Research material on aria2-style architecture.
 - `cloud_protocol_design.md`
-  云存储协议设计对比与思路记录。
+  Cloud storage protocol design comparison and working notes.
 - `private_protocols.md`
-  私有协议背景与设计说明。
+  Background and design notes for private protocols.
 - `protocol_support.md`
-  历史协议支持总览。
+  Historical overview of protocol support.
 
-### 迁移与规划
+### Migration and Planning
 
 - `aria2c-migration-plan.md`
-  aria2c 功能迁移计划与历史记录。
+  aria2c feature migration plan and history.
 
-### 分析报告
+### Analysis Reports
 
 - `feature_comparison_report.md`
-  Falcon 与 aria2 的阶段性功能对比报告。
+  A staged feature comparison report between Falcon and aria2.
 
-## 使用建议
+## Usage Tips
 
-- 查当前接口、CLI 用法、构建方式时，优先看 `docs/src/`。
-- 查历史设计动机、迁移背景、分析记录时，再回看根目录这些归档文件。
-- 若归档内容与 `docs/src/` 冲突，以 `docs/src/` 为准。
+- When you need the current API, CLI usage, or build instructions, start with `docs/src/`.
+- When you need historical design rationale, migration background, or analysis records, consult these archived files in the root directory.
+- If archived content conflicts with `docs/src/`, treat `docs/src/` as authoritative.

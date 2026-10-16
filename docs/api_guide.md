@@ -1,12 +1,14 @@
-# Falcon API 使用指南
+[中文](api_guide.zh.md) | **English**
+
+# Falcon API Guide
 
 > [!WARNING]
-> 本文档属于旧版 API 设计/迁移材料。
-> 当前维护中的 API 文档请以 `docs/src/api/` 下页面为准。
+> This document is legacy API design and migration material.
+> For the currently maintained API documentation, refer to the pages under `docs/src/api/`.
 
-## 快速开始
+## Quick Start
 
-### 基础下载
+### Basic Download
 
 ```cpp
 #include <falcon/download_engine_v2.hpp>
@@ -15,67 +17,67 @@
 using namespace falcon;
 
 int main() {
-    // 1. 创建引擎配置
+    // 1. Create the engine configuration
     EngineConfigV2 config;
     config.max_concurrent_tasks = 5;
-    config.global_speed_limit = 0;  // 无限制
+    config.global_speed_limit = 0;  // No limit
 
-    // 2. 创建下载引擎
+    // 2. Create the download engine
     DownloadEngineV2 engine(config);
 
-    // 3. 配置下载选项
+    // 3. Configure the download options
     DownloadOptions options;
-    options.max_connections = 4;  // 4 个分段同时下载
+    options.max_connections = 4;  // Download 4 segments concurrently
     options.output_directory = "/tmp/downloads";
     options.timeout_seconds = 30;
 
-    // 4. 添加下载任务
+    // 4. Add the download task
     TaskId task_id = engine.add_download(
         "https://example.com/large_file.zip",
         options
     );
 
-    // 5. 启动事件循环（阻塞直到完成）
+    // 5. Start the event loop (blocks until completion)
     engine.run();
 
-    // 6. 获取统计信息
+    // 6. Get statistics
     auto stats = engine.get_statistics();
-    std::cout << "下载完成: " << stats.total_downloaded << " 字节\n";
+    std::cout << "Download complete: " << stats.total_downloaded << " bytes\n";
 
     return 0;
 }
 ```
 
-## 详细 API 说明
+## Detailed API Reference
 
-### DownloadEngineV2 - 下载引擎
+### DownloadEngineV2 - Download Engine
 
-#### 创建引擎
+#### Creating the Engine
 
 ```cpp
-// 使用默认配置
+// With default configuration
 DownloadEngineV2 engine;
 
-// 使用自定义配置
+// With custom configuration
 EngineConfigV2 config;
 config.max_concurrent_tasks = 10;
 config.poll_timeout_ms = 50;
 config.enable_disk_cache = true;
-config.disk_cache_size = 8 * 1024 * 1024;  // 8MB
+config.disk_cache_size = 8 * 1024 * 1024;  // 8 MB
 
 DownloadEngineV2 engine(config);
 ```
 
-#### 添加下载任务
+#### Adding Download Tasks
 
 ```cpp
-// 单 URL 下载
+// Single-URL download
 TaskId id1 = engine.add_download(
     "http://example.com/file.zip",
     options
 );
 
-// 多镜像下载（自动故障切换）
+// Multi-mirror download (automatic failover)
 std::vector<std::string> urls = {
     "http://mirror1.example.com/file.zip",
     "http://mirror2.example.com/file.zip",
@@ -84,188 +86,188 @@ std::vector<std::string> urls = {
 TaskId id2 = engine.add_download(urls, options);
 ```
 
-#### 任务控制
+#### Task Control
 
 ```cpp
-// 暂停任务
+// Pause a task
 engine.pause_task(task_id);
 
-// 恢复任务
+// Resume a task
 engine.resume_task(task_id);
 
-// 取消任务
+// Cancel a task
 engine.cancel_task(task_id);
 
-// 批量操作
+// Bulk operations
 engine.pause_all();
 engine.resume_all();
-engine.cancel_all();  // 相当于 shutdown()
+engine.cancel_all();  // Equivalent to shutdown()
 ```
 
-#### 统计信息
+#### Statistics
 
 ```cpp
 auto stats = engine.get_statistics();
-std::cout << "活动任务: " << stats.active_tasks << "\n";
-std::cout << "等待任务: " << stats.waiting_tasks << "\n";
-std::cout << "已完成: " << stats.completed_tasks << "\n";
-std::cout << "下载速度: " << (stats.global_download_speed / 1024) << " KB/s\n";
-std::cout << "总下载量: " << (stats.total_downloaded / 1024 / 1024) << " MB\n";
+std::cout << "Active tasks: " << stats.active_tasks << "\n";
+std::cout << "Waiting tasks: " << stats.waiting_tasks << "\n";
+std::cout << "Completed: " << stats.completed_tasks << "\n";
+std::cout << "Download speed: " << (stats.global_download_speed / 1024) << " KB/s\n";
+std::cout << "Total downloaded: " << (stats.total_downloaded / 1024 / 1024) << " MB\n";
 ```
 
-### DownloadOptions - 下载选项
+### DownloadOptions - Download Options
 
-#### 基础选项
+#### Basic Options
 
 ```cpp
 DownloadOptions options;
 
-// 并发设置
-options.max_connections = 8;              // 每个 HTTP 连接最多 8 个分段
-options.min_segment_size = 1024 * 1024;   // 最小分段大小 1MB
-options.split = 5;                        // 最多分 5 个部分下载
+// Concurrency settings
+options.max_connections = 8;              // Up to 8 segments per HTTP connection
+options.min_segment_size = 1024 * 1024;   // Minimum segment size of 1 MB
+options.split = 5;                        // Download in up to 5 parts
 
-// 超时设置
-options.timeout_seconds = 30;             // 连接超时 30 秒
-options.connect_timeout = 10;             // 连接建立超时 10 秒
+// Timeout settings
+options.timeout_seconds = 30;             // Connection timeout of 30 seconds
+options.connect_timeout = 10;             // Connection setup timeout of 10 seconds
 
-// 重试设置
-options.max_retries = 5;                  // 最多重试 5 次
-options.retry_wait = 5;                   // 重试等待 5 秒
+// Retry settings
+options.max_retries = 5;                  // Retry up to 5 times
+options.retry_wait = 5;                   // Wait 5 seconds between retries
 
-// 输出设置
+// Output settings
 options.output_directory = "/tmp/downloads";
 options.output_filename = "custom_name.zip";
-options.overwrite = false;                // 不覆盖已存在文件
+options.overwrite = false;                // Do not overwrite existing files
 ```
 
-#### HTTP 选项
+#### HTTP Options
 
 ```cpp
 // User-Agent
 options.user_agent = "Falcon/1.0 (https://github.com/cuihairu/falcon)";
 
-// 自定义 HTTP 头
+// Custom HTTP headers
 options.headers = {
     {"Authorization", "Bearer token123"},
     {"Accept", "application/json"}
 };
 
-// 引用页
+// Referrer
 options.referer = "https://example.com";
 
-// 认证
+// Authentication
 options.http_user = "username";
 options.http_passwd = "password";
 ```
 
-#### 速度限制
+#### Speed Limits
 
 ```cpp
-// 单任务限速
+// Per-task speed limit
 options.speed_limit = 1024 * 1024;  // 1 MB/s
 
-// 全局限速（在引擎配置中）
+// Global speed limit (in the engine configuration)
 EngineConfigV2 config;
 config.global_speed_limit = 10 * 1024 * 1024;  // 10 MB/s
 ```
 
-#### 断点续传
+#### Resume Downloads
 
 ```cpp
-options.resume_if_exists = true;  // 自动续传
-options.resume_position = 1024 * 1024;  // 从 1MB 位置开始
+options.resume_if_exists = true;  // Resume automatically
+options.resume_position = 1024 * 1024;  // Start from the 1 MB offset
 ```
 
-### 命令行参数
+### Command-Line Arguments
 
-Falcon CLI 支持 aria2 兼容的命令行参数：
+Falcon CLI supports aria2-compatible command-line arguments:
 
-#### 基础参数
+#### Basic Arguments
 
 ```bash
-# 单文件下载
+# Download a single file
 falcon-cli https://example.com/file.zip
 
-# 指定输出目录
+# Specify the output directory
 falcon-cli -d /tmp/downloads https://example.com/file.zip
 
-# 指定输出文件名
+# Specify the output filename
 falcon-cli -o custom_name.zip https://example.com/file.zip
 
-# 限制并发数
+# Limit concurrency
 falcon-cli -x 8 -s 16 https://example.com/file.zip
-# -x: 每个任务最大连接数 (默认: 5)
-# -s: 单服务器最大连接数 (默认: 5)
+# -x: Maximum connections per task (default: 5)
+# -s: Maximum connections per server (default: 5)
 ```
 
-#### 进度显示
+#### Progress Display
 
 ```bash
-# 显示简化进度条
+# Show a simplified progress bar
 falcon-cli --simple-progress=true https://example.com/file.zip
 
-# 控制台输出
+# Console output
 falcon-cli --console-log-level=notice https://example.com/file.zip
 ```
 
-#### 重试和超时
+#### Retries and Timeouts
 
 ```bash
-# 设置重试次数和等待时间
+# Set the retry count and wait time
 falcon-cli --max-tries=5 --retry-wait=10 https://example.com/file.zip
 
-# 设置超时
+# Set timeouts
 falcon-cli --timeout=30 --connect-timeout=10 https://example.com/file.zip
 ```
 
-#### 速度限制
+#### Speed Limits
 
 ```bash
-# 限制下载速度
+# Limit the download speed
 falcon-cli --max-download-limit=1M https://example.com/file.zip
 
-# 设置全局速度限制
+# Set a global speed limit
 falcon-cli --max-overall-download-limit=10M https://example.com/file.zip
 ```
 
-#### RPC 参数（已实现）
+#### RPC Arguments (Implemented)
 
 ```bash
-# 启用 RPC
+# Enable RPC
 falcon-daemon --enable-rpc --rpc-listen-port 6800
 
-# 设置 RPC 密钥（客户端需在 JSON-RPC params 里携带 "token:<密钥>"）
+# Set the RPC secret (clients must include "token:<secret>" in the JSON-RPC params)
 falcon-daemon --enable-rpc --rpc-secret mysecrettoken
 
-# 允许跨域请求
+# Allow cross-origin requests
 falcon-daemon --enable-rpc --rpc-allow-origin-all
 ```
 
-### 文件哈希验证
+### File Hash Verification
 
-#### 计算文件哈希
+#### Computing File Hashes
 
 ```cpp
 #include <falcon/file_hash.hpp>
 
-// 计算 SHA256 哈希
+// Compute a SHA256 hash
 auto sha256_hash = FileHasher::calculate(
     "file.zip",
     HashAlgorithm::SHA256
 );
 std::cout << "SHA256: " << sha256_hash << std::endl;
 
-// 计算其他算法
+// Compute other algorithms
 auto md5_hash = FileHasher::calculate("file.zip", HashAlgorithm::MD5);
 auto sha1_hash = FileHasher::calculate("file.zip", HashAlgorithm::SHA1);
 auto sha512_hash = FileHasher::calculate("file.zip", HashAlgorithm::SHA512);
 ```
 
-#### 验证文件完整性
+#### Verifying File Integrity
 
 ```cpp
-// 验证下载的文件
+// Verify a downloaded file
 auto result = FileHasher::verify(
     "downloaded_file.zip",
     "dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f",
@@ -273,15 +275,15 @@ auto result = FileHasher::verify(
 );
 
 if (result.valid) {
-    std::cout << "文件验证通过\n";
+    std::cout << "File verified\n";
 } else {
-    std::cout << "文件验证失败！\n";
-    std::cout << "期望: " << result.expected << "\n";
-    std::cout << "实际: " << result.calculated << "\n";
+    std::cout << "File verification failed!\n";
+    std::cout << "Expected: " << result.expected << "\n";
+    std::cout << "Actual: " << result.calculated << "\n";
 }
 ```
 
-#### 批量验证
+#### Batch Verification
 
 ```cpp
 std::vector<std::pair<std::string, HashAlgorithm>> hashes = {
@@ -293,140 +295,140 @@ std::vector<std::pair<std::string, HashAlgorithm>> hashes = {
 auto results = FileHasher::verify_multiple("file.zip", hashes);
 
 for (const auto& result : results) {
-    std::cout << "算法: " << static_cast<int>(result.algorithm)
-              << " 有效: " << result.valid << "\n";
+    std::cout << "Algorithm: " << static_cast<int>(result.algorithm)
+              << " Valid: " << result.valid << "\n";
 }
 ```
 
-#### 自动检测算法
+#### Automatic Algorithm Detection
 
 ```cpp
-// 根据哈希长度自动检测算法
+// Automatically detect the algorithm from the hash length
 std::string hash_str = "dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f";
 auto algorithm = FileHasher::detect_algorithm(hash_str);
 
 if (algorithm == HashAlgorithm::SHA256) {
-    std::cout << "检测到 SHA256 哈希\n";
+    std::cout << "Detected SHA256 hash\n";
 }
 ```
 
-### Socket 连接池
+### Socket Connection Pool
 
-#### 创建连接池
+#### Creating a Connection Pool
 
 ```cpp
 #include <falcon/net/socket_pool.hpp>
 
 using namespace falcon::net;
 
-// 30 秒空闲超时，最多保留 16 个空闲连接
+// 30-second idle timeout, keep up to 16 idle connections
 SocketPool pool(std::chrono::seconds(30), 16);
 ```
 
-#### 获取和释放连接
+#### Acquiring and Releasing Connections
 
 ```cpp
-// 定义连接键
+// Define the connection key
 SocketKey key;
 key.host = "example.com";
 key.port = 80;
-key.username = "";  // HTTP 基本认证（可选）
-key.proxy = "";    // 代理地址（可选）
+key.username = "";  // HTTP basic authentication (optional)
+key.proxy = "";    // Proxy address (optional)
 
-// 获取连接
+// Acquire a connection
 auto socket = pool.acquire(key);
 if (socket && socket->is_valid()) {
     int fd = socket->fd();
 
-    // 使用连接发送 HTTP 请求
+    // Use the connection to send an HTTP request
     send_http_request(fd);
 
-    // 释放连接回池
+    // Return the connection to the pool
     pool.release(socket);
 } else {
-    // 创建新连接
+    // Create a new connection
     int fd = create_new_connection();
     auto new_socket = std::make_shared<PooledSocket>(fd, key);
     pool.release(new_socket);
 }
 ```
 
-### 事件轮询
+### Event Polling
 
-#### 创建 EventPoll
+#### Creating an EventPoll
 
 ```cpp
 #include <falcon/net/event_poll.hpp>
 
 using namespace falcon::net;
 
-// 自动选择平台最优实现
+// Automatically selects the optimal platform implementation
 auto poll = EventPoll::create();
 ```
 
-#### 注册事件
+#### Registering Events
 
 ```cpp
-// 注册读事件
+// Register a read event
 poll->add_event(socket_fd, static_cast<int>(IOEvent::READ),
     [](int fd, int events, void* user_data) {
         char buffer[4096];
         ssize_t n = recv(fd, buffer, sizeof(buffer), 0);
         if (n > 0) {
-            // 处理数据
+            // Handle the data
         }
     });
 
-// 注册写事件
+// Register a write event
 poll->add_event(socket_fd, static_cast<int>(IOEvent::WRITE),
     [](int fd, int events, void* user_data) {
         const char* data = "GET / HTTP/1.1\r\n\r\n";
         send(fd, data, strlen(data), 0);
     });
 
-// 注册错误事件
+// Register an error event
 poll->add_event(socket_fd, static_cast<int>(IOEvent::ERR | IOEvent::HANGUP),
     [](int fd, int events, void* user_data) {
         close(fd);
     });
 ```
 
-#### 修改事件
+#### Modifying Events
 
 ```cpp
-// 从读事件改为写事件
+// Switch from a read event to a write event
 poll->modify_event(socket_fd, static_cast<int>(IOEvent::WRITE));
 ```
 
-#### 移除事件
+#### Removing Events
 
 ```cpp
-// 移除事件监听
+// Remove the event listener
 poll->remove_event(socket_fd);
 ```
 
-#### 事件循环
+#### The Event Loop
 
 ```cpp
 while (!should_stop) {
-    // 等待事件（100ms 超时）
+    // Wait for events (100 ms timeout)
     int num_events = poll->poll(100);
 
     if (num_events > 0) {
-        // 处理就绪事件（通过回调函数自动处理）
+        // Handle ready events (processed automatically via callbacks)
     } else if (num_events == 0) {
-        // 超时，执行定期任务
+        // Timed out; run periodic work
     } else {
-        // 错误
-        std::cerr << "poll() 错误: " << poll->get_error() << std::endl;
+        // Error
+        std::cerr << "poll() error: " << poll->get_error() << std::endl;
         break;
     }
 }
 ```
 
-## 高级用法
+## Advanced Usage
 
-### 多任务并发下载
+### Concurrent Multi-Task Downloads
 
 ```cpp
 DownloadEngineV2 engine;
@@ -444,17 +446,17 @@ for (const auto& url : urls) {
 engine.run();
 ```
 
-### 自定义进度回调
+### Custom Progress Callbacks
 
 ```cpp
-// TODO: 添加进度回调接口
+// TODO: Add a progress callback interface
 // ProgressCallback callback = [](TaskId id, float progress) {
-//     std::cout << "任务 " << id << ": " << (progress * 100) << "%\n";
+//     std::cout << "Task " << id << ": " << (progress * 100) << "%\n";
 // };
 // engine.set_progress_callback(callback);
 ```
 
-### 镜像故障切换
+### Mirror Failover
 
 ```cpp
 std::vector<std::string> mirrors = {
@@ -465,112 +467,112 @@ std::vector<std::string> mirrors = {
 
 RequestGroup group(1, mirrors, options);
 
-// 尝试下一个镜像
+// Try the next mirror
 while (!download_complete) {
     if (download_failed) {
         if (group.try_next_uri()) {
-            // 重试下一个镜像
+            // Retry with the next mirror
         } else {
-            // 所有镜像都失败
+            // All mirrors failed
             break;
         }
     }
 }
 ```
 
-## 错误处理
+## Error Handling
 
-### 异常处理
+### Exception Handling
 
 ```cpp
 try {
     engine.run();
 } catch (const NetworkException& e) {
-    std::cerr << "网络错误: " << e.what() << std::endl;
+    std::cerr << "Network error: " << e.what() << std::endl;
 } catch (const FileException& e) {
-    std::cerr << "文件错误: " << e.what() << std::endl;
+    std::cerr << "File error: " << e.what() << std::endl;
 } catch (const std::exception& e) {
-    std::cerr << "未知错误: " << e.what() << std::endl;
+    std::cerr << "Unknown error: " << e.what() << std::endl;
 }
 ```
 
-### 日志配置
+### Log Configuration
 
 ```cpp
-// TODO: 添加日志配置接口
+// TODO: Add a log configuration interface
 // Logger::set_level(LogLevel::DEBUG);
 // Logger::add_file_handler("/tmp/falcon.log");
 ```
 
-## 性能优化建议
+## Performance Optimization Tips
 
-### 1. 合理设置并发数
+### 1. Choose a Sensible Concurrency Level
 
 ```cpp
-// 根据网络带宽调整
-options.max_connections = 16;  // 高速网络
-options.max_connections = 4;   // 低速网络
+// Adjust based on network bandwidth
+options.max_connections = 16;  // High-speed network
+options.max_connections = 4;   // Slow network
 ```
 
-### 2. 启用连接复用
+### 2. Enable Connection Reuse
 
 ```cpp
-// 连接池自动复用，无需额外配置
+// The connection pool reuses connections automatically; no extra configuration needed
 SocketPool pool(std::chrono::seconds(30), 16);
 ```
 
-### 3. 分段下载
+### 3. Split Downloads into Segments
 
 ```cpp
-// 启用多分段下载加速
-options.min_segment_size = 1024 * 1024;  // 1MB 以上才分段
-options.split = 8;                        // 分 8 段下载
+// Enable multi-segment downloads for speed
+options.min_segment_size = 1024 * 1024;  // Only split files larger than 1 MB
+options.split = 8;                        // Download in 8 segments
 ```
 
-### 4. 速度限制
+### 4. Limit Speed
 
 ```cpp
-// 避免占满带宽
-options.speed_limit = 5 * 1024 * 1024;  // 限制 5 MB/s
+// Avoid saturating the bandwidth
+options.speed_limit = 5 * 1024 * 1024;  // Cap at 5 MB/s
 ```
 
-## 常见问题
+## Frequently Asked Questions
 
-### Q: 如何断点续传？
+### Q: How do I resume a download?
 
-A: Falcon 会自动检测已下载的部分：
+A: Falcon automatically detects the portion that has already been downloaded:
 
 ```cpp
 options.resume_if_exists = true;
 ```
 
-### Q: 如何下载到特定目录？
+### Q: How do I download to a specific directory?
 
-A: 设置输出目录：
+A: Set the output directory:
 
 ```cpp
 options.output_directory = "/path/to/downloads";
 ```
 
-### Q: 如何限制下载速度？
+### Q: How do I limit the download speed?
 
-A: 使用速度限制选项：
+A: Use the speed limit option:
 
 ```cpp
 options.speed_limit = 1024 * 1024;  // 1 MB/s
 ```
 
-### Q: 如何验证文件完整性？
+### Q: How do I verify file integrity?
 
-A: 使用文件哈希验证：
+A: Use file hash verification:
 
 ```cpp
 auto result = FileHasher::verify("file.zip", expected_hash, HashAlgorithm::SHA256);
 ```
 
-## 参考文档
+## Reference Documentation
 
-- [架构文档](aria2_architecture.md)
-- [迁移计划](aria2c-migration-plan.md)
-- [协议支持](protocol_support.md)
-- [私有协议](private_protocols.md)
+- [Architecture documentation](aria2_architecture.md)
+- [Migration plan](aria2c-migration-plan.md)
+- [Protocol support](protocol_support.md)
+- [Private protocols](private_protocols.md)

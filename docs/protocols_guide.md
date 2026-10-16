@@ -1,228 +1,230 @@
-# Falcon 下载器 - 协议支持指南
+[中文](protocols_guide.zh.md) | **English**
+
+# Falcon Downloader - Protocol Support Guide
 
 > [!WARNING]
-> 本文档属于旧版协议说明归档。
-> 当前维护中的协议文档请以 `docs/src/protocols/` 下页面为准。
+> This document is part of the legacy protocol documentation archive.
+> For the currently maintained protocol documentation, refer to the pages under `docs/src/protocols/`.
 
-本文档详细介绍了 Falcon 下载器支持的所有下载协议及其使用方法。
+This document provides a detailed overview of all download protocols supported by Falcon Downloader and how to use them.
 
-## 目录
+## Table of Contents
 
-- [基础协议](#基础协议)
-- [私有协议](#私有协议)
-- [流媒体协议](#流媒体协议)
-- [P2P协议](#p2p协议)
-- [使用示例](#使用示例)
-- [配置说明](#配置说明)
-- [故障排除](#故障排除)
+- [Basic Protocols](#basic-protocols)
+- [Private Protocols](#private-protocols)
+- [Streaming Protocols](#streaming-protocols)
+- [P2P Protocols](#p2p-protocols)
+- [Usage Examples](#usage-examples)
+- [Configuration](#configuration)
+- [Troubleshooting](#troubleshooting)
 
-## 基础协议
+## Basic Protocols
 
 ### HTTP/HTTPS
 
-Falcon 支持完整的 HTTP/HTTPS 协议，包括：
+Falcon supports the full HTTP/HTTPS protocol, including:
 
-- **断点续传**：自动检测服务器支持，中断后可继续下载
-- **分块下载**：多线程并发下载，提高大文件下载速度
-- **速度控制**：支持全局和单任务速度限制
-- **自定义头部**：可设置 User-Agent 和其他 HTTP 头
-- **代理支持**：支持 HTTP/HTTPS/SOCKS 代理
-- **认证支持**：基本认证和摘要认证
+- **Resume support**: Automatically detects server support and allows downloads to continue after interruption
+- **Segmented download**: Multi-threaded concurrent downloads to improve large file download speeds
+- **Speed control**: Supports both global and per-task speed limits
+- **Custom headers**: Set User-Agent and other HTTP headers
+- **Proxy support**: Supports HTTP/HTTPS/SOCKS proxies
+- **Authentication support**: Basic authentication and digest authentication
 
 ```bash
-# 基础下载
+# Basic download
 falcon-cli https://example.com/file.zip
 
-# 多线程下载（5个连接）
+# Multi-threaded download (5 connections)
 falcon-cli https://example.com/large.zip -c 5
 
-# 断点续传
+# Resume download
 falcon-cli https://example.com/file.zip --continue
 
-# 速度限制
+# Speed limit
 falcon-cli https://example.com/file.zip --limit 1M
 
-# 使用代理
+# Use a proxy
 falcon-cli https://example.com/file.zip --proxy http://proxy:8080
 ```
 
 ### FTP
 
-支持 FTP 和 FTPS 协议，包括主动和被动模式。
+Supports FTP and FTPS protocols, including both active and passive modes.
 
 ```bash
-# 下载FTP文件
+# Download an FTP file
 falcon-cli ftp://ftp.example.com/file.zip
 
-# 使用用户名和密码
+# With username and password
 falcon-cli ftp://user:pass@ftp.example.com/file.zip
 
-# FTPS（显式TLS）
+# FTPS (explicit TLS)
 falcon-cli ftpes://ftp.example.com/file.zip
 ```
 
-## 私有协议
+## Private Protocols
 
-Falcon 支持多种国内常用下载工具的私有协议：
+Falcon supports private protocols from several commonly used download tools in China:
 
-### 迅雷 (Thunder)
+### Thunder
 
-支持 `thunder://` 和 `thunderxl://` 链接格式。
+Supports `thunder://` and `thunderxl://` link formats.
 
 ```bash
-# 经典迅雷链接
+# Classic Thunder link
 falcon-cli "thunder://QUFodHRwOi8vZXhhbXBsZS5jb20vZmlsZS56aXAuWg=="
 
-# 迅雷离线链接
+# Thunder offline link
 falcon-cli "thunderxl://aHR0cHM6Ly9leGFtcGxlLmNvbS92aWRlby5tcDQ="
 ```
 
-### QQ旋风 (QQDL)
+### QQDL
 
-支持 `qqlink://` 和 `qqdl://` 格式。
+Supports `qqlink://` and `qqdl://` formats.
 
 ```bash
-# QQ旋风链接
+# QQDL link
 falcon-cli "qqlink://aHR0cDovL2V4YW1wbGUuY29tL3ZpZGVvLm1wNA=="
 
-# 带GID的链接
+# Link with GID
 falcon-cli "qqlink://1234567890ABCDEF|video.mp4"
 ```
 
-### 快车 (FlashGet)
+### FlashGet
 
-支持 `flashget://` 和 `fg://` 格式。
+Supports `flashget://` and `fg://` formats.
 
 ```bash
-# 完整格式（带引用）
+# Full format (with referrer)
 falcon-cli "flashget://[URL]&ref=http://example.com"
 
-# 短格式
+# Short format
 falcon-cli "fg://aHR0cDovL2V4YW1wbGUuY29tL2ZpbGUuemlw"
 
-# Base64编码格式
+# Base64-encoded format
 falcon-cli "flashget://[FLASHGET]aHR0cDovL2V4YW1wbGUuY29tLw=="
 ```
 
-### ED2K (电驴)
+### ED2K (Donkey)
 
-支持 `ed2k://` 格式，包括文件链接和服务器链接。
+Supports `ed2k://` format, including file links and server links.
 
 ```bash
-# 文件链接
+# File link
 falcon-cli "ed2k://file|example.zip|1048576|A1B2C3D4E5F6789012345678901234AB|/"
 
-# 带源的文件链接
+# File link with sources
 falcon-cli "ed2k://file|example.zip|1048576|HASH|/|s,192.168.1.1:4662|s,192.168.1.2:4662"
 
-# 带AICH校验
+# With AICH checksum
 falcon-cli "ed2k://file|example.zip|1048576|HASH|/|h=ABCDEF123456789"
 
-# 服务器链接（仅服务器插件使用）
+# Server link (used by server plugin only)
 falcon-cli "ed2k://server|server.example.com|4242|Main Server/"
 ```
 
-## 流媒体协议
+## Streaming Protocols
 
 ### HLS (HTTP Live Streaming)
 
-支持 `.m3u8` 播放列表，自动下载所有媒体段并合并。
+Supports `.m3u8` playlists, automatically downloading all media segments and merging them.
 
 ```bash
-# 下载HLS流
+# Download an HLS stream
 falcon-cli "https://example.com/playlist.m3u8" -o video.mp4
 
-# 自动选择最佳质量
+# Auto-select the best quality
 falcon-cli "https://example.com/master.m3u8" -o best.mp4
 ```
 
-HLS 特性：
-- 自动解析主播放列表和变体播放列表
-- 支持加密流（需要密钥）
-- 自动选择最佳带宽
-- 使用 FFmpeg 合并媒体段
+HLS features:
+- Automatically parses master and variant playlists
+- Supports encrypted streams (key required)
+- Auto-selects the best bandwidth
+- Uses FFmpeg to merge media segments
 
-### DASH (Dynamic Adaptive Streaming)
+### DASH (Dynamic Adaptive Streaming over HTTP)
 
-支持 `.mpd` 清单文件。
+Supports `.mpd` manifest files.
 
 ```bash
-# 下载DASH流
+# Download a DASH stream
 falcon-cli "https://example.com/manifest.mpd" -o video.mp4"
 
-# 下载特定质量的视频
+# Download a specific video quality
 falcon-cli "https://example.com/manifest.mpd" -o 1080p.mp4
 ```
 
-## P2P协议
+## P2P Protocols
 
 ### BitTorrent
 
-支持 `.torrent` 文件和 `magnet://` 链接。
+Supports `.torrent` files and `magnet://` links.
 
 ```bash
-# 使用Magnet链接
+# Use a Magnet link
 falcon-cli "magnet:?xt=urn:btih:HASH&dn=Example&tr=tracker.example.com"
 
-# 下载torrent文件
+# Download a torrent file
 falcon-cli "https://example.com/file.torrent"
 
-# 下载本地torrent文件
+# Download a local torrent file
 falcon-cli "file:///path/to/file.torrent"
 
-# 设置保存目录
+# Set the save directory
 falcon-cli "magnet:?xt=urn:btih:HASH" -d /downloads/torrents
 ```
 
-BitTorrent 特性：
-- 支持 DHT、LSD、UPnP、NAT-PMP
-- 自动获取更多节点
-- 可选择下载特定文件
-- 支持做种（完成后继续上传）
+BitTorrent features:
+- Supports DHT, LSD, UPnP, and NAT-PMP
+- Automatically discovers more peers
+- Optionally select specific files to download
+- Supports seeding (continue uploading after completion)
 
-## 使用示例
+## Usage Examples
 
-### 批量下载
+### Batch Download
 
-创建一个文本文件 `urls.txt`：
+Create a text file `urls.txt`:
 
 ```
-# HTTP文件
+# HTTP files
 https://example.com/file1.zip
 https://example.com/file2.zip
 
-# 迅雷链接
+# Thunder link
 thunder://QUFodHRwOi8vZXhhbXBsZS5jb20vZmlsZTMuemlwWg==
 
-# ED2K链接
+# ED2K link
 ed2k://file|video.mp4|1073741824|ABCDEF123456789|/
 
-# HLS流
+# HLS stream
 https://example.com/playlist.m3u8
 ```
 
-然后批量下载：
+Then batch download:
 
 ```bash
 falcon-cli -i urls.txt
 ```
 
-### C++ API 使用
+### C++ API Usage
 
 ```cpp
 #include <falcon/falcon.hpp>
 
 int main() {
-    // 创建下载引擎
+    // Create a download engine
     falcon::DownloadEngine engine;
 
-    // 配置下载选项
+    // Configure download options
     falcon::DownloadOptions options;
     options.max_connections = 5;
     options.output_directory = "./downloads";
     options.speed_limit = 1024 * 1024;  // 1MB/s
 
-    // 下载不同协议的文件
+    // Download files from different protocols
     std::vector<std::string> urls = {
         "https://example.com/file.zip",
         "thunder://QUFodHRwOi8vZXhhbXBsZS5jb20vZmlsZS56aXAuWg==",
@@ -240,7 +242,7 @@ int main() {
         }
     }
 
-    // 等待所有下载完成
+    // Wait for all downloads to complete
     for (auto& task : tasks) {
         task->wait();
 
@@ -256,14 +258,14 @@ int main() {
 }
 ```
 
-## 配置说明
+## Configuration
 
-### 编译配置
+### Build Configuration
 
-使用 CMake 控制哪些协议被编译：
+Use CMake to control which protocols are compiled in:
 
 ```bash
-# 启用所有协议
+# Enable all protocols
 cmake -B build \
   -DFALCON_ENABLE_HTTP=ON \
   -DFALCON_ENABLE_FTP=ON \
@@ -274,7 +276,7 @@ cmake -B build \
   -DFALCON_ENABLE_ED2K=ON \
   -DFALCON_ENABLE_HLS=ON
 
-# 仅启用基础协议
+# Enable only the basic protocols
 cmake -B build \
   -DFALCON_ENABLE_HTTP=ON \
   -DFALCON_ENABLE_FTP=ON \
@@ -286,75 +288,75 @@ cmake -B build \
   -DFALCON_ENABLE_HLS=OFF
 ```
 
-### 运行时配置
+### Runtime Configuration
 
-当前更稳定的运行时入口是 CLI 参数和 CMake 构建选项。配置文件格式仍在演进中，不建议把某个固定 JSON 路径当成稳定接口。
+The more stable runtime interfaces today are CLI arguments and CMake build options. The configuration file format is still evolving, and treating any specific JSON file path as a stable interface is not recommended.
 
-## 故障排除
+## Troubleshooting
 
-### 常见问题
+### Common Issues
 
-1. **协议不被支持**
-   - 确保编译时启用了相应的协议
-   - 检查 `CMakeLists.txt` 中对应的 `FALCON_ENABLE_*` 选项
+1. **Protocol not supported**
+   - Make sure the protocol was enabled at build time
+   - Check the corresponding `FALCON_ENABLE_*` option in `CMakeLists.txt`
 
-2. **下载失败**
-   - 检查网络连接
-   - 验证 URL 格式是否正确
-   - 查看日志获取详细错误信息
+2. **Download failure**
+   - Check your network connection
+   - Verify that the URL format is correct
+   - Check the logs for detailed error information
 
-3. **断点续传不工作**
-   - 确保服务器支持 Range 请求
-   - 检查文件是否被修改
+3. **Resume not working**
+   - Ensure the server supports Range requests
+   - Check whether the file has been modified
 
-4. **BitTorrent 下载慢**
-   - 确保端口 6881 可访问
-   - 检查防火墙设置
-   - 添加更多 tracker
+4. **Slow BitTorrent downloads**
+   - Ensure port 6881 is accessible
+   - Check your firewall settings
+   - Add more trackers
 
-### 调试模式
+### Debug Mode
 
-启用详细日志：
+Enable verbose logging:
 
 ```bash
 falcon-cli <URL> --verbose
 
-# 或设置日志级别
+# Or set the log level
 export FALCON_LOG_LEVEL=debug
 falcon-cli <URL>
 ```
 
-### 性能优化
+### Performance Optimization
 
-1. **HTTP 下载优化**
-   - 使用分块下载（`-c 5`）
-   - 调整缓冲区大小
-   - 使用 CDN 或镜像
+1. **HTTP download optimization**
+   - Use segmented download (`-c 5`)
+   - Adjust the buffer size
+   - Use a CDN or mirror
 
-2. **BitTorrent 优化**
-   - 启用 DHT 和 PEX
-   - 使用更多 tracker
-   - 设置合适的上传限制
+2. **BitTorrent optimization**
+   - Enable DHT and PEX
+   - Use more trackers
+   - Set an appropriate upload limit
 
-3. **系统优化**
-   - 增加 TCP 连接限制
-   - 使用 SSD 存储
-   - 关闭不必要的程序
+3. **System optimization**
+   - Increase TCP connection limits
+   - Use SSD storage
+   - Close unnecessary programs
 
-## 协议对比
+## Protocol Comparison
 
-| 协议 | 特点 | 适用场景 | 限制 |
-|------|------|----------|------|
-| HTTP/HTTPS | 简单、广泛支持 | 下载网页、文件 | 依赖服务器速度 |
-| FTP | 传统文件传输 | 企业文件共享 | 不够安全 |
-| 迅雷/快车 | 国内常用 | 中文资源 | 需要解码 |
-| ED2K | P2P网络 | 老资源共享 | 速度不稳定 |
-| BitTorrent | 去中心化 | 大文件分发 | 需要节点 |
-| HLS/DASH | 自适应流 | 视频点播 | 需要合并 |
+| Protocol | Features | Use Cases | Limitations |
+|----------|----------|-----------|-------------|
+| HTTP/HTTPS | Simple, widely supported | Downloading webpages and files | Depends on server speed |
+| FTP | Traditional file transfer | Enterprise file sharing | Not secure enough |
+| Thunder/FlashGet | Common in China | Chinese-language resources | Requires decoding |
+| ED2K | P2P network | Legacy resource sharing | Unstable speeds |
+| BitTorrent | Decentralized | Large file distribution | Requires peers |
+| HLS/DASH | Adaptive streaming | Video on demand | Requires merging |
 
-## 更多资源
+## More Resources
 
-- [API 文档](api/)
-- [开发者指南](developer_guide.md)
-- [常见问题](faq.md)
-- [贡献指南](contributing.md)
+- [API Documentation](api/)
+- [Developer Guide](developer_guide.md)
+- [FAQ](faq.md)
+- [Contributing Guide](contributing.md)
