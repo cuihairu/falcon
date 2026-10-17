@@ -1,0 +1,68 @@
+{
+  "name": "libfalcon-protocols",
+  "version-date": "2026-10-16",
+  "description": "Falcon standard download protocols (http/ftp/bittorrent/sftp/webdav/metalink/nat)",
+  "homepage": "https://github.com/cuihairu/falcon",
+  "license": "Apache-2.0",
+  "dependencies": [
+    {
+      "name": "vcpkg-cmake-config",
+      "host": true
+    },
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    },
+    "libfalcon-core"
+  ],
+  "default-features": [
+    "http"
+  ],
+  "features": {
+    "http": {
+      "description": "HTTP/HTTPS plugin",
+      "dependencies": [
+        "curl",
+        "openssl"
+      ]
+    },
+    "ftp": {
+      "description": "FTP plugin",
+      "dependencies": [
+        "curl"
+      ]
+    },
+    "bittorrent": {
+      "description": "BitTorrent plugin (full data plane via libtorrent)",
+      "dependencies": [
+        "libtorrent"
+      ]
+    },
+    "sftp": {
+      "description": "SFTP plugin",
+      "dependencies": [
+        "libssh2"
+      ]
+    },
+    "webdav": {
+      "description": "WebDAV plugin",
+      "dependencies": [
+        "curl"
+      ]
+    },
+    "metalink": {
+      "description": "Metalink plugin",
+      "dependencies": [
+        "expat",
+        "openssl"
+      ]
+    },
+    "nat": {
+      "description": "NAT port mapping facade (UPnP IGD + NAT-PMP)",
+      "dependencies": [
+        "miniupnpc",
+        "libnatpmp"
+      ]
+    }
+  }
+}

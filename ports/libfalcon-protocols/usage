@@ -1,0 +1,14 @@
+falcon-protocols provides CMake targets:
+
+    find_package(FalconProtocols CONFIG REQUIRED)
+    target_link_libraries(main PRIVATE Falcon::protocols)
+
+falcon-protocols provides the following features:
+
+  http         HTTP/HTTPS plugin (default; pulls curl + openssl)
+  ftp          FTP plugin (pulls curl)
+  bittorrent   BitTorrent full data plane via libtorrent (pulls libtorrent)
+  sftp         SFTP plugin (pulls libssh2)
+  webdav       WebDAV plugin (pulls curl)
+  metalink     Metalink plugin (pulls expat + openssl)
+  nat          NAT port mapping facade, UPnP IGD + NAT-PMP (pulls miniupnpc + libnatpmp)

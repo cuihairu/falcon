@@ -1,0 +1,6 @@
+falcon-drives provides CMake targets:
+
+    find_package(FalconDrives CONFIG REQUIRED)
+    target_link_libraries(main PRIVATE Falcon::drives)
+
+falcon-drives provides no features yet (cloud drive candidates are not implemented).

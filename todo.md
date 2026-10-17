@@ -539,7 +539,27 @@ feature 候选：
   `describe_builtin_protocols` 强实现，批次 F 陷阱的安装形态）；
   ② 单体路径（全新非插桩树 install → `find_package(Falcon)` 同一
   消费工程）同样绿。全量 ctest 回归绿
-- 🔄 阶段 2 实施中（2026-10-13 批次，授权「上轮巡检点火续做」）：
+- ✅ 阶段 2 已实施（2026-10-17，Windows 真机 vcpkg x64-windows-static）：② 四
+  overlay 端口文件落地（`ports/libfalcon-{core,protocols,storage,drives}`：
+  vcpkg.json `version-date: 2026-10-16` + portfile 锁 REF 5ba5843（SHA512
+  实测）+ usage；protocols feature→`FALCON_ENABLE_*` 显式 ON/OFF、storage
+  五 provider 同构；libnatpmp 沿用既有 overlay）。**实施中发现并按 vcpkg
+  惯例处置的真实缺口**：包的 `FALCON_EXPORTS/FALCON_IMPORTS` 宏零头文件
+  消费点（无任何 dllexport 标注）→ 共享构建产出零导出符号的坏 DLL（动态
+  triplet post-build 三项警告实证），四端口统一
+  `vcpkg_check_linkage(ONLY_STATIC_LIBRARY)` 锁静态——与 monorepo 默认
+  （根未开 BUILD_SHARED_LIBS）一致；DLL 导出接线属独立工作项未做。验收：
+  ② core 单装单链冒烟绿（manifest 消费工程 `engine ok version=0.1.0`）；
+  ③ `libfalcon-storage[core,s3]` 最小集装后库内对象核对——S3Browser 125
+  处、OSS/COS/Kodo/Upyun 浏览器 0 处（grep 实测）；④
+  `libfalcon-protocols[bittorrent]` 装（libtorrent 2.0.11 真构建 23min）+
+  bt 冒烟消费工程（bittorrent compiled_in+integrated、sftp/ftp 负向
+  can_handle=0）；① 全量 ctest 在 Windows 有既有平台缺口（falcon-daemon
+  websocket_frame.cpp:328 MSVC 语法红 + mock_ftp_server.hpp POSIX-only
+  头），本批回归面取本机可编子集 falcon_core_tests 453/453 +
+  falcon_split_tests 10/10 绿（ports 新增不进 monorepo 构建树，git status
+  佐证零源码改动）；平台缺口另立
+- 📋 阶段 2 原实施记录（2026-10-13 批次，授权「上轮巡检点火续做」）：
   ① §5.2 storage per-provider option 前置小改动（五枚
   `FALCON_ENABLE_STORAGE_{S3,OSS,COS,KODO,UPYUN}`，默认 ON 行为零变
   化，浏览器对象与 mock 测试按 provider 挂门禁）；② 四 overlay 端口

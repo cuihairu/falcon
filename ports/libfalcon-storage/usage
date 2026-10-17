@@ -1,0 +1,12 @@
+falcon-storage provides CMake targets:
+
+    find_package(FalconStorage CONFIG REQUIRED)
+    target_link_libraries(main PRIVATE Falcon::storage)
+
+falcon-storage provides the following features (all on by default):
+
+  s3      Amazon S3 resource browser
+  oss     Aliyun OSS resource browser
+  cos     Tencent COS resource browser
+  kodo    Qiniu Kodo resource browser
+  upyun   Upyun resource browser

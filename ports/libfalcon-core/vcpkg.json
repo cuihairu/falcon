@@ -1,0 +1,20 @@
+{
+  "name": "libfalcon-core",
+  "version-date": "2026-10-16",
+  "description": "Falcon download engine core: resource abstraction, download engine, events (no protocol/storage/drive knowledge)",
+  "homepage": "https://github.com/cuihairu/falcon",
+  "license": "Apache-2.0",
+  "dependencies": [
+    {
+      "name": "vcpkg-cmake-config",
+      "host": true
+    },
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    },
+    "nlohmann-json",
+    "spdlog",
+    "openssl"
+  ]
+}

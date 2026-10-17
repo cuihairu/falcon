@@ -1,0 +1,6 @@
+falcon-core provides CMake targets:
+
+    find_package(FalconCore CONFIG REQUIRED)
+    target_link_libraries(main PRIVATE Falcon::core)
+
+falcon-core provides no features.

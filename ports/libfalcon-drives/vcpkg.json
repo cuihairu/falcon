@@ -1,0 +1,22 @@
+{
+  "name": "libfalcon-drives",
+  "version-date": "2026-10-16",
+  "description": "Falcon cloud drive integrations and config manager",
+  "homepage": "https://github.com/cuihairu/falcon",
+  "license": "Apache-2.0",
+  "dependencies": [
+    {
+      "name": "vcpkg-cmake-config",
+      "host": true
+    },
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    },
+    "libfalcon-core",
+    "nlohmann-json",
+    "curl",
+    "sqlite3",
+    "openssl"
+  ]
+}

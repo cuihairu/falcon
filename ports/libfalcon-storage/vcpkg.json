@@ -1,0 +1,45 @@
+{
+  "name": "libfalcon-storage",
+  "version-date": "2026-10-16",
+  "description": "Falcon object storage browsers (s3/oss/cos/kodo/upyun)",
+  "homepage": "https://github.com/cuihairu/falcon",
+  "license": "Apache-2.0",
+  "dependencies": [
+    {
+      "name": "vcpkg-cmake-config",
+      "host": true
+    },
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    },
+    "libfalcon-core",
+    "curl",
+    "nlohmann-json",
+    "openssl"
+  ],
+  "default-features": [
+    "s3",
+    "oss",
+    "cos",
+    "kodo",
+    "upyun"
+  ],
+  "features": {
+    "s3": {
+      "description": "Amazon S3 resource browser"
+    },
+    "oss": {
+      "description": "Aliyun OSS resource browser"
+    },
+    "cos": {
+      "description": "Tencent COS resource browser"
+    },
+    "kodo": {
+      "description": "Qiniu Kodo resource browser"
+    },
+    "upyun": {
+      "description": "Upyun resource browser"
+    }
+  }
+}
