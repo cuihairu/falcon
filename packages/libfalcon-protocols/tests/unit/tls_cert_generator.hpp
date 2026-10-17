@@ -56,7 +56,10 @@ inline bool generate_self_signed_cert(const std::string& key_path,
         X509_set_version(x509, 2);  // v3：SAN/基本约束扩展需要
         X509_set_pubkey(x509, pkey);
 
-        X509_NAME* name = X509_get_subject_name(x509);
+        // OpenSSL 3.x(LibreSSL/brew) 的 X509_get_subject_name 返回 const
+        // X509_NAME*，而 X509_NAME_add_entry_by_txt 需可变指针；const_cast
+        // 在返回非 const 的实现上是 no-op，跨平台皆可编译。
+        X509_NAME* name = const_cast<X509_NAME*>(X509_get_subject_name(x509));
         X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
                                    reinterpret_cast<const unsigned char*>(
                                        "localhost"),
@@ -182,7 +185,10 @@ inline bool generate_client_cert(const std::string& key_path,
         X509_set_version(x509, 2);
         X509_set_pubkey(x509, pkey);
 
-        X509_NAME* name = X509_get_subject_name(x509);
+        // OpenSSL 3.x(LibreSSL/brew) 的 X509_get_subject_name 返回 const
+        // X509_NAME*，而 X509_NAME_add_entry_by_txt 需可变指针；const_cast
+        // 在返回非 const 的实现上是 no-op，跨平台皆可编译。
+        X509_NAME* name = const_cast<X509_NAME*>(X509_get_subject_name(x509));
         X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
                                    reinterpret_cast<const unsigned char*>(
                                        "falcon-client"),
