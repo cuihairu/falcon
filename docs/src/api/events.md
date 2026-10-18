@@ -1,3 +1,5 @@
+[中文](events.zh.md) | **English**
+
 # 事件 API
 
 Falcon 当前的公共事件接口以 `IEventListener`、`TaskStatus`、`ProgressInfo` 和 `FileInfo` 为核心。

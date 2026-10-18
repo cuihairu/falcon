@@ -76,7 +76,7 @@ lives in [docs/design/ui-sandbox/](docs/design/ui-sandbox/README.md).
 - **Cloud Storage Integration**:
   - Amazon S3, Alibaba Cloud OSS, Tencent COS, Qiniu Kodo, Upyun
   - Custom endpoints for MinIO / RustFS / private-gateway deployments (AWS SigV4 signing)
-- **Remote Resource Browsing**: Browse FTP/SFTP/S3/OSS/COS/Kodo/Upyun directories
+- **Remote Resource Browsing**: Browse FTP/S3/OSS/COS/Kodo/Upyun/WebDAV directories
 - **Resource Search**: Built-in search provider framework for torrent and file resources
 - **Secure Configuration**: AES-256-GCM encrypted credential storage with master password protection
 
@@ -87,21 +87,7 @@ lives in [docs/design/ui-sandbox/](docs/design/ui-sandbox/README.md).
 Installs the desktop app from the daily build (anonymous download, idempotent — rerun to upgrade):
 
 ```bash
-
-## 本地测试口径
-
-CI 与本地开发按改动面三路分流——改一行文档不该全量编译。
-
-1. **文档改动**（`*.md`、`docs/**`、图片）：不编译。主 CI workflow 的
-   `paths-ignore` 已跳过这些路径。
-2. **代码改动**：只跑改动子集，不全量。
-   - `ctest -R '<改动测试>' -C Debug`
-3. **全量**（`ctest --build-config Debug --output-on-failure`）：仅以下情形触发——CMakeLists.txt、
-   `.github/**`、Docker/Compose 配置、发布前。
-
 # Linux / macOS
-
-> **English** | [中文](README.zh.md)
 curl -fsSL https://raw.githubusercontent.com/cuihairu/falcon/main/scripts/install.sh | bash
 ```
 
@@ -166,7 +152,7 @@ falcon-cli --http-engine v2 https://example.com/file.zip
 # Connection settings
 falcon-cli -x 16 -s 16 --min-split-size=1M https://example.com/file.zip
 # -x: Max connections per task
-# -s: Max connections per server
+# -s: alias of -x (aria2 --split; same per-task connection count)
 
 # Retry settings
 falcon-cli -r 5 --retry-wait 10 https://example.com/file.zip
@@ -231,7 +217,7 @@ generic crawler-backed provider. CLI search commands are not implemented yet; se
 library API for integration.
 
 ### Remote Directory Browsing
-`libfalcon-storage` implements the `ResourceBrowser` interface for FTP, SFTP, S3, OSS,
+`libfalcon-storage` implements the `ResourceBrowser` interface for FTP, S3, OSS,
 COS, Kodo, and Upyun — format-tree/table listings, path validation, and recursive
 operations. The desktop cloud storage page is built on it.
 
@@ -239,7 +225,8 @@ operations. The desktop cloud storage page is built on it.
 The daemon exposes an MCP (Model Context Protocol) endpoint at `POST /mcp` (Streamable
 HTTP, same port as the RPC). AI hosts such as Claude Desktop or Cursor can list and call
 10 download tools (`falcon_add_download`, `falcon_list_tasks`, `falcon_get_task`,
-pause/resume/remove, pause_all/resume_all, global stats, task files) — add a URL and ask
+pause/resume/remove, pause_all/resume_all, global stats, task files) plus global-option
+and seeding tools (13 total) — add a URL and ask
 "what's the progress?" in natural language. Enable it with `--enable-mcp` or
 `daemon.json` `"mcp": {"enabled": true}`; auth reuses `rpc.secret` via
 `Authorization: Bearer` (the endpoint refuses all requests when no secret is configured).
@@ -381,7 +368,7 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 - [x] HTTP/HTTPS, FTP/FTPS plugins
 - [x] Metalink downloads (multi-mirror P2SP segmentation + whole-file hash verification)
 - [x] CLI (60+ aria2-compatible options)
-- [x] Daemon: aria2-compatible JSON-RPC (HTTP + WebSocket event stream), SQLite persistence, SIGHUP hot reload, MCP tool endpoint (10 download tools)
+- [x] Daemon: aria2-compatible JSON-RPC (HTTP + WebSocket event stream), SQLite persistence, SIGHUP hot reload, MCP tool endpoint (13 tools)
 - [x] P2SP phase 1+2: falcon-swarmd rendezvous service, daemon announce/retract with TTL renewal, RPC falcon.swarm.status/setShare, CLI --swarm-server, inbound /by-sha256 data service, swarm sources in metalink mirror pools (NAT-filtered, hash-verified)
 - [x] Desktop application (Qt6, Fluent design, light/dark themes, cloud drive browsing)
 - [x] Private protocol support (Thunder, QQDL, FlashGet, ED2K)

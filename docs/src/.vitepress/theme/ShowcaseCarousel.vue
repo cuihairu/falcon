@@ -27,45 +27,45 @@ import settingsPage from "../../screenshots/settings_dark_1200.png";
 const slides = [
   {
     src: warmConsole,
-    tag: "设计原型",
-    caption: "主视图原型 · warm console（现行主题方向，暖黑底 + falcon 橙单强调）",
-    alt: "warm console 主视图设计原型（暗色）",
+    tag: "Design Prototype",
+    caption: "Main view prototype - warm console (current theme direction, warm-dark base + falcon orange accent)",
+    alt: "warm console main view design prototype (dark)",
   },
   {
     src: coldUtility,
-    tag: "设计原型",
-    caption: "主视图原型 · cold utility（备选变体，冷中性底 + 克制蓝强调）",
-    alt: "cold utility 主视图设计原型（暗色）",
+    tag: "Design Prototype",
+    caption: "Main view prototype - cold utility (alternative variant, cool neutral base + restrained blue accent)",
+    alt: "cold utility main view design prototype (dark)",
   },
   {
     src: downloadTable,
-    tag: "实况截图",
-    caption: "下载管理 · 任务表格视图（暗色主题）",
-    alt: "桌面端下载页任务表格视图截图",
+    tag: "Live Screenshot",
+    caption: "Download management - task table view (dark theme)",
+    alt: "Desktop downloads page task table view screenshot",
   },
   {
     src: completedGrid,
-    tag: "实况截图",
-    caption: "已完成列表 · 网格视图（暗色主题）",
-    alt: "桌面端已完成任务网格视图截图",
+    tag: "Live Screenshot",
+    caption: "Completed list - grid view (dark theme)",
+    alt: "Desktop completed tasks grid view screenshot",
   },
   {
     src: addDialog,
-    tag: "实况截图",
-    caption: "添加下载对话框（Fluent 风格）",
-    alt: "桌面端添加下载对话框截图",
+    tag: "Live Screenshot",
+    caption: "Add download dialog (Fluent style)",
+    alt: "Desktop add download dialog screenshot",
   },
   {
     src: cloudBrowser,
-    tag: "实况截图",
-    caption: "云存储浏览（S3 / OSS / COS / Kodo / 又拍云）",
-    alt: "桌面端云存储浏览页截图",
+    tag: "Live Screenshot",
+    caption: "Cloud storage browsing (S3 / OSS / COS / Kodo / Upyun)",
+    alt: "Desktop cloud storage browser page screenshot",
   },
   {
     src: settingsPage,
-    tag: "实况截图",
-    caption: "设置页（下载参数 / 外观 / 连接）",
-    alt: "桌面端设置页截图",
+    tag: "Live Screenshot",
+    caption: "Settings page (download options / appearance / connection)",
+    alt: "Desktop settings page screenshot",
   },
 ];
 
@@ -123,8 +123,8 @@ onUnmounted(() => {
 <template>
   <div
     class="showcase"
-    aria-roledescription="轮播"
-    aria-label="Falcon 界面展示"
+    aria-roledescription="carousel"
+    aria-label="Falcon interface showcase"
     tabindex="0"
     @mouseenter="hovering = true"
     @mouseleave="hovering = false"
@@ -141,27 +141,27 @@ onUnmounted(() => {
           :key="s.src"
           class="slide"
           :aria-hidden="i !== current"
-          :aria-label="`${i + 1} / ${count}：${s.caption}`"
+          :aria-label="`${i + 1} / ${count}: ${s.caption}`"
         >
           <!-- 全部 eager：7 张共 ~0.5MB，横向轨道里的 lazy 图片在被轮到之前
                不在视口附近，浏览器不会预取，自动播放时会白一拍 -->
           <img :src="s.src" :alt="s.alt" draggable="false" />
           <figcaption>
-            <span class="tag" :class="s.tag === '设计原型' ? 'proto' : 'shot'">{{ s.tag }}</span>
+            <span class="tag" :class="s.tag === 'Design Prototype' ? 'proto' : 'shot'">{{ s.tag }}</span>
             <span class="caption-text">{{ s.caption }}</span>
           </figcaption>
         </figure>
       </div>
 
-      <button class="arrow left" aria-label="上一张" @click="prev">
+      <button class="arrow left" aria-label="Previous slide" @click="prev">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
       </button>
-      <button class="arrow right" aria-label="下一张" @click="next">
+      <button class="arrow right" aria-label="Next slide" @click="next">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
       </button>
     </div>
 
-    <div class="dots" role="tablist" aria-label="选择幻灯片">
+    <div class="dots" role="tablist" aria-label="Select a slide">
       <button
         v-for="(s, i) in slides"
         :key="`dot-${s.src}`"
@@ -169,7 +169,7 @@ onUnmounted(() => {
         :class="{ active: i === current }"
         role="tab"
         :aria-selected="i === current"
-        :aria-label="`第 ${i + 1} 张：${s.caption}`"
+        :aria-label="`Slide ${i + 1}: ${s.caption}`"
         @click="go(i)"
       />
     </div>

@@ -1,57 +1,59 @@
-# 安装说明
+[中文](installation.zh.md) | **English**
 
-本文档详细介绍如何在当前仓库状态下构建和安装 Falcon。
+# Installation Guide
 
-## 目录
+This document explains in detail how to build and install Falcon in the current state of the repository.
 
-- [系统要求](#系统要求)
-- [从源码编译](#从源码编译)
-- [验证安装](#验证安装)
+## Table of Contents
 
-## 系统要求
+- [System Requirements](#system-requirements)
+- [Building from Source](#building-from-source)
+- [Verifying the Installation](#verifying-the-installation)
 
-### 最低要求
+## System Requirements
 
-| 组件 | 要求 |
-|------|------|
-| 操作系统 | Windows 10+、macOS 10.14+、Linux（主流发行版） |
-| CPU | x86_64 或 ARM64 |
-| 内存 | 512 MB |
-| 磁盘空间 | 100 MB |
+### Minimum Requirements
 
-### 编译要求
+| Component | Requirement |
+|-----------|-------------|
+| Operating system | Windows 10+, macOS 10.14+, Linux (major distributions) |
+| CPU | x86_64 or ARM64 |
+| Memory | 512 MB |
+| Disk space | 100 MB |
 
-| 组件 | 版本 |
-|------|------|
+### Build Requirements
+
+| Component | Version |
+|-----------|---------|
 | CMake | 3.15+ |
-| C++ 编译器 | GCC 7+、Clang 5+、MSVC 2017+ |
-| Python | 非必需 |
+| C++ compiler | GCC 7+, Clang 5+, MSVC 2017+ |
+| Python | Not required |
 
-当前仓库文档默认以源码构建为准。若未来提供 Release 制品或系统包，应以仓库发布页和 CI 产物说明为准，而不是本文中的静态占位示例。
+The documentation in this repository assumes building from source. If Release artifacts or system packages are provided in the future, follow the repository release page and the CI artifact notes rather than the static placeholder examples in this document.
 
-## 从源码编译
+## Building from Source
 
-### 依赖项
+### Dependencies
 
-#### 核心依赖
+#### Core Dependencies
 
-| 依赖 | 版本 | 说明 |
-|------|------|------|
-| spdlog | 1.9+ | 日志库 |
-| nlohmann/json | 3.10+ | JSON 解析 |
-| libcurl | 7.68+ | HTTP 客户端 |
-| OpenSSL | 1.1+ | SSL/TLS 支持 |
+| Dependency | Version | Purpose |
+|------------|---------|---------|
+| spdlog | 1.9+ | Logging |
+| nlohmann/json | 3.10+ | JSON parsing |
+| libcurl | 7.68+ | HTTP client |
+| OpenSSL | 1.1+ | SSL/TLS support |
 
-#### 可选依赖
+#### Optional Dependencies
 
-| 依赖 | 版本 | 说明 |
-|------|------|------|
-| libtorrent | 2.0+ | BitTorrent 支持 |
-| gtest | 1.12+ | 单元测试 |
+| Dependency | Version | Purpose |
+|------------|---------|---------|
+| libtorrent | 2.0+ | BitTorrent support |
+| gtest | 1.12+ | Unit testing |
 
-### 使用 vcpkg（推荐）
+### Using vcpkg (Recommended)
 
-#### 1. 安装 vcpkg
+#### 1. Install vcpkg
 
 ```bash
 git clone https://github.com/Microsoft/vcpkg.git
@@ -59,29 +61,29 @@ cd vcpkg
 ./bootstrap-vcpkg.sh
 ```
 
-#### 2. 安装依赖
+#### 2. Install Dependencies
 
 ```bash
 ./vcpkg install spdlog nlohmann-json curl openssl gtest
 ```
 
-#### 3. 编译
+#### 3. Build
 
 ```bash
-# 获取源码
+# Get the source
 git clone https://github.com/cuihairu/falcon.git
 cd falcon
 
-# 配置 CMake
+# Configure CMake
 cmake -B build -S . \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_TOOLCHAIN_FILE=[vcpkg-root]/scripts/buildsystems/vcpkg.cmake
 
-# 编译
+# Build
 cmake --build build --config Release
 ```
 
-### 使用系统包管理器
+### Using System Package Managers
 
 #### macOS
 
@@ -112,7 +114,7 @@ cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
 ```
 
-#### Windows（Visual Studio）
+#### Windows (Visual Studio)
 
 ```powershell
 git clone https://github.com/Microsoft/vcpkg.git C:\vcpkg
@@ -125,27 +127,27 @@ cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.c
 cmake --build build --config Release
 ```
 
-### 常用编译开关
+### Common Build Options
 
-根目录 `CMakeLists.txt` 当前暴露了这些常用选项：
+The root `CMakeLists.txt` currently exposes these common options:
 
-| 选项 | 默认值 | 说明 |
-|------|--------|------|
-| `FALCON_BUILD_TESTS` | `ON` | 构建测试 |
-| `FALCON_BUILD_EXAMPLES` | `ON` | 构建示例 |
-| `FALCON_BUILD_CLI` | `ON` | 构建 CLI |
-| `FALCON_BUILD_DAEMON` | `ON` | 构建 Daemon |
-| `FALCON_BUILD_DESKTOP` | `ON` | 构建桌面端 |
-| `FALCON_ENABLE_HTTP` | `ON` | 启用 HTTP/HTTPS 插件 |
-| `FALCON_ENABLE_FTP` | `ON` | 启用 FTP 插件 |
-| `FALCON_ENABLE_BITTORRENT` | `OFF` | 启用 BitTorrent 插件 |
-| `FALCON_ENABLE_THUNDER` | `OFF` | 启用迅雷插件 |
-| `FALCON_ENABLE_QQDL` | `OFF` | 启用 QQ 旋风插件 |
-| `FALCON_ENABLE_FLASHGET` | `OFF` | 启用快车插件 |
-| `FALCON_ENABLE_ED2K` | `OFF` | 启用 ED2K 插件 |
-| `FALCON_ENABLE_HLS` | `OFF` | 启用 HLS/DASH 插件 |
+| Option | Default | Description |
+|--------|---------|-------------|
+| `FALCON_BUILD_TESTS` | `ON` | Build tests |
+| `FALCON_BUILD_EXAMPLES` | `ON` | Build examples |
+| `FALCON_BUILD_CLI` | `ON` | Build the CLI |
+| `FALCON_BUILD_DAEMON` | `ON` | Build the daemon |
+| `FALCON_BUILD_DESKTOP` | `ON` | Build the desktop app |
+| `FALCON_ENABLE_HTTP` | `ON` | Enable the HTTP/HTTPS plugin |
+| `FALCON_ENABLE_FTP` | `ON` | Enable the FTP plugin |
+| `FALCON_ENABLE_BITTORRENT` | `ON` | Enable the BitTorrent plugin |
+| `FALCON_ENABLE_THUNDER` | `OFF` | Enable the Thunder plugin |
+| `FALCON_ENABLE_QQDL` | `OFF` | Enable the QQ Whirlwind plugin |
+| `FALCON_ENABLE_FLASHGET` | `OFF` | Enable the FlashGet plugin |
+| `FALCON_ENABLE_ED2K` | `OFF` | Enable the ED2K plugin |
+| `FALCON_ENABLE_HLS` | `OFF` | Enable the HLS/DASH plugin |
 
-示例：
+Example:
 
 ```bash
 cmake -B build -S . \
@@ -155,10 +157,10 @@ cmake -B build -S . \
   -DFALCON_ENABLE_HLS=ON
 ```
 
-## 验证安装
+## Verifying the Installation
 
 ```bash
 ./build/bin/falcon-cli --version
 ```
 
-如果只构建了部分目标，请按实际输出目录运行对应二进制。
+If you built only a subset of the targets, run the corresponding binaries from their actual output directories.

@@ -68,7 +68,7 @@
 - **云存储集成**:
   - 亚马逊 S3、阿里云 OSS、腾讯云 COS、七牛云 Kodo、又拍云
   - 自定义 endpoint,支持 MinIO / RustFS / 私有化网关（AWS SigV4 请求签名）
-- **远程资源浏览**: 浏览 FTP/SFTP/S3/OSS/COS/Kodo/又拍云目录
+- **远程资源浏览**: 浏览 FTP/S3/OSS/COS/Kodo/又拍云/WebDAV 目录
 - **资源搜索**: 内置搜索提供者框架,支持种子和文件资源搜索
 - **安全配置**: AES-256-GCM 加密存储凭据,主密码保护
 
@@ -80,8 +80,6 @@
 
 ```bash
 # Linux / macOS
-
-> [English](README.md) | **中文**
 curl -fsSL https://raw.githubusercontent.com/cuihairu/falcon/main/scripts/install.sh | bash
 ```
 
@@ -146,7 +144,7 @@ falcon-cli --http-engine v2 https://example.com/file.zip
 # 连接设置
 falcon-cli -x 16 -s 16 --min-split-size=1M https://example.com/file.zip
 # -x: 单任务最大连接数
-# -s: 单服务器最大连接数
+# -s: -x 的别名（aria2 --split，同一任务连接数）
 
 # 重试设置
 falcon-cli -r 5 --retry-wait 10 https://example.com/file.zip
@@ -207,14 +205,14 @@ OSS、腾讯云 COS、七牛云 Kodo、又拍云：列举、树形视图、对�
 请参见库 API。
 
 ### 远程目录浏览
-`libfalcon-storage` 实现 `ResourceBrowser` 接口，覆盖 FTP、SFTP、S3、OSS、COS、
-Kodo、又拍云——格式化树/表格列举、路径校验、递归操作。桌面云盘页面即基于它构建。
+`libfalcon-storage` 实现 `ResourceBrowser` 接口，覆盖 FTP、S3、OSS、COS、
+Kodo、又拍云与 WebDAV——格式化树/表格列举、路径校验、递归操作。桌面云盘页面即基于它构建。
 
 ### MCP 工具服务
 daemon 在 `POST /mcp` 暴露 MCP（Model Context Protocol）端点（Streamable HTTP，
-与 RPC 同端口）。Claude Desktop、Cursor 等 AI 宿主可以列出并调用 10 个下载工具
-（`falcon_add_download`、`falcon_list_tasks`、`falcon_get_task`、暂停/恢复/移除、
-全局暂停/恢复、全局统计、任务文件清单）——用自然语言说「把这个链接下下来」「下到
+与 RPC 同端口）。Claude Desktop、Cursor 等 AI 宿主可以列出并调用 13 个工具——
+10 个下载工具（`falcon_add_download`、`falcon_list_tasks`、`falcon_get_task`、暂停/恢复/移除、
+全局暂停/恢复、全局统计、任务文件清单）+ 全局选项与做种工具——用自然语言说「把这个链接下下来」「下到
 哪一步了」即可驱动下载。以 `--enable-mcp` 或 `daemon.json` 的
 `"mcp": {"enabled": true}` 开启；鉴权复用 `rpc.secret`（`Authorization: Bearer`，
 未配置 secret 时端点拒绝一切请求）。宿主侧配置（Streamable HTTP）：
@@ -351,7 +349,7 @@ HTTP、FTP、BitTorrent、SFTP、WebDAV、Metalink、云存储、资源浏览/�
 - [x] HTTP/HTTPS、FTP/FTPS 插件
 - [x] Metalink 下载（多镜像 P2SP 分段 + 整文件哈希校验）
 - [x] 命令行工具（60+ aria2 兼容参数）
-- [x] Daemon：aria2 兼容 JSON-RPC（HTTP + WebSocket 事件流）、SQLite 持久化、SIGHUP 热重载、MCP 工具端点（10 下载工具）
+- [x] Daemon：aria2 兼容 JSON-RPC（HTTP + WebSocket 事件流）、SQLite 持久化、SIGHUP 热重载、MCP 工具端点（13 工具）
 - [x] P2SP 阶段 1+2：falcon-swarmd 会合服务，daemon 公告/撤销 + TTL 续期，RPC falcon.swarm.status/setShare，CLI --swarm-server，内置 /by-sha256 数据服务，metalink 镜像池补 swarm 源（NAT 过滤 + 哈希校验）
 - [x] 桌面应用（Qt6，Fluent 设计、亮暗主题、云盘浏览）
 - [x] 私有协议支持（迅雷、QQDL、FlashGet、ED2K）

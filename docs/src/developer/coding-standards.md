@@ -1,27 +1,29 @@
-# 编码规范
+[中文](coding-standards.zh.md) | **English**
 
-本文档定义了 Falcon 项目的编码规范。
+# Coding Standards
 
-## C++ 标准
+This document defines the coding standards for the Falcon project.
 
-- **最低要求**: C++17
-- **推荐**: C++20
+## C++ Standard
 
-## 命名规范
+- **Minimum requirement**: C++17
+- **Current status**: C++17 across the entire codebase (the root CMakeLists pins `CMAKE_CXX_STANDARD 17`, and every target also declares `cxx_std_17`)
 
-### 文件命名
+## Naming Conventions
+
+### File Naming
 
 ```
-// 文件名使用 snake_case
+// File names use snake_case
 download_engine.hpp
 download_engine.cpp
 http_plugin.cpp
 ```
 
-### 类命名
+### Class Naming
 
 ```cpp
-// 类名使用 PascalCase
+// Class names use PascalCase
 class DownloadEngine {
 };
 
@@ -32,25 +34,25 @@ class BittorrentPlugin {
 };
 ```
 
-### 函数命名
+### Function Naming
 
 ```cpp
-// 函数使用 snake_case
+// Functions use snake_case
 void start_download();
 int get_task_count();
 bool is_valid_url();
 ```
 
-### 变量命名
+### Variable Naming
 
 ```cpp
-// 局部变量和参数：snake_case
+// Local variables and parameters: snake_case
 void func(int connection_count, std::string url) {
     int file_size = 0;
     bool is_connected = false;
 }
 
-// 成员变量：尾随下划线
+// Member variables: trailing underscore
 class MyClass {
 private:
     int task_count_;
@@ -58,23 +60,23 @@ private:
     bool is_initialized_;
 };
 
-// 静态成员变量：k_ 前缀 + 尾随下划线
+// Constants and static constants: k prefix + PascalCase
 class MyClass {
 private:
-    static const int k_max_retries_;
-    static std::string k_default_user_agent_;
+    static constexpr int kMaxRetries = 3;
+    static constexpr const char* kDefaultUserAgent = "Falcon/1.0";
 };
 
-// 常量：全大写 + 下划线
-const int MAX_CONNECTIONS = 100;
-const double DEFAULT_TIMEOUT = 30.0;
-constexpr size_t BUFFER_SIZE = 4096;
+// File-level constants also use the k prefix
+constexpr int kMaxConnections = 100;
+constexpr double kDefaultTimeout = 30.0;
+constexpr size_t kBufferSize = 4096;
 ```
 
-### 命名空间
+### Namespaces
 
 ```cpp
-// 小写，简短
+// Lowercase, short
 namespace falcon {
 namespace http {
 namespace internal {
@@ -84,64 +86,66 @@ namespace internal {
 }
 ```
 
-### 枚举
+### Enumerations
 
 ```cpp
-// 枚举类使用 PascalCase
+// Enum classes use PascalCase (the real TaskStatus values)
 enum class TaskStatus {
     Pending,
-    Running,
+    Preparing,
+    Downloading,
     Paused,
     Completed,
-    Failed
+    Failed,
+    Cancelled
 };
 
-// 强类型枚举值使用 PascalCase
-auto status = TaskStatus::Running;
+// Strongly-typed enum values use PascalCase
+auto status = TaskStatus::Downloading;
 ```
 
-### 类型别名
+### Type Aliases
 
 ```cpp
-// 类型别名使用 PascalCase
+// Type aliases use PascalCase
 using TaskId = uint64_t;
 using DownloadCallback = std::function<void(const ProgressInfo&)>;
 using PluginMap = std::unordered_map<std::string, std::unique_ptr<IProtocolHandler>>;
 ```
 
-## 代码组织
+## Code Organization
 
-### 头文件结构
+### Header File Structure
 
 ```cpp
-// 1. 许可证和版权声明（可选）
-// 2. 头文件保护
+// 1. License and copyright notice (optional)
+// 2. Header guard
 #pragma once
 
-// 3. 包含对应的 C 标准库
+// 3. Include the corresponding C standard library headers
 #include <cstdint>
 #include <cstring>
 
-// 4. 包含 C++ 标准库
+// 4. Include C++ standard library headers
 #include <memory>
 #include <string>
 #include <vector>
 
-// 5. 包含第三方库
+// 5. Include third-party libraries
 #include <curl/curl.h>
 
-// 6. 包含项目内部头文件
+// 6. Include project-internal headers
 #include <falcon/types.hpp>
 #include <falcon/protocol_handler.hpp>
 
-// 7. 命名空间声明
+// 7. Namespace declaration
 namespace falcon {
 
-// 8. 前向声明
+// 8. Forward declarations
 class DownloadTask;
 struct DownloadOptions;
 
-// 9. 类定义
+// 9. Class definition
 class DownloadEngine {
     // ...
 };
@@ -149,27 +153,27 @@ class DownloadEngine {
 } // namespace falcon
 ```
 
-### 源文件结构
+### Source File Structure
 
 ```cpp
-// 1. 包含对应的头文件
-#include "download_engine.hpp"
+// 1. Include the corresponding header
+#include <falcon/download_engine.hpp>
 
-// 2. 包含 C 标准库
+// 2. Include C standard library headers
 #include <cstring>
 
-// 3. 包含 C++ 标准库
+// 3. Include C++ standard library headers
 #include <algorithm>
 #include <iostream>
 
-// 4. 包含第三方库
+// 4. Include third-party libraries
 #include <spdlog/spdlog.h>
 
-// 5. 包含项目内部头文件
-#include "internal/task_manager.hpp"
-#include "internal/event_loop.hpp"
+// 5. Include project-internal headers
+#include <falcon/task_manager.hpp>
+#include <falcon/event_dispatcher.hpp>
 
-// 6. 匿名命名空间（内部链接）
+// 6. Anonymous namespace (internal linkage)
 namespace {
 
 constexpr int kDefaultTimeout = 30;
@@ -177,18 +181,18 @@ std::string log_prefix = "[DownloadEngine]";
 
 } // namespace
 
-// 7. 命名空间
+// 7. Namespace
 namespace falcon {
 
-// 8. 静态成员定义
+// 8. Static member definitions
 const int DownloadEngine::kMaxRetries = 3;
 
-// 9. 成员函数定义
+// 9. Member function definitions
 DownloadEngine::DownloadEngine()
     : task_manager_(std::make_unique<TaskManager>()) {
 }
 
-// 10. 自由函数
+// 10. Free functions
 void helper_function() {
     // ...
 }
@@ -196,29 +200,29 @@ void helper_function() {
 } // namespace falcon
 ```
 
-## 注释规范
+## Comment Conventions
 
-### 文件注释
+### File Comments
 
 ```cpp
 /**
  * @file download_engine.hpp
- * @brief 下载引擎类定义
+ * @brief Download engine class definition
  * @author Falcon Team
  * @date 2025-12-25
  * @copyright Apache License 2.0
  */
 ```
 
-### 类注释
+### Class Comments
 
 ```cpp
 /**
  * @class DownloadEngine
- * @brief 高性能下载引擎
+ * @brief High-performance download engine
  *
- * 提供多协议下载支持，包括 HTTP、FTP、BitTorrent 等。
- * 支持断点续传、多线程下载、速度限制等功能。
+ * Provides multi-protocol download support, including HTTP, FTP, BitTorrent, and more.
+ * Supports resumable downloads, multi-threaded downloads, speed limits, and other features.
  *
  * @example
  * @code
@@ -234,23 +238,23 @@ class DownloadEngine {
 };
 ```
 
-### 函数注释
+### Function Comments
 
 ```cpp
 /**
- * @brief 添加下载任务
+ * @brief Add a download task
  *
- * 根据指定的 URL 和选项创建下载任务。
- * 如果 URL 不被任何插件支持，将返回 nullptr。
+ * Creates a download task from the given URL and options.
+ * If no plugin supports the URL, nullptr is returned.
  *
- * @param url 下载 URL，支持 http/https/ftp/magnet 等
- * @param options 下载选项，包括连接数、保存路径等
- * @return std::shared_ptr<DownloadTask> 任务对象，失败返回 nullptr
+ * @param url The download URL; supports http/https/ftp/magnet and more
+ * @param options Download options, including connection count, save path, etc.
+ * @return std::shared_ptr<DownloadTask> the task object, nullptr on failure
  *
- * @throws InvalidURLException 当 URL 格式错误时
- * @throws UnsupportedProtocolException 当没有支持的协议处理器时
+ * @throws InvalidURLException When the URL is malformed
+ * @throws UnsupportedProtocolException When no supported protocol handler exists
  *
- * @note 添加任务后需要再调用 start_task(task->id()) 启动任务
+ * @note After adding a task, call start_task(task->id()) to start it
  *
  * @see DownloadTask
  * @see DownloadOptions
@@ -259,41 +263,41 @@ DownloadTask::Ptr add_task(const std::string& url,
                            const DownloadOptions& options = {});
 ```
 
-### 成员变量注释
+### Member Variable Comments
 
 ```cpp
 class DownloadEngine {
 private:
-    /// 任务管理器，负责所有任务的生命周期管理
+    /// Task manager, responsible for the lifecycle of all tasks
     std::unique_ptr<TaskManager> task_manager_;
 
-    /// 协议注册中心，负责协议处理器的加载和路由
+    /// Protocol registry, responsible for loading and routing protocol handlers
     ProtocolRegistry protocol_registry_;
 
-    /// 事件分发器，处理回调分发
+    /// Event dispatcher, handles callback dispatch
     EventDispatcher event_dispatcher_;
 
-    /// 当前运行的任务数量
+    /// Number of currently running tasks
     std::atomic<int> active_tasks_;
 };
 ```
 
-### 行内注释
+### Inline Comments
 
 ```cpp
-// 使用常规注释解释代码意图
-int result = calculate();  // 单行注释放在语句后面
+// Use regular comments to explain code intent
+int result = calculate();  // Single-line comments go after the statement
 
-// 多行注释
-// 在复杂逻辑前添加解释
-// 1. 首先检查连接状态
-// 2. 然后发送请求
-// 3. 最后处理响应
+// Multi-line comments:
+// Add an explanation before complex logic
+// 1. First check the connection status
+// 2. Then send the request
+// 3. Finally process the response
 ```
 
-## 格式化
+## Formatting
 
-使用 **clang-format** 自动格式化，配置文件 `.clang-format`：
+Use **clang-format** for automatic formatting, configured via `.clang-format`:
 
 ```yaml
 BasedOnStyle: Google
@@ -301,22 +305,22 @@ IndentWidth: 4
 ColumnLimit: 100
 ```
 
-### 自动格式化
+### Automatic Formatting
 
 ```bash
-# 格式化所有文件
+# Format all files
 find . -name "*.cpp" -o -name "*.hpp" | xargs clang-format -i
 
-# 检查格式
+# Check formatting
 find . -name "*.cpp" -o -name "*.hpp" | xargs clang-format --dry-run --Werror
 ```
 
-## 最佳实践
+## Best Practices
 
 ### RAII
 
 ```cpp
-// 好：使用 RAII 管理资源
+// Good: manage resources with RAII
 class FileHandle {
 public:
     FileHandle(const std::string& path) : fd_(open(path.c_str(), O_RDONLY)) {
@@ -331,11 +335,11 @@ public:
         }
     }
 
-    // 禁止拷贝
+    // Forbid copying
     FileHandle(const FileHandle&) = delete;
     FileHandle& operator=(const FileHandle&) = delete;
 
-    // 允许移动
+    // Allow moving
     FileHandle(FileHandle&& other) noexcept : fd_(other.fd_) {
         other.fd_ = -1;
     }
@@ -345,104 +349,104 @@ private:
 };
 ```
 
-### 智能指针
+### Smart Pointers
 
 ```cpp
-// 独占所有权
+// Exclusive ownership
 std::unique_ptr<DownloadTask> task = std::make_unique<DownloadTask>();
 
-// 共享所有权
+// Shared ownership
 std::shared_ptr<DownloadEngine> engine = std::make_shared<DownloadEngine>();
 
-// 弱引用，避免循环引用
+// Weak reference, avoids reference cycles
 std::weak_ptr<DownloadTask> weak_task = task;
 ```
 
-### 异常安全
+### Exception Safety
 
 ```cpp
-// 好：使用 RAII，异常安全
+// Good: RAII, exception-safe
 std::lock_guard<std::mutex> lock(mutex_);
 
-// 好：使用 unique_lock，可手动控制锁
+// Good: unique_lock, for manual lock control
 std::unique_lock<std::mutex> lock(mutex_);
-// ... 做一些事情
+// ... do some work
 lock.unlock();
 
-// 避免：裸指针和手动资源管理
+// Avoid: raw pointers and manual resource management
 // int* ptr = new int(42);
-// delete ptr;  // 可能忘记释放或异常时未执行
+// delete ptr;  // may be forgotten or skipped when an exception is thrown
 ```
 
-### const 正确性
+### const Correctness
 
 ```cpp
-// 好：标记为 const
-int getValue() const { return value_; }
-bool isEmpty() const { return items_.empty(); }
-const std::string& getName() const { return name_; }
+// Good: mark as const
+int get_value() const { return value_; }
+bool is_empty() const { return items_.empty(); }
+const std::string& get_name() const { return name_; }
 
-// 好：使用 const 引用传递
+// Good: pass by const reference
 void process(const std::string& input);
 void update(const Config& config);
 ```
 
-### 默认参数
+### Default Arguments
 
 ```cpp
-// 好：使用默认参数
+// Good: use default arguments
 void download(const std::string& url,
               const DownloadOptions& options = {},
               IEventListener* listener = nullptr);
 
-// 避免：函数重载仅用于提供默认值
+// Avoid: overloading a function just to provide default values
 void download(const std::string& url);
 void download(const std::string& url, const DownloadOptions& options);
 ```
 
-## 禁止事项
+## Forbidden Practices
 
-### 不要做的事情
+### Things Not To Do
 
 ```cpp
-// 1. 不要使用 C 风格转换
+// 1. Do not use C-style casts
 // char* ptr = (char*)malloc(100);
 
-// 好：使用 C++ 类型转换
+// Good: use C++ casts
 char* ptr = static_cast<char*>(malloc(100));
 
-// 2. 不要使用 NULL
+// 2. Do not use NULL
 // void* ptr = NULL;
 
-// 好：使用 nullptr
+// Good: use nullptr
 void* ptr = nullptr;
 
-// 3. 不要使用 using namespace std;
+// 3. Do not use "using namespace std;"
 // using namespace std;
 
-// 好：使用具体的 using 声明或不使用
+// Good: use specific using declarations, or none at all
 using std::vector;
 
-// 4. 不要使用 bool 作为位域
+// 4. Do not use bool as a bitfield
 // struct Flag { unsigned int ready : 1; };
 
-// 5. 不要在头文件中使用 using 指令
+// 5. Do not use using-directives in headers
 // using namespace std;
 
-// 6. 不要使用全局变量
+// 6. Do not use global variables
 // int global_counter = 0;
 
-// 好：使用命名空间内的常量或静态成员
+// Good: use constants inside a namespace or static members
 namespace { const int kGlobalCounter = 0; }
 
-// 7. 不要使用魔数
+// 7. Do not use magic numbers
 // if (size > 1073741824) { }
 
-// 好：使用命名常量
+// Good: use named constants
 constexpr int k1GB = 1073741824;
 if (size > k1GB) { }
 ```
 
-::: tip 代码审查
-提交代码前，请确保代码符合以上规范。使用 `./scripts/check-format.sh` 检查格式。
+::: tip Code review
+Before submitting code, make sure it follows the standards above. Check formatting with `clang-format --dry-run --Werror`.
 :::

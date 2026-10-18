@@ -1,60 +1,62 @@
-# Falcon 下载器
+[中文](index.zh.md) | **English**
 
-**Falcon（猎鹰下载器）** 是一个跨平台的 C++ 下载器，采用 Monorepo 架构，传输底座基于 libcurl、OpenSSL、libtorrent、libssh2 等开源组件，围绕统一引擎承载多协议下载。
+# Falcon Downloader
 
-## 为什么选择 Falcon？
+**Falcon** is a cross-platform C++ downloader built as a monorepo. Its transfer foundation relies on open-source components such as libcurl, OpenSSL, libtorrent, and libssh2, all orchestrated around a unified engine that carries multi-protocol downloading.
 
-- **并发下载**：C++17 事件驱动引擎，支持多线程分块与断点续传
-- **多协议**：默认启用 HTTP/HTTPS、FTP、SFTP、WebDAV、BitTorrent、Metalink，另有多种可选协议插件
-- **易用性**：提供 CLI 工具和 C++ API
-- **可扩展**：插件化架构，便于新增协议或能力
-- **跨平台**：面向 Windows、Linux、macOS
+## Why Falcon?
 
-## 核心特性
+- **Concurrent downloads**: a C++17 event-driven engine with multi-threaded chunking and resumable transfers
+- **Multi-protocol**: HTTP/HTTPS, FTP, SFTP, WebDAV, BitTorrent, and Metalink enabled by default, plus a variety of optional protocol plugins
+- **Ease of use**: provides both a CLI tool and a C++ API
+- **Extensible**: a plugin-based architecture that makes adding protocols or capabilities easy
+- **Cross-platform**: targets Windows, Linux, and macOS
 
-### 1. 多协议下载
+## Core Features
 
-Falcon 当前聚焦于可组合的协议能力：
+### 1. Multi-Protocol Downloads
 
-- **基础协议**：HTTP/HTTPS、FTP/FTPS
-- **P2P / 扩展协议**：BitTorrent、ED2K
-- **私有协议插件**：迅雷、QQ 旋风、快车
-- **流媒体协议插件**：HLS、DASH
+Falcon currently focuses on composable protocol capabilities:
 
-### 2. 并发下载与断点续传
+- **Core protocols**: HTTP/HTTPS, FTP/FTPS
+- **P2P / extended protocols**: BitTorrent, ED2K
+- **Proprietary-protocol plugins**: Thunder, QQ Whirlwind, FlashGet
+- **Streaming-protocol plugins**: HLS, DASH
 
-- **多线程分块下载**：将文件切分为多个块并行下载
-- **断点续传**：在支持范围请求的场景中恢复中断任务
-- **速度控制**：支持单任务限速
-- **连接复用**：减少重复建连带来的额外开销
+### 2. Concurrent Downloads and Resume
 
-### 3. 多入口部署
+- **Multi-threaded chunked downloads**: splits files into chunks that are downloaded in parallel
+- **Resume**: recovers interrupted tasks wherever range requests are supported
+- **Speed control**: per-task speed limiting
+- **Connection reuse**: reduces the overhead of repeated connection setup
 
-- **CLI 工具**：适合脚本和自动化任务
-- **Daemon 服务**：适合后台任务和远程管理
-- **核心库**：可嵌入其他 C++ 项目
-- **桌面端 / 浏览器扩展**：仓库中已包含相关代码
+### 3. Multiple Deployment Entry Points
 
-## 项目架构
+- **CLI tool**: great for scripts and automation
+- **Daemon service**: great for background jobs and remote management
+- **Core libraries**: embeddable in other C++ projects
+- **Desktop app / browser extension**: the code is already in the repository
+
+## Project Architecture
 
 ```
 falcon/
 ├── packages/
-│   ├── libfalcon-core/      # 核心下载引擎、任务模型、事件系统
-│   ├── libfalcon-protocols/ # 标准下载协议
-│   ├── libfalcon-storage/   # 对象存储与远程资源浏览
-│   ├── libfalcon-drives/    # 网盘与分享链能力
-│   ├── falcon-cli/          # 命令行工具
-│   └── falcon-daemon/       # 后台守护进程
+│   ├── libfalcon-core/      # Core download engine, task model, event system
+│   ├── libfalcon-protocols/ # Standard download protocols
+│   ├── libfalcon-storage/   # Object storage and remote resource browsing
+│   ├── libfalcon-drives/    # Cloud drive and share-link capabilities
+│   ├── falcon-cli/          # Command-line tool
+│   └── falcon-daemon/       # Background daemon
 ├── apps/
-│   ├── desktop/             # 桌面应用
-│   └── browser_extension/   # 浏览器扩展
-└── docs/                    # 项目文档
+│   ├── desktop/             # Desktop application
+│   └── browser_extension/   # Browser extension
+└── docs/                    # Project documentation
 ```
 
-## 快速开始
+## Quick Start
 
-### 安装
+### Install
 
 ```bash
 git clone https://github.com/cuihairu/falcon.git
@@ -63,23 +65,23 @@ cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
 ```
 
-### 基本使用
+### Basic Usage
 
 ```bash
-# 下载单个文件
+# Download a single file
 falcon-cli https://example.com/file.zip
 
-# 多线程下载
+# Multi-threaded download
 falcon-cli https://example.com/large.zip -c 5
 
-# 下载迅雷链接
+# Download a Thunder link
 falcon-cli "thunder://QUFodHRwOi8vZXhhbXBsZS5jb20vZmlsZS56aXAuWg=="
 
-# 从文件批量读取 URL
+# Read URLs from a file for batch downloading
 falcon-cli -i urls.txt -j 3
 ```
 
-### C++ API 使用
+### Using the C++ API
 
 ```cpp
 #include <falcon/falcon.hpp>
@@ -103,27 +105,27 @@ int main() {
 }
 ```
 
-## 文档导航
+## Documentation Navigation
 
-- [入门指南](getting-started.md) - 快速了解 Falcon
-- [安装说明](installation.md) - 详细的构建步骤
-- [使用指南](usage.md) - 命令行和 API 使用
-- [协议支持](/protocols/) - 所有支持协议的概览
-- [开发者指南](/developer/) - 贡献代码和插件开发
-- [常见问题](../faq.md) - 常见问题解答
+- [Getting Started](getting-started.md) - Get to know Falcon quickly
+- [Installation Guide](installation.md) - Detailed build steps
+- [Usage Guide](usage.md) - CLI and API usage
+- [Protocol Support](/protocols/) - An overview of all supported protocols
+- [Developer Guide](/developer/) - Contributing and plugin development
+- [FAQ](../faq.md) - Answers to common questions
 
-## 社区
+## Community
 
 - **GitHub**: [https://github.com/cuihairu/falcon](https://github.com/cuihairu/falcon)
 - **Issues**: [https://github.com/cuihairu/falcon/issues](https://github.com/cuihairu/falcon/issues)
 - **Discussions**: [https://github.com/cuihairu/falcon/discussions](https://github.com/cuihairu/falcon/discussions)
 
-## 许可证
+## License
 
 Apache License 2.0
 
 ---
 
-::: tip 获取帮助
-如果遇到问题，请先查看 [常见问题](../faq.md)，或在 [GitHub Issues](https://github.com/cuihairu/falcon/issues) 中提问。
+::: tip Getting Help
+If you run into problems, check the [FAQ](../faq.md) first, or ask in [GitHub Issues](https://github.com/cuihairu/falcon/issues).
 :::

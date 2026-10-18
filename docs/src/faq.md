@@ -1,26 +1,28 @@
-# 常见问题
+[中文](faq.zh.md) | **English**
 
-本文档汇总了 Falcon 的常见问题和解答。
+# Frequently Asked Questions
 
-## 安装问题
+This page collects frequently asked questions about Falcon.
 
-### Q: 如何安装 Falcon？
+## Installation
 
-A: 当前建议直接从源码构建：
+### Q: How do I install Falcon?
+
+A: Building from source is currently the recommended approach:
 
 ```bash
-# 从源码编译
+# Build from source
 git clone https://github.com/cuihairu/falcon.git
 cd falcon
 cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
-详见 [安装说明](./guide/installation.md)。
+See the [Installation Guide](./guide/installation.md) for details.
 
-### Q: 编译时找不到依赖？
+### Q: The build cannot find dependencies?
 
-A: 确保已安装所有依赖：
+A: Make sure all dependencies are installed:
 
 ```bash
 # macOS
@@ -31,101 +33,100 @@ sudo apt install libspdlog-dev nlohmann-json3-dev \
   libcurl4-openssl-dev libssl-dev libgtest-dev
 ```
 
-### Q: 如何查看支持的协议？
+### Q: How can I see which protocols are supported?
 
-A: 目前建议直接查看 [协议支持](/protocols/) 文档，或在构建时确认对应 `FALCON_ENABLE_*` CMake 选项是否开启。
+A: For now, check the [Protocol Support](/protocols/) documentation, or verify that the corresponding `FALCON_ENABLE_*` CMake options are enabled at build time.
 
-## 使用问题
+## Usage
 
-### Q: 如何下载文件？
+### Q: How do I download a file?
 
-A: 基本用法：
+A: Basic usage:
 
 ```bash
 falcon-cli https://example.com/file.zip
 ```
 
-### Q: 如何使用多线程下载？
+### Q: How do I download with multiple threads?
 
-A: 使用 `-c` 选项：
+A: Use the `-c` option:
 
 ```bash
 falcon-cli https://example.com/large.zip -c 5
 ```
 
-### Q: 断点续传不工作？
+### Q: Resuming doesn't work?
 
-A: 确保：
-1. 服务器支持 Range 请求
-2. 使用 `--continue` 选项
-3. 文件未被修改
+A: Make sure:
+1. The server supports Range requests
+2. You are using the `--continue` option
+3. The file has not changed
 
-### Q: 如何限制下载速度？
+### Q: How do I limit the download speed?
 
-A: 使用 `--limit` 选项：
+A: Use the `--limit` option:
 
 ```bash
 falcon-cli https://example.com/file.zip --limit 1M
 ```
 
-### Q: 如何使用代理？
+### Q: How do I use a proxy?
 
-A: 使用 `--proxy` 选项：
+A: Use the `--proxy` option:
 
 ```bash
 falcon-cli https://example.com/file.zip --proxy http://proxy:8080
 ```
 
-## 协议问题
+## Protocols
 
-### Q: 支持哪些协议？
+### Q: Which protocols are supported?
 
-A: Falcon 支持：
+A: Falcon supports:
 - HTTP/HTTPS
 - FTP/FTPS
 - BitTorrent (Magnet, .torrent)
 - ED2K
-- 迅雷 (thunder://)
-- QQ旋风 (qqlink://)
-- 快车 (flashget://)
+- Thunder (thunder://)
+- QQ Whirlwind (qqlink://)
+- FlashGet (flashget://)
 - HLS/DASH
 
-详见 [协议支持](/protocols/)。
+See [Protocol Support](/protocols/) for details.
 
-### Q: 如何下载迅雷链接？
+### Q: How do I download a Thunder link?
 
-A: 直接使用迅雷链接：
+A: Just use the Thunder link directly:
 
 ```bash
 falcon-cli "thunder://QUFodHRwOi8vZXhhbXBsZS5jb20vZmlsZS56aXAuWg=="
 ```
 
-### Q: Magnet 链接下载很慢？
+### Q: Magnet downloads are slow?
 
-A: 可能的原因：
-1. 没有 peers：添加更多 tracker
-2. 防火墙阻止：开放端口 6881
-3. 启用 UPnP 或手动端口映射
+A: Possible causes:
+1. No peers: add more trackers
+2. Firewall blocking: open port 6881
+3. Enable UPnP or set up a manual port mapping
 
-### Q: HLS 下载失败？
+### Q: HLS download fails?
 
-A: 确保：
-1. FFmpeg 已安装
-2. 播放列表 URL 有效
-3. 如果是加密流，提供密钥
+A: Make sure:
+1. The HLS/DASH plugin was enabled at build time (`FALCON_ENABLE_HLS=ON`)
+2. The playlist URL is valid
 
-## 配置问题
+## Configuration
 
-### Q: 配置文件在哪里？
+### Q: Where is the configuration file?
 
-A: 配置文件位置：
+A: Configuration file locations:
 
 - **Linux/macOS**: `~/.config/falcon/config.json`
 - **Windows**: `%APPDATA%\falcon\config.json`
 
-### Q: 如何修改默认下载目录？
+### Q: How do I change the default download directory?
 
-A: 编辑配置文件：
+A: Edit the configuration file:
 
 ```json
 {
@@ -133,9 +134,9 @@ A: 编辑配置文件：
 }
 ```
 
-### Q: 如何设置全局代理？
+### Q: How do I set a global proxy?
 
-A: 编辑配置文件：
+A: Edit the configuration file:
 
 ```json
 {
@@ -143,18 +144,18 @@ A: 编辑配置文件：
 }
 ```
 
-## 错误排查
+## Troubleshooting
 
-### Q: 下载失败怎么办？
+### Q: What should I do if a download fails?
 
-A: 检查：
-1. 网络连接是否正常
-2. URL 是否有效
-3. 使用 `--verbose` 查看详细日志
+A: Check:
+1. Whether your network connection is working
+2. Whether the URL is valid
+3. Use `--verbose` for detailed logs
 
-### Q: SSL 证书验证失败？
+### Q: SSL certificate verification fails?
 
-A: 临时解决方案（不推荐生产环境）：
+A: Workaround (not recommended for production):
 
 ```json
 {
@@ -162,89 +163,89 @@ A: 临时解决方案（不推荐生产环境）：
 }
 ```
 
-### Q: 磁盘空间不足？
+### Q: Not enough disk space?
 
-A: 检查磁盘空间：
+A: Check disk space:
 
 ```bash
 df -h
 ```
 
-或更改下载目录：
+Or change the download directory:
 
 ```bash
 falcon-cli <URL> -d /path/to/larger/disk
 ```
 
-### Q: 权限被拒绝？
+### Q: Permission denied?
 
-A: 检查文件权限：
+A: Check file permissions:
 
 ```bash
-# 检查目标目录权限
+# Check permissions on the target directory
 ls -la ~/Downloads
 
-# 修改权限
+# Fix permissions
 chmod u+w ~/Downloads
 ```
 
-## 性能问题
+## Performance
 
-### Q: 如何提高下载速度？
+### Q: How do I improve download speed?
 
-A: 尝试：
-1. 增加连接数：`-c 5`
-2. 使用更快的网络
-3. 更换 CDN 或镜像
-4. 关闭其他占用带宽的程序
+A: Try:
+1. Increase the number of connections: `-c 5`
+2. Use a faster network
+3. Switch to a different CDN or mirror
+4. Close other programs consuming bandwidth
 
-### Q: Falcon 占用内存太多？
+### Q: Falcon uses too much memory?
 
-A: 检查：
-1. 同时下载的任务数
-2. 单个任务的最大连接数
-3. 是否有内存泄漏
+A: Check:
+1. The number of simultaneous download tasks
+2. The maximum number of connections per task
+3. Whether there is a memory leak
 
-## 开发问题
+## Development
 
-### Q: 如何贡献代码？
+### Q: How do I contribute code?
 
-A: 请查看 [开发者指南](/developer/)。
+A: See the [Developer Guide](/developer/).
 
-### Q: 如何开发新插件？
+### Q: How do I develop a new plugin?
 
-A: 请查看 [插件开发指南](./developer/plugins.md)。
+A: See the [Plugin Development Guide](./developer/plugins.md).
 
-### Q: 如何运行测试？
+### Q: How do I run the tests?
 
 A:
 
 ```bash
-# 编译测试
+# Build the tests
 cmake -B build -S . -DFALCON_BUILD_TESTS=ON
 cmake --build build
 
-# 运行测试
+# Run the tests
 ctest --test-dir build --output-on-failure
 ```
 
-## 其他问题
+## Miscellaneous
 
-### Q: Falcon 是开源的吗？
+### Q: Is Falcon open source?
 
-A: 是的，基于 Apache 2.0 许可证开源。
+A: Yes, it is open source under the Apache 2.0 license.
 
-### Q: Falcon 与 aria2 相比如何？
+### Q: How does Falcon compare to aria2?
 
-A: 请查看 [开发者指南](/developer/)。
+A: See the [Developer Guide](/developer/).
 
-### Q: 如何获取帮助？
+### Q: How do I get help?
 
 A:
-- 查看 [文档](./)
-- 在 [GitHub Issues](https://github.com/cuihairu/falcon/issues) 提问
-- 加入 [Discussions](https://github.com/cuihairu/falcon/discussions)
+- Read the [documentation](./)
+- Ask in [GitHub Issues](https://github.com/cuihairu/falcon/issues)
+- Join [Discussions](https://github.com/cuihairu/falcon/discussions)
 
-::: tip 仍有问题？
-请在 [GitHub Issues](https://github.com/cuihairu/falcon/issues) 中提问，我们很乐意帮助！
+::: tip Still stuck?
+Please ask in [GitHub Issues](https://github.com/cuihairu/falcon/issues) — we are happy to help!
 :::

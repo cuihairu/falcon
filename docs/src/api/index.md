@@ -1,3 +1,5 @@
+[中文](index.zh.md) | **English**
+
 # API 参考
 
 Falcon 当前主要提供 C++ API，CLI 则基于同一套核心库能力构建。

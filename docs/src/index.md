@@ -3,70 +3,75 @@ layout: home
 
 hero:
   name: Falcon
-  text: 现代化、跨平台的 C++ 资源传输引擎
-  tagline: 统一承载 HTTP、FTP、SFTP、WebDAV、对象存储与 P2P 资源的下载与访问——以 CLI、Daemon、桌面端多形态交付
+  text: A Modern, Cross-Platform C++ Resource Transfer Engine
+  tagline: Unified downloading and access for HTTP, FTP, SFTP, WebDAV, object storage, and P2P resources — delivered as a CLI, a daemon, and a desktop app
   image:
     src: /logo.svg
-    alt: Falcon 徽标
+    alt: Falcon logo
   actions:
     - theme: brand
-      text: 快速开始
+      text: Get Started
       link: /guide/getting-started
     - theme: alt
-      text: 项目介绍
+      text: Project Overview
       link: /guide/
 
 features:
-  - title: 多协议支持
-    details: 传输核心默认启用 HTTP/HTTPS、FTP、SFTP、WebDAV、Metalink 与 BitTorrent，另提供迅雷、QQ 旋风、快车、ED2K、HLS/DASH 等可选兼容插件。
-  - title: 事件驱动引擎
-    details: 基于 C++17 事件驱动架构，支持多线程分块下载、断点续传和可配置并发控制。
-  - title: 多入口形态
-    details: 仓库内包含核心库、CLI、Daemon、桌面端和浏览器扩展，便于按场景组合使用。
-  - title: 插件化
-    details: 协议处理器作为独立插件组织，便于扩展新协议并隔离实现复杂度。
-  - title: 易于集成
-    details: 提供 libfalcon 核心库，可在其他 C++ 项目中复用下载能力。
-  - title: 开源许可
-    details: 基于 Apache 2.0 许可证发布。
+  - title: Multi-Protocol Support
+    details: The transfer core ships with HTTP/HTTPS, FTP, SFTP, WebDAV, Metalink, and BitTorrent enabled by default, plus optional compatibility plugins for Thunder, QQ Whirlwind, FlashGet, ED2K, and HLS/DASH.
+  - title: Event-Driven Engine
+    details: Built on a C++17 event-driven architecture with multi-threaded chunked downloads, resumable transfers, and configurable concurrency control.
+  - title: Multiple Entry Points
+    details: The repository contains the core libraries, a CLI, a daemon, a desktop app, and a browser extension, so you can combine them to fit your scenario.
+  - title: Plugin-Based
+    details: Protocol handlers are organized as independent plugins, making it easy to add new protocols and keep implementation complexity isolated.
+  - title: Easy to Integrate
+    details: The libfalcon core libraries let you reuse the download capability in other C++ projects.
+  - title: Open Source
+    details: Released under the Apache 2.0 license.
 ---
 
-主视图设计原型（warm console / cold utility）与桌面端实况截图（下载管理、
-已完成列表、添加对话框、云存储、设置页）自动轮播——鼠标悬停暂停，
-可用左右箭头、圆点或键盘方向键切换。
+[中文](index.zh.md) | **English**
+
+The main-view design prototypes (warm console / cold utility) and live desktop
+screenshots (download management, completed list, add-download dialog, cloud
+storage, settings) rotate automatically — hovering pauses the carousel, and
+you can switch with the left/right arrows, the dots, or the keyboard arrow
+keys.
 
 <ShowcaseCarousel />
 
-> 更多界面截图（52 张：13 视图 × 亮暗 × 两种窗口宽度）见仓库
-> [docs/design/ui-sandbox/](https://github.com/cuihairu/falcon/tree/main/docs/design/ui-sandbox)。
+> More UI screenshots (52 in total: 13 views × light/dark × two window
+> widths) are available in the repository at
+> [docs/design/ui-sandbox/](https://github.com/cuihairu/falcon/tree/main/docs/design/ui-sandbox).
 
-## 快速预览
+## Quick Preview
 
-### 安装
+### Install
 
 ```bash
-# 从源码构建
+# Build from source
 git clone https://github.com/cuihairu/falcon.git
 cd falcon
 cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
 ```
 
-当前文档以源码构建为主，不再假设 Homebrew、APT 或预编译安装包已经对外发布。
+The current documentation focuses on building from source; it no longer assumes that Homebrew, APT, or prebuilt installers have been published.
 
-### 基本使用
+### Basic Usage
 
 ```bash
-# 下载单个文件
+# Download a single file
 falcon-cli https://example.com/file.zip
 
-# 多线程下载
+# Multi-threaded download
 falcon-cli https://example.com/large.zip -c 5
 
-# 从文件批量读取 URL
+# Read URLs from a file for batch downloading
 falcon-cli -i urls.txt -j 3
 
-# 通过代理下载
+# Download through a proxy
 falcon-cli https://example.com/file.zip --proxy http://127.0.0.1:7890
 ```
 
@@ -94,43 +99,43 @@ int main() {
 }
 ```
 
-## 项目结构
+## Project Structure
 
 ```
 falcon/
 ├── packages/
-│   ├── libfalcon-core/      # 核心下载引擎、任务模型、事件系统
-│   ├── libfalcon-protocols/ # 标准下载协议
-│   ├── libfalcon-storage/   # 对象存储与资源浏览
-│   ├── libfalcon-drives/    # 网盘与分享链能力
-│   ├── falcon-cli/          # 命令行工具
-│   └── falcon-daemon/       # 后台守护进程
+│   ├── libfalcon-core/      # Core download engine, task model, event system
+│   ├── libfalcon-protocols/ # Standard download protocols
+│   ├── libfalcon-storage/   # Object storage and resource browsing
+│   ├── libfalcon-drives/    # Cloud drive and share-link capabilities
+│   ├── falcon-cli/          # Command-line tool
+│   └── falcon-daemon/       # Background daemon
 ├── apps/
-│   ├── desktop/             # 桌面应用
-│   └── browser_extension/   # 浏览器扩展
-└── docs/                    # 项目文档
+│   ├── desktop/             # Desktop application
+│   └── browser_extension/   # Browser extension
+└── docs/                    # Project documentation
 ```
 
-## 协议支持
+## Protocol Support
 
-| 协议 | 状态 | 说明 |
-|------|------|------|
-| HTTP/HTTPS | 已启用 | 断点续传、分块下载 |
-| FTP/FTPS | 已启用 | 主动/被动模式 |
-| BitTorrent | 已启用 | 基于 libtorrent，做种、DHT、NAT 端口映射 |
-| ED2K | 可选实现 | 代码库内有实现，默认构建通常关闭 |
-| 迅雷 | 可选实现 | 代码库内有实现，默认构建通常关闭 |
-| QQ旋风 | 可选实现 | 代码库内有实现，默认构建通常关闭 |
-| 快车 | 可选实现 | 代码库内有实现，默认构建通常关闭 |
-| HLS/DASH | 可选实现 | 代码库内有实现，默认构建通常关闭 |
+| Protocol | Status | Notes |
+|----------|--------|-------|
+| HTTP/HTTPS | Enabled | Resumable and chunked downloads |
+| FTP/FTPS | Enabled | Active/passive modes |
+| BitTorrent | Enabled | libtorrent-based, with seeding, DHT, and NAT port mapping |
+| ED2K | Optional | Implemented in the codebase, usually off in default builds |
+| Thunder | Optional | Implemented in the codebase, usually off in default builds |
+| QQ Whirlwind | Optional | Implemented in the codebase, usually off in default builds |
+| FlashGet | Optional | Implemented in the codebase, usually off in default builds |
+| HLS/DASH | Optional | Implemented in the codebase, usually off in default builds |
 
-## 贡献
+## Contributing
 
-欢迎贡献代码、报告问题或提出建议！
+Contributions, bug reports, and suggestions are welcome!
 
 - [GitHub Issues](https://github.com/cuihairu/falcon/issues)
-- [贡献指南](/developer/)
+- [Contributing Guide](/developer/)
 
-## 许可证
+## License
 
 Apache License 2.0

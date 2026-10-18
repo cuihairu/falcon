@@ -1,24 +1,26 @@
-# 架构设计
+[中文](architecture.zh.md) | **English**
 
-本文档基于当前仓库代码说明 Falcon 的核心结构，而不是早期设计稿中的理想化接口。
+# Architecture Design
 
-## 总体结构
+This document describes Falcon's core structure based on the current repository code, not the idealized interfaces from early design drafts.
+
+## Overall Structure
 
 ```text
 falcon/
 ├── packages/
-│   ├── libfalcon-core/     # 核心下载引擎、任务模型、事件系统
-│   ├── libfalcon-protocols/# 标准下载协议与协议相关实现
-│   ├── libfalcon-storage/  # 对象存储与远程资源浏览
-│   ├── libfalcon-drives/   # 网盘、分享链、账号态能力
-│   ├── falcon-cli/         # 命令行工具
-│   └── falcon-daemon/      # 后台服务
+│   ├── libfalcon-core/     # Core download engine, task model, event system
+│   ├── libfalcon-protocols/# Standard download protocols and protocol-related implementations
+│   ├── libfalcon-storage/  # Object storage and remote resource browsing
+│   ├── libfalcon-drives/   # Cloud drives, share links, account-state capabilities
+│   ├── falcon-cli/         # Command-line tool
+│   └── falcon-daemon/      # Background service
 ├── apps/
-│   └── desktop/            # Qt6 桌面应用
-└── docs/                   # 文档站
+│   └── desktop/            # Qt6 desktop application
+└── docs/                   # Documentation site
 ```
 
-## 库依赖关系
+## Library Dependencies
 
 ```
 falcon_protocols  →  falcon_core
@@ -26,69 +28,69 @@ falcon_storage    →  falcon_core
 falcon_drives     →  falcon_core
 ```
 
-禁止反向依赖：`core` 不依赖 `protocols/storage/drives`。
+Reverse dependencies are forbidden: `core` does not depend on `protocols/storage/drives`.
 
-顶层还提供兼容聚合 target：
+The top level also provides a compatibility aggregate target:
 
 ```text
 Falcon::falcon = falcon_core + falcon_protocols + falcon_storage + falcon_drives
 ```
 
-`Falcon::falcon` 主要用于历史兼容和“一次性链接全部能力”的场景。内部应用、测试和新增模块应优先按需链接具体 target，例如 `Falcon::core`、`Falcon::protocols`、`Falcon::storage` 或 `Falcon::drives`，避免把无关模块隐式带入最终链接图。
+`Falcon::falcon` mainly serves historical compatibility and "link everything in one go" scenarios. Internal applications, tests, and new modules should prefer linking the specific targets they need — for example `Falcon::core`, `Falcon::protocols`, `Falcon::storage`, or `Falcon::drives` — to avoid implicitly pulling unrelated modules into the final link graph.
 
-## 当前分层状态
+## Current Layering Status
 
 ### libfalcon-core
 
-核心层包含稳定领域模型和调度抽象：
+The core layer contains the stable domain model and scheduling abstractions:
 
-- `DownloadTask`、`TaskManager`、`DownloadEngine`
-- `ProtocolRegistry`、`IProtocolHandler`
-- `EventDispatcher`、`IEventListener`
-- 基础类型、异常、日志、版本、密码管理
+- `DownloadTask`, `TaskManager`, `DownloadEngine`
+- `ProtocolRegistry`, `IProtocolHandler`
+- `EventDispatcher`, `IEventListener`
+- Basic types, exceptions, logging, versioning, password management
 
-`falcon_core` 可以独立构建和测试，不依赖具体协议实现。内置协议注册通过 `builtin_protocol_handlers_stub.cpp` 提供弱符号桩函数；当最终程序同时链接 `falcon_protocols` 时，`libfalcon-protocols/src/builtin_protocol_handlers.cpp` 中的真实实现会覆盖桩函数并注册 HTTP/FTP 等具体处理器。
+`falcon_core` can be built and tested independently, with no dependency on concrete protocol implementations. Built-in protocol registration goes through weak-symbol stub functions provided by `builtin_protocol_handlers_stub.cpp`; when the final program also links `falcon_protocols`, the real implementations in `libfalcon-protocols/src/builtin_protocol_handlers.cpp` override the stubs and register concrete handlers such as HTTP and FTP.
 
 ### libfalcon-protocols
 
-协议层依赖 `falcon_core`，负责具体下载协议和传输能力：
+The protocol layer depends on `falcon_core` and provides the concrete download protocols and transport capabilities:
 
-- HTTP/FTP 等协议处理器
-- 分段下载、增量下载、请求组、文件 hash
-- socket/event poll 等协议侧网络基础设施
-- 可选私有协议插件
+- Protocol handlers such as HTTP and FTP
+- Segmented downloads, incremental downloads, request groups, file hashing
+- Protocol-side networking infrastructure such as sockets and event polling
+- Optional private protocol plugins
 
-协议层可以扩展具体协议，但不应把协议实现细节反向放入 core。
+The protocol layer can be extended with additional protocols, but protocol implementation details must not leak back into core.
 
 ### libfalcon-storage
 
-存储层依赖 `falcon_core`，负责远程资源浏览和对象存储浏览能力，例如 FTP/S3/OSS/COS/Kodo/Upyun browser。它不应依赖 `falcon_protocols`。
+The storage layer depends on `falcon_core` and provides remote resource browsing and object-storage browsing capabilities — for example the FTP/S3/OSS/COS/Kodo/Upyun browsers. It must not depend on `falcon_protocols`.
 
 ### libfalcon-drives
 
-网盘层依赖 `falcon_core`，负责网盘、分享链、资源搜索和配置管理类能力。当前这层仍包含占位源文件和多个可选功能开关，成熟度低于 `core` 和基础协议层。
+The cloud-drive layer depends on `falcon_core` and provides cloud drive, share-link, resource-search, and configuration-management capabilities. This layer still contains placeholder source files and several optional feature switches, and is less mature than `core` and the core protocol layer.
 
-## 当前稳定性基线
+## Current Stability Baseline
 
-当前已用 vcpkg manifest 构建验证：
+The following have been verified with vcpkg manifest builds:
 
-- `falcon_core_tests`: 384 个测试通过
-- `falcon_split_tests`: 10 个测试通过
+- `falcon_core_tests`: 384 tests passing
+- `falcon_split_tests`: 10 tests passing
 
-这说明 `libfalcon-core` 的核心行为和四库链接分层在当前测试覆盖范围内是稳定的。它不等价于整个项目功能齐全；协议插件、桌面端、daemon、网盘和资源浏览仍需要各自的集成测试与真实场景验证。
+This shows that the core behavior of `libfalcon-core` and the four-library link layering are stable within current test coverage. It does not mean the whole project is feature-complete; protocol plugins, the desktop app, the daemon, cloud drives, and resource browsing still need their own integration tests and real-world validation.
 
-## libfalcon-core 核心组件
+## Core Components of libfalcon-core
 
 ### DownloadEngine
 
-`DownloadEngine` 是面向调用方的主入口，负责：
+`DownloadEngine` is the main entry point for callers, responsible for:
 
-- 接收下载请求
-- 管理任务生命周期
-- 管理事件监听器
-- 与 `ProtocolRegistry` 和 `TaskManager` 协作
+- Accepting download requests
+- Managing task lifecycles
+- Managing event listeners
+- Cooperating with `ProtocolRegistry` and `TaskManager`
 
-当前公开接口以这些方法为主：
+Its current public interface consists mainly of these methods:
 
 ```cpp
 DownloadTask::Ptr add_task(const std::string& url,
@@ -108,32 +110,32 @@ std::vector<std::string> get_supported_protocols() const;
 bool is_url_supported(const std::string& url) const;
 ```
 
-说明：
+Notes:
 
-- `DownloadEngine` 构造时会加载当前构建里可用的内置处理器。
-- 文档中不再使用旧的 `startDownload()` / `loadPlugin()` 作为对外接口。
+- Constructing a `DownloadEngine` loads the built-in handlers available in the current build.
+- The documentation no longer presents the old `startDownload()` / `loadPlugin()` as external interfaces.
 
 ### TaskManager
 
-`TaskManager` 负责：
+`TaskManager` is responsible for:
 
-- 任务队列
-- 最大并发控制
-- 任务状态迁移
-- 启动、暂停、恢复、取消具体任务
+- The task queue
+- Maximum concurrency control
+- Task state transitions
+- Starting, pausing, resuming, and canceling individual tasks
 
-从 `DownloadEngine` 实现来看，任务通常先通过 `add_task()` 创建，再由 `start_task()` 推进执行。
+From the `DownloadEngine` implementation, tasks are typically first created via `add_task()` and then driven forward by `start_task()`.
 
 ### ProtocolRegistry
 
-`ProtocolRegistry` 负责：
+`ProtocolRegistry` is responsible for:
 
-- 注册协议处理器
-- 根据 URL 路由到合适处理器
-- 加载当前构建里可用的内置 handler
-- 提供协议与 scheme 查询
+- Registering protocol handlers
+- Routing a URL to the appropriate handler
+- Loading the built-in handlers available in the current build
+- Providing protocol and scheme queries
 
-公共头文件中的核心方法包括：
+Core methods from the public header include:
 
 ```cpp
 void register_handler(std::unique_ptr<IProtocolHandler> handler);
@@ -145,7 +147,7 @@ bool supports_url(const std::string& url) const;
 
 ### IProtocolHandler
 
-协议插件通过 `IProtocolHandler` 接入：
+Protocol plugins plug in through `IProtocolHandler`:
 
 ```cpp
 std::string protocol_name() const;
@@ -159,36 +161,36 @@ void resume(DownloadTask::Ptr task, IEventListener* listener);
 void cancel(DownloadTask::Ptr task);
 ```
 
-与旧设计相比，下载接口不是“传 URL 返回新 task”，而是“接收已有 `DownloadTask::Ptr`”。
+Compared with the old design, the download interface is not "pass a URL, get a new task" — it "receives an existing `DownloadTask::Ptr`".
 
-## 下载流程
+## Download Flow
 
 ```text
-用户调用 add_task(url, options)
+Caller invokes add_task(url, options)
         ↓
-DownloadEngine 校验 URL 并创建 DownloadTask
+DownloadEngine validates the URL and creates a DownloadTask
         ↓
-ProtocolRegistry 根据 URL 找到协议处理器
+ProtocolRegistry finds the protocol handler for the URL
         ↓
-TaskManager 接管任务并排队
+TaskManager takes over the task and queues it
         ↓
-start_task(id) 触发执行
+start_task(id) triggers execution
         ↓
-协议处理器执行 download(task, listener)
+The protocol handler executes download(task, listener)
         ↓
-任务状态和进度通过事件系统回传
+Task status and progress are reported back through the event system
 ```
 
-## 事件系统
+## Event System
 
-当前公共事件接口不是 `ProgressEvent` / `CompleteEvent` 这套结构体，而是：
+The current public event interfaces are not the `ProgressEvent` / `CompleteEvent` structs, but rather:
 
 - `TaskStatus`
 - `ProgressInfo`
 - `FileInfo`
 - `IEventListener`
 
-`IEventListener` 主要回调：
+Main `IEventListener` callbacks:
 
 ```cpp
 void on_status_changed(TaskId task_id,
@@ -200,24 +202,24 @@ void on_completed(TaskId task_id, const std::string& output_path);
 void on_file_info(TaskId task_id, const FileInfo& info);
 ```
 
-## 并发与线程
+## Concurrency and Threading
 
-从当前实现看：
+From the current implementation:
 
-- `EventDispatcher` 负责事件分发
-- `TaskManager` 负责任务调度
-- 协议处理器负责具体下载逻辑
-- `DownloadEngine::Impl` 在构造时启动事件分发器和任务管理器
+- `EventDispatcher` handles event dispatch
+- `TaskManager` handles task scheduling
+- Protocol handlers implement the concrete download logic
+- `DownloadEngine::Impl` starts the event dispatcher and task manager at construction
 
-这意味着调用方通常不需要自己管理“主事件循环”。
+This means callers normally do not need to manage a "main event loop" themselves.
 
-## 设计边界
+## Design Boundaries
 
-当前文档刻意不再展开这些尚未形成稳定公共 API 的设计：
+This document deliberately does not expand on designs that have not yet formed a stable public API:
 
-- `startDownloadAsync()` 之类异步包装接口
-- 协程版下载 API
-- 协议专属公开选项结构体
-- Web 管理界面作为既成事实架构层
+- Async wrapper interfaces like `startDownloadAsync()`
+- Coroutine-based download APIs
+- Protocol-specific public option structs
+- A web management interface as a de facto architecture layer
 
-这些内容如果未来进入实际头文件，再适合写进架构文档。
+Once any of these land in actual headers, they will be appropriate to document in the architecture pages.

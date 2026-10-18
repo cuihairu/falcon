@@ -1,47 +1,49 @@
-# 开发者指南
+[中文](index.zh.md) | **English**
 
-欢迎来到 Falcon 开发者指南！本文档面向希望贡献代码或基于 Falcon 进行开发的开发者。
+# Developer Guide
 
-## 目录
+Welcome to the Falcon developer guide! This document is aimed at developers who want to contribute code or build on top of Falcon.
 
-- [开发环境搭建](#开发环境搭建)
-- [项目架构](#项目架构)
-- [代码规范](#代码规范)
-- [测试指南](#测试指南)
-- [插件开发](#插件开发)
-- [提交代码](#提交代码)
+## Table of Contents
 
-## 开发环境搭建
+- [Setting Up the Development Environment](#setting-up-the-development-environment)
+- [Project Architecture](#project-architecture)
+- [Coding Standards](#coding-standards)
+- [Testing Guide](#testing-guide)
+- [Plugin Development](#plugin-development)
+- [Submitting Code](#submitting-code)
 
-### 前置要求
+## Setting Up the Development Environment
+
+### Prerequisites
 
 - **CMake** 3.15+
-- **C++ 编译器** (GCC 7+, Clang 5+, MSVC 2017+)
+- **C++ compiler** (GCC 7+, Clang 5+, MSVC 2017+)
 - **Git**
-- **vcpkg** (推荐) 或系统包管理器
+- **vcpkg** (recommended) or a system package manager
 
-### 获取源码
+### Getting the Source
 
 ```bash
 git clone https://github.com/cuihairu/falcon.git
 cd falcon
 ```
 
-### 安装依赖
+### Installing Dependencies
 
-#### 使用 vcpkg
+#### Using vcpkg
 
 ```bash
-# 安装 vcpkg
+# Install vcpkg
 git clone https://github.com/Microsoft/vcpkg.git
 cd vcpkg
 ./bootstrap-vcpkg.sh
 
-# 安装依赖
+# Install dependencies
 ./vcpkg install spdlog nlohmann-json curl openssl gtest
 ```
 
-#### 系统包管理器
+#### System Package Manager
 
 ```bash
 # macOS
@@ -53,31 +55,31 @@ sudo apt install build-essential cmake git \
   libssl-dev libgtest-dev
 ```
 
-### 编译项目
+### Building the Project
 
 ```bash
-# Debug 模式（开发）
+# Debug mode (development)
 cmake -B build -S . \
   -DCMAKE_BUILD_TYPE=Debug \
   -DFALCON_BUILD_TESTS=ON \
   -DCMAKE_TOOLCHAIN_FILE=[vcpkg-root]/scripts/buildsystems/vcpkg.cmake
 
-# 编译
+# Build
 cmake --build build
 
-# 运行测试
+# Run the tests
 ctest --test-dir build --output-on-failure
 ```
 
-### IDE 配置
+### IDE Configuration
 
 #### VS Code
 
-安装扩展：
+Install the extensions:
 - C/C++ Extension Pack
 - CMake Tools
 
-配置 `.vscode/settings.json`:
+Configure `.vscode/settings.json`:
 
 ```json
 {
@@ -94,25 +96,25 @@ File → Settings → Build, Execution, Deployment → CMake
 - CMake options: `-DCMAKE_TOOLCHAIN_FILE=[vcpkg-root]/scripts/buildsystems/vcpkg.cmake`
 - Build directory: `build`
 
-## 项目架构
+## Project Architecture
 
-### Monorepo 结构
+### Monorepo Layout
 
 ```
 falcon/
 ├── packages/
-│   ├── libfalcon-core/        # 核心下载引擎
-│   ├── libfalcon-protocols/   # 标准下载协议
-│   ├── libfalcon-storage/     # 对象存储与资源浏览
-│   ├── libfalcon-drives/      # 网盘与云存储
-│   ├── falcon-cli/            # 命令行工具
-│   └── falcon-daemon/         # 后台守护进程
+│   ├── libfalcon-core/        # Core download engine
+│   ├── libfalcon-protocols/   # Standard download protocols
+│   ├── libfalcon-storage/     # Object storage and resource browsing
+│   ├── libfalcon-drives/      # Cloud drives and cloud storage
+│   ├── falcon-cli/            # Command-line tool
+│   └── falcon-daemon/         # Background daemon
 ├── apps/
-│   └── desktop/               # Qt6 桌面应用
-└── docs/                      # 文档
+│   └── desktop/               # Qt6 desktop application
+└── docs/                      # Documentation
 ```
 
-### 库依赖关系
+### Library Dependencies
 
 ```
 falcon_protocols  →  falcon_core
@@ -120,50 +122,50 @@ falcon_storage    →  falcon_core
 falcon_drives     →  falcon_core
 ```
 
-禁止反向依赖：`core` 不依赖 `protocols/storage/drives`。
+Reverse dependencies are forbidden: `core` does not depend on `protocols/storage/drives`.
 
-### 核心组件
+### Core Components
 
-| 组件 | 库 | 职责 |
-|------|------|------|
-| `DownloadEngine` | core | 下载引擎核心 |
-| `TaskManager` | core | 任务管理器 |
-| `ProtocolRegistry` | core | 协议处理器注册与路由 |
-| `IProtocolHandler` | core | 协议处理器接口 |
-| `HttpHandler` | protocols | HTTP/HTTPS 协议 |
-| `SegmentDownloader` | protocols | 多线程分段下载 |
-| `S3Browser` | storage | S3 资源浏览 |
-| `CloudStorageManager` | drives | 网盘与分享链相关旧抽象 |
+| Component | Library | Responsibility |
+|-----------|---------|----------------|
+| `DownloadEngine` | core | Download engine core |
+| `TaskManager` | core | Task manager |
+| `ProtocolRegistry` | core | Protocol handler registration and routing |
+| `IProtocolHandler` | core | Protocol handler interface |
+| `HttpHandler` | protocols | HTTP/HTTPS protocol |
+| `SegmentDownloader` | protocols | Multi-threaded segmented downloads |
+| `S3Browser` | storage | S3 resource browsing |
+| `CloudStorageManager` | drives | Legacy abstraction for cloud drives and share links |
 
-::: tip 详细架构
-请查看 [架构设计文档](./architecture.md) 了解更多细节。
+::: tip Full architecture
+See the [architecture design document](./architecture.md) for more details.
 :::
 
-## 代码规范
+## Coding Standards
 
-### C++ 风格
+### C++ Style
 
-遵循 **Google C++ Style Guide**：
+Follow the **Google C++ Style Guide**:
 
 ```cpp
-// 类名：PascalCase
+// Class names: PascalCase
 class DownloadEngine {
 public:
-    // 函数名：snake_case
-    void add_download(const std::string& url);
+    // Function names: snake_case
+    bool start_task(TaskId id);
 
-    // 成员变量：下划线后缀
+    // Member variables: trailing underscore
     int task_count_;
 
 private:
     std::string config_path_;
 };
 
-// 常量：全大写 + 下划线
-const int MAX_RETRIES = 5;
+// Constants: k prefix + PascalCase
+constexpr int kMaxRetries = 5;
 ```
 
-### 命名空间
+### Namespaces
 
 ```cpp
 namespace falcon {
@@ -177,101 +179,106 @@ class EventPoll {
 } // namespace falcon
 ```
 
-### 注释规范
+### Comment Conventions
 
 ```cpp
 /**
  * @file download_engine.hpp
- * @brief 下载引擎类定义
+ * @brief Download engine class definition
  * @author Falcon Team
  * @date 2025-12-25
  */
 
 /**
  * @class DownloadEngine
- * @brief 高性能下载引擎
+ * @brief High-performance download engine
  *
- * 支持多协议、多线程、断点续传等功能
+ * Supports multiple protocols, multi-threading, resumable downloads, and more
  */
 class DownloadEngine {
 public:
     /**
-     * @brief 添加下载任务
+     * @brief Add a download task
      *
-     * @param url 下载 URL
-     * @param options 下载选项
-     * @return 任务 ID
+     * @param url Download URL
+     * @param options Download options
+     * @return Task object, nullptr on failure
      *
-     * @throws InvalidURLException 当 URL 格式错误时
+     * @throws InvalidURLException When the URL is malformed
      */
-    TaskId add_download(const std::string& url,
-                       const DownloadOptions& options = {});
+    DownloadTask::Ptr add_task(const std::string& url,
+                               const DownloadOptions& options = {});
 };
 ```
 
-### 格式化
+### Formatting
 
 ```bash
-# 格式化所有文件
+# Format all files
 find . -name "*.cpp" -o -name "*.hpp" | xargs clang-format -i
 ```
 
-::: tip 详细规范
-请查看 [编码规范文档](./coding-standards.md) 了解更多细节。
+::: tip Full standards
+See the [coding standards document](./coding-standards.md) for more details.
 :::
 
-## 测试指南
+## Testing Guide
 
-### 单元测试
+### Unit Tests
 
-使用 **Google Test** 框架：
+The project uses the **Google Test** framework:
 
 ```cpp
 #include <gtest/gtest.h>
 #include <falcon/download_engine.hpp>
 
-TEST(DownloadEngineTest, AddDownload) {
+TEST(DownloadEngineTest, AddTask) {
     falcon::DownloadEngine engine;
-    TaskId id = engine.add_download("https://example.com/file.zip");
-    EXPECT_NE(id, INVALID_TASK_ID);
+    auto task = engine.add_task("https://example.com/file.zip");
+    EXPECT_NE(task, nullptr);
 }
 ```
 
-### 运行测试
+### Running Tests
 
 ```bash
-# 运行所有测试
+# Run all tests
 ctest --test-dir build
 
-# 运行特定测试
+# Run a specific test
 ./build/bin/falcon_core_tests --gtest_filter="DownloadEngineTest*"
 
-# 查看测试覆盖率
-cmake --build build --target coverage
+# Test coverage: reconfigure with coverage instrumentation, then build and test
+cmake -B build-cov -S . -DFALCON_ENABLE_COVERAGE=ON -DFALCON_BUILD_TESTS=ON
+cmake --build build-cov
+ctest --test-dir build-cov --output-on-failure
+
+# Generate a report with gcovr (installed separately)
+gcovr -r . --filter 'packages/' build-cov
 ```
 
-### 提交代码前检查
+### Pre-Submission Checks
 
 ```bash
-# 格式化检查
-./scripts/check-format.sh
+# Format check
+find . -name "*.cpp" -o -name "*.hpp" | xargs clang-format --dry-run --Werror
 
-# 静态分析
-./scripts/run-clang-tidy.sh
+# Static analysis
+clang-tidy -p build <source-file>
 
-# 运行所有测试
+# Run all tests
 ctest --test-dir build --output-on-failure
 ```
 
-::: tip 详细测试指南
-请查看 [测试文档](./testing.md) 了解更多细节。
+::: tip Full testing guide
+See the [testing document](./testing.md) for more details.
 :::
 
-## 插件开发
+## Plugin Development
 
-### 创建新协议插件
+### Creating a New Protocol Plugin
 
-1. **定义插件接口**:
+1. **Define the plugin interface**:
 
 ```cpp
 // plugins/myprotocol/myprotocol_plugin.hpp
@@ -280,189 +287,196 @@ ctest --test-dir build --output-on-failure
 
 class MyProtocolPlugin : public IProtocolHandler {
 public:
-    std::string protocol() const override { return "myproto"; }
+    std::string protocol_name() const override { return "myproto"; }
+
+    std::vector<std::string> supported_schemes() const override {
+        return {"myproto"};
+    }
 
     bool can_handle(const std::string& url) const override {
         return url.find("myproto://") == 0;
     }
 
-    std::shared_ptr<DownloadTask> download(
-        const std::string& url,
-        const DownloadOptions& options,
-        IEventListener* listener) override;
+    FileInfo get_file_info(const std::string& url,
+                           const DownloadOptions& options) override;
+
+    void download(DownloadTask::Ptr task,
+                  IEventListener* listener) override;
+
+    void pause(DownloadTask::Ptr task) override;
+    void resume(DownloadTask::Ptr task, IEventListener* listener) override;
+    void cancel(DownloadTask::Ptr task) override;
 };
 ```
 
-2. **实现插件逻辑**:
+2. **Implement the plugin logic**:
 
 ```cpp
 // plugins/myprotocol/myprotocol_plugin.cpp
 #include "myprotocol_plugin.hpp"
 
-std::shared_ptr<DownloadTask> MyProtocolPlugin::download(
-    const std::string& url,
-    const DownloadOptions& options,
-    IEventListener* listener) {
+void MyProtocolPlugin::download(DownloadTask::Ptr task,
+                                IEventListener* listener) {
 
-    // 解析 URL
-    // 建立连接
-    // 下载数据
-    // 通知进度
+    // Parse the URL
+    // Establish the connection
+    // Download the data
+    // Report progress
 }
 ```
 
-3. **注册处理器**:
+3. **Register the handler**:
 
 ```cpp
 falcon::DownloadEngine engine;
 engine.register_handler(std::make_unique<MyProtocolPlugin>());
-}
 ```
 
-::: tip 详细插件开发
-请查看 [插件开发文档](./plugins.md) 了解更多细节。
+::: tip Full plugin development guide
+See the [plugin development document](./plugins.md) for more details.
 :::
 
-## 桌面应用开发
+## Desktop Application Development
 
-### 技术栈
+### Technology Stack
 
-Desktop 应用使用 **Qt6** 框架开发：
+The desktop application is built with the **Qt6** framework:
 
-- **CMake**: 构建系统
-- **Qt6 Widgets**: UI 框架
-- **QSS**: 样式表（支持亮色/暗色主题）
-- **libfalcon**: 核心下载库
+- **CMake**: Build system
+- **Qt6 Widgets**: UI framework
+- **QSS**: Style sheets (light/dark themes supported)
+- **falcon_core**: Core download library
 
-### 目录结构
+### Directory Layout
 
 ```
 apps/desktop/
 ├── src/
-│   ├── main.cpp               # 入口
-│   ├── main_window.{hpp,cpp}  # 主窗口
-│   ├── widgets/               # UI 组件
-│   │   ├── top_bar.hpp        # 顶部工具栏
-│   │   ├── status_bar.hpp     # 底部状态栏
-│   │   └── sidebar.hpp        # 侧边导航栏
-│   ├── pages/                 # 页面
-│   │   ├── download_page.hpp  # 下载管理
-│   │   ├── cloud_page.hpp     # 云盘管理
-│   │   ├── discovery_page.hpp # 资源发现
-│   │   └── settings_page.hpp  # 设置
-│   ├── dialogs/               # 对话框
-│   ├── services/              # 服务层
-│   │   ├── search_service.hpp # 搜索服务
-│   │   ├── storage_service.hpp # 存储服务
-│   │   └── theme_manager.hpp  # 主题管理
-│   └── utils/                 # 工具类
+│   ├── main.cpp               # Entry point
+│   ├── main_window.{hpp,cpp}  # Main window
+│   ├── widgets/               # UI components
+│   │   ├── top_bar.hpp        # Top toolbar
+│   │   └── status_bar.hpp     # Bottom status bar
+│   ├── navigation/            # Navigation
+│   │   └── sidebar.hpp        # Side navigation bar
+│   ├── pages/                 # Pages
+│   │   ├── download_page.hpp  # Download management
+│   │   ├── cloud_page.hpp     # Cloud drive management
+│   │   ├── discovery_page.hpp # Resource discovery
+│   │   └── settings_page.hpp  # Settings
+│   ├── dialogs/               # Dialogs
+│   ├── services/              # Service layer
+│   │   ├── search_service.hpp # Search service
+│   │   └── storage_service.hpp # Storage service
+│   └── utils/                 # Utilities
+│       ├── theme_manager.hpp  # Theme management
 │       ├── clipboard_monitor.hpp
-│       └── url_detector.hpp    # URL 检测（含云盘）
+│       └── url_detector.hpp    # URL detection (including cloud drives)
 └── CMakeLists.txt
 ```
 
-### 编译 Desktop 应用
+### Building the Desktop Application
 
 ```bash
-# 安装 Qt6
+# Install Qt6
 # Ubuntu
 sudo apt install qt6-base-dev qt6-tools-dev
 
 # macOS
 brew install qt@6
 
-# 配置 CMake
+# Configure CMake
 cmake -B build -S . \
   -DFALCON_BUILD_DESKTOP=ON \
   -DCMAKE_PREFIX_PATH=/path/to/Qt/6.x.x/gcc_64
 
-# 编译
+# Build
 cmake --build build --target falcon-desktop
 
-# 运行
+# Run
 ./build/bin/falcon-desktop
 ```
 
-### 主要功能
+### Main Features
 
-| 功能 | 说明 |
-|------|------|
-| 网格/表格视图切换 | 任务列表支持卡片和表格两种显示模式 |
-| 系统托盘集成 | 关闭最小化到托盘 |
-| 主题切换 | 亮色/暗色主题，运行时切换 |
-| 云盘链接识别 | 支持百度网盘、阿里云盘、夸克等 |
-| 剪贴板监听 | 自动检测剪切板中的下载链接 |
-| IPC 服务器 | 接收浏览器扩展的下载请求 |
+| Feature | Description |
+|---------|-------------|
+| Grid/table view switching | Task list supports both card and table display modes |
+| System tray integration | Closing minimizes to the tray |
+| Theme switching | Light/dark themes, switchable at runtime |
+| Cloud drive link detection | Supports Baidu Netdisk, Aliyun Drive, Quark, and more |
+| Clipboard monitoring | Automatically detects download links in the clipboard |
+| IPC server | Receives download requests from the browser extension |
 
-## 提交代码
+## Submitting Code
 
-### 提交信息规范
+### Commit Message Conventions
 
-遵循 **Conventional Commits**:
+Follow **Conventional Commits**:
 
 ```
-feat: 添加 XXX 功能
-fix: 修复 YYY 问题
-docs: 更新 ZZZ 文档
-test: 添加 AAA 测试
-refactor: 重构 BBB 模块
-perf: 优化 CCC 性能
+feat: add xxx feature
+fix: fix yyy issue
+docs: update zzz docs
+test: add aaa tests
+refactor: refactor bbb module
+perf: improve ccc performance
 ```
 
-### Pull Request 流程
+### Pull Request Workflow
 
-1. Fork 项目
-2. 创建功能分支: `git checkout -b feature/my-feature`
-3. 提交代码: `git commit -m "feat: 添加功能"`
-4. 推送分支: `git push origin feature/my-feature`
-5. 创建 Pull Request
+1. Fork the project
+2. Create a feature branch: `git checkout -b feature/my-feature`
+3. Commit your changes: `git commit -m "feat: add my feature"`
+4. Push the branch: `git push origin feature/my-feature`
+5. Create a Pull Request
 
-### PR 检查清单
+### PR Checklist
 
-- [ ] 代码符合编码规范
-- [ ] 通过所有测试
-- [ ] 添加了必要的测试
-- [ ] 更新了相关文档
-- [ ] 提交信息清晰明确
+- [ ] Code follows the coding standards
+- [ ] All tests pass
+- [ ] Necessary tests were added
+- [ ] Related documentation was updated
+- [ ] Commit messages are clear and descriptive
 
-## 调试技巧
+## Debugging Tips
 
-### 使用 gdb
+### Using gdb
 
 ```bash
-# 编译 Debug 版本
+# Build a Debug version
 cmake -B build -S . -DCMAKE_BUILD_TYPE=Debug
 cmake --build build
 
-# 启动 gdb
+# Start gdb
 gdb ./build/bin/falcon-cli
 ```
 
-### 使用 lldb (macOS)
+### Using lldb (macOS)
 
 ```bash
 lldb ./build/bin/falcon-cli
 ```
 
-### 日志调试
+### Log-Based Debugging
 
 ```cpp
-FALCON_LOG_DEBUG("调试信息: " << value);
-FALCON_LOG_INFO("普通信息");
-FALCON_LOG_WARN("警告信息");
-FALCON_LOG_ERROR("错误信息");
+FALCON_LOG_DEBUG("debug info: " << value);
+FALCON_LOG_INFO("info message");
+FALCON_LOG_WARN("warning message");
+FALCON_LOG_ERROR("error message");
 ```
 
-::: tip 详细调试指南
-请查看 [调试文档](./debugging.md) 了解更多细节。
+::: tip Full debugging guide
+See the [debugging document](./debugging.md) for more details.
 :::
 
-## 获取帮助
+## Getting Help
 
 - **GitHub Issues**: [https://github.com/cuihairu/falcon/issues](https://github.com/cuihairu/falcon/issues)
 - **Discussions**: [https://github.com/cuihairu/falcon/discussions](https://github.com/cuihairu/falcon/discussions)
 - **Wiki**: [https://github.com/cuihairu/falcon/wiki](https://github.com/cuihairu/falcon/wiki)
 
-::: tip 欢迎贡献
-感谢你对 Falcon 的关注！我们欢迎任何形式的贡献。
+::: tip Contributions welcome
+Thank you for your interest in Falcon! We welcome contributions of any kind.
 :::

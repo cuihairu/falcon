@@ -1,30 +1,32 @@
-# 快速开始
+[中文](getting-started.zh.md) | **English**
 
-本指南基于当前仓库实际状态，帮助你从源码构建并运行 Falcon CLI。
+# Getting Started
 
-## 前置要求
+This guide follows the current state of the repository and walks you through building and running the Falcon CLI from source.
 
-- **操作系统**：Windows 10+、macOS 10.14+、Linux（主流发行版）
-- **编译器**：
-  - GCC 7+（Linux）
-  - Clang 5+（macOS）
-  - MSVC 2017+（Windows）
-- **CMake**：3.15 或更高版本
+## Prerequisites
 
-## 安装
+- **Operating system**: Windows 10+, macOS 10.14+, or Linux (major distributions)
+- **Compilers**:
+  - GCC 7+ (Linux)
+  - Clang 5+ (macOS)
+  - MSVC 2017+ (Windows)
+- **CMake**: 3.15 or newer
 
-### 从源码编译（当前推荐）
+## Installation
 
-#### 1. 获取源码
+### Build from Source (Currently Recommended)
+
+#### 1. Get the Source
 
 ```bash
 git clone https://github.com/cuihairu/falcon.git
 cd falcon
 ```
 
-#### 2. 安装依赖
+#### 2. Install Dependencies
 
-**使用 vcpkg（推荐）**：
+**Using vcpkg (recommended)**:
 
 ```bash
 git clone https://github.com/Microsoft/vcpkg.git
@@ -33,7 +35,7 @@ cd vcpkg
 ./vcpkg install spdlog nlohmann-json curl openssl gtest
 ```
 
-**或使用系统包管理器**：
+**Or use your system package manager**:
 
 ```bash
 # macOS
@@ -43,7 +45,7 @@ brew install spdlog nlohmann-json curl openssl googletest
 sudo apt install libspdlog-dev nlohmann-json3-dev libcurl4-openssl-dev libssl-dev libgtest-dev
 ```
 
-#### 3. 编译
+#### 3. Build
 
 ```bash
 cmake -B build -S . \
@@ -53,42 +55,42 @@ cmake -B build -S . \
 cmake --build build --config Release
 ```
 
-当前文档仅保证源码构建路径准确。若后续提供预编译版本或系统包，请以仓库发布页和 CI 产物说明为准。
+This documentation only guarantees the build-from-source path. If prebuilt releases or system packages become available later, refer to the repository release page and the CI artifact notes instead.
 
-## 验证安装
+## Verify the Installation
 
 ```bash
 falcon-cli --version
 ```
 
-你应该看到类似以下输出：
+You should see output similar to:
 
 ```
 Falcon CLI v0.2.0
 ```
 
-## 第一个下载
+## Your First Download
 
-### 命令行下载
+### Downloading from the Command Line
 
 ```bash
-# 下载单个文件
+# Download a single file
 falcon-cli https://example.com/file.zip
 
-# 指定输出文件名
+# Specify the output file name
 falcon-cli https://example.com/file.zip -o my-file.zip
 
-# 指定保存目录
+# Specify the save directory
 falcon-cli https://example.com/file.zip -d ~/Downloads
 
-# 多线程下载
+# Multi-threaded download
 falcon-cli https://example.com/large.zip -c 5
 
-# 查看下载进度和详细日志
+# Show download progress and detailed logs
 falcon-cli https://example.com/file.zip --verbose
 ```
 
-### 下载不同类型的链接
+### Downloading Different Link Types
 
 #### HTTP/HTTPS
 
@@ -96,78 +98,78 @@ falcon-cli https://example.com/file.zip --verbose
 falcon-cli https://example.com/file.zip
 ```
 
-#### 迅雷链接
+#### Thunder Links
 
 ```bash
 falcon-cli "thunder://QUFodHRwOi8vZXhhbXBsZS5jb20vZmlsZS56aXAuWg=="
 ```
 
-#### 磁力链接
+#### Magnet Links
 
 ```bash
 falcon-cli "magnet:?xt=urn:btih:HASH&dn=Example"
 ```
 
-#### ED2K 链接
+#### ED2K Links
 
 ```bash
 falcon-cli "ed2k://file|example.zip|1048576|A1B2C3D4E5F6789012345678901234AB|/"
 ```
 
-#### HLS 流媒体
+#### HLS Streaming
 
 ```bash
 falcon-cli "https://example.com/playlist.m3u8" -o video.mp4
 ```
 
-## 当前可直接使用的 CLI 选项
+## CLI Options Available Today
 
-仓库中的 CLI 参数以 `packages/falcon-cli/src/main.cpp` 为准，下面列的是已经在代码里实现的常用项。
+The CLI arguments in the repository are defined in `packages/falcon-cli/src/main.cpp`; the table below lists the commonly used options that are already implemented in the code.
 
-| 选项 | 说明 | 示例 |
-|------|------|------|
-| `-o`, `--output` | 指定输出文件名 | `-o file.zip` |
-| `-d`, `--directory` | 指定输出目录 | `-d ~/Downloads` |
-| `-c`, `--connections` | 设置并发连接数 | `-c 5` |
-| `-j`, `--max-concurrent-downloads` | 设置最大并发任务数 | `-j 3` |
-| `--limit` | 单任务限速 | `--limit 1M` |
-| `--retry-wait` | 设置重试等待秒数 | `--retry-wait 5` |
-| `--proxy` | 指定代理地址 | `--proxy http://127.0.0.1:7890` |
-| `-H`, `--header` | 添加 HTTP 头 | `-H "Authorization: Bearer token"` |
+| Option | Description | Example |
+|--------|-------------|---------|
+| `-o`, `--output` | Specify the output file name | `-o file.zip` |
+| `-d`, `--directory` | Specify the output directory | `-d ~/Downloads` |
+| `-c`, `--connections` | Set the number of concurrent connections | `-c 5` |
+| `-j`, `--max-concurrent-downloads` | Set the maximum number of concurrent tasks | `-j 3` |
+| `--limit` | Per-task speed limit | `--limit 1M` |
+| `--retry-wait` | Set the retry wait in seconds | `--retry-wait 5` |
+| `--proxy` | Specify a proxy address | `--proxy http://127.0.0.1:7890` |
+| `-H`, `--header` | Add an HTTP header | `-H "Authorization: Bearer token"` |
 
-## 批量下载
+## Batch Downloads
 
-创建一个文本文件 `urls.txt`：
+Create a text file `urls.txt`:
 
 ```
-# 注释行以 # 开头
+# Comment lines start with #
 https://example.com/file1.zip
 https://example.com/file2.zip
 thunder://QUFodHRwOi8vZXhhbXBsZS5jb20vZmlsZTMuemlwWg==
 ```
 
-然后批量下载：
+Then download in batch:
 
 ```bash
 falcon-cli -i urls.txt -j 3
 ```
 
-## 下一步
+## Next Steps
 
-- [安装说明](installation.md) - 详细的构建和依赖说明
-- [使用指南](usage.md) - 深入了解命令行选项和 C++ API
-- [协议支持](/protocols/) - 了解所有支持的下载协议
+- [Installation Guide](installation.md) - Detailed build and dependency notes
+- [Usage Guide](usage.md) - A deeper look at CLI options and the C++ API
+- [Protocol Support](/protocols/) - Learn about all supported download protocols
 
-## 获取帮助
+## Getting Help
 
 ```bash
-# 查看帮助信息
+# Show help
 falcon-cli --help
 
-# 查看版本
+# Show the version
 falcon-cli --version
 ```
 
-::: tip 提示
-使用 `--verbose` 选项可以查看详细的下载日志，有助于排查问题。
+::: tip Tip
+Use the `--verbose` option to see detailed download logs, which helps with troubleshooting.
 :::

@@ -50,7 +50,7 @@ falcon-cli https://example.com/file.zip --proxy http://proxy:8080
 
 ### FTP
 
-支持 FTP 和 FTPS 协议，包括主动和被动模式。
+支持 FTP 和 FTPS 协议（FTP 默认使用被动模式）。
 
 ```bash
 # 下载FTP文件
@@ -59,8 +59,8 @@ falcon-cli ftp://ftp.example.com/file.zip
 # 使用用户名和密码
 falcon-cli ftp://user:pass@ftp.example.com/file.zip
 
-# FTPS（显式TLS）
-falcon-cli ftpes://ftp.example.com/file.zip
+# FTPS（libcurl 的 ftps://，含显式与隐式协商）
+falcon-cli ftps://ftp.example.com/file.zip
 ```
 
 ## 私有协议
@@ -73,7 +73,7 @@ Falcon 支持多种国内常用下载工具的私有协议：
 
 ```bash
 # 经典迅雷链接
-falcon-cli "thunder://QUFodHRwOi8vZXhhbXBsZS5jb20vZmlsZS56aXAuWg=="
+falcon-cli "thunder://QUFodHRwOi8vZXhhbXBsZS5jb20vZmlsZS56aXBaWg=="
 
 # 迅雷离线链接
 falcon-cli "thunderxl://aHR0cHM6Ly9leGFtcGxlLmNvbS92aWRlby5tcDQ="
@@ -88,7 +88,7 @@ falcon-cli "thunderxl://aHR0cHM6Ly9leGFtcGxlLmNvbS92aWRlby5tcDQ="
 falcon-cli "qqlink://aHR0cDovL2V4YW1wbGUuY29tL3ZpZGVvLm1wNA=="
 
 # 带GID的链接
-falcon-cli "qqlink://1234567890ABCDEF|video.mp4"
+falcon-cli "qqlink://1234567890ABCDEF|http://example.com/video.mp4"
 ```
 
 ### 快车 (FlashGet)
@@ -96,19 +96,19 @@ falcon-cli "qqlink://1234567890ABCDEF|video.mp4"
 支持 `flashget://` 和 `fg://` 格式。
 
 ```bash
-# 完整格式（带引用）
-falcon-cli "flashget://[URL]&ref=http://example.com"
+# Base64 完整格式（&ref= 尾缀会被剥除；载荷先 Base64 解码再剥 [FLASHGET] 前缀）
+falcon-cli "flashget://W0ZMQVNIR0VUXWh0dHA6Ly9leGFtcGxlLmNvbS9maWxlLnppcA==&ref=http://example.com/page"
 
-# 短格式
-falcon-cli "fg://aHR0cDovL2V4YW1wbGUuY29tL2ZpbGUuemlw"
+# 短格式（fg:// 载荷是 URL 编码，不是 Base64）
+falcon-cli "fg://http%3A%2F%2Fexample.com%2Ffile.zip"
 
-# Base64编码格式
-falcon-cli "flashget://[FLASHGET]aHR0cDovL2V4YW1wbGUuY29tLw=="
+# Base64 简写（无 &ref= 尾缀同样支持）
+falcon-cli "flashget://W0ZMQVNIR0VUXWh0dHA6Ly9leGFtcGxlLmNvbS9maWxlLnppcA=="
 ```
 
 ### ED2K (电驴)
 
-支持 `ed2k://` 格式，包括文件链接和服务器链接。
+支持 `ed2k://` 文件链接（服务器链接 `ed2k://server|...` 当前不支持，解析会报错）。
 
 ```bash
 # 文件链接
@@ -119,9 +119,6 @@ falcon-cli "ed2k://file|example.zip|1048576|HASH|/|s,192.168.1.1:4662|s,192.168.
 
 # 带AICH校验
 falcon-cli "ed2k://file|example.zip|1048576|HASH|/|h=ABCDEF123456789"
-
-# 服务器链接（仅服务器插件使用）
-falcon-cli "ed2k://server|server.example.com|4242|Main Server/"
 ```
 
 ## 流媒体协议
@@ -133,40 +130,29 @@ falcon-cli "ed2k://server|server.example.com|4242|Main Server/"
 ```bash
 # 下载HLS流
 falcon-cli "https://example.com/playlist.m3u8" -o video.mp4
-
-# 自动选择最佳质量
-falcon-cli "https://example.com/master.m3u8" -o best.mp4
 ```
 
 HLS 特性：
-- 自动解析主播放列表和变体播放列表
-- 支持加密流（需要密钥）
-- 自动选择最佳带宽
-- 使用 FFmpeg 合并媒体段
+- 解析 `.m3u8` 播放列表（EXTINF 时长信息）
+- 按序下载全部媒体段并按二进制拼接合并
+- 暂不支持主播放列表（master playlist）择流与加密流（AES 密钥）
 
 ### DASH (Dynamic Adaptive Streaming)
 
-支持 `.mpd` 清单文件。
-
-```bash
-# 下载DASH流
-falcon-cli "https://example.com/manifest.mpd" -o video.mp4"
-
-# 下载特定质量的视频
-falcon-cli "https://example.com/manifest.mpd" -o 1080p.mp4
-```
+DASH（`.mpd` 清单解析）尚未实现；直接提交 `.mpd` URL 会按普通文件下载清单本身。
+需要下载流媒体时请使用 HLS 播放列表。
 
 ## P2P协议
 
 ### BitTorrent
 
-支持 `.torrent` 文件和 `magnet://` 链接。
+支持 `.torrent` 文件和 `magnet:` 链接。
 
 ```bash
 # 使用Magnet链接
 falcon-cli "magnet:?xt=urn:btih:HASH&dn=Example&tr=tracker.example.com"
 
-# 下载torrent文件
+# 通过 HTTP 直链下载 .torrent 文件本身
 falcon-cli "https://example.com/file.torrent"
 
 # 下载本地torrent文件
@@ -177,10 +163,9 @@ falcon-cli "magnet:?xt=urn:btih:HASH" -d /downloads/torrents
 ```
 
 BitTorrent 特性：
-- 支持 DHT、LSD、UPnP、NAT-PMP
+- 支持 DHT、PEX（libtorrent 数据面，含 LSD/UPnP/NAT-PMP）
 - 自动获取更多节点
-- 可选择下载特定文件
-- 支持做种（完成后继续上传）
+- 支持做种（ratio/时长策略，默认做种到 1.0 倍）
 
 ## 使用示例
 
@@ -194,7 +179,7 @@ https://example.com/file1.zip
 https://example.com/file2.zip
 
 # 迅雷链接
-thunder://QUFodHRwOi8vZXhhbXBsZS5jb20vZmlsZTMuemlwWg==
+thunder://QUFodHRwOi8vZXhhbXBsZS5jb20vZmlsZTMuemlwWlo=
 
 # ED2K链接
 ed2k://file|video.mp4|1073741824|ABCDEF123456789|/
@@ -215,7 +200,7 @@ falcon-cli -i urls.txt
 #include <falcon/falcon.hpp>
 
 int main() {
-    // 创建下载引擎
+    // 创建下载引擎（构造时自动注册全部内置协议处理器，无需手动注册）
     falcon::DownloadEngine engine;
 
     // 配置下载选项
@@ -227,18 +212,21 @@ int main() {
     // 下载不同协议的文件
     std::vector<std::string> urls = {
         "https://example.com/file.zip",
-        "thunder://QUFodHRwOi8vZXhhbXBsZS5jb20vZmlsZS56aXAuWg==",
+        "thunder://QUFodHRwOi8vZXhhbXBsZS5jb20vZmlsZS56aXBaWg==",
         "ed2k://file|test.zip|1048576|HASH|/",
         "magnet:?xt=urn:btih:HASH&dn=Test"
     };
 
-    std::vector<std::shared_ptr<falcon::DownloadTask>> tasks;
+    std::vector<falcon::DownloadTask::Ptr> tasks;
 
     for (const auto& url : urls) {
-        if (engine.supportsUrl(url)) {
-            auto task = engine.startDownload(url, options);
-            tasks.push_back(task);
-            std::cout << "Started download: " << url << std::endl;
+        if (engine.is_url_supported(url)) {
+            auto task = engine.add_task(url, options);
+            if (task) {
+                engine.start_task(task->id());
+                tasks.push_back(task);
+                std::cout << "Started download: " << url << std::endl;
+            }
         }
     }
 
@@ -246,11 +234,11 @@ int main() {
     for (auto& task : tasks) {
         task->wait();
 
-        if (task->getStatus() == falcon::TaskStatus::Completed) {
+        if (task->status() == falcon::TaskStatus::Completed) {
             std::cout << "Download completed!" << std::endl;
-            std::cout << "File size: " << task->getTotalBytes() << " bytes" << std::endl;
+            std::cout << "File size: " << task->total_bytes() << " bytes" << std::endl;
         } else {
-            std::cout << "Download failed: " << task->getErrorMessage() << std::endl;
+            std::cout << "Download failed: " << task->error_message() << std::endl;
         }
     }
 
@@ -265,22 +253,28 @@ int main() {
 使用 CMake 控制哪些协议被编译：
 
 ```bash
-# 启用所有协议
+# 启用全部协议
 cmake -B build \
   -DFALCON_ENABLE_HTTP=ON \
   -DFALCON_ENABLE_FTP=ON \
   -DFALCON_ENABLE_BITTORRENT=ON \
+  -DFALCON_ENABLE_SFTP=ON \
+  -DFALCON_ENABLE_WEBDAV=ON \
+  -DFALCON_ENABLE_METALINK=ON \
   -DFALCON_ENABLE_THUNDER=ON \
   -DFALCON_ENABLE_QQDL=ON \
   -DFALCON_ENABLE_FLASHGET=ON \
   -DFALCON_ENABLE_ED2K=ON \
   -DFALCON_ENABLE_HLS=ON
 
-# 仅启用基础协议
+# 仅启用基础协议（HTTP/FTP/BT/SFTP/WebDAV/Metalink 默认 ON；五个私有协议默认 OFF）
 cmake -B build \
   -DFALCON_ENABLE_HTTP=ON \
   -DFALCON_ENABLE_FTP=ON \
-  -DFALCON_ENABLE_BITTORRENT=OFF \
+  -DFALCON_ENABLE_BITTORRENT=ON \
+  -DFALCON_ENABLE_SFTP=ON \
+  -DFALCON_ENABLE_WEBDAV=ON \
+  -DFALCON_ENABLE_METALINK=ON \
   -DFALCON_ENABLE_THUNDER=OFF \
   -DFALCON_ENABLE_QQDL=OFF \
   -DFALCON_ENABLE_FLASHGET=OFF \
@@ -310,7 +304,7 @@ cmake -B build \
    - 检查文件是否被修改
 
 4. **BitTorrent 下载慢**
-   - 确保端口 6881 可访问
+   - 确保 BT 监听端口（默认 6881）可访问（实际端口以运行日志为准）
    - 检查防火墙设置
    - 添加更多 tracker
 
@@ -356,7 +350,7 @@ falcon-cli <URL>
 
 ## 更多资源
 
-- [API 文档](api/)
+- [API 文档](api_guide.md)
 - [开发者指南](developer_guide.md)
-- [常见问题](faq.md)
-- [贡献指南](contributing.md)
+- [常见问题](src/faq.md)
+- [贡献指南](../CONTRIBUTING.md)

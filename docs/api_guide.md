@@ -101,7 +101,7 @@ engine.cancel_task(task_id);
 // Bulk operations
 engine.pause_all();
 engine.resume_all();
-engine.cancel_all();  // Equivalent to shutdown()
+engine.cancel_all();
 ```
 
 #### Statistics
@@ -125,20 +125,18 @@ DownloadOptions options;
 // Concurrency settings
 options.max_connections = 8;              // Up to 8 segments per HTTP connection
 options.min_segment_size = 1024 * 1024;   // Minimum segment size of 1 MB
-options.split = 5;                        // Download in up to 5 parts
 
 // Timeout settings
-options.timeout_seconds = 30;             // Connection timeout of 30 seconds
-options.connect_timeout = 10;             // Connection setup timeout of 10 seconds
+options.timeout_seconds = 30;             // Stall watchdog: aborts only when sustained < 1 B/s for 30 s (not a total-duration cap)
 
 // Retry settings
 options.max_retries = 5;                  // Retry up to 5 times
-options.retry_wait = 5;                   // Wait 5 seconds between retries
+options.retry_delay_seconds = 5;          // Wait 5 seconds between retries
 
 // Output settings
 options.output_directory = "/tmp/downloads";
 options.output_filename = "custom_name.zip";
-options.overwrite = false;                // Do not overwrite existing files
+options.overwrite_existing = false;       // Do not overwrite existing files
 ```
 
 #### HTTP Options
@@ -157,8 +155,8 @@ options.headers = {
 options.referer = "https://example.com";
 
 // Authentication
-options.http_user = "username";
-options.http_passwd = "password";
+options.http_username = "username";
+options.http_password = "password";
 ```
 
 #### Speed Limits
@@ -175,8 +173,7 @@ config.global_speed_limit = 10 * 1024 * 1024;  // 10 MB/s
 #### Resume Downloads
 
 ```cpp
-options.resume_if_exists = true;  // Resume automatically
-options.resume_position = 1024 * 1024;  // Start from the 1 MB offset
+options.resume_enabled = true;  // Resume automatically (default on; continues from the temp-file checkpoint)
 ```
 
 ### Command-Line Arguments
@@ -196,39 +193,42 @@ falcon-cli -d /tmp/downloads https://example.com/file.zip
 falcon-cli -o custom_name.zip https://example.com/file.zip
 
 # Limit concurrency
-falcon-cli -x 8 -s 16 https://example.com/file.zip
-# -x: Maximum connections per task (default: 5)
-# -s: Maximum connections per server (default: 5)
+falcon-cli -x 8 -s 8 https://example.com/file.zip
+# -x: Maximum connections per task (default: 4)
+# -s: Alias for -x (aria2 --split, task-level connection count)
 ```
 
 #### Progress Display
 
 ```bash
-# Show a simplified progress bar
-falcon-cli --simple-progress=true https://example.com/file.zip
+# Verbose output
+falcon-cli -v https://example.com/file.zip
 
-# Console output
-falcon-cli --console-log-level=notice https://example.com/file.zip
+# Quiet mode (only errors and the final result)
+falcon-cli -q https://example.com/file.zip
+
+# Disable colored output
+falcon-cli --no-color https://example.com/file.zip
 ```
 
 #### Retries and Timeouts
 
 ```bash
 # Set the retry count and wait time
-falcon-cli --max-tries=5 --retry-wait=10 https://example.com/file.zip
+falcon-cli -r 5 --retry-wait 10 https://example.com/file.zip
 
-# Set timeouts
-falcon-cli --timeout=30 --connect-timeout=10 https://example.com/file.zip
+# Set the timeout
+falcon-cli -t 30 https://example.com/file.zip
 ```
 
 #### Speed Limits
 
 ```bash
 # Limit the download speed
-falcon-cli --max-download-limit=1M https://example.com/file.zip
+falcon-cli --max-download-limit 1M https://example.com/file.zip
 
-# Set a global speed limit
-falcon-cli --max-overall-download-limit=10M https://example.com/file.zip
+# Set a global speed limit (daemon only: aria2.changeGlobalOption's max-overall-download-limit,
+# or download.max_overall_speed_limit in daemon.json; the CLI has no such argument)
 ```
 
 #### RPC Arguments (Implemented)
@@ -294,9 +294,10 @@ std::vector<std::pair<std::string, HashAlgorithm>> hashes = {
 
 auto results = FileHasher::verify_multiple("file.zip", hashes);
 
-for (const auto& result : results) {
-    std::cout << "Algorithm: " << static_cast<int>(result.algorithm)
-              << " Valid: " << result.valid << "\n";
+for (std::size_t i = 0; i < hashes.size(); ++i) {
+    std::cout << "Expected: " << hashes[i].first
+              << " Calculated: " << results[i].calculated
+              << " Valid: " << results[i].valid << "\n";
 }
 ```
 
@@ -489,7 +490,7 @@ try {
     engine.run();
 } catch (const NetworkException& e) {
     std::cerr << "Network error: " << e.what() << std::endl;
-} catch (const FileException& e) {
+} catch (const FileIOException& e) {
     std::cerr << "File error: " << e.what() << std::endl;
 } catch (const std::exception& e) {
     std::cerr << "Unknown error: " << e.what() << std::endl;
@@ -526,7 +527,7 @@ SocketPool pool(std::chrono::seconds(30), 16);
 ```cpp
 // Enable multi-segment downloads for speed
 options.min_segment_size = 1024 * 1024;  // Only split files larger than 1 MB
-options.split = 8;                        // Download in 8 segments
+options.max_connections = 8;              // Up to 8 segment connections
 ```
 
 ### 4. Limit Speed
@@ -543,7 +544,7 @@ options.speed_limit = 5 * 1024 * 1024;  // Cap at 5 MB/s
 A: Falcon automatically detects the portion that has already been downloaded:
 
 ```cpp
-options.resume_if_exists = true;
+options.resume_enabled = true;  // On by default
 ```
 
 ### Q: How do I download to a specific directory?

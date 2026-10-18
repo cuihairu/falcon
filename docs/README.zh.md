@@ -40,7 +40,7 @@ pnpm docs:build
 ```
 docs/
 ├── package.json              # pnpm / Node 配置
-├── README.md                 # 本文件
+├── README.md / README.zh.md    # 文档站说明（双语索引）
 ├── ARCHIVE.md                # 根目录历史文档索引
 ├── src/                      # VitePress 源文件
 │   ├── index.md              # 首页
@@ -64,6 +64,8 @@ docs/
 │   │   ├── coding-standards.md # 编码规范
 │   │   ├── testing.md        # 测试指南
 │   │   ├── plugins.md        # 插件开发
+│   │   ├── desktop-redesign.md            # 桌面端重设计
+│   │   ├── design-prototypes.md       # UI 设计原型
 │   │   ├── debugging.md      # 调试技巧
 │   │   └── release.md        # 发布流程
 │   ├── api/                  # API 参考
@@ -78,6 +80,9 @@ docs/
     ├── protocols_guide.md
     └── ...
 ```
+
+内容页按语言分文件：`name.md` 为英文版、`name.zh.md` 为中文版。
+
 
 ## VitePress 组件
 
@@ -116,18 +121,18 @@ int main() {
 
 ## 部署
 
-### GitHub Pages
+### GitHub Pages（备用：手动发布——正式发布走 `.github/workflows/docs-deploy.yml`）
 
 ```bash
 # 构建
 pnpm docs:build
 
-# 推送到 gh-pages 分支
+# 推送到 gh-pages 分支（备用）
 cd src/.vitepress/dist
 git init
 git add .
 git commit -m "Deploy docs"
-git push -f git@github.com:cuihairu/falcon.git master:gh-pages
+git push -f git@github.com:cuihairu/falcon.git main:gh-pages
 ```
 
 ### Vercel/Netlify

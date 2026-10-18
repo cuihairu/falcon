@@ -101,7 +101,7 @@ engine.cancel_task(task_id);
 // 批量操作
 engine.pause_all();
 engine.resume_all();
-engine.cancel_all();  // 相当于 shutdown()
+engine.cancel_all();
 ```
 
 #### 统计信息
@@ -125,20 +125,18 @@ DownloadOptions options;
 // 并发设置
 options.max_connections = 8;              // 每个 HTTP 连接最多 8 个分段
 options.min_segment_size = 1024 * 1024;   // 最小分段大小 1MB
-options.split = 5;                        // 最多分 5 个部分下载
 
 // 超时设置
-options.timeout_seconds = 30;             // 连接超时 30 秒
-options.connect_timeout = 10;             // 连接建立超时 10 秒
+options.timeout_seconds = 30;             // 停滞看门狗：低于 1 B/s 持续 30 秒才中止（非总时长上限）
 
 // 重试设置
 options.max_retries = 5;                  // 最多重试 5 次
-options.retry_wait = 5;                   // 重试等待 5 秒
+options.retry_delay_seconds = 5;          // 重试等待 5 秒
 
 // 输出设置
 options.output_directory = "/tmp/downloads";
 options.output_filename = "custom_name.zip";
-options.overwrite = false;                // 不覆盖已存在文件
+options.overwrite_existing = false;       // 不覆盖已存在文件
 ```
 
 #### HTTP 选项
@@ -157,8 +155,8 @@ options.headers = {
 options.referer = "https://example.com";
 
 // 认证
-options.http_user = "username";
-options.http_passwd = "password";
+options.http_username = "username";
+options.http_password = "password";
 ```
 
 #### 速度限制
@@ -175,8 +173,7 @@ config.global_speed_limit = 10 * 1024 * 1024;  // 10 MB/s
 #### 断点续传
 
 ```cpp
-options.resume_if_exists = true;  // 自动续传
-options.resume_position = 1024 * 1024;  // 从 1MB 位置开始
+options.resume_enabled = true;  // 自动续传（默认开启，从临时文件断点继续）
 ```
 
 ### 命令行参数
@@ -196,39 +193,42 @@ falcon-cli -d /tmp/downloads https://example.com/file.zip
 falcon-cli -o custom_name.zip https://example.com/file.zip
 
 # 限制并发数
-falcon-cli -x 8 -s 16 https://example.com/file.zip
-# -x: 每个任务最大连接数 (默认: 5)
-# -s: 单服务器最大连接数 (默认: 5)
+falcon-cli -x 8 -s 8 https://example.com/file.zip
+# -x: 每个任务最大连接数 (默认: 4)
+# -s: -x 的别名（aria2 --split，同为任务级连接数）
 ```
 
 #### 进度显示
 
 ```bash
-# 显示简化进度条
-falcon-cli --simple-progress=true https://example.com/file.zip
+# 详细输出
+falcon-cli -v https://example.com/file.zip
 
-# 控制台输出
-falcon-cli --console-log-level=notice https://example.com/file.zip
+# 安静模式（只输出错误与最终结果）
+falcon-cli -q https://example.com/file.zip
+
+# 关闭彩色输出
+falcon-cli --no-color https://example.com/file.zip
 ```
 
 #### 重试和超时
 
 ```bash
 # 设置重试次数和等待时间
-falcon-cli --max-tries=5 --retry-wait=10 https://example.com/file.zip
+falcon-cli -r 5 --retry-wait 10 https://example.com/file.zip
 
 # 设置超时
-falcon-cli --timeout=30 --connect-timeout=10 https://example.com/file.zip
+falcon-cli -t 30 https://example.com/file.zip
 ```
 
 #### 速度限制
 
 ```bash
 # 限制下载速度
-falcon-cli --max-download-limit=1M https://example.com/file.zip
+falcon-cli --max-download-limit 1M https://example.com/file.zip
 
-# 设置全局速度限制
-falcon-cli --max-overall-download-limit=10M https://example.com/file.zip
+# 设置全局速度限制（仅 daemon：RPC aria2.changeGlobalOption 的 max-overall-download-limit，
+# 或 daemon.json 的 download.max_overall_speed_limit；CLI 无此参数）
 ```
 
 #### RPC 参数（已实现）
@@ -294,9 +294,10 @@ std::vector<std::pair<std::string, HashAlgorithm>> hashes = {
 
 auto results = FileHasher::verify_multiple("file.zip", hashes);
 
-for (const auto& result : results) {
-    std::cout << "算法: " << static_cast<int>(result.algorithm)
-              << " 有效: " << result.valid << "\n";
+for (std::size_t i = 0; i < hashes.size(); ++i) {
+    std::cout << "期望: " << hashes[i].first
+              << " 计算: " << results[i].calculated
+              << " 有效: " << results[i].valid << "\n";
 }
 ```
 
@@ -489,7 +490,7 @@ try {
     engine.run();
 } catch (const NetworkException& e) {
     std::cerr << "网络错误: " << e.what() << std::endl;
-} catch (const FileException& e) {
+} catch (const FileIOException& e) {
     std::cerr << "文件错误: " << e.what() << std::endl;
 } catch (const std::exception& e) {
     std::cerr << "未知错误: " << e.what() << std::endl;
@@ -526,7 +527,7 @@ SocketPool pool(std::chrono::seconds(30), 16);
 ```cpp
 // 启用多分段下载加速
 options.min_segment_size = 1024 * 1024;  // 1MB 以上才分段
-options.split = 8;                        // 分 8 段下载
+options.max_connections = 8;              // 最多 8 个分段连接
 ```
 
 ### 4. 速度限制
@@ -543,7 +544,7 @@ options.speed_limit = 5 * 1024 * 1024;  // 限制 5 MB/s
 A: Falcon 会自动检测已下载的部分：
 
 ```cpp
-options.resume_if_exists = true;
+options.resume_enabled = true;  // 默认已开启
 ```
 
 ### Q: 如何下载到特定目录？

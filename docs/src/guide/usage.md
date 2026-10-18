@@ -1,236 +1,238 @@
-# 使用指南
+[中文](usage.zh.md) | **English**
 
-本文档详细介绍 Falcon 下载器的使用方法，包括命令行工具和 C++ API。
+# Usage Guide
 
-## 目录
+This document covers how to use the Falcon downloader in detail, including the command-line tool and the C++ API.
 
-- [命令行工具](#命令行工具)
+## Table of Contents
+
+- [Command-Line Tool](#command-line-tool)
 - [C++ API](#c-api)
-- [高级用法](#高级用法)
+- [Advanced Usage](#advanced-usage)
 
-## 命令行工具
+## Command-Line Tool
 
-### 基本语法
+### Basic Syntax
 
 ```bash
 falcon-cli [OPTIONS] URL
 ```
 
-### 常用选项
+### Common Options
 
-| 选项 | 简写 | 说明 | 示例 |
-|------|------|------|------|
-| `--output` | `-o` | 指定输出文件名 | `-o file.zip` |
-| `--directory` | `-d` | 指定保存目录 | `-d ~/Downloads` |
-| `--connections` | `-c` | 连接数（多线程下载） | `-c 5` |
-| `--max-connections` | `-x` | `--connections` 的 aria2 风格别名 | `-x 5` |
-| `--max-concurrent-downloads` | `-j` | 最大并发下载任务数 | `-j 3` |
-| `--limit` |  | 速度限制（字节/秒） | `--limit 1M` |
-| `--continue` | | 断点续传 | `--continue` |
-| `--proxy` | | 代理服务器 | `--proxy http://proxy:8080` |
-| `--verbose` | `-v` | 详细输出 | `-v` |
-| `--help` | `-h` | 显示帮助 | `-h` |
-| `--version` | `-V` | 显示版本 | `-V` |
+| Option | Short | Description | Example |
+|--------|-------|-------------|---------|
+| `--output` | `-o` | Specify the output file name | `-o file.zip` |
+| `--directory` | `-d` | Specify the save directory | `-d ~/Downloads` |
+| `--connections` | `-c` | Number of connections (multi-threaded download) | `-c 5` |
+| `--max-connections` | `-x` | aria2-style alias of `--connections` | `-x 5` |
+| `--max-concurrent-downloads` | `-j` | Maximum number of concurrent download tasks | `-j 3` |
+| `--limit` |  | Speed limit (bytes/second) | `--limit 1M` |
+| `--continue` | | Resume interrupted downloads | `--continue` |
+| `--proxy` | | Proxy server | `--proxy http://proxy:8080` |
+| `--verbose` | `-v` | Verbose output | `-v` |
+| `--help` | `-h` | Show help | `-h` |
+| `--version` | `-V` | Show version | `-V` |
 
-### 基本使用
+### Basic Usage
 
-#### 下载单个文件
+#### Download a Single File
 
 ```bash
 falcon-cli https://example.com/file.zip
 ```
 
-#### 指定输出文件名
+#### Specify the Output File Name
 
 ```bash
 falcon-cli https://example.com/file.zip -o my-file.zip
 ```
 
-#### 指定保存目录
+#### Specify the Save Directory
 
 ```bash
 falcon-cli https://example.com/file.zip -d ~/Downloads
 ```
 
-#### 多线程下载
+#### Multi-Threaded Download
 
 ```bash
-# 使用 5 个连接同时下载
+# Download with 5 concurrent connections
 falcon-cli https://example.com/large.zip -c 5
 ```
 
-#### 速度限制
+#### Speed Limit
 
 ```bash
-# 限制速度为 1MB/s
+# Limit the speed to 1MB/s
 falcon-cli https://example.com/file.zip --limit 1M
 
-# 限制速度为 500KB/s
+# Limit the speed to 500KB/s
 falcon-cli https://example.com/file.zip --limit 500K
 ```
 
-#### 断点续传
+#### Resume
 
 ```bash
-# 自动断点续传（默认启用）
+# Automatic resume (enabled by default)
 falcon-cli https://example.com/file.zip --continue
 ```
 
-#### 使用代理
+#### Using a Proxy
 
 ```bash
-# HTTP 代理
+# HTTP proxy
 falcon-cli https://example.com/file.zip --proxy http://proxy:8080
 
-# SOCKS5 代理
+# SOCKS5 proxy
 falcon-cli https://example.com/file.zip --proxy socks5://proxy:1080
 
-# 带认证的代理
+# Proxy with authentication
 falcon-cli https://example.com/file.zip --proxy http://user:pass@proxy:8080
 ```
 
-### 下载不同协议
+### Downloading Different Protocols
 
 #### HTTP/HTTPS
 
 ```bash
 falcon-cli https://example.com/file.zip
 
-# 自定义 User-Agent
+# Custom User-Agent
 falcon-cli https://example.com/file.zip --user-agent "MyApp/2.0"
 
-# 添加自定义头部
+# Add custom headers
 falcon-cli https://example.com/file.zip --header "Authorization: Bearer TOKEN"
 ```
 
 #### FTP
 
 ```bash
-# 匿名下载
+# Anonymous download
 falcon-cli ftp://ftp.example.com/file.zip
 
-# 带用户名密码
+# With username and password
 falcon-cli ftp://user:password@ftp.example.com/file.zip
 
-# FTPS（显式 TLS）
-falcon-cli ftpes://ftp.example.com/file.zip
+# FTPS
+falcon-cli ftps://ftp.example.com/file.zip
 ```
 
-#### 迅雷链接
+#### Thunder Links
 
 ```bash
 falcon-cli "thunder://QUFodHRwOi8vZXhhbXBsZS5jb20vZmlsZS56aXAuWg=="
 
-# 迅雷离线链接
+# Thunder offline link
 falcon-cli "thunderxl://aHR0cHM6Ly9leGFtcGxlLmNvbS92aWRlby5tcDQ="
 ```
 
-#### QQ旋风链接
+#### QQ Whirlwind Links
 
 ```bash
 falcon-cli "qqlink://aHR0cDovL2V4YW1wbGUuY29tL3ZpZGVvLm1wNA=="
 
-# 带 GID 的链接
+# Link with GID
 falcon-cli "qqlink://1234567890ABCDEF|video.mp4"
 ```
 
-#### 快车链接
+#### FlashGet Links
 
 ```bash
 falcon-cli "flashget://[URL]&ref=http://example.com"
 
-# Base64 格式
+# Base64 format
 falcon-cli "fg://aHR0cDovL2V4YW1wbGUuY29tL2ZpbGUuemlw"
 ```
 
-#### ED2K 链接
+#### ED2K Links
 
 ```bash
 falcon-cli "ed2k://file|example.zip|1048576|A1B2C3D4E5F6789012345678901234AB|/"
 
-# 带源的链接
+# Link with sources
 falcon-cli "ed2k://file|example.zip|1048576|HASH|/|s,192.168.1.1:4662"
 ```
 
 #### BitTorrent
 
 ```bash
-# Magnet 链接
+# Magnet link
 falcon-cli "magnet:?xt=urn:btih:HASH&dn=Example&tr=tracker.example.com"
 
-# Torrent 文件
+# Torrent file
 falcon-cli https://example.com/file.torrent
 
-# 本地 torrent 文件
+# Local torrent file
 falcon-cli file:///path/to/file.torrent
 ```
 
-#### HLS 流媒体
+#### HLS Streaming
 
 ```bash
 falcon-cli "https://example.com/playlist.m3u8" -o video.mp4
 
-# 自动选择最佳质量
+# Automatically pick the best quality
 falcon-cli "https://example.com/master.m3u8" -o best.mp4
 ```
 
-### 批量下载
+### Batch Downloads
 
-#### 从文件读取 URL
+#### Read URLs from a File
 
-创建一个文本文件 `urls.txt`：
+Create a text file `urls.txt`:
 
 ```
-# 注释行以 # 开头
+# Comment lines start with #
 https://example.com/file1.zip
 https://example.com/file2.zip
 thunder://QUFodHRwOi8vZXhhbXBsZS5jb20vZmlsZTMuemlwWg==
 ```
 
-然后批量下载：
+Then download in batch:
 
 ```bash
 falcon-cli -i urls.txt
 ```
 
-#### 并发控制
+#### Concurrency Control
 
 ```bash
-# 最多 3 个并发下载
+# At most 3 concurrent downloads
 falcon-cli -i urls.txt -j 3
 ```
 
-### 进度显示
+### Progress Display
 
-#### 详细输出
+#### Verbose Output
 
 ```bash
 falcon-cli https://example.com/file.zip --verbose
 ```
 
-输出示例：
+Sample output:
 
 ```
-[INFO] 开始下载: https://example.com/file.zip
-[INFO] 文件大小: 104.85 MB
-[INFO] 连接数: 1
+[INFO] Download started: https://example.com/file.zip
+[INFO] File size: 104.85 MB
+[INFO] Connections: 1
 [========------------------] 25% (26.21 MB / 104.85 MB, 2.5 MB/s, ETA 32s)
-[========================] 100% (104.85 MB / 104.85 MB, 3.2 MB/s, 完成)
-[INFO] 下载完成: /path/to/file.zip
+[========================] 100% (104.85 MB / 104.85 MB, 3.2 MB/s, done)
+[INFO] Download complete: /path/to/file.zip
 ```
 
 ## C++ API
 
-### 基本用法
+### Basic Usage
 
 ```cpp
 #include <falcon/falcon.hpp>
 
 int main() {
-    // 创建下载引擎
+    // Create the download engine
     falcon::DownloadEngine engine;
 
-    // 配置下载选项
+    // Configure download options
     falcon::DownloadOptions options;
     options.max_connections = 5;
     options.output_directory = "./downloads";
@@ -243,18 +245,18 @@ int main() {
 
     engine.start_task(task->id());
 
-    // 等待下载完成
+    // Wait for the download to finish
     task->wait();
 
     if (task->status() == falcon::TaskStatus::Completed) {
-        std::cout << "下载完成!" << std::endl;
+        std::cout << "Download complete!" << std::endl;
     }
 
     return 0;
 }
 ```
 
-### 事件监听
+### Event Listening
 
 ```cpp
 #include <falcon/falcon.hpp>
@@ -263,15 +265,15 @@ class MyEventListener : public falcon::IEventListener {
 public:
     void on_progress(const falcon::ProgressInfo& info) override {
         double percent = info.progress * 100.0;
-        std::cout << "\r进度: " << percent << "%";
+        std::cout << "\rProgress: " << percent << "%";
     }
 
     void on_completed(falcon::TaskId, const std::string& output_path) override {
-        std::cout << "\n下载完成: " << output_path << std::endl;
+        std::cout << "\nDownload complete: " << output_path << std::endl;
     }
 
     void on_error(falcon::TaskId, const std::string& error_message) override {
-        std::cerr << "\n下载失败: " << error_message << std::endl;
+        std::cerr << "\nDownload failed: " << error_message << std::endl;
     }
 };
 
@@ -294,7 +296,7 @@ int main() {
 }
 ```
 
-### 多任务下载
+### Multi-Task Downloads
 
 ```cpp
 #include <falcon/falcon.hpp>
@@ -318,14 +320,14 @@ int main() {
         engine.start_task(task->id());
     }
 
-    // 等待所有下载完成
+    // Wait for all downloads to finish
     engine.wait_all();
 
     return 0;
 }
 ```
 
-### 断点续传
+### Resume
 
 ```cpp
 #include <falcon/falcon.hpp>
@@ -349,16 +351,16 @@ int main() {
 }
 ```
 
-## 高级用法
+## Advanced Usage
 
-### 速度限制
+### Speed Limit
 
 ```cpp
 falcon::DownloadOptions options;
 options.speed_limit = 1024 * 1024;  // 1MB/s
 ```
 
-### 自定义 HTTP 头部
+### Custom HTTP Headers
 
 ```cpp
 falcon::DownloadOptions options;
@@ -369,7 +371,7 @@ options.headers = {
 };
 ```
 
-### 代理设置
+### Proxy Settings
 
 ```cpp
 falcon::DownloadOptions options;
@@ -378,14 +380,14 @@ options.proxy_username = "user";
 options.proxy_password = "pass";
 ```
 
-### 超时设置
+### Timeout Settings
 
 ```cpp
 falcon::DownloadOptions options;
 options.timeout_seconds = 30;
 ```
 
-### 重试策略
+### Retry Policy
 
 ```cpp
 falcon::DownloadOptions options;
@@ -393,10 +395,10 @@ options.max_retries = 5;
 options.retry_delay_seconds = 10;
 ```
 
-## 编译示例程序
+## Compiling Your Program
 
 ```bash
-# 假设 Falcon 安装在 /usr/local
+# Assume Falcon is installed in /usr/local
 g++ -std=c++17 \
     -I/usr/local/include/falcon \
     -L/usr/local/lib \
@@ -405,6 +407,6 @@ g++ -std=c++17 \
     -lfalcon
 ```
 
-::: tip 提示
-更多示例代码请查看 [GitHub 仓库](https://github.com/cuihairu/falcon/tree/main/examples) 中的 examples 目录。
+::: tip Tip
+For more sample code, see the examples directory in the [GitHub repository](https://github.com/cuihairu/falcon/tree/main/examples).
 :::

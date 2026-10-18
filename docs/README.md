@@ -40,7 +40,7 @@ The build output is written to `docs/src/.vitepress/dist/`.
 ```
 docs/
 ├── package.json              # pnpm / Node config
-├── README.md                 # This file
+├── README.md / README.zh.md    # Docs-site notes (bilingual index)
 ├── ARCHIVE.md                # Index of historical docs at the root
 ├── src/                      # VitePress source files
 │   ├── index.md              # Home page
@@ -64,6 +64,8 @@ docs/
 │   │   ├── coding-standards.md # Coding standards
 │   │   ├── testing.md        # Testing guide
 │   │   ├── plugins.md        # Plugin development
+│   │   ├── desktop-redesign.md  # Desktop redesign
+│   │   ├── design-prototypes.md # UI design prototypes
 │   │   ├── debugging.md      # Debugging tips
 │   │   └── release.md        # Release process
 │   ├── api/                  # API reference
@@ -78,6 +80,9 @@ docs/
     ├── protocols_guide.md
     └── ...
 ```
+
+Content pages are split by language: `name.md` is English, `name.zh.md` is Chinese.
+
 
 ## VitePress Components
 
@@ -116,18 +121,18 @@ Hidden content
 
 ## Deployment
 
-### GitHub Pages
+### GitHub Pages (manual fallback — production deploys via `.github/workflows/docs-deploy.yml`)
 
 ```bash
 # Build
 pnpm docs:build
 
-# Push to the gh-pages branch
+# Push to the gh-pages branch (fallback)
 cd src/.vitepress/dist
 git init
 git add .
 git commit -m "Deploy docs"
-git push -f git@github.com:cuihairu/falcon.git master:gh-pages
+git push -f git@github.com:cuihairu/falcon.git main:gh-pages
 ```
 
 ### Vercel/Netlify

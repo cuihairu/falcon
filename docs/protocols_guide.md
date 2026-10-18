@@ -50,7 +50,7 @@ falcon-cli https://example.com/file.zip --proxy http://proxy:8080
 
 ### FTP
 
-Supports FTP and FTPS protocols, including both active and passive modes.
+Supports FTP and FTPS protocols (FTP uses passive mode by default).
 
 ```bash
 # Download an FTP file
@@ -59,8 +59,8 @@ falcon-cli ftp://ftp.example.com/file.zip
 # With username and password
 falcon-cli ftp://user:pass@ftp.example.com/file.zip
 
-# FTPS (explicit TLS)
-falcon-cli ftpes://ftp.example.com/file.zip
+# FTPS (libcurl's ftps://, explicit and implicit negotiation)
+falcon-cli ftps://ftp.example.com/file.zip
 ```
 
 ## Private Protocols
@@ -73,7 +73,7 @@ Supports `thunder://` and `thunderxl://` link formats.
 
 ```bash
 # Classic Thunder link
-falcon-cli "thunder://QUFodHRwOi8vZXhhbXBsZS5jb20vZmlsZS56aXAuWg=="
+falcon-cli "thunder://QUFodHRwOi8vZXhhbXBsZS5jb20vZmlsZS56aXBaWg=="
 
 # Thunder offline link
 falcon-cli "thunderxl://aHR0cHM6Ly9leGFtcGxlLmNvbS92aWRlby5tcDQ="
@@ -88,7 +88,7 @@ Supports `qqlink://` and `qqdl://` formats.
 falcon-cli "qqlink://aHR0cDovL2V4YW1wbGUuY29tL3ZpZGVvLm1wNA=="
 
 # Link with GID
-falcon-cli "qqlink://1234567890ABCDEF|video.mp4"
+falcon-cli "qqlink://1234567890ABCDEF|http://example.com/video.mp4"
 ```
 
 ### FlashGet
@@ -96,19 +96,20 @@ falcon-cli "qqlink://1234567890ABCDEF|video.mp4"
 Supports `flashget://` and `fg://` formats.
 
 ```bash
-# Full format (with referrer)
-falcon-cli "flashget://[URL]&ref=http://example.com"
+# Full Base64 format (the &ref= suffix is stripped; the payload is Base64-decoded
+# first, then the [FLASHGET] prefix is removed)
+falcon-cli "flashget://W0ZMQVNIR0VUXWh0dHA6Ly9leGFtcGxlLmNvbS9maWxlLnppcA==&ref=http://example.com/page"
 
-# Short format
-falcon-cli "fg://aHR0cDovL2V4YW1wbGUuY29tL2ZpbGUuemlw"
+# Short format (the fg:// payload is URL-encoded, not Base64)
+falcon-cli "fg://http%3A%2F%2Fexample.com%2Ffile.zip"
 
-# Base64-encoded format
-falcon-cli "flashget://[FLASHGET]aHR0cDovL2V4YW1wbGUuY29tLw=="
+# Base64 shorthand (works without the &ref= suffix too)
+falcon-cli "flashget://W0ZMQVNIR0VUXWh0dHA6Ly9leGFtcGxlLmNvbS9maWxlLnppcA=="
 ```
 
 ### ED2K (Donkey)
 
-Supports `ed2k://` format, including file links and server links.
+Supports `ed2k://` file links (server links `ed2k://server|...` are not supported; parsing them fails with an error).
 
 ```bash
 # File link
@@ -120,8 +121,6 @@ falcon-cli "ed2k://file|example.zip|1048576|HASH|/|s,192.168.1.1:4662|s,192.168.
 # With AICH checksum
 falcon-cli "ed2k://file|example.zip|1048576|HASH|/|h=ABCDEF123456789"
 
-# Server link (used by server plugin only)
-falcon-cli "ed2k://server|server.example.com|4242|Main Server/"
 ```
 
 ## Streaming Protocols
@@ -133,40 +132,30 @@ Supports `.m3u8` playlists, automatically downloading all media segments and mer
 ```bash
 # Download an HLS stream
 falcon-cli "https://example.com/playlist.m3u8" -o video.mp4
-
-# Auto-select the best quality
-falcon-cli "https://example.com/master.m3u8" -o best.mp4
 ```
 
 HLS features:
-- Automatically parses master and variant playlists
-- Supports encrypted streams (key required)
-- Auto-selects the best bandwidth
-- Uses FFmpeg to merge media segments
+- Parses `.m3u8` playlists (EXTINF duration info)
+- Downloads all media segments in order and merges them via binary concatenation
+- Master-playlist (stream selection) and encrypted streams (AES keys) are not supported yet
 
 ### DASH (Dynamic Adaptive Streaming over HTTP)
 
-Supports `.mpd` manifest files.
-
-```bash
-# Download a DASH stream
-falcon-cli "https://example.com/manifest.mpd" -o video.mp4"
-
-# Download a specific video quality
-falcon-cli "https://example.com/manifest.mpd" -o 1080p.mp4
-```
+DASH (`.mpd` manifest parsing) is not implemented yet; submitting an `.mpd`
+URL downloads the manifest file itself as a regular file. Use HLS playlists
+for streaming downloads.
 
 ## P2P Protocols
 
 ### BitTorrent
 
-Supports `.torrent` files and `magnet://` links.
+Supports `.torrent` files and `magnet:` links.
 
 ```bash
 # Use a Magnet link
 falcon-cli "magnet:?xt=urn:btih:HASH&dn=Example&tr=tracker.example.com"
 
-# Download a torrent file
+# Download a .torrent file via its direct HTTP link
 falcon-cli "https://example.com/file.torrent"
 
 # Download a local torrent file
@@ -177,10 +166,9 @@ falcon-cli "magnet:?xt=urn:btih:HASH" -d /downloads/torrents
 ```
 
 BitTorrent features:
-- Supports DHT, LSD, UPnP, and NAT-PMP
+- Supports DHT and PEX (libtorrent data plane, with LSD/UPnP/NAT-PMP)
 - Automatically discovers more peers
-- Optionally select specific files to download
-- Supports seeding (continue uploading after completion)
+- Supports seeding (ratio/duration policies; seeds to 1.0x by default)
 
 ## Usage Examples
 
@@ -194,7 +182,7 @@ https://example.com/file1.zip
 https://example.com/file2.zip
 
 # Thunder link
-thunder://QUFodHRwOi8vZXhhbXBsZS5jb20vZmlsZTMuemlwWg==
+thunder://QUFodHRwOi8vZXhhbXBsZS5jb20vZmlsZTMuemlwWlo=
 
 # ED2K link
 ed2k://file|video.mp4|1073741824|ABCDEF123456789|/
@@ -215,7 +203,8 @@ falcon-cli -i urls.txt
 #include <falcon/falcon.hpp>
 
 int main() {
-    // Create a download engine
+    // Create a download engine (all built-in protocol handlers are
+    // registered automatically at construction; no manual registration needed)
     falcon::DownloadEngine engine;
 
     // Configure download options
@@ -232,13 +221,16 @@ int main() {
         "magnet:?xt=urn:btih:HASH&dn=Test"
     };
 
-    std::vector<std::shared_ptr<falcon::DownloadTask>> tasks;
+    std::vector<falcon::DownloadTask::Ptr> tasks;
 
     for (const auto& url : urls) {
-        if (engine.supportsUrl(url)) {
-            auto task = engine.startDownload(url, options);
-            tasks.push_back(task);
-            std::cout << "Started download: " << url << std::endl;
+        if (engine.is_url_supported(url)) {
+            auto task = engine.add_task(url, options);
+            if (task) {
+                engine.start_task(task->id());
+                tasks.push_back(task);
+                std::cout << "Started download: " << url << std::endl;
+            }
         }
     }
 
@@ -246,11 +238,11 @@ int main() {
     for (auto& task : tasks) {
         task->wait();
 
-        if (task->getStatus() == falcon::TaskStatus::Completed) {
+        if (task->status() == falcon::TaskStatus::Completed) {
             std::cout << "Download completed!" << std::endl;
-            std::cout << "File size: " << task->getTotalBytes() << " bytes" << std::endl;
+            std::cout << "File size: " << task->total_bytes() << " bytes" << std::endl;
         } else {
-            std::cout << "Download failed: " << task->getErrorMessage() << std::endl;
+            std::cout << "Download failed: " << task->error_message() << std::endl;
         }
     }
 
@@ -270,17 +262,24 @@ cmake -B build \
   -DFALCON_ENABLE_HTTP=ON \
   -DFALCON_ENABLE_FTP=ON \
   -DFALCON_ENABLE_BITTORRENT=ON \
+  -DFALCON_ENABLE_SFTP=ON \
+  -DFALCON_ENABLE_WEBDAV=ON \
+  -DFALCON_ENABLE_METALINK=ON \
   -DFALCON_ENABLE_THUNDER=ON \
   -DFALCON_ENABLE_QQDL=ON \
   -DFALCON_ENABLE_FLASHGET=ON \
   -DFALCON_ENABLE_ED2K=ON \
   -DFALCON_ENABLE_HLS=ON
 
-# Enable only the basic protocols
+# Enable only the basic protocols (HTTP/FTP/BT/SFTP/WebDAV/Metalink default ON;
+# the five private protocols default OFF)
 cmake -B build \
   -DFALCON_ENABLE_HTTP=ON \
   -DFALCON_ENABLE_FTP=ON \
-  -DFALCON_ENABLE_BITTORRENT=OFF \
+  -DFALCON_ENABLE_BITTORRENT=ON \
+  -DFALCON_ENABLE_SFTP=ON \
+  -DFALCON_ENABLE_WEBDAV=ON \
+  -DFALCON_ENABLE_METALINK=ON \
   -DFALCON_ENABLE_THUNDER=OFF \
   -DFALCON_ENABLE_QQDL=OFF \
   -DFALCON_ENABLE_FLASHGET=OFF \
@@ -310,7 +309,7 @@ The more stable runtime interfaces today are CLI arguments and CMake build optio
    - Check whether the file has been modified
 
 4. **Slow BitTorrent downloads**
-   - Ensure port 6881 is accessible
+   - Ensure the BT listening port (default 6881) is accessible (the actual port appears in the run logs)
    - Check your firewall settings
    - Add more trackers
 
@@ -356,7 +355,7 @@ falcon-cli <URL>
 
 ## More Resources
 
-- [API Documentation](api/)
+- [API Documentation](api_guide.md)
 - [Developer Guide](developer_guide.md)
-- [FAQ](faq.md)
-- [Contributing Guide](contributing.md)
+- [FAQ](src/faq.md)
+- [Contributing Guide](../CONTRIBUTING.md)
