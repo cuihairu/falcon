@@ -1,4 +1,4 @@
-[根目录](../../../../CLAUDE.md) > [packages](../../../) > [libfalcon](../../CLAUDE.md) > [plugins](../) > **ftp**
+[根目录](../../../../CLAUDE.md) > packages > libfalcon > plugins > **ftp**
 
 ---
 

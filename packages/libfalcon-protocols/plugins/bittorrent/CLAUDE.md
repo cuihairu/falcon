@@ -1,4 +1,4 @@
-[根目录](../../../../CLAUDE.md) > [packages](../../../) > [libfalcon](../../CLAUDE.md) > [plugins](../) > **bittorrent**
+[根目录](../../../../CLAUDE.md) > packages > libfalcon > plugins > **bittorrent**
 
 ---
 

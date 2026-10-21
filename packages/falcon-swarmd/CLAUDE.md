@@ -1,4 +1,4 @@
-[根目录](../../CLAUDE.md) > [packages](../) > **falcon-swarmd**
+[根目录](../../CLAUDE.md) > packages > **falcon-swarmd**
 
 ---
 
