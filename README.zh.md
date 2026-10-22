@@ -4,11 +4,11 @@
 
   # Falcon
 
-  [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-  [![Build Status](https://github.com/cuihairu/falcon/workflows/CMake%20Build/badge.svg)](https://github.com/cuihairu/falcon/actions)
-  [![codecov](https://codecov.io/gh/cuihairu/falcon/branch/main/graph/badge.svg)](https://codecov.io/gh/cuihairu/falcon)
-  [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/cuihairu/falcon)
-  [![Version](https://img.shields.io/badge/version-0.1.0-green.svg)](https://github.com/cuihairu/falcon/releases)
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-blue.svg"></a>
+  <a href="https://github.com/cuihairu/falcon/actions"><img alt="Build Status" src="https://github.com/cuihairu/falcon/workflows/CMake%20Build/badge.svg"></a>
+  <a href="https://codecov.io/gh/cuihairu/falcon"><img alt="codecov" src="https://codecov.io/gh/cuihairu/falcon/branch/main/graph/badge.svg"></a>
+  <a href="https://github.com/cuihairu/falcon"><img alt="Platform" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg"></a>
+  <a href="https://github.com/cuihairu/falcon/releases"><img alt="Version" src="https://img.shields.io/badge/version-0.1.0-green.svg"></a>
 
   **统一资源传输引擎（Universal Resource Transfer Engine）**
 
@@ -81,7 +81,9 @@
 ```bash
 # Linux / macOS
 
-<p align="center">[![Status](https://img.shields.io/badge/status-in%20development-orange)](https://github.com/cuihairu/falcon/releases)</p>
+<p align="center">
+<a href="https://github.com/cuihairu/falcon/releases"><img alt="Status" src="https://img.shields.io/badge/status-in%20development-orange"></a>
+</p>
 curl -fsSL https://raw.githubusercontent.com/cuihairu/falcon/main/scripts/install.sh | bash
 ```
 
