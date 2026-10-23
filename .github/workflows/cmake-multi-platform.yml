@@ -166,7 +166,7 @@ jobs:
 
   coverage:
     name: Coverage (Ubuntu)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     # 本 job 无 vcpkg 缓存，历来每轮全量源码构建；manifest 新增 libtorrent
     # （default-features: bittorrent）后构建时长上探——job 帽与 Install 步骤
     # 预算同步放宽
