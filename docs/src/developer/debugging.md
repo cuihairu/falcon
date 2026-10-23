@@ -1,10 +1,8 @@
-[中文](debugging.zh.md) | **English**
+# Debugging Techniques
 
-# 调试技巧
+This document lists practical debugging entry points in the current repository, focused on real targets and interfaces.
 
-本文档给出当前仓库下更实用的调试入口，重点围绕真实存在的目标和接口。
-
-## Debug 构建
+## Debug build
 
 ```bash
 cmake -B build -S . \
@@ -14,9 +12,9 @@ cmake -B build -S . \
 cmake --build build
 ```
 
-## Sanitizer
+## Sanitizers
 
-当前顶层 `CMakeLists.txt` 暴露的是：
+The current top-level `CMakeLists.txt` exposes:
 
 ```bash
 cmake -B build -S . \
@@ -26,7 +24,7 @@ cmake -B build -S . \
 cmake --build build
 ```
 
-文档里不再使用不存在的 `FALCON_ENABLE_ASAN` / `FALCON_ENABLE_TSAN` 选项名。
+This documentation no longer references the nonexistent `FALCON_ENABLE_ASAN` or `FALCON_ENABLE_TSAN` option names.
 
 ## GDB
 
@@ -34,7 +32,7 @@ cmake --build build
 gdb --args ./build/bin/falcon-cli https://example.com/file.zip
 ```
 
-常用断点更适合打在当前真实接口上：
+Useful breakpoints should target the real interfaces:
 
 ```txt
 (gdb) break main
@@ -43,7 +41,7 @@ gdb --args ./build/bin/falcon-cli https://example.com/file.zip
 (gdb) break falcon::DownloadTask::set_status
 ```
 
-条件断点示例：
+Conditional breakpoint example:
 
 ```txt
 (gdb) break falcon::DownloadEngine::add_task if url.find("example") != std::string::npos
@@ -62,19 +60,19 @@ lldb ./build/bin/falcon-cli -- https://example.com/file.zip
 (lldb) run
 ```
 
-## 日志
+## Logging
 
-从当前实现看，日志级别最终会走 `falcon::set_log_level(...)`。更有效的调试方式通常是：
+In the current implementation, log levels ultimately flow through `falcon::set_log_level(...)`. More effective debugging usually means:
 
-- 在 Debug 构建下运行 CLI
-- 结合 `--verbose`
-- 在关键实现点下断点
+- Running the CLI from a Debug build.
+- Combining that with `--verbose`.
+- Setting breakpoints at key implementation points.
 
 ```bash
 ./build/bin/falcon-cli --verbose https://example.com/file.zip
 ```
 
-## 性能分析
+## Performance analysis
 
 ### perf
 
@@ -85,7 +83,7 @@ perf report
 
 ### Benchmark
 
-如果要写性能样例，建议也基于当前真实接口：
+Benchmarks should also use the current real interfaces:
 
 ```cpp
 static void BM_AddAndStartTask(benchmark::State& state) {
@@ -100,36 +98,36 @@ static void BM_AddAndStartTask(benchmark::State& state) {
 }
 ```
 
-## 常见排查点
+## Common investigation points
 
-### URL 不支持
+### Unsupported URL
 
-先看：
+Check:
 
 ```cpp
 engine.is_url_supported(url)
 engine.get_supported_protocols()
 ```
 
-### 任务未启动
+### Task does not start
 
-确认是否：
+Confirm that:
 
-- `add_task()` 成功返回任务
-- 显式调用了 `start_task(task->id())`
-- 构建中启用了对应插件
+- `add_task()` returned a task successfully.
+- `start_task(task->id())` was called explicitly.
+- The matching plugin is enabled in the build.
 
-### 任务状态异常
+### Abnormal task status
 
-优先观察：
+Observe:
 
 - `DownloadTask::status()`
 - `DownloadTask::error_message()`
 - `IEventListener::on_status_changed()`
 
-## 核心调试入口
+## Core debugging entry points
 
-如果要理解主流程，优先看这些实现：
+To understand the main flow, start with these implementations:
 
 - `packages/libfalcon-core/src/download_engine.cpp`
 - `packages/libfalcon-core/src/task_manager.cpp`

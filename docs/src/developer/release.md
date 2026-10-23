@@ -1,56 +1,54 @@
-[中文](release.zh.md) | **English**
+# Release Process
 
-# 发布流程
+This document explains how to publish a new Falcon release.
 
-本文档介绍如何发布 Falcon 的新版本。
+## Version numbering
 
-## 版本号规范
-
-Falcon 遵循 [语义化版本](https://semver.org/lang/zh-CN/)：
+Falcon follows [Semantic Versioning](https://semver.org/):
 
 ```
 MAJOR.MINOR.PATCH
 
-1.0.0 - 初始稳定版本
-1.1.0 - 添加新功能（向后兼容）
-1.1.1 - Bug 修复
-2.0.0 - 破坏性更改
+1.0.0 - Initial stable release
+1.1.0 - New features (backward compatible)
+1.1.1 - Bug fixes
+2.0.0 - Breaking changes
 ```
 
-### 版本类型
+### Release types
 
-| 类型 | 说明 | 示例 |
+| Type | Description | Example |
 |------|------|------|
-| **Major** | 破坏性 API 变更 | 1.0.0 → 2.0.0 |
-| **Minor** | 向后兼容的新功能 | 1.0.0 → 1.1.0 |
-| **Patch** | 向后兼容的 Bug 修复 | 1.0.0 → 1.0.1 |
+| **Major** | Breaking API changes | 1.0.0 → 2.0.0 |
+| **Minor** | Backward-compatible features | 1.0.0 → 1.1.0 |
+| **Patch** | Backward-compatible bug fixes | 1.0.0 → 1.0.1 |
 
-## 发布前检查清单
+## Pre-release checklist
 
-### 代码质量
+### Code quality
 
-- [ ] 所有测试通过
-- [ ] 代码覆盖率达标
-- [ ] 无编译警告
-- [ ] 代码格式检查通过
-- [ ] 静态分析通过
+- [ ] All tests pass
+- [ ] Code coverage meets the target
+- [ ] No compiler warnings
+- [ ] Code-format checks pass
+- [ ] Static analysis passes
 
-### 文档
+### Documentation
 
-- [ ] CHANGELOG 更新
-- [ ] README 更新（如需要）
-- [ ] API 文档更新
-- [ ] 迁移指南（Major 版本）
+- [ ] CHANGELOG updated
+- [ ] README updated when needed
+- [ ] API documentation updated
+- [ ] Migration guide available (major releases)
 
-### 功能
+### Features
 
-- [ ] 所有计划功能已实现
-- [ ] 已知 bug 已修复
-- [ ] 性能测试通过
+- [ ] All planned features implemented
+- [ ] Known bugs fixed
+- [ ] Performance tests pass
 
-## 发布步骤
+## Release steps
 
-### 1. 更新版本号
+### 1. Update the version number
 
 ```cpp
 // include/falcon/version.hpp
@@ -60,94 +58,94 @@ MAJOR.MINOR.PATCH
 #define FALCON_VERSION "1.1.0"
 ```
 
-### 2. 更新 CHANGELOG
+### 2. Update CHANGELOG
 
 ```markdown
 ## [1.1.0] - 2025-01-06
 
 ### Added
-- 添加对 DASH 协议的支持
-- 添加下载速度限制功能
-- 添加配置文件支持
+- Added DASH protocol support
+- Added download speed limiting
+- Added configuration file support
 
 ### Changed
-- 改进 HTTP 连接复用机制
-- 更新最低 C++ 标准为 C++17
+- Improved HTTP connection reuse
+- Raised the minimum C++ standard to C++17
 
 ### Fixed
-- 修复断点续传的文件大小计算问题
-- 修复 FTP 主动模式连接失败的问题
+- Fixed file-size calculation for resumed downloads
+- Fixed FTP active-mode connection failures
 
 ### Security
-- 修复潜在的 SSL 证书验证问题
+- Fixed a potential SSL certificate validation issue
 ```
 
-### 3. 创建发布分支
+### 3. Create a release branch
 
 ```bash
-# 从 main 创建 release 分支
+# Create a release branch from main
 git checkout -b release/1.1.0
 
-# 更新版本号和 CHANGELOG
+# Update the version and CHANGELOG
 git add .
-git commit -m "chore: 准备发布 1.1.0"
+git commit -m "chore: prepare 1.1.0 release"
 ```
 
-### 4. 测试发布版本
+### 4. Test the release build
 
 ```bash
-# 构建 Release 版本
+# Build the release configuration
 cmake -B build-release -S . -DCMAKE_BUILD_TYPE=Release
 cmake --build build-release --config Release
 
-# 运行测试
+# Run tests
 ctest --test-dir build-release --output-on-failure
 
-# 测试 CLI 工具
+# Smoke-test the CLI
 ./build-release/bin/falcon-cli --version
 ./build-release/bin/falcon-cli https://example.com/test.zip
 ```
 
-### 5. 创建 Git 标签
+### 5. Create the Git tag
 
 ```bash
-# 创建 annotated 标签
+# Create an annotated tag
 git tag -a v1.1.0 -m "Release version 1.1.0"
 
-# 推送标签
+# Push the tag
 git push origin v1.1.0
 ```
 
-### 6. 合并到 main
+### 6. Merge into main
 
 ```bash
-# 合并 release 分支到 main
+# Merge the release branch into main
 git checkout main
 git merge release/1.1.0
 
-# 推送
+# Push
 git push origin main
 ```
 
-### 7. 创建 GitHub Release
+### 7. Create a GitHub Release
 
-1. 访问 [GitHub Releases](https://github.com/cuihairu/falcon/releases)
-2. 点击 "Draft a new release"
-3. 选择标签 `v1.1.0`
-4. 填写发布标题：`Falcon 1.1.0`
-5. 填写发布说明（从 CHANGELOG 复制）
-6. 上传构建的发布包
-7. 点击 "Publish release"
+1. Open [GitHub Releases](https://github.com/cuihairu/falcon/releases).
+2. Click "Draft a new release".
+3. Select the `v1.1.0` tag.
+4. Enter the release title: `Falcon 1.1.0`.
+5. Paste the release notes from CHANGELOG.
+6. Upload the built release packages.
+7. Click "Publish release".
 
-## 构建发布包
+## Build release packages
 
 ### Linux
 
 ```bash
-# 使用 CPack
+# Use CPack
 cmake --build build-release --target package
 
-# 或手动打包
+# Or package manually
 cd build-release
 make package
 ```
@@ -155,25 +153,25 @@ make package
 ### macOS
 
 ```bash
-# 创建 DMG
+# Create a DMG
 cmake --build build-release --target package
 
-# 或使用 macports
+# Or use MacPorts
 sudo port install falcon
 ```
 
 ### Windows
 
 ```bash
-# 使用 CPack
+# Use CPack
 cmake --build build-release --config Release --target package
 
-# 或使用 WiX
+# Or use WiX
 candle falcon.wxs
 light -out falcon.msi falcon.wixobj
 ```
 
-## 持续集成
+## Continuous integration
 
 ### GitHub Actions
 
@@ -229,45 +227,43 @@ jobs:
         path: build/falcon-*
 ```
 
-## 发布后
+## After release
 
-### 通知用户
+### Notify users
 
-- [ ] GitHub Release 发布
-- [ ] 更新网站首页
-- [ ] 发送邮件通知（如果有邮件列表）
-- [ ] 在社交媒体发布
+- [ ] Publish the GitHub Release
+- [ ] Update the website home page
+- [ ] Send an email announcement if a mailing list exists
+- [ ] Announce on social media
 
-### 文档更新
+### Update documentation
 
-- [ ] 更新网站文档
-- [ ] 添加迁移指南（如果需要）
-- [ ] 更新 API 文档
+- [ ] Update the website documentation
+- [ ] Add a migration guide when needed
+- [ ] Update API documentation
 
-### 监控
+### Monitor
 
-- [ ] 监控 issue 和 PR
-- [ ] 收集用户反馈
-- [ ] 跟踪下载统计
+- [ ] Monitor issues and pull requests
+- [ ] Collect user feedback
+- [ ] Track download statistics
 
-## 回滚计划
+## Rollback plan
 
-如果发现严重问题：
+If a serious issue is discovered:
 
 ```bash
-# 回滚标签
+# Remove the tag locally and remotely
 git tag -d v1.1.0
 git push origin :refs/tags/v1.1.0
 
-# 删除 GitHub Release
-# （在 GitHub 网页上操作）
+# Delete the GitHub Release in the web UI.
 
-# 发布修复版本
-# 1.1.1 → 修复补丁
+# Publish a fixed release, for example 1.1.1.
 ```
 
-::: tip 发布建议
-- 在非工作时间发布，以便有时间处理紧急问题
-- 提前通知用户即将发布的版本
-- 准备好快速修复计划
+::: tip Release guidance
+- Release outside working hours so there is time to handle urgent issues.
+- Tell users in advance about an upcoming release.
+- Have a fast-fix plan ready.
 :::

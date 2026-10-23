@@ -1,5 +1,3 @@
-[English](private.md) | **中文**
-
 # 私有协议
 
 Falcon 代码库中包含迅雷、QQ 旋风、快车、电驴、HLS/DASH 五个可选协议插件的实现，这些插件在顶层 CMake 中默认是关闭的。

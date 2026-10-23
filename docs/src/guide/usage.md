@@ -1,5 +1,3 @@
-[中文](usage.zh.md) | **English**
-
 # Usage Guide
 
 This document covers how to use the Falcon downloader in detail, including the command-line tool and the C++ API.

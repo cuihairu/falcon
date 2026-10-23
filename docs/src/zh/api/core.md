@@ -1,5 +1,3 @@
-[English](core.md) | **中文**
-
 # 核心 API
 
 本文档基于当前公共头文件说明 Falcon 的核心 C++ 接口。

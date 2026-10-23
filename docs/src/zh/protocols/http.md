@@ -1,5 +1,3 @@
-[English](http.md) | **中文**
-
 # HTTP/HTTPS 协议
 
 HTTP/HTTPS 是 Falcon 当前最稳定、默认启用的下载协议。

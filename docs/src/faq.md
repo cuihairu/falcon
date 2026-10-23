@@ -1,5 +1,3 @@
-[中文](faq.zh.md) | **English**
-
 # Frequently Asked Questions
 
 This page collects frequently asked questions about Falcon.

@@ -1,12 +1,10 @@
-[中文](plugins.zh.md) | **English**
+# Plugin Development Guide
 
-# 插件开发指南
+This guide explains how to add a protocol handler using the current public plugin interface.
 
-本文档基于当前公共插件接口说明如何新增协议处理器。
+## Public interface
 
-## 公共接口
-
-插件需要实现 `IProtocolHandler`：
+A plugin must implement `IProtocolHandler`:
 
 ```cpp
 class IProtocolHandler {
@@ -33,9 +31,9 @@ public:
 };
 ```
 
-## 新建处理器
+## Creating a handler
 
-### 头文件
+### Header
 
 ```cpp
 #pragma once
@@ -70,7 +68,7 @@ public:
 };
 ```
 
-### 实现骨架
+### Implementation skeleton
 
 ```cpp
 void MyProtocolHandler::download(
@@ -83,31 +81,31 @@ void MyProtocolHandler::download(
 
     task->set_status(falcon::TaskStatus::Downloading);
 
-    // 下载循环中持续更新进度
+    // Keep updating progress inside the download loop.
     task->update_progress(downloaded, total, speed);
 
-    // 完成时写入输出路径并结束
+    // Write the output path and finish when complete.
     task->set_output_path(task->output_path());
     task->set_status(falcon::TaskStatus::Completed);
 }
 ```
 
-这里的关键点是：
+Key points:
 
-- 插件接收的是已有的 `DownloadTask`
-- 任务状态、文件信息、进度都应通过 `DownloadTask` 回写
-- 监听器接口使用的是 `on_progress()` / `on_completed()` 这一套当前事件名
+- A plugin receives an existing `DownloadTask`.
+- Write task status, file information, and progress back through `DownloadTask`.
+- The listener interface uses the current event names `on_progress()` and `on_completed()`.
 
-## 注册方式
+## Registering a handler
 
-### 直接注册
+### Direct registration
 
 ```cpp
 falcon::DownloadEngine engine;
 engine.register_handler(std::make_unique<MyProtocolHandler>());
 ```
 
-### 工厂注册
+### Factory registration
 
 ```cpp
 std::unique_ptr<falcon::IProtocolHandler> create_myproto_handler() {
@@ -117,16 +115,16 @@ std::unique_ptr<falcon::IProtocolHandler> create_myproto_handler() {
 engine.register_handler_factory(&create_myproto_handler);
 ```
 
-## CMake 接入
+## CMake integration
 
-如果要把插件纳入仓库构建，参考现有插件目录组织，例如：
+To include a plugin in the repository build, follow the existing plugin directory layout, for example:
 
 ```text
 packages/libfalcon-protocols/plugins/http/
 packages/libfalcon-protocols/plugins/ftp/
 ```
 
-最小示例：
+Minimal example:
 
 ```cmake
 add_library(falcon_plugin_myproto
@@ -140,17 +138,17 @@ target_link_libraries(falcon_plugin_myproto
 )
 ```
 
-## 测试建议
+## Testing guidance
 
-优先测试这些点：
+Prioritize testing:
 
-- `protocol_name()` 是否正确
-- `supported_schemes()` 是否覆盖目标 scheme
-- `can_handle()` 是否只匹配预期 URL
-- `get_file_info()` 是否返回合理的 `FileInfo`
-- `download()` 是否正确更新 `TaskStatus`
+- Whether `protocol_name()` is correct.
+- Whether `supported_schemes()` covers the target schemes.
+- Whether `can_handle()` matches only the expected URLs.
+- Whether `get_file_info()` returns a sensible `FileInfo`.
+- Whether `download()` updates `TaskStatus` correctly.
 
-示例：
+Example:
 
 ```cpp
 TEST(MyProtocolHandlerTest, CanHandleValidUrl) {
@@ -164,9 +162,9 @@ TEST(MyProtocolHandlerTest, ProtocolName) {
 }
 ```
 
-## 插件元数据
+## Plugin metadata
 
-如果你维护独立插件仓库，可以使用类似这样的清单：
+If you maintain a standalone plugin repository, a manifest like this can be used:
 
 ```json
 {
@@ -183,6 +181,6 @@ TEST(MyProtocolHandlerTest, ProtocolName) {
 }
 ```
 
-## 边界说明
+## Scope
 
-当前公共头文件没有把协议专属配置结构体作为稳定 API 全量公开，所以新插件文档不应默认扩展 `DownloadOptions` 去挂载 `HttpOptions` / `FtpOptions` 风格的字段，除非这些字段已经真的进入公共接口。
+The current public headers do not expose every protocol-specific configuration struct as a stable API. New plugin documentation therefore should not assume that `DownloadOptions` can carry `HttpOptions`- or `FtpOptions`-style fields unless those fields have actually entered the public interface.

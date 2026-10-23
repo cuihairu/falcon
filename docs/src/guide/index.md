@@ -1,5 +1,3 @@
-[中文](index.zh.md) | **English**
-
 # Falcon Downloader
 
 **Falcon** is a cross-platform C++ downloader built as a monorepo. Its transfer foundation relies on open-source components such as libcurl, OpenSSL, libtorrent, and libssh2, all orchestrated around a unified engine that carries multi-protocol downloading.

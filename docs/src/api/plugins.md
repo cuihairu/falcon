@@ -1,14 +1,12 @@
-[中文](plugins.zh.md) | **English**
+# Plugin API
 
-# 插件 API
-
-本文档说明当前公共插件接口，而不是尚未进入公共头文件的协议专属选项设计稿。
+This document describes the current public plugin interface, not protocol-specific option designs that have not yet entered the public headers.
 
 ## IProtocolHandler
 
-所有协议处理器都需要实现 `IProtocolHandler`。
+Every protocol handler must implement `IProtocolHandler`.
 
-### 接口定义
+### Interface definition
 
 ```cpp
 class IProtocolHandler {
@@ -39,28 +37,28 @@ public:
 };
 ```
 
-### 要点
+### Key points
 
-- `protocol_name()` 返回处理器标识，例如 `http`、`ftp`。
-- `supported_schemes()` 返回 URL scheme 列表，例如 `http` / `https`。
-- `download()` 和 `resume()` 接收的是 `DownloadTask::Ptr`，而不是单独的 URL 字符串。
-- 下载过程中的状态和进度应通过 `DownloadTask` 与 `IEventListener` 协同更新。
+- `protocol_name()` returns the handler identifier, for example `http` or `ftp`.
+- `supported_schemes()` returns the URL schemes, for example `http` and `https`.
+- `download()` and `resume()` receive a `DownloadTask::Ptr`, not a bare URL string.
+- Update status and progress during a download through `DownloadTask` together with `IEventListener`.
 
 ## ProtocolHandlerFactory
 
-公共工厂类型如下：
+The public factory type is:
 
 ```cpp
 using ProtocolHandlerFactory = std::unique_ptr<IProtocolHandler> (*)();
 ```
 
-这允许你通过 `DownloadEngine::register_handler_factory()` 延迟注册协议处理器。
+This lets you register a protocol handler lazily through `DownloadEngine::register_handler_factory()`.
 
 ## ProtocolRegistry
 
-当前公共头文件里对外可见的注册与查询接口是 `ProtocolRegistry`，负责注册和查询协议处理器。
+The registration and lookup interface currently exposed by the public headers is `ProtocolRegistry`, which registers and resolves protocol handlers.
 
-### 主要接口
+### Main interface
 
 ```cpp
 class ProtocolRegistry {
@@ -80,7 +78,7 @@ public:
 };
 ```
 
-### 使用示例
+### Usage example
 
 ```cpp
 falcon::ProtocolRegistry registry;
@@ -95,28 +93,28 @@ if (auto* handler = registry.get_handler_for_url("https://example.com/file.zip")
 }
 ```
 
-## 与 DownloadEngine 的关系
+## Relationship to DownloadEngine
 
-大多数业务代码不需要直接操作 `ProtocolRegistry`。通常更简单的方式是：
+Most application code does not need to operate `ProtocolRegistry` directly. The simpler path is usually:
 
 ```cpp
 falcon::DownloadEngine engine;
 auto task = engine.add_task("https://example.com/file.zip");
 ```
 
-如果你需要注册自定义协议处理器，可以使用：
+To register a custom protocol handler, use:
 
 ```cpp
 engine.register_handler(std::make_unique<MyProtocolHandler>());
 ```
 
-或：
+or:
 
 ```cpp
 engine.register_handler_factory(&create_my_protocol_handler);
 ```
 
-## 自定义处理器示例
+## Custom handler example
 
 ```cpp
 class MyProtocolHandler : public falcon::IProtocolHandler {
@@ -147,6 +145,6 @@ public:
 };
 ```
 
-::: tip 边界说明
-`HttpOptions`、`FtpOptions`、`BittorrentOptions`、`HlsOptions` 这类协议专属配置结构当前不在公共头文件里作为稳定 API 暴露，因此这里不再把它们写成“现有公共接口”。
+::: tip Scope
+Protocol-specific configuration structs such as `HttpOptions`, `FtpOptions`, `BittorrentOptions`, and `HlsOptions` are not currently exposed as stable public APIs in the public headers, so they are not documented here as existing public interfaces.
 :::

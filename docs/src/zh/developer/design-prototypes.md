@@ -1,5 +1,3 @@
-[English](design-prototypes.md) | **中文**
-
 # 界面设计原型
 
 桌面端主视图的两版设计候选——先出原型过目，再动生产代码。两图均为
@@ -7,8 +5,8 @@ ui_sandbox 离屏渲染（真实 Qt 组件树 + demo 任务数据：2 下载中 
 1 完成 / 1 失败 / 2 做种），「下载中·表格」视图（应用落地第一屏），顶栏 /
 侧栏 / hero 摘要卡 / 七列任务表 / 状态栏全要素，暗色主题 1200×800。
 
-![变体 A · warm console（现行生产主题）](../../design/prototypes/warm-console-dark.png)
-![变体 B · cold utility（变体候选）](../../design/prototypes/cold-utility-dark.png)
+![变体 A · warm console（现行生产主题）](/prototypes/warm-console-dark.png)
+![变体 B · cold utility（变体候选）](/prototypes/cold-utility-dark.png)
 
 <div class="prototype-caption">左：变体 A（warm console，现行生产主题）｜右：变体 B（cold utility，变体候选）</div>
 
@@ -51,7 +49,7 @@ build-desktop/bin/falcon-ui-sandbox --prototype docs/design/prototypes
 （需要 `FALCON_BUILD_UI_SANDBOX=ON` 的 build-desktop 树；离屏渲染，
 无需显示环境。）
 
-另见 [桌面端重设计](/developer/desktop-redesign) 的整体重设计 brief。
+另见 [桌面端重设计](/zh/developer/desktop-redesign) 的整体重设计 brief。
 
 <style scoped>
 img {

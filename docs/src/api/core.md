@@ -1,14 +1,12 @@
-[中文](core.zh.md) | **English**
+# Core API
 
-# 核心 API
-
-本文档基于当前公共头文件说明 Falcon 的核心 C++ 接口。
+This document describes Falcon's core C++ interfaces as defined by the current public headers.
 
 ## DownloadEngine
 
-`DownloadEngine` 负责任务生命周期、并发控制、事件监听和协议处理器注册。
+`DownloadEngine` owns the task lifecycle, concurrency control, event listeners, and protocol-handler registration.
 
-### 主要接口
+### Main interface
 
 ```cpp
 class DownloadEngine {
@@ -61,7 +59,7 @@ public:
 };
 ```
 
-### 基本示例
+### Basic example
 
 ```cpp
 #include <falcon/falcon.hpp>
@@ -84,7 +82,7 @@ int main() {
 }
 ```
 
-### 多任务示例
+### Multiple tasks
 
 ```cpp
 falcon::DownloadEngine engine;
@@ -106,9 +104,9 @@ engine.wait_all();
 
 ## DownloadOptions
 
-`DownloadOptions` 描述单个下载任务的行为。
+`DownloadOptions` describes the behavior of a single download task.
 
-### 当前字段
+### Current fields
 
 ```cpp
 struct DownloadOptions {
@@ -146,7 +144,7 @@ struct DownloadOptions {
 };
 ```
 
-### 示例
+### Example
 
 ```cpp
 falcon::DownloadOptions options;
@@ -160,7 +158,7 @@ options.headers["Authorization"] = "Bearer TOKEN";
 
 ## EngineConfig
 
-`EngineConfig` 描述引擎级全局行为。
+`EngineConfig` describes global engine behavior.
 
 ```cpp
 struct EngineConfig {
@@ -174,7 +172,7 @@ struct EngineConfig {
 };
 ```
 
-示例：
+Example:
 
 ```cpp
 falcon::EngineConfig config;
@@ -186,9 +184,9 @@ falcon::DownloadEngine engine(config);
 
 ## DownloadTask
 
-`DownloadTask` 表示单个下载任务。
+`DownloadTask` represents a single download task.
 
-### 主要接口
+### Main interface
 
 ```cpp
 class DownloadTask {
@@ -213,7 +211,7 @@ public:
 };
 ```
 
-### 示例
+### Example
 
 ```cpp
 auto task = engine.add_task("https://example.com/file.zip");
@@ -228,7 +226,7 @@ if (task->status() == falcon::TaskStatus::Completed) {
 
 ## TaskStatus
 
-当前任务状态枚举定义在 `event_listener.hpp`：
+The current task-status enum is defined in `event_listener.hpp`:
 
 ```cpp
 enum class TaskStatus {
@@ -242,9 +240,9 @@ enum class TaskStatus {
 };
 ```
 
-## 基础类型
+## Fundamental types
 
-常用基础类型定义在 `types.hpp`：
+Common fundamental types are defined in `types.hpp`:
 
 ```cpp
 using TaskId = std::uint64_t;

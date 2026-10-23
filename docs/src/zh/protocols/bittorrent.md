@@ -1,5 +1,3 @@
-[English](bittorrent.md) | **中文**
-
 # BitTorrent 协议
 
 Falcon 代码库中包含 BitTorrent 插件实现，可处理 Magnet 链接和 `.torrent` 文件；数据面由 libtorrent 承担，顶层 CMake 默认启用（缺 libtorrent 时以 WARNING 优雅降级）。

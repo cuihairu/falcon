@@ -1,5 +1,3 @@
-[English](installation.md) | **中文**
-
 # 安装说明
 
 本文档详细介绍如何在当前仓库状态下构建和安装 Falcon。

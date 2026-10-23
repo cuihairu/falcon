@@ -1,5 +1,3 @@
-[English](ftp.md) | **中文**
-
 # FTP/FTPS 协议
 
 Falcon 支持 FTP 和 FTPS，并默认内置 FTP 处理器。

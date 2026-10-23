@@ -1,5 +1,3 @@
-[中文](getting-started.zh.md) | **English**
-
 # Getting Started
 
 This guide follows the current state of the repository and walks you through building and running the Falcon CLI from source.

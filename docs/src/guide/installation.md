@@ -1,5 +1,3 @@
-[中文](installation.zh.md) | **English**
-
 # Installation Guide
 
 This document explains in detail how to build and install Falcon in the current state of the repository.

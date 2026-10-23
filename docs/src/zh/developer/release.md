@@ -1,5 +1,3 @@
-[English](release.md) | **中文**
-
 # 发布流程
 
 本文档介绍如何发布 Falcon 的新版本。

@@ -1,5 +1,3 @@
-[English](faq.md) | **中文**
-
 # 常见问题
 
 本文档汇总了 Falcon 的常见问题和解答。
@@ -35,7 +33,7 @@ sudo apt install libspdlog-dev nlohmann-json3-dev \
 
 ### Q: 如何查看支持的协议？
 
-A: 目前建议直接查看 [协议支持](/protocols/) 文档，或在构建时确认对应 `FALCON_ENABLE_*` CMake 选项是否开启。
+A: 目前建议直接查看 [协议支持](/zh/protocols/) 文档，或在构建时确认对应 `FALCON_ENABLE_*` CMake 选项是否开启。
 
 ## 使用问题
 
@@ -92,7 +90,7 @@ A: Falcon 支持：
 - 快车 (flashget://)
 - HLS/DASH
 
-详见 [协议支持](/protocols/)。
+详见 [协议支持](/zh/protocols/)。
 
 ### Q: 如何下载迅雷链接？
 
@@ -210,7 +208,7 @@ A: 检查：
 
 ### Q: 如何贡献代码？
 
-A: 请查看 [开发者指南](/developer/)。
+A: 请查看 [开发者指南](/zh/developer/)。
 
 ### Q: 如何开发新插件？
 
@@ -237,7 +235,7 @@ A: 是的，基于 Apache 2.0 许可证开源。
 
 ### Q: Falcon 与 aria2 相比如何？
 
-A: 请查看 [开发者指南](/developer/)。
+A: 请查看 [开发者指南](/zh/developer/)。
 
 ### Q: 如何获取帮助？
 

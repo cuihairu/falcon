@@ -31,8 +31,6 @@ features:
     details: 基于 Apache 2.0 许可证发布。
 ---
 
-[English](index.md) | **中文**
-
 主视图设计原型（warm console / cold utility）与桌面端实况截图（下载管理、
 已完成列表、添加对话框、云存储、设置页）自动轮播——鼠标悬停暂停，
 可用左右箭头、圆点或键盘方向键切换。
@@ -131,7 +129,7 @@ falcon/
 欢迎贡献代码、报告问题或提出建议！
 
 - [GitHub Issues](https://github.com/cuihairu/falcon/issues)
-- [贡献指南](/developer/)
+- [贡献指南](/zh/developer/)
 
 ## 许可证
 

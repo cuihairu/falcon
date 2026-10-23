@@ -1,8 +1,6 @@
-[中文](events.zh.md) | **English**
+# Events API
 
-# 事件 API
-
-Falcon 当前的公共事件接口以 `IEventListener`、`TaskStatus`、`ProgressInfo` 和 `FileInfo` 为核心。
+Falcon's current public event interface centers on `IEventListener`, `TaskStatus`, `ProgressInfo`, and `FileInfo`.
 
 ## IEventListener
 
@@ -32,7 +30,7 @@ public:
 };
 ```
 
-和旧设计稿不同，当前公共事件接口并没有 `ProgressEvent`、`CompleteEvent` 这类独立事件结构体。
+Unlike older design drafts, the current public event interface does not define separate event structs such as `ProgressEvent` or `CompleteEvent`.
 
 ## TaskStatus
 
@@ -48,7 +46,7 @@ enum class TaskStatus {
 };
 ```
 
-可以通过 `falcon::to_string(status)` 转成字符串。
+Use `falcon::to_string(status)` to convert a status to a string.
 
 ## ProgressInfo
 
@@ -77,7 +75,7 @@ struct FileInfo {
 };
 ```
 
-## 监听器示例
+## Listener example
 
 ```cpp
 #include <falcon/falcon.hpp>
@@ -91,7 +89,7 @@ public:
         falcon::TaskId task_id,
         falcon::TaskStatus old_status,
         falcon::TaskStatus new_status) override {
-        std::cout << "\n[任务 " << task_id << "] "
+        std::cout << "\n[task " << task_id << "] "
                   << falcon::to_string(old_status)
                   << " -> "
                   << falcon::to_string(new_status)
@@ -108,19 +106,19 @@ public:
     void on_error(
         falcon::TaskId task_id,
         const std::string& error_message) override {
-        std::cerr << "\n[任务 " << task_id << "] " << error_message << '\n';
+        std::cerr << "\n[task " << task_id << "] " << error_message << '\n';
     }
 
     void on_completed(
         falcon::TaskId task_id,
         const std::string& output_path) override {
-        std::cout << "\n[任务 " << task_id << "] 完成: "
+        std::cout << "\n[task " << task_id << "] completed: "
                   << output_path << '\n';
     }
 };
 ```
 
-## 与引擎集成
+## Integrating with the engine
 
 ```cpp
 falcon::DownloadEngine engine;

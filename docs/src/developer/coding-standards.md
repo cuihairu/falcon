@@ -1,5 +1,3 @@
-[中文](coding-standards.zh.md) | **English**
-
 # Coding Standards
 
 This document defines the coding standards for the Falcon project.

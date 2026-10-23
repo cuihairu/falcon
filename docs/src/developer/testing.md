@@ -1,10 +1,8 @@
-[中文](testing.zh.md) | **English**
+# Testing Guide
 
-# 测试指南
+This document explains how tests are organized in the current repository and which interfaces new tests should target.
 
-本文档说明当前仓库中的测试组织方式，以及编写测试时应遵循的接口口径。
-
-## 测试目录
+## Test directories
 
 ```text
 packages/libfalcon-core/tests/
@@ -14,15 +12,15 @@ packages/libfalcon-drives/tests/
 packages/falcon-daemon/tests/
 ```
 
-这些库下目前主要包含：
+These libraries currently contain:
 
 - `unit/`
 - `integration/`
 - `performance/`
 
-## 构建测试
+## Building tests
 
-推荐使用 vcpkg manifest 构建测试。仓库根目录的 `vcpkg.json` 已声明 `gtest`，使用 vcpkg toolchain 配置时会自动安装测试依赖。
+The recommended path is the vcpkg manifest build. The repository-root `vcpkg.json` declares `gtest`, so configuring with the vcpkg toolchain installs the test dependency automatically.
 
 ```bash
 export VCPKG_ROOT=/path/to/vcpkg
@@ -42,19 +40,19 @@ cmake -B build-vcpkg-core -S . \
 cmake --build build-vcpkg-core --target falcon_core_tests falcon_split_tests -j4
 ```
 
-核心库最小稳定面验证：
+Verify the minimal stable surface of the core library:
 
 ```bash
 ./build-vcpkg-core/bin/falcon_core_tests --gtest_brief=1
 ./build-vcpkg-core/bin/falcon_split_tests --gtest_brief=1
 ```
 
-当前已验证结果：
+Current verified results:
 
-- `falcon_core_tests`: 384 个测试通过
-- `falcon_split_tests`: 10 个测试通过
+- `falcon_core_tests`: 384 tests passed
+- `falcon_split_tests`: 10 tests passed
 
-如果使用系统依赖而不是 vcpkg：
+To use system dependencies instead of vcpkg:
 
 ```bash
 cmake -B build -S . -DCMAKE_BUILD_TYPE=Debug -DFALCON_BUILD_TESTS=ON
@@ -62,9 +60,9 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-裸 CMake 配置不会自动从 vcpkg manifest 安装依赖。如果本机没有预装 `GTest`，当前仓库会直接跳过各测试目录，不再自动通过 `FetchContent` 联网拉取依赖。
+A bare CMake configuration does not install dependencies from the vcpkg manifest. If `GTest` is not preinstalled, the repository skips the test directories rather than fetching dependencies over the network with `FetchContent`.
 
-常见安装方式：
+Common installation commands:
 
 ```bash
 # macOS (Homebrew)
@@ -74,11 +72,11 @@ brew install googletest
 sudo apt-get install libgtest-dev
 ```
 
-安装完成后，重新执行上面的 CMake 配置与构建命令。
+After installation, rerun the CMake configuration and build commands above.
 
-## 编写测试时的接口基线
+## Interface baseline for tests
 
-当前公开接口应以这些符号为准：
+New tests should target these public symbols:
 
 - `DownloadEngine::add_task()`
 - `DownloadEngine::start_task()`
@@ -88,9 +86,9 @@ sudo apt-get install libgtest-dev
 - `DownloadTask::status()`
 - `DownloadTask::id()`
 
-不要再以 `startDownload()`、`loadPlugin()`、`getStatus()` 作为新测试样例的默认写法。
+Do not use `startDownload()`, `loadPlugin()`, or `getStatus()` as defaults in new test examples.
 
-## 基本示例
+## Basic examples
 
 ```cpp
 #include <gtest/gtest.h>
@@ -108,7 +106,7 @@ TEST(DownloadEngineTest, AddTaskWithSupportedUrl) {
 }
 ```
 
-## 测试固件
+## Test fixture
 
 ```cpp
 class DownloadEngineTest : public ::testing::Test {
@@ -127,7 +125,7 @@ TEST_F(DownloadEngineTest, AddedTaskStartsAsPending) {
 }
 ```
 
-## 参数化测试
+## Parameterized tests
 
 ```cpp
 class ProtocolSupportTest : public ::testing::TestWithParam<std::string> {
@@ -150,16 +148,16 @@ INSTANTIATE_TEST_SUITE_P(
 );
 ```
 
-## 集成测试建议
+## Integration-test guidance
 
-集成测试更适合验证：
+Integration tests are a better fit for verifying:
 
-- 真实 URL 路由是否命中正确处理器
-- 下载任务从 `Pending` 到 `Completed` 的流转
-- 断点续传和输出路径行为
-- 并发任务数量与全局限制
+- Whether a real URL routes to the correct handler.
+- The transition of a download task from `Pending` to `Completed`.
+- Resume and output-path behavior.
+- Active-task counts and global concurrency limits.
 
-示例：
+Example:
 
 ```cpp
 TEST(DownloadEngineIntegration, AddThenStartTask) {
@@ -179,7 +177,7 @@ TEST(DownloadEngineIntegration, AddThenStartTask) {
 }
 ```
 
-## 覆盖率
+## Coverage
 
 ```bash
 cmake -B build -S . \
@@ -191,9 +189,9 @@ cmake --build build
 ctest --test-dir build
 ```
 
-## 最佳实践
+## Best practices
 
-- 为公共头文件中的真实接口写测试，不要围绕历史设计稿扩展新样例。
-- 优先测试稳定行为：状态迁移、URL 支持判断、输出路径、并发限制。
-- 需要网络的测试应尽量使用本地测试服务器或夹具，避免外网不稳定。
-- 当插件默认关闭时，测试应明确设置对应的构建开关前提。
+- Test real interfaces from the public headers; do not extend new examples around historical design drafts.
+- Prefer stable behavior: state transitions, URL support checks, output paths, and concurrency limits.
+- Use local test servers or fixtures for network-dependent tests to avoid external-network flakiness.
+- When a plugin is disabled by default, state the required build-option precondition in the test.

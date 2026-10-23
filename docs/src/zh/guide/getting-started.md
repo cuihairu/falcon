@@ -1,5 +1,3 @@
-[English](getting-started.md) | **中文**
-
 # 快速开始
 
 本指南基于当前仓库实际状态，帮助你从源码构建并运行 Falcon CLI。
@@ -158,7 +156,7 @@ falcon-cli -i urls.txt -j 3
 
 - [安装说明](installation.md) - 详细的构建和依赖说明
 - [使用指南](usage.md) - 深入了解命令行选项和 C++ API
-- [协议支持](/protocols/) - 了解所有支持的下载协议
+- [协议支持](/zh/protocols/) - 了解所有支持的下载协议
 
 ## 获取帮助
 

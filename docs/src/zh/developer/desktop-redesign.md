@@ -1,5 +1,3 @@
-[English](desktop-redesign.md) | **中文**
-
 # Desktop Redesign Brief
 
 本文定义 Falcon Desktop 的界面重设计方向。目标是在进入 Qt 代码实现前，先建立可评审的视觉标准，避免只做低质量换色。

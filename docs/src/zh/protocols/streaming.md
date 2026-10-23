@@ -1,5 +1,3 @@
-[English](streaming.md) | **中文**
-
 # HLS/DASH 流媒体协议
 
 Falcon 代码库中包含 HLS 相关插件实现，流媒体能力目前更适合视作“可选协议插件能力”，而不是已经稳定公开的高层 API。

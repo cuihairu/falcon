@@ -1,16 +1,14 @@
-[中文](index.zh.md) | **English**
+# API Reference
 
-# API 参考
+Falcon currently exposes a C++ API; the CLI is built on the same core library capabilities.
 
-Falcon 当前主要提供 C++ API，CLI 则基于同一套核心库能力构建。
-
-## 头文件入口
+## Header entry point
 
 ```cpp
 #include <falcon/falcon.hpp>
 ```
 
-`falcon.hpp` 会聚合以下公共接口：
+`falcon.hpp` aggregates the following public interfaces:
 
 - `download_engine.hpp`
 - `download_options.hpp`
@@ -20,7 +18,7 @@ Falcon 当前主要提供 C++ API，CLI 则基于同一套核心库能力构建�
 - `types.hpp`
 - `version.hpp`
 
-## 快速开始
+## Quick start
 
 ```cpp
 #include <falcon/falcon.hpp>
@@ -46,17 +44,17 @@ int main() {
 }
 ```
 
-说明：
+Notes:
 
-- `DownloadEngine` 构造时会加载当前构建中可用的内置协议处理器。
-- 任务通过 `add_task()` 或 `add_tasks()` 加入，再通过 `start_task()` 启动。
-- 事件回调通过 `add_listener()` / `remove_listener()` 管理。
+- Constructing `DownloadEngine` loads the built-in protocol handlers available in the current build.
+- Add tasks with `add_task()` or `add_tasks()`, then start them with `start_task()`.
+- Manage event callbacks with `add_listener()` and `remove_listener()`.
 
-## CLI 对应关系
+## Relationship to the CLI
 
-CLI 常见参数与 `DownloadOptions` 大致对应如下：
+Common CLI options map approximately to `DownloadOptions` fields as follows:
 
-| CLI 参数 | C++ 字段 |
+| CLI option | C++ field |
 |------|------|
 | `-o`, `--output` | `output_filename` |
 | `-d`, `--directory` | `output_directory` |
@@ -66,9 +64,9 @@ CLI 常见参数与 `DownloadOptions` 大致对应如下：
 | `--retry-wait` | `retry_delay_seconds` |
 | `--no-verify-ssl` | `verify_ssl = false` |
 
-::: tip 详细 API
-请继续查看：
-- [核心 API](./core.md)
-- [插件 API](./plugins.md)
-- [事件 API](./events.md)
+::: tip Detailed API
+Continue with:
+- [Core API](./core.md)
+- [Plugin API](./plugins.md)
+- [Events API](./events.md)
 :::

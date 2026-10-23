@@ -1,5 +1,3 @@
-[English](coding-standards.md) | **中文**
-
 # 编码规范
 
 本文档定义了 Falcon 项目的编码规范。

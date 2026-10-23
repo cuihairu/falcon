@@ -31,8 +31,6 @@ features:
     details: Released under the Apache 2.0 license.
 ---
 
-[中文](index.zh.md) | **English**
-
 The main-view design prototypes (warm console / cold utility) and live desktop
 screenshots (download management, completed list, add-download dialog, cloud
 storage, settings) rotate automatically — hovering pauses the carousel, and

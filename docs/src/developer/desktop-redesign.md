@@ -1,125 +1,123 @@
-[中文](desktop-redesign.zh.md) | **English**
-
 # Desktop Redesign Brief
 
-本文定义 Falcon Desktop 的界面重设计方向。目标是在进入 Qt 代码实现前，先建立可评审的视觉标准，避免只做低质量换色。
+This document defines the interface redesign direction for Falcon Desktop. The goal is to establish a reviewable visual standard before implementation in Qt, rather than settling for a low-quality recoloring pass.
 
-## 设计目标
+## Design goals
 
-Falcon Desktop 应该像一个高性能下载控制台，而不是通用后台管理系统。界面需要突出任务状态、速度、队列和资源入口，让用户在打开应用后的 3 秒内理解当前下载系统是否健康。
+Falcon Desktop should feel like a high-performance download console, not a generic administration backend. The interface must foreground task status, speed, queues, and resource entry points so users understand whether the download system is healthy within three seconds of opening the app.
 
-核心目标：
+Core goals:
 
-- 强化产品识别度：形成 Falcon 自己的视觉语言，而不是默认 Qt 控件堆叠。
-- 提升任务可读性：下载状态、速度、进度、操作入口必须比装饰元素更醒目。
-- 降低认知负担：保留当前功能结构，但重新组织信息层级。
-- 控制实现风险：优先改样式、布局和组件外观，不改下载引擎、存储、搜索和 IPC 逻辑。
+- Strengthen product identity: establish Falcon's own visual language instead of stacking default Qt controls.
+- Improve task readability: download status, speed, progress, and actions must stand out more than decorative elements.
+- Reduce cognitive load: preserve the current feature structure while reorganizing the information hierarchy.
+- Control implementation risk: change styles, layout, and component appearance first; do not touch the download engine, storage, search, or IPC logic.
 
-## 视觉方向
+## Visual direction
 
-推荐采用 `Deep Signal` 方向：深色控制台基底、青绿色信号光、暖橙关键操作、玻璃感任务面板。
+The recommended direction is `Deep Signal`: a dark console base, teal signal light, warm-orange primary actions, and glass-like task panels.
 
-这个方向适合下载工具的原因：
+Why this direction suits a download tool:
 
-- 深色基底能承载长时间运行场景，减少视觉疲劳。
-- 青绿色和蓝色可表达网络、速度、连接、稳定。
-- 暖橙只用于“新建下载”“立即开始”等高优先级动作，避免全界面高饱和。
-- 卡片和表格使用低对比边框与层级阴影，让任务列表像仪表板而不是表单。
+- A dark base supports long-running sessions and reduces visual fatigue.
+- Teal and blue communicate networking, speed, connectivity, and stability.
+- Warm orange is reserved for high-priority actions such as "New Download" and "Start Now", avoiding saturation across the entire interface.
+- Cards and tables use low-contrast borders and layered shadows so the task list reads like a dashboard, not a form.
 
-备选方向：
+Alternative directions:
 
-- `Graphite Pro`：浅色石墨灰专业工具风，适合偏办公和跨平台一致性。
-- `Kinetic Glass`：浅深混合玻璃拟态，视觉更强，但 Qt QSS 实现复杂度更高。
-- `Neo Classic`：macOS 风格侧栏与内容卡片，稳妥但辨识度不足。
+- `Graphite Pro`: a light graphite-gray professional tool style, suited to office use and cross-platform consistency.
+- `Kinetic Glass`: mixed light/dark glassmorphism with stronger visual impact, but significantly higher Qt QSS implementation complexity.
+- `Neo Classic`: macOS-style sidebar and content cards; safe, but lacking differentiation.
 
-## 信息架构
+## Information architecture
 
-### 顶部栏
+### Top bar
 
-顶部栏承担全局任务入口，而不是普通标题栏。
+The top bar is the global task entry point, not a conventional title bar.
 
-建议结构：
+Suggested structure:
 
-- 左侧：Falcon 标识、版本/运行状态小标签。
-- 中间：链接输入与资源搜索合一的 command bar。
-- 右侧：刷新、视图、更多、窗口控制。
+- Left: Falcon mark and a small version/runtime-status badge.
+- Center: a command bar combining link input and resource search.
+- Right: refresh, view, more, and window controls.
 
-文案建议：
+Suggested copy:
 
-- 搜索占位：`粘贴链接、磁力、电驴或搜索资源`
-- 状态标签：`Signal Ready` 或 `Engine Online`
-- 主操作按钮：`新建下载`
+- Search placeholder: `Paste a link, magnet, ed2k, or search resources`
+- Status badge: `Signal Ready` or `Engine Online`
+- Primary action: `New Download`
 
-### 侧边栏
+### Sidebar
 
-侧边栏应从“功能菜单”升级为“任务空间”。
+The sidebar should evolve from a "feature menu" into a "task workspace".
 
-建议分组：
+Suggested groups:
 
-- `传输队列`：下载中、已完成、云添加。
-- `资源网络`：资源发现、云盘空间。
-- `系统`：偏好设置。
+- `Transfer Queue`: Downloading, Completed, Cloud Add.
+- `Resource Network`: Resource Discovery, Cloud Storage.
+- `System`: Preferences.
 
-删除或后置目前弱价值的“私人空间”入口，除非后续有真实隐私下载功能。
+Remove or demote the currently low-value "Private Space" entry unless real private-download functionality arrives later.
 
-### 下载页
+### Download page
 
-下载页是主体验，应重做为三层结构：
+The download page is the primary experience and should be rebuilt as three layers:
 
-- Hero 状态面板：当前模式、总速度、活跃任务、主操作。
-- Summary cards：活跃任务、已完成、当前速度、失败/等待。
-- Task surface：表格/卡片两种视图，但视觉风格统一。
+- Hero status panel: current mode, total speed, active tasks, primary action.
+- Summary cards: active tasks, completed tasks, current speed, failed/waiting tasks.
+- Task surface: table and card views with one consistent visual style.
 
-任务列表需要突出：
+The task list must emphasize:
 
-- 文件名和来源。
-- 进度条。
-- 实时速度。
-- 状态 badge。
-- 暂停、继续、删除等行内操作。
+- Filename and source.
+- Progress bar.
+- Real-time speed.
+- Status badge.
+- Inline actions such as pause, resume, and delete.
 
-### 状态栏
+### Status bar
 
-状态栏应像系统 telemetry，不应像按钮堆。
+The status bar should read like system telemetry, not a pile of buttons.
 
-建议内容：
+Suggested content:
 
-- 左侧：计划、远程、插件。
-- 中间：实时速度、任务数量、连接状态。
-- 右侧：下载检测与通知 badge。
+- Left: schedule, remote, plugins.
+- Center: real-time speed, task count, connection status.
+- Right: download detection and notification badges.
 
-## 设计 Token
+## Design tokens
 
-### 颜色
+### Colors
 
-`Deep Signal` 建议 token：
+Suggested `Deep Signal` tokens:
 
-| Token | 用途 | 值 |
+| Token | Purpose | Value |
 | --- | --- | --- |
-| `bg.app` | 应用底色 | `#08111F` |
-| `bg.sidebar` | 侧边栏 | `#0B1726` |
-| `bg.surface` | 内容面板 | `#101D2E` |
-| `bg.surfaceElevated` | 悬浮卡片 | `#15263A` |
-| `border.subtle` | 弱边框 | `#22364D` |
-| `text.primary` | 主文本 | `#EAF2FF` |
-| `text.secondary` | 次级文本 | `#8EA3BA` |
-| `brand.signal` | 品牌信号色 | `#36E3B4` |
-| `brand.action` | 主操作色 | `#FFB454` |
-| `state.error` | 错误 | `#FF5C7A` |
-| `state.warning` | 警告 | `#FFD166` |
-| `state.success` | 成功 | `#35D07F` |
+| `bg.app` | Application background | `#08111F` |
+| `bg.sidebar` | Sidebar | `#0B1726` |
+| `bg.surface` | Content panel | `#101D2E` |
+| `bg.surfaceElevated` | Floating cards | `#15263A` |
+| `border.subtle` | Subtle border | `#22364D` |
+| `text.primary` | Primary text | `#EAF2FF` |
+| `text.secondary` | Secondary text | `#8EA3BA` |
+| `brand.signal` | Brand signal color | `#36E3B4` |
+| `brand.action` | Primary action color | `#FFB454` |
+| `state.error` | Error | `#FF5C7A` |
+| `state.warning` | Warning | `#FFD166` |
+| `state.success` | Success | `#35D07F` |
 
-### 字体
+### Typography
 
-Qt 跨平台实现优先使用系统可用字体链：
+The cross-platform Qt implementation should prefer an available system font stack:
 
 ```text
 "Segoe UI Variable", "SF Pro Display", "Microsoft YaHei UI", "Noto Sans CJK SC", sans-serif
 ```
 
-字号建议：
+Suggested type scale:
 
-| 层级 | 字号 | 字重 |
+| Level | Size | Weight |
 | --- | --- | --- |
 | Hero title | 24px | 700 |
 | Section title | 16px | 700 |
@@ -127,40 +125,40 @@ Qt 跨平台实现优先使用系统可用字体链：
 | Metadata | 12px | 500 |
 | Caption | 11px | 600 |
 
-### 间距与圆角
+### Spacing and radii
 
-使用 4px 基础网格：
+Use a 4px base grid:
 
-- 页面边距：24px。
-- 卡片内边距：16px 或 20px。
-- 控件间距：8px、12px、16px。
-- 普通圆角：12px。
-- 卡片圆角：18px。
-- Command bar 圆角：20px。
+- Page margin: 24px.
+- Card padding: 16px or 20px.
+- Control spacing: 8px, 12px, 16px.
+- Standard corner radius: 12px.
+- Card corner radius: 18px.
+- Command bar corner radius: 20px.
 
-## Qt 落地策略
+## Qt implementation strategy
 
-### 第一阶段：低风险视觉换代
+### Phase 1: low-risk visual refresh
 
-只修改 UI 层：
+Change only the UI layer:
 
 - `apps/desktop/src/utils/theme_manager.cpp`
 - `apps/desktop/src/widgets/top_bar.cpp`
 - `apps/desktop/src/navigation/sidebar.cpp`
 - `apps/desktop/src/widgets/status_bar.cpp`
-- 必要时小幅调整 `download_page.cpp` 的对象名、间距和文案。
+- Minor object-name, spacing, and copy adjustments in `download_page.cpp` where necessary.
 
-不修改：
+Do not change:
 
 - `DownloadEngine`
 - `TaskManager`
-- 协议处理器
-- 云盘和资源搜索业务逻辑
-- IPC 和系统托盘逻辑
+- Protocol handlers
+- Cloud-storage and resource-search business logic
+- IPC and system-tray logic
 
-### 第二阶段：组件化整理
+### Phase 2: component consolidation
 
-如果第一阶段方向通过，再抽象：
+If Phase 1 is approved, abstract:
 
 - `MetricCard`
 - `CommandBar`
@@ -168,34 +166,34 @@ Qt 跨平台实现优先使用系统可用字体链：
 - `TaskActionButton`
 - `NavItem`
 
-这些组件应保持单一职责，避免把业务状态和样式揉在一起。
+These components should keep a single responsibility; do not mix business state and styling in one component.
 
-### 第三阶段：动效与空状态
+### Phase 3: motion and empty states
 
-Qt Widgets 动效需要克制：
+Qt Widgets motion must remain restrained:
 
-- 新任务出现时做轻微 opacity/position transition。
-- 进度条使用渐变 chunk。
-- 空状态增加图形化信号波纹，但不要引入复杂动画系统。
+- Use a subtle opacity/position transition when a new task appears.
+- Use a gradient chunk for progress bars.
+- Add graphical signal ripples to empty states without introducing a complex animation system.
 
-## 验收标准
+## Acceptance criteria
 
-实现阶段必须满足：
+Implementation must satisfy:
 
-- 主窗口、顶部栏、侧边栏、下载页、设置页、资源发现页风格一致。
-- 表格和卡片视图在深色主题下可读，不依赖纯黑/纯白强对比。
-- 主操作按钮全局唯一醒目，次要按钮不抢视觉焦点。
-- 任务状态和进度比装饰更醒目。
-- Linux/macOS/Windows CI 至少能完成 desktop build。
-- 如果本地缺少 Qt，必须通过 GitHub Actions 完整验证后才能声称完成。
+- The main window, top bar, sidebar, download page, settings page, and resource-discovery page share one visual language.
+- Table and card views remain readable in the dark theme without relying on pure-black/pure-white contrast.
+- The primary action is the only globally prominent action; secondary buttons do not compete for focus.
+- Task status and progress are more prominent than decoration.
+- Desktop builds complete on Linux, macOS, and Windows CI.
+- If Qt is unavailable locally, do not claim completion until GitHub Actions has verified the build.
 
-## 当前约束
+## Current constraints
 
-当前会话没有可用的 Figma MCP 工具，无法直接生成 Figma 画板。已安装 Figma 相关 skills 后，若后续接入 Figma MCP，应按以下流程执行：
+This session has no available Figma MCP tool, so it cannot generate Figma boards directly. After Figma-related skills are installed, and once a Figma MCP connection exists, follow this flow:
 
-1. 使用 `figma-use` 检查目标 Figma 文件。
-2. 使用 `figma-generate-design` 基于本 brief 生成主窗口画板。
-3. 先验证截图，再进入代码实现。
-4. 使用 `figma-implement-design` 将确认后的设计转换为 Qt 实现约束。
+1. Use `figma-use` to inspect the target Figma file.
+2. Use `figma-generate-design` to generate the main-window board from this brief.
+3. Verify screenshots before starting code implementation.
+4. Use `figma-implement-design` to turn the approved design into Qt implementation constraints.
 
-在没有 Figma MCP 的情况下，本 brief 作为实现依据。
+Without Figma MCP, this brief is the implementation source of truth.

@@ -1,5 +1,3 @@
-[中文](index.zh.md) | **English**
-
 # Developer Guide
 
 Welcome to the Falcon developer guide! This document is aimed at developers who want to contribute code or build on top of Falcon.

@@ -1,5 +1,3 @@
-[English](index.md) | **中文**
-
 # Falcon 下载器
 
 **Falcon（猎鹰下载器）** 是一个跨平台的 C++ 下载器，采用 Monorepo 架构，传输底座基于 libcurl、OpenSSL、libtorrent、libssh2 等开源组件，围绕统一引擎承载多协议下载。
@@ -110,8 +108,8 @@ int main() {
 - [入门指南](getting-started.md) - 快速了解 Falcon
 - [安装说明](installation.md) - 详细的构建步骤
 - [使用指南](usage.md) - 命令行和 API 使用
-- [协议支持](/protocols/) - 所有支持协议的概览
-- [开发者指南](/developer/) - 贡献代码和插件开发
+- [协议支持](/zh/protocols/) - 所有支持协议的概览
+- [开发者指南](/zh/developer/) - 贡献代码和插件开发
 - [常见问题](../faq.md) - 常见问题解答
 
 ## 社区

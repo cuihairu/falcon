@@ -1,5 +1,3 @@
-[中文](architecture.zh.md) | **English**
-
 # Architecture Design
 
 This document describes Falcon's core structure based on the current repository code, not the idealized interfaces from early design drafts.
