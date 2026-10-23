@@ -436,7 +436,22 @@ void SegmentDownloader::download_segment(
 
         const std::string segment_path = get_segment_path(segment->index);
         const Bytes segment_size = segment->size();
-        const Bytes existing_downloaded = std::min(segment->downloaded.load(), segment_size);
+        // 段文件的真实长度才是续传基线：传输被 abort（如 pause 打断）
+        // 后 curl 可能仍追加最后几个块，磁盘比 downloaded 原子值长——
+        // 按旧基线续传会以 append 模式叠在多出的尾巴上，最终段超长
+        // 报 size mismatch（Windows 计时下高频复现）
+        std::error_code on_disk_ec;
+        const auto on_disk =
+            std::filesystem::file_size(segment_path, on_disk_ec);
+        Bytes existing_downloaded =
+            on_disk_ec ? Bytes{0} : static_cast<Bytes>(on_disk);
+        if (existing_downloaded > segment_size) {
+            // 超长段（外部篡改/历史半成品）不可续传，整段重来
+            std::error_code rm_ec;
+            std::filesystem::remove(segment_path, rm_ec);
+            existing_downloaded = 0;
+        }
+        segment->downloaded.store(existing_downloaded);
         if (existing_downloaded >= segment_size) {
             complete_segment(segment);
             break;
