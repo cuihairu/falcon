@@ -4,12 +4,7 @@
 
   # Falcon
 
-  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-blue.svg"></a>
-  <a href="https://github.com/cuihairu/falcon/actions"><img alt="Build Status" src="https://github.com/cuihairu/falcon/workflows/CMake%20Build/badge.svg"></a>
-  <a href="https://codecov.io/gh/cuihairu/falcon"><img alt="codecov" src="https://codecov.io/gh/cuihairu/falcon/branch/main/graph/badge.svg"></a>
-  <a href="https://github.com/cuihairu/falcon"><img alt="Platform" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg"></a>
-  <a href="https://github.com/cuihairu/falcon/releases"><img alt="Version" src="https://img.shields.io/badge/version-0.1.0-green.svg"></a>
-
+<a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-blue.svg"></a> <a href="https://github.com/cuihairu/falcon/actions"><img alt="Build Status" src="https://github.com/cuihairu/falcon/workflows/CMake%20Build/badge.svg"></a> <a href="https://codecov.io/gh/cuihairu/falcon"><img alt="codecov" src="https://codecov.io/gh/cuihairu/falcon/branch/main/graph/badge.svg"></a> <a href="https://github.com/cuihairu/falcon"><img alt="Platform" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg"></a> <a href="https://github.com/cuihairu/falcon/releases"><img alt="Version" src="https://img.shields.io/badge/version-0.1.0-green.svg"></a>
   **统一资源传输引擎（Universal Resource Transfer Engine）**
 
   跨平台的 C++ 传输引擎,统一承载 HTTP、FTP、SFTP、WebDAV、对象存储与
