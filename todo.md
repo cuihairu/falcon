@@ -2933,3 +2933,5 @@ libtorrent 强依赖（当前 FALCON_ENABLE_BITTORRENT=OFF 为默认
   **实测 1 失败**（V2PauseThenResume，round 29——初报「零失败」
   有误，更正）——定性为独立缺陷 B29 并修复（见 BUGS.md B29 行）
   零告警
+
+- [ ] **UI-AUDIT · P2 · 界面审核(impeccable 流程)**:原生桌面界面此前不在 web 界面审核范围,补审——按 impeccable 审计(层级/排版/对比度 a11y/布局/边界态),报告+截图入 docs/review/,坏损当场修。
