@@ -9,6 +9,7 @@
   [![codecov](https://codecov.io/gh/cuihairu/falcon/branch/main/graph/badge.svg)](https://codecov.io/gh/cuihairu/falcon)
   [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/cuihairu/falcon)
   [![Version](https://img.shields.io/badge/version-0.1.0-green.svg)](https://github.com/cuihairu/falcon/releases)
+  [![Status](https://img.shields.io/badge/status-in%20development-orange)](https://github.com/cuihairu/falcon/releases)
 
   **统一资源传输引擎（Universal Resource Transfer Engine）**
 
@@ -17,10 +18,10 @@
   开源组件:libcurl、OpenSSL、libtorrent、libssh2 承载各协议数据面;
   事件驱动的 V2 引擎与 aria2 兼容参数/RPC 参照 aria2 的架构与语义实现。
 
-  [English](README.md) | [中文](README.zh.md) <a href="https://cuihairu.github.io/falcon/zh//"><img src="https://img.shields.io/badge/%E6%96%87%E6%A1%A3-blue" alt="docs"></a>
+  [English](README.md) | [中文](README.zh.md) <a href="https://cuihairu.github.io/falcon/zh/"><img src="https://img.shields.io/badge/%E6%96%87%E6%A1%A3-blue" alt="docs"></a>
 </div>
 
-界面截图与设计原型统一在[文档站](https://cuihairu.github.io/falcon/zh//)首页展示；
+界面截图与设计原型统一在[文档站](https://cuihairu.github.io/falcon/zh/)首页展示；
 完整图库（52 张）见 [docs/design/ui-sandbox/](docs/design/ui-sandbox/README.md)。
 
 ## 特性
@@ -79,8 +80,6 @@
 
 ```bash
 # Linux / macOS
-
-<p align="center">[![Status](https://img.shields.io/badge/status-in%20development-orange)](https://github.com/cuihairu/falcon/releases)</p>
 curl -fsSL https://raw.githubusercontent.com/cuihairu/falcon/main/scripts/install.sh | bash
 ```
 
@@ -249,7 +248,7 @@ daemon 在 `POST /mcp` 暴露 MCP（Model Context Protocol）端点（Streamable
 </p>
 
 源资产与再生成说明见 [`docs/design/prototypes/`](docs/design/prototypes/README.md)，
-对比页见[文档站](https://cuihairu.github.io/falcon/developer/design-prototypes)。
+对比页见[文档站](https://cuihairu.github.io/falcon/zh/developer/design-prototypes)。
 
 ## 架构设计
 

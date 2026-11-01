@@ -9,6 +9,7 @@
   [![codecov](https://codecov.io/gh/cuihairu/falcon/branch/main/graph/badge.svg)](https://codecov.io/gh/cuihairu/falcon)
   [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/cuihairu/falcon)
   [![Version](https://img.shields.io/badge/version-0.1.0-green.svg)](https://github.com/cuihairu/falcon/releases)
+  [![Status](https://img.shields.io/badge/status-in%20development-orange)](https://github.com/cuihairu/falcon/releases)
 
   **The Universal Resource Transfer Engine**
 
@@ -19,11 +20,11 @@
   planes; the event-driven V2 engine and the aria2-compatible CLI/RPC surface
   follow aria2's architecture.
 
-  [中文](README.zh.md) | [English](README.md) <a href="https://cuihairu.github.io/falcon//"><img src="https://img.shields.io/badge/docs-blue" alt="docs"></a>
+  [中文](README.zh.md) | [English](README.md) <a href="https://cuihairu.github.io/falcon/"><img src="https://img.shields.io/badge/docs-blue" alt="docs"></a>
 </div>
 
 Screenshots and design prototypes are showcased on the
-[docs site](https://cuihairu.github.io/falcon//); the full gallery (52 shots)
+[docs site](https://cuihairu.github.io/falcon/); the full gallery (52 shots)
 lives in [docs/design/ui-sandbox/](docs/design/ui-sandbox/README.md).
 
 ## Features
@@ -87,8 +88,6 @@ Installs the desktop app from the daily build (anonymous download, idempotent �
 
 ```bash
 # Linux / macOS
-
-<p align="center">[![Status](https://img.shields.io/badge/status-in%20development-orange)](https://github.com/cuihairu/falcon/releases)</p>
 curl -fsSL https://raw.githubusercontent.com/cuihairu/falcon/main/scripts/install.sh | bash
 ```
 
