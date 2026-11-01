@@ -4,7 +4,12 @@
 
   # Falcon
 
-<a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-blue.svg"></a> <a href="https://github.com/cuihairu/falcon/actions"><img alt="Build Status" src="https://github.com/cuihairu/falcon/workflows/CMake%20Build/badge.svg"></a> <a href="https://codecov.io/gh/cuihairu/falcon"><img alt="codecov" src="https://codecov.io/gh/cuihairu/falcon/branch/main/graph/badge.svg"></a> <a href="https://github.com/cuihairu/falcon"><img alt="Platform" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg"></a> <a href="https://github.com/cuihairu/falcon/releases"><img alt="Version" src="https://img.shields.io/badge/version-0.1.0-green.svg"></a>
+  [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+  [![Build Status](https://github.com/cuihairu/falcon/workflows/CMake%20Build/badge.svg)](https://github.com/cuihairu/falcon/actions)
+  [![codecov](https://codecov.io/gh/cuihairu/falcon/branch/main/graph/badge.svg)](https://codecov.io/gh/cuihairu/falcon)
+  [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/cuihairu/falcon)
+  [![Version](https://img.shields.io/badge/version-0.1.0-green.svg)](https://github.com/cuihairu/falcon/releases)
+
   **The Universal Resource Transfer Engine**
 
   A cross-platform C++ engine for downloading and accessing resources across
@@ -14,12 +19,11 @@
   planes; the event-driven V2 engine and the aria2-compatible CLI/RPC surface
   follow aria2's architecture.
 
-  [中文](README.zh.md) | [English](README.md)
-
+  [中文](README.zh.md) | [English](README.md) <a href="https://cuihairu.github.io/falcon//"><img src="https://img.shields.io/badge/docs-blue" alt="docs"></a>
 </div>
 
 Screenshots and design prototypes are showcased on the
-[docs site](https://cuihairu.github.io/falcon/); the full gallery (52 shots)
+[docs site](https://cuihairu.github.io/falcon//); the full gallery (52 shots)
 lives in [docs/design/ui-sandbox/](docs/design/ui-sandbox/README.md).
 
 ## Features
@@ -84,9 +88,7 @@ Installs the desktop app from the daily build (anonymous download, idempotent �
 ```bash
 # Linux / macOS
 
-<p align="center">
-<a href="https://github.com/cuihairu/falcon/releases"><img alt="Status" src="https://img.shields.io/badge/status-in%20development-orange"></a>
-</p>
+<p align="center">[![Status](https://img.shields.io/badge/status-in%20development-orange)](https://github.com/cuihairu/falcon/releases)</p>
 curl -fsSL https://raw.githubusercontent.com/cuihairu/falcon/main/scripts/install.sh | bash
 ```
 
