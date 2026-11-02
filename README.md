@@ -4,12 +4,7 @@
 
   # Falcon
 
-  [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE) [![docs](https://img.shields.io/badge/docs-blue)](https://cuihairu.github.io/falcon/)
-  [![Build Status](https://github.com/cuihairu/falcon/workflows/CMake%20Build/badge.svg)](https://github.com/cuihairu/falcon/actions)
-  [![codecov](https://codecov.io/gh/cuihairu/falcon/branch/main/graph/badge.svg)](https://codecov.io/gh/cuihairu/falcon)
-  [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/cuihairu/falcon)
-  [![Version](https://img.shields.io/badge/version-0.1.0-green.svg)](https://github.com/cuihairu/falcon/releases)
-  [![Status](https://img.shields.io/badge/status-in%20development-orange)](https://github.com/cuihairu/falcon/releases)
+<p align="center">[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE) [![docs](https://img.shields.io/badge/docs-blue)](https://cuihairu.github.io/falcon/) [![Build Status](https://github.com/cuihairu/falcon/workflows/CMake%20Build/badge.svg)](https://github.com/cuihairu/falcon/actions) [![codecov](https://codecov.io/gh/cuihairu/falcon/branch/main/graph/badge.svg)](https://codecov.io/gh/cuihairu/falcon) [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/cuihairu/falcon) [![Version](https://img.shields.io/badge/version-0.1.0-green.svg)](https://github.com/cuihairu/falcon/releases) [![Status](https://img.shields.io/badge/status-in%20development-orange)](https://github.com/cuihairu/falcon/releases)</p>
 
   **The Universal Resource Transfer Engine**
 
