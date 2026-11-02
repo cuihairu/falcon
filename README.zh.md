@@ -4,7 +4,7 @@
 
   # Falcon
 
-  [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+  [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE) [![文档](https://img.shields.io/badge/%E6%96%87%E6%A1%A3-blue)](https://cuihairu.github.io/falcon/zh/)
   [![Build Status](https://github.com/cuihairu/falcon/workflows/CMake%20Build/badge.svg)](https://github.com/cuihairu/falcon/actions)
   [![codecov](https://codecov.io/gh/cuihairu/falcon/branch/main/graph/badge.svg)](https://codecov.io/gh/cuihairu/falcon)
   [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/cuihairu/falcon)
@@ -18,7 +18,7 @@
   开源组件:libcurl、OpenSSL、libtorrent、libssh2 承载各协议数据面;
   事件驱动的 V2 引擎与 aria2 兼容参数/RPC 参照 aria2 的架构与语义实现。
 
-  [English](README.md) | [中文](README.zh.md) <a href="https://cuihairu.github.io/falcon/zh/"><img src="https://img.shields.io/badge/%E6%96%87%E6%A1%A3-blue" alt="docs"></a>
+  [English](README.md) | [中文](README.zh.md) 
 </div>
 
 界面截图与设计原型统一在[文档站](https://cuihairu.github.io/falcon/zh/)首页展示；
