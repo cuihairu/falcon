@@ -4,7 +4,7 @@
 
   # Falcon
 
-  [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+  [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE) [![docs](https://img.shields.io/badge/docs-blue)](https://cuihairu.github.io/falcon/)
   [![Build Status](https://github.com/cuihairu/falcon/workflows/CMake%20Build/badge.svg)](https://github.com/cuihairu/falcon/actions)
   [![codecov](https://codecov.io/gh/cuihairu/falcon/branch/main/graph/badge.svg)](https://codecov.io/gh/cuihairu/falcon)
   [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/cuihairu/falcon)
@@ -20,7 +20,7 @@
   planes; the event-driven V2 engine and the aria2-compatible CLI/RPC surface
   follow aria2's architecture.
 
-  [中文](README.zh.md) | [English](README.md) <a href="https://cuihairu.github.io/falcon/"><img src="https://img.shields.io/badge/docs-blue" alt="docs"></a>
+  [中文](README.zh.md) | [English](README.md) 
 </div>
 
 Screenshots and design prototypes are showcased on the
