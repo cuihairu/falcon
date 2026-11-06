@@ -306,7 +306,7 @@
   不置此属性。验证:PE 头 Subsystem 须为 2(验证脚本见上一条目方法)
 
 ### 2026-09-18 - Nightly Windows 包资源编入实证（发布包二进制验证方法）
-- **验证方法**（无 Windows 环境对发布包做资源闭环验收）：下载 nightly
+- **验证方法**（本机 Linux 对发布包做资源闭环验收；Windows 真机 openclaw/imac/.5 在位，可在其上补真机验收）：下载 nightly
   Windows zip → 解包 → Python 直接分析 falcon-desktop.exe。三个陷阱
   逐一踩过，下轮直接用正确姿势：
   ① **UTF-16BE 资源名搜索会被 UTF-16LE 代码字面量错位误报**——.rdata
