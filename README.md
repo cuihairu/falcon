@@ -4,7 +4,7 @@
 
   # Falcon
 
-<p align="center">[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE) [![docs](https://img.shields.io/badge/docs-blue)](https://cuihairu.github.io/falcon/) [![Build Status](https://github.com/cuihairu/falcon/workflows/CMake%20Build/badge.svg)](https://github.com/cuihairu/falcon/actions) [![codecov](https://codecov.io/gh/cuihairu/falcon/branch/main/graph/badge.svg)](https://codecov.io/gh/cuihairu/falcon) [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/cuihairu/falcon) [![Version](https://img.shields.io/badge/version-0.1.0-green.svg)](https://github.com/cuihairu/falcon/releases) [![Status](https://img.shields.io/badge/status-in%20development-orange)](https://github.com/cuihairu/falcon/releases)</p>
+<p align="center">[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE) [![Docs](https://img.shields.io/badge/docs-online-blue)](https://cuihairu.github.io/falcon/) [![Build Status](https://github.com/cuihairu/falcon/actions/workflows/cmake-multi-platform.yml/badge.svg)](https://github.com/cuihairu/falcon/actions/workflows/cmake-multi-platform.yml) [![codecov](https://codecov.io/gh/cuihairu/falcon/branch/main/graph/badge.svg)](https://codecov.io/gh/cuihairu/falcon) [![Nightly](https://github.com/cuihairu/falcon/actions/workflows/nightly-build.yml/badge.svg)](https://github.com/cuihairu/falcon/actions/workflows/nightly-build.yml) [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/cuihairu/falcon) [![Version](https://img.shields.io/badge/version-0.1.0-green.svg)](https://github.com/cuihairu/falcon/releases)</p>
 
   **The Universal Resource Transfer Engine**
 
@@ -58,6 +58,11 @@ lives in [docs/design/ui-sandbox/](docs/design/ui-sandbox/README.md).
   table & grid task views, cloud storage browsing, resource search, dual backend
   (in-process engine or daemon RPC with WebSocket event refresh)
 - **CLI** (`falcon-cli`): 60+ aria2-compatible parameters, batch input files, JSON config
+- **Browser Extension** (Chrome / Edge, MV3): download takeover, context-menu
+  download, batch link collection, and **media sniffing** — video/audio/HLS
+  `.m3u8`/DASH `.mpd` requests detected per tab, optional `ts`/`m4s` segments,
+  one-click send to desktop app or daemon; see
+  [`apps/browser_extension/`](apps/browser_extension/README.md)
 - **Performance characteristics**:
   - Multi-connection segmented downloading with adaptive sizing
   - Non-blocking I/O with event-driven architecture
@@ -242,26 +247,23 @@ Stage 2 is complete (stdio wrapper `falcon-mcp`, SSE progress subscription via
 `GET /mcp`, global-option and seeding tools); see
 `docs/design/mcp_server_design.md` for the full contract.
 
-## UI Prototypes
+## User Interface
 
-The desktop main view ships in the "warm console" theme (variant A) and has a
-"cold utility" variant candidate (variant B). Both dark-theme prototypes below are
-rendered from the real Qt widget tree (offscreen sandbox) with demo task data:
-
-| Variant | Direction | Key tokens |
-|---|---|---|
-| A · warm console (current production theme) | warm dark neutral base + falcon salmon accent, shared with the docs site | window `#1b1714` / card `#262019` / text `#f2ede8` / accent `#ffa07a` |
-| B · cold utility (variant candidate) | Motrix-style: deeper neutral base, higher-contrast text, restrained blue accent | window `#131519` / card `#1b1e24` / text `#f5f7fa` / accent `#5b9df5` |
+The redesigned desktop UI ships the "warm console" theme with light/dark modes
+(Fluent design, table & grid task views). The screenshots below are rendered
+from the real Qt widget tree (offscreen ui-sandbox, styles identical to
+production):
 
 <p align="center">
-  <img src="docs/design/prototypes/warm-console-dark.png" alt="Variant A · warm console (dark)" width="49%"/>
-  <img src="docs/design/prototypes/cold-utility-dark.png" alt="Variant B · cold utility (dark)" width="49%"/>
+  <img src="docs/design/ui-sandbox/download_table_dark_1200.png" alt="Downloads · table view (dark)" width="49%"/>
+  <img src="docs/design/ui-sandbox/download_table_light_1200.png" alt="Downloads · table view (light)" width="49%"/>
 </p>
 
-Source assets and regeneration instructions live in
-[`docs/design/prototypes/`](docs/design/prototypes/README.md);
-the interactive comparison page is on the
-[docs site](https://cuihairu.github.io/falcon/developer/design-prototypes).
+The full gallery (13 views × light/dark × 1200/960, 52 shots) lives in
+[`docs/design/ui-sandbox/`](docs/design/ui-sandbox/README.md) and on the
+[docs site](https://cuihairu.github.io/falcon/); the design-variant history
+(warm console vs cold utility) is on the
+[design-prototypes page](https://cuihairu.github.io/falcon/developer/design-prototypes).
 
 ## Architecture
 
@@ -370,6 +372,7 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 - [x] SFTP, WebDAV protocols (libssh2 / libcurl data planes)
 - [x] Cloud storage browsing (S3, Alibaba Cloud OSS, Tencent COS, Qiniu Kodo, Upyun)
 - [x] Resource search, encrypted configuration management
+- [x] Browser extension (Chrome / Edge, MV3): download takeover, media sniffing (video/audio/HLS/DASH), batch link collection, popup task panel
 
 ### In Progress
 - [ ] More private protocols and cloud-drive direct-link parsing

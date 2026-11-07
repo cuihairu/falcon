@@ -4,7 +4,7 @@
 
   # Falcon
 
-<p align="center">[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE) [![文档](https://img.shields.io/badge/%E6%96%87%E6%A1%A3-blue)](https://cuihairu.github.io/falcon/zh/) [![Build Status](https://github.com/cuihairu/falcon/workflows/CMake%20Build/badge.svg)](https://github.com/cuihairu/falcon/actions) [![codecov](https://codecov.io/gh/cuihairu/falcon/branch/main/graph/badge.svg)](https://codecov.io/gh/cuihairu/falcon) [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/cuihairu/falcon) [![Version](https://img.shields.io/badge/version-0.1.0-green.svg)](https://github.com/cuihairu/falcon/releases) [![Status](https://img.shields.io/badge/status-in%20development-orange)](https://github.com/cuihairu/falcon/releases)</p>
+<p align="center">[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE) [![文档](https://img.shields.io/badge/%E6%96%87%E6%A1%A3-online-blue)](https://cuihairu.github.io/falcon/zh/) [![构建状态](https://github.com/cuihairu/falcon/actions/workflows/cmake-multi-platform.yml/badge.svg)](https://github.com/cuihairu/falcon/actions/workflows/cmake-multi-platform.yml) [![codecov](https://codecov.io/gh/cuihairu/falcon/branch/main/graph/badge.svg)](https://codecov.io/gh/cuihairu/falcon) [![夜间构建](https://github.com/cuihairu/falcon/actions/workflows/nightly-build.yml/badge.svg)](https://github.com/cuihairu/falcon/actions/workflows/nightly-build.yml) [![平台](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/cuihairu/falcon) [![版本](https://img.shields.io/badge/version-0.1.0-green.svg)](https://github.com/cuihairu/falcon/releases)</p>
 
   **统一资源传输引擎（Universal Resource Transfer Engine）**
 
@@ -50,6 +50,10 @@
 - **桌面应用** (Qt6):Fluent 设计语言、亮暗主题、无边框窗口、表格/网格双任务视图、
   云盘浏览、资源搜索、双后端(进程内引擎或 Daemon RPC + WebSocket 事件刷新)
 - **命令行工具** (`falcon-cli`):60+ 个 aria2 兼容参数、批量输入文件、JSON 配置
+- **浏览器扩展** (Chrome / Edge,MV3):下载接管、右键菜单下载、页面链接批量收集,
+  以及**媒体嗅探**——按 tab 检测视频/音频/HLS `.m3u8`/DASH `.mpd` 请求,可选包含
+  `ts`/`m4s` 分片,一键发送到桌面应用或 daemon;见
+  [`apps/browser_extension/`](apps/browser_extension/README.md)
 - **性能相关设计**:
   - 多连接分段下载,自适应分段
   - 事件驱动的非阻塞 I/O 架构
@@ -226,24 +230,20 @@ daemon 在 `POST /mcp` 暴露 MCP（Model Context Protocol）端点（Streamable
 阶段 2 已落地（stdio 薄壳 `falcon-mcp`、`GET /mcp` SSE 进度订阅、全局选项
 与做种工具）；完整契约见 `docs/design/mcp_server_design.md`。
 
-## 界面原型
+## 界面
 
-桌面端主视图当前采用「warm console」主题（变体 A），另有一版「cold utility」
-变体候选（变体 B）。下方两张暗色主题原型均由真实 Qt 组件树离屏渲染（含 demo
-任务数据）：
-
-| 变体 | 方向 | 关键 token |
-|---|---|---|
-| A · warm console（现行生产主题） | 暖黑中性底 + falcon 鲑橙单强调，与文档站同源 | window `#1b1714` / card `#262019` / text `#f2ede8` / accent `#ffa07a` |
-| B · cold utility（变体候选） | 冷峻工具感（对标 Motrix）：更深中性底、高对比文字、克制蓝色 accent | window `#131519` / card `#1b1e24` / text `#f5f7fa` / accent `#5b9df5` |
+桌面端界面已完成「warm console」重设计，亮/暗双主题（Fluent 风格、表格/网格
+双任务视图）。以下截图由真实 Qt 组件树离屏渲染（ui-sandbox，样式与生产一致）：
 
 <p align="center">
-  <img src="docs/design/prototypes/warm-console-dark.png" alt="变体 A · warm console（暗色）" width="49%"/>
-  <img src="docs/design/prototypes/cold-utility-dark.png" alt="变体 B · cold utility（暗色）" width="49%"/>
+  <img src="docs/design/ui-sandbox/download_table_dark_1200.png" alt="下载视图 · 表格（暗色）" width="49%"/>
+  <img src="docs/design/ui-sandbox/download_table_light_1200.png" alt="下载视图 · 表格（亮色）" width="49%"/>
 </p>
 
-源资产与再生成说明见 [`docs/design/prototypes/`](docs/design/prototypes/README.md)，
-对比页见[文档站](https://cuihairu.github.io/falcon/zh/developer/design-prototypes)。
+完整图库（13 视图 × 亮/暗 × 1200/960，共 52 张）见
+[`docs/design/ui-sandbox/`](docs/design/ui-sandbox/README.zh.md) 与
+[文档站](https://cuihairu.github.io/falcon/zh/)；设计变体沿革
+（warm console vs cold utility）见[设计原型页](https://cuihairu.github.io/falcon/zh/developer/design-prototypes)。
 
 ## 架构设计
 
@@ -351,6 +351,7 @@ HTTP、FTP、BitTorrent、SFTP、WebDAV、Metalink、云存储、资源浏览/�
 - [x] SFTP、WebDAV 协议（libssh2 / libcurl 数据面）
 - [x] 云存储浏览（S3、阿里云OSS、腾讯云COS、七牛云、又拍云）
 - [x] 资源搜索、加密配置管理
+- [x] 浏览器扩展 (Chrome / Edge,MV3):下载接管、媒体嗅探(视频/音频/HLS/DASH)、页面链接批量收集、popup 任务面板
 
 ### 进行中
 - [ ] 更多私有协议与网盘直链解析
