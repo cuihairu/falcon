@@ -55,6 +55,7 @@ const englishSidebar = {
       items: [
         { text: "Overview", link: "/developer/" },
         { text: "Architecture", link: "/developer/architecture" },
+        { text: "Source-Layer Glossary", link: "/developer/glossary" },
         { text: "Coding Standards", link: "/developer/coding-standards" },
         { text: "Testing", link: "/developer/testing" },
         { text: "Plugin Development", link: "/developer/plugins" },
@@ -109,6 +110,7 @@ const chineseSidebar = {
       items: [
         { text: "概览", link: "/zh/developer/" },
         { text: "架构", link: "/zh/developer/architecture" },
+        { text: "源码分层术语表", link: "/zh/developer/glossary" },
         { text: "编码规范", link: "/zh/developer/coding-standards" },
         { text: "测试", link: "/zh/developer/testing" },
         { text: "插件开发", link: "/zh/developer/plugins" },

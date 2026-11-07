@@ -6,6 +6,7 @@ Welcome to the Falcon developer guide! This document is aimed at developers who 
 
 - [Setting Up the Development Environment](#setting-up-the-development-environment)
 - [Project Architecture](#project-architecture)
+- [Source-Layer Glossary](#source-layer-glossary)
 - [Coding Standards](#coding-standards)
 - [Testing Guide](#testing-guide)
 - [Plugin Development](#plugin-development)
@@ -138,6 +139,10 @@ Reverse dependencies are forbidden: `core` does not depend on `protocols/storage
 ::: tip Full architecture
 See the [architecture design document](./architecture.md) for more details.
 :::
+
+### Source-Layer Glossary
+
+The [source-layer glossary](./glossary.md) defines the seven runtime layers with source anchors; the [Chinese version](/zh/developer/glossary) is its synchronized translation.
 
 ## Coding Standards
 
