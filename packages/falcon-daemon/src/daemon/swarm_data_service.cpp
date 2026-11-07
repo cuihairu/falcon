@@ -267,14 +267,20 @@ void SwarmDataService::stop() {
         listen_fd_ = kInvalidSocket;
     }
 
+    // 先 join accept 线程再 shutdown 存量连接 fd——join 之后不再产生新
+    // 连接线程，conn_fds_ 集合稳定，accept() 返回但尚未登记进台账的 fd
+    // 不会漏醒（否则该连接线程阻塞在 recv 到 5s 兜底耗尽，析构后仍触碰
+    // this）。shutdown 不 close，fd 由各连接线程自身收尾，避免编号复用
+    // 误关不属于自己的 socket。沿 2026-10-01 detached 线程收口纪律与
+    // scripted_http_server.hpp 同款顺序。
+    if (accept_thread_.joinable()) accept_thread_.join();
+
     // 唤醒全部会话线程的阻塞 recv：shutdown 存量 fd（不 close，fd 由
     // 各连接线程自身收尾，避免编号复用误关不属于自己的 socket）。
     {
         std::lock_guard<std::mutex> lk(conns_mutex_);
         for (int cfd : conn_fds_) ::shutdown(cfd, 2);
     }
-
-    if (accept_thread_.joinable()) accept_thread_.join();
 
     // 有界等待会话线程归零（5s 兜底：宁可放走迟到线程的微秒残窗，
     // 也不让析构后仍有无界触碰——沿 2026-10-01 detached 线程收口纪律）。
