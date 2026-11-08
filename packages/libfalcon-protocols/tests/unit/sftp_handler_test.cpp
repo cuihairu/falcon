@@ -434,14 +434,23 @@ TEST_F(SftpHandlerTest, PauseCancelResumeNullTaskIsNoop) {
 // URL 无 userinfo 且 http_username 缺省且 $USER 未设置：get_file_info
 // 必须拒绝（line "no username" 收口），不尝试连接。
 TEST_F(SftpHandlerTest, GetFileInfoRejectsMissingUsername) {
+#if defined(_WIN32)
+    const char* old_user = std::getenv("USERNAME");
+    _putenv_s("USERNAME", "");
+#else
     const char* old_user = std::getenv("USER");
     ::unsetenv("USER");
+#endif
     DownloadOptions options;
     options.max_retries = 0;
     EXPECT_THROW(handler()->get_file_info("sftp://127.0.0.1:1/f.txt", options),
                  NetworkException);
+#if defined(_WIN32)
+    _putenv_s("USERNAME", old_user ? old_user : "");
+#else
     if (old_user) ::setenv("USER", old_user, 1);
     else ::unsetenv("USER");
+#endif
 }
 
 // 暂停/取消/恢复：任务状态翻转（下载未连接，无网络副作用）。
