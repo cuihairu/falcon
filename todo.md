@@ -212,7 +212,8 @@ packages/
 
 ## 桌面 UI 重设计第二轮（用户令 2026-11-07 晚：falcon UI 重新设计）
 
-- [ ] UI-RD-001 [P1] 桌面 UI 重设计提案：先原型后实现（铁律）。产出=完整功能面原型集（主视图表格/网格、添加对话框、云盘、资源发现、设置、回收站、托盘菜单、亮暗双主题——13 视图面全覆盖，复用 ui-sandbox 真组件渲染管线与现有 design tokens），给出 2-3 个完整设计方向（warm console 迭代版 / cold utility 迭代版 / 新方向），每个方向出关键视图渲染图+对比说明，落 `docs/design/redesign-2026-11/`（含 index 对比页）。**只做原型，不改生产代码**；用户拍板方向后才排实现批次。原型图由 ui-sandbox 离屏渲染产出（真实 Qt 组件树），不许手绘假图。
+- [x] UI-RD-001 [P1] 桌面 UI 重设计提案：先原型后实现（铁律）。产出=完整功能面原型集（主视图表格/网格、添加对话框、云盘、资源发现、设置、回收站、托盘菜单、亮暗双主题——13 视图面全覆盖，复用 ui-sandbox 真组件渲染管线与现有 design tokens），给出 2-3 个完整设计方向（warm console 迭代版 / cold utility 迭代版 / 新方向），每个方向出关键视图渲染图+对比说明，落 `docs/design/redesign-2026-11/`（含 index 对比页）。**只做原型，不改生产代码**；用户拍板方向后才排实现批次。原型图由 ui-sandbox 离屏渲染产出（真实 Qt 组件树），不许手绘假图。
+  - 交付（commit `fc124bf`）：3 方向（A warm console II / B cold utility II / C graphite emerald）× 14 功能面 × 亮暗双主题 = 84 张原型图 + 每方向双语 README（token 表与 `ui_sandbox.cpp` 六映射表逐 hex 核对一致）+ index.md 对比决策页；全部 24 对色 WCAG 检查 ≥4.5:1（A 暗色 text 16.73 / B 17.03 / C accent 于窗底 9.78）；生产代码零改动（`--redesign` 沙盒模式）。待用户拍板方向后排实现批次。
 
 ## 源码分层分析 2026-11-07
 
