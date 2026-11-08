@@ -443,6 +443,32 @@ const char* kStringSizeBody = R"({"results":[
     {"title":"String Size Item","url":"https://ss.example/one.bin","size":"1.5 GB","seeds":"42","type":"video"}
 ]})";
 
+
+// 数值类型混乱形态：float size、负整数、超界无符号、非数字字符串
+// seeds、bool 字段——json_size/json_int/json_str 各宽容分支
+const char* kMixedNumBody = R"({"results":[
+    {"title":"Float Size Item","url":"https://mix.example/a.bin","size":1.5,"seeds":7,"leeches":3.9},
+    {"title":"Neg Size Item","url":"https://mix.example/b.bin","size":-100,"seeds":-5,"leeches":-2},
+    {"title":"Huge Size Item","url":"https://mix.example/c.bin","size":18446744073709551615,"seeds":2147483648},
+    {"title":"Bad Seeds Item","url":"https://mix.example/d.bin","size":2048,"seeds":"not-a-number","leeches":"zz"},
+    {"title":"Bool Fields Item","url":"https://mix.example/e.bin","size":true,"seeds":false,"leeches":true,"title":5,"url":6,"hash":null}
+]})";
+
+const char* kMixedNumBody2 = R"({"results":[
+    {"title":"Huge Float Size","url":"https://mix2.example/f.bin","size":1.8e19,"seeds":2},
+    {"title":"Tiny Float Size","url":"https://mix2.example/g.bin","size":0.5,"seeds":1}
+]})";
+
+
+// 数组内混入标量条目（非对象）：extract_json_item 对标量取键抛
+// nlohmann type_error → 走 std::exception 分支，解析不崩溃
+const char* kScalarItemBody = R"([
+    {"title":"Good Item","url":"https://scalar.example/good.bin","size":1024,"seeds":3},
+    "scalar-junk",
+    42,
+    {"title":"Second Good","url":"https://scalar.example/two.bin","size":2048,"seeds":4}
+])";
+
 const char* kHtmlItemsBody = R"(<ul>
 <li><b>Cov Title One</b> <span class="sz">2GB</span> <span class="sd">77</span> <a href="magnet:?xt=urn:btih:cov1">get</a></li>
 <li><b>Cov Title Two</b> <span class="sz">512KB</span> <span class="sd">12</span> <a href="magnet:?xt=urn:btih:cov2">get</a></li>
@@ -780,6 +806,9 @@ protected:
         if (req.path == "/badjson") return kBadJsonBody;
         if (req.path == "/typeerr") return kTypeErrBody;
         if (req.path == "/strsize") return kStringSizeBody;
+        if (req.path == "/mixednum") return kMixedNumBody;
+        if (req.path == "/mixednum2") return kMixedNumBody2;
+        if (req.path == "/scalaritem") return kScalarItemBody;
         if (req.path == "/empty") return "";
         if (req.path == "/items") return kHtmlItemsBody;
         if (req.path.rfind("/find/", 0) == 0) return kJsonArrayBody;
@@ -951,6 +980,70 @@ TEST_F(ResourceSearchCovNetTest, SearchToleratesStringSizesAndSeeds) {
     EXPECT_EQ(results[0].size, 1610612736ULL);
     EXPECT_EQ(results[0].seeds, 42);
     EXPECT_EQ(results[0].source, "LocalEngine");
+}
+
+
+TEST_F(ResourceSearchCovNetTest, SearchToleratesMixedNumericFieldTypes) {
+    // 站点字段类型不可控：float/负整数/超界无符号/垃圾字符串/bool 混入，
+    // 宽容提取逐字段降级而不丢结果（json_str/json_int/json_size 各分支）
+    TempFile config(build_engine_config(server_.base_url(), "/mixednum", "json", {}));
+    ResourceSearchManager manager;
+    ASSERT_TRUE(manager.load_config(config.path()));
+
+    SearchQuery query;
+    query.keyword = "mix";
+    auto results = manager.search_all(query);
+    ASSERT_EQ(results.size(), 5u);
+    EXPECT_EQ(results[0].size, 1u);           // 1.5 float → 截断 1
+    EXPECT_EQ(results[0].seeds, 7);
+    EXPECT_EQ(results[0].peers, 3);           // 3.9 float → 截断 3
+    EXPECT_EQ(results[1].size, 0u);           // -100 → 0
+    EXPECT_EQ(results[1].seeds, -5);
+    EXPECT_EQ(results[1].peers, -2);
+    EXPECT_EQ(results[2].size, 18446744073709551615ULL);
+    EXPECT_EQ(results[2].seeds, 0);           // 2147483648 超 int 界 → 0
+    EXPECT_EQ(results[3].size, 2048u);
+    EXPECT_EQ(results[3].seeds, 0);           // stoi 抛 → 0
+    EXPECT_EQ(results[3].peers, 0);
+    // 数字 title/url 经 json_str 数字分支转字符串；bool size/seeds/leeches
+    // 非数字类型 → json_size/json_int 落 0；hash=null → json_str 空
+    EXPECT_EQ(results[4].title, "5");
+    EXPECT_EQ(results[4].url, "6");
+    EXPECT_EQ(results[4].hash, "");
+    EXPECT_EQ(results[4].size, 0u);
+    EXPECT_EQ(results[4].seeds, 0);
+    EXPECT_EQ(results[4].peers, 0);
+}
+
+
+TEST_F(ResourceSearchCovNetTest, SearchToleratesScalarArrayItems) {
+    // 数组含标量垃圾条目：整段解析仍成功，合法对象条目保留
+    TempFile config(build_engine_config(server_.base_url(), "/scalaritem", "json", {}));
+    ResourceSearchManager manager;
+    ASSERT_TRUE(manager.load_config(config.path()));
+
+    SearchQuery query;
+    query.keyword = "scalar";
+    auto results = manager.search_all(query);
+    ASSERT_EQ(results.size(), 2u);
+    EXPECT_EQ(results[0].title, "Good Item");
+    EXPECT_EQ(results[0].size, 1024u);
+    EXPECT_EQ(results[1].title, "Second Good");
+    EXPECT_EQ(results[1].size, 2048u);
+}
+
+TEST_F(ResourceSearchCovNetTest, SearchClampsOutOfRangeFloatSizes) {
+    // 1.8e19 超 uint64 上限 → 0；0.5 合法正浮点 → 0（截断）
+    TempFile config(build_engine_config(server_.base_url(), "/mixednum2", "json", {}));
+    ResourceSearchManager manager;
+    ASSERT_TRUE(manager.load_config(config.path()));
+
+    SearchQuery query;
+    query.keyword = "mix2";
+    auto results = manager.search_all(query);
+    ASSERT_EQ(results.size(), 2u);
+    EXPECT_EQ(results[0].size, 0u);
+    EXPECT_EQ(results[1].size, 0u);
 }
 
 TEST_F(ResourceSearchCovNetTest, SearchParsesHtmlWithSelectors) {
