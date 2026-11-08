@@ -830,3 +830,69 @@ TEST_F(S3BrowserMockTest, ConnectWithoutEndpointUsesOfficialDomainAndFails) {
         {"region", "us-east-9z"}};
     EXPECT_FALSE(browser.connect("s3://" + std::string(kBucket), options));
 }
+
+// ===========================================================================
+// JSON 兼容回退路径（FALCON_BROWSER_NO_JSON 未定义时活跃）：历史 mock 的
+// {"Contents":[...]} 形态与 CommonPrefixes 递归。XML 是真实协议面，JSON
+// 路径在旧端点/降级时仍可达，需独立覆盖 parse_s3_object 各字段分支。
+// ===========================================================================
+
+TEST_F(S3BrowserMockTest, ListDirectoryJsonFallbackParsesAllFields) {
+    // 顶层 docs/ 返回 JSON（触发 JSON 回退路径）；递归下钻的子目录返回
+    // 空 XML（无 Contents/CommonPrefixes），避免无限递归。只对顶层
+    // list-type=2 请求（prefix=docs/）返回 JSON，其余一律空 XML。
+    server_ = std::make_unique<MockS3Server>(
+        [](const std::string& method, const std::string& path) {
+            if (method == "GET" && path.find("list-type=2") != std::string::npos &&
+                path.find("prefix=docs/") != std::string::npos) {
+                return MockS3Server::Response{200, R"({
+                    "Contents": [
+                        {"Key": "docs/a.txt", "Size": 10,
+                         "LastModified": "2026-01-02T03:04:05Z",
+                         "ETag": "\"abc\"", "StorageClass": "STANDARD"},
+                        {"Key": "docs/.hidden", "Size": 1},
+                        {"Key": "docs/sub/file.bin", "Size": 99}
+                    ],
+                    "CommonPrefixes": [
+                        {"Prefix": "docs/sub/"},
+                        {"Prefix": "docs/empty/"}
+                    ]
+                })"};
+            }
+            return MockS3Server::Response{200, "<ListBucketResult/>"};
+        });
+    ASSERT_TRUE(server_->start());
+
+    S3Browser browser;
+    ASSERT_TRUE(connectBrowser(browser));
+
+    ListOptions options;
+    options.recursive = true;
+    options.show_hidden = false;
+    auto resources = browser.list_directory("docs", options);
+
+    // 递归下钻 CommonPrefixes 会再发请求——defaultReply 对子目录返回空
+    // XML（无 Contents），因此只断言顶层 JSON 条目解析成功。
+    // a.txt 全字段：name=basename、path、size、modified、etag、storage_class。
+    bool saw_a = false, saw_bin = false;
+    for (const auto& r : resources) {
+        if (r.name == "a.txt") {
+            saw_a = true;
+            EXPECT_EQ(r.size, 10u);
+            EXPECT_EQ(r.etag, "\"abc\"");
+            EXPECT_EQ(r.metadata.at("storage_class"), "STANDARD");
+            EXPECT_FALSE(r.modified_time.empty());
+        }
+        if (r.name == "file.bin") {
+            saw_bin = true;
+            EXPECT_EQ(r.size, 99u);
+        }
+    }
+    EXPECT_TRUE(saw_a);
+    EXPECT_TRUE(saw_bin);
+    // .hidden 被 show_hidden=false 过滤。
+    for (const auto& r : resources) {
+        EXPECT_NE(r.name, ".hidden");
+    }
+}
+

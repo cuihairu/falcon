@@ -39,6 +39,8 @@ function(add_test_includes target_name)
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/../src
             ${CMAKE_CURRENT_SOURCE_DIR}/..
+            ${CMAKE_CURRENT_SOURCE_DIR}/../plugins/webdav
+            ${CMAKE_CURRENT_SOURCE_DIR}/../plugins/s3
     )
 endfunction()
 
@@ -52,6 +54,7 @@ if(FALCON_ENABLE_RESOURCE_BROWSER)
         unit/resource_browser_utils_test.cpp
         unit/resource_browsers_test.cpp
         unit/resource_browser_edges_test.cpp
+        unit/xml_scan_coverage_test.cpp
         unit/webdav_browser_mock_test.cpp
         unit/ftp_browser_mock_test.cpp
         unit/storage_presets_test.cpp

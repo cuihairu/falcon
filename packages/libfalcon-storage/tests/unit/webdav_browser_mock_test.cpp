@@ -693,3 +693,133 @@ TEST_F(WebDavBrowserMockTest, DirectoryHelpersAreInMemory) {
     EXPECT_TRUE(browser.change_directory("/"));
     EXPECT_EQ(browser.get_current_directory(), "/");
 }
+
+// ===========================================================================
+// modified_time 排序与 URL 内联凭据注入 config
+// ===========================================================================
+
+TEST_F(WebDavBrowserMockTest, ListDirectorySortsByModifiedTime) {
+    server_ = std::make_unique<MockDavServer>(
+        [](const std::string& method, const std::string&) {
+            if (method != "PROPFIND") {
+                return MockDavServer::Response{204, ""};
+            }
+            return MockDavServer::Response{
+                207,
+                multistatusXml(
+                    davEntry("/dav/new.txt", false, 10,
+                             "Mon, 01 Jan 2026 01:00:00 GMT") +
+                    davEntry("/dav/old.txt", false, 20,
+                             "Fri, 01 Jan 2021 01:00:00 GMT")),
+                {}};
+        });
+    ASSERT_TRUE(server_->start());
+
+    WebDavBrowser browser;
+    ASSERT_TRUE(connectBrowser(browser));
+
+    ListOptions by_time;
+    by_time.sort_by = "modified_time";
+    auto resources = browser.list_directory("", by_time);
+    ASSERT_EQ(resources.size(), size_t{2});
+    // 升序（默认 sort_desc=false）：旧在前
+    EXPECT_EQ(resources[0].name, "old.txt");
+    EXPECT_EQ(resources[1].name, "new.txt");
+
+    ListOptions by_time_desc;
+    by_time_desc.sort_by = "modified_time";
+    by_time_desc.sort_desc = true;
+    resources = browser.list_directory("", by_time_desc);
+    ASSERT_EQ(resources.size(), size_t{2});
+    EXPECT_EQ(resources[0].name, "new.txt");
+}
+
+TEST_F(WebDavBrowserMockTest, ConnectUsesInlineCredentialsFromUrl) {
+    // URL 内联凭据 → config_.username/password 注入，请求带 Basic auth。
+    // 用不含凭据的 connect（直接 connect(url, options)）覆盖 URL 凭据分支。
+    server_ = std::make_unique<MockDavServer>(
+        [](const std::string& method, const std::string&) {
+            if (method == "PROPFIND") {
+                return MockDavServer::Response{207, multistatusXml(""), {}};
+            }
+            return MockDavServer::Response{204, ""};
+        });
+    ASSERT_TRUE(server_->start());
+
+    WebDavBrowser browser;
+    // 不带 username/password 的 options：凭据从 URL userinfo 取
+    std::map<std::string, std::string> options;
+    options["endpoint"] = server_->base_url();
+    std::string url = "webdav://u%40x:p%23ss@127.0.0.1:";
+    // 直接 connect 到 server 的端口
+    const auto base = server_->base_url();
+    const auto pos = base.find("://");
+    const auto rest = base.substr(pos + 3);
+    url = "webdav://u%40x:p%23ss@" + rest;
+    ASSERT_TRUE(browser.connect(url, options));
+    SUCCEED();
+}
+
+// PROPFIND 返回非 multistatus：list_directory 空结果，不抛。
+TEST_F(WebDavBrowserMockTest, ListDirectoryNonMultistatusReturnsEmpty) {
+    server_ = std::make_unique<MockDavServer>(
+        [](const std::string& method, const std::string&) {
+            if (method == "PROPFIND") {
+                return MockDavServer::Response{200, "this is not xml",
+                                               {{"Content-Type", "text/plain"}}};
+            }
+            return MockDavServer::Response{204, ""};
+        });
+    ASSERT_TRUE(server_->start());
+
+    WebDavBrowser browser;
+    ASSERT_TRUE(connectBrowser(browser));
+    const auto resources = browser.list_directory("");
+    EXPECT_TRUE(resources.empty());
+}
+
+// PROPFIND HTTP 错误（非 2xx）：list_directory 空结果。
+TEST_F(WebDavBrowserMockTest, ListDirectoryHttpErrorReturnsEmpty) {
+    server_ = std::make_unique<MockDavServer>(
+        [](const std::string& method, const std::string&,
+           const std::map<std::string, std::string>& headers) {
+            if (method == "PROPFIND" && headers.at("depth") == "1") {
+                return MockDavServer::Response{403, "forbidden",
+                                               {{"Content-Type", "text/plain"}}};
+            }
+            return MockDavServer::Response{207, multistatusXml(""), {}};
+        });
+    ASSERT_TRUE(server_->start());
+
+    WebDavBrowser browser;
+    ASSERT_TRUE(connectBrowser(browser));
+    const auto resources = browser.list_directory("");
+    EXPECT_TRUE(resources.empty());
+}
+
+
+// URL 解析补充：userinfo 无冒号（仅用户名）、IPv6 无端口、畸形 IPv6、
+// 空 authority——webdav_browser 各边界分支。
+TEST(WebDavUrlParserTest, UserinfoNoColonAndIpv6EdgeCases) {
+    // userinfo 无冒号：仅 username，password 空。
+    auto no_colon = WebDavUrlParser::parse("webdav://alice@host/path");
+    EXPECT_EQ(no_colon.username, "alice");
+    EXPECT_EQ(no_colon.password, "");
+    EXPECT_EQ(no_colon.host, "host");
+
+    // IPv6 无端口。
+    auto ipv6_no_port = WebDavUrlParser::parse("dav://[::1]/dav");
+    EXPECT_EQ(ipv6_no_port.host, "[::1]");
+    EXPECT_EQ(ipv6_no_port.port, "");
+
+    // 畸形 IPv6（无闭合 ]）：host 保持空、scheme 已设（继续可报错）。
+    auto bad_ipv6 = WebDavUrlParser::parse("dav://[::1/dav");
+    EXPECT_EQ(bad_ipv6.scheme, "http");
+    EXPECT_TRUE(bad_ipv6.host.empty());
+
+    // 空 authority（host:// 形态）。
+    auto empty_auth = WebDavUrlParser::parse("dav://");
+    EXPECT_EQ(empty_auth.scheme, "http");
+    EXPECT_TRUE(empty_auth.host.empty());
+}
+
