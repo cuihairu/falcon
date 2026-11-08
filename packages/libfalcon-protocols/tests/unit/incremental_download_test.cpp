@@ -1517,6 +1517,20 @@ TEST_F(IncrementalDownloadTest, ParseRsyncBlockListRejectsCorruptions) {
                row.substr(c2) + text.substr(end);
     };
 
+    const auto replace_first_row = [](const std::string& text,
+                                      std::size_t row_offset,
+                                      const std::string& new_row_prefix) {
+        // 以 "\n<row_offset>:" 定位首条数据行（元数据行都以 '#' 开头）
+        const std::string needle = "\n" + std::to_string(row_offset) + ":";
+        const auto start = text.find(needle);
+        EXPECT_NE(start, std::string::npos);
+        if (start == std::string::npos) return text;
+        const auto end = text.find('\n', start + 1);
+        const std::string row = text.substr(start + 1, end - start - 1);
+        return text.substr(0, start + 1) + new_row_prefix +
+               row.substr(new_row_prefix.size()) + text.substr(end);
+    };
+
     const std::vector<std::string> corrupt = {
         drop_magic(valid),
         replace_first(valid, "# mode: rsync", "# mode: chunk"),
@@ -1528,7 +1542,56 @@ TEST_F(IncrementalDownloadTest, ParseRsyncBlockListRejectsCorruptions) {
         rewrite_first_row(valid, "zz112233"),  // weak 非十六进制
         replace_first(valid, "\n2048:", "\n2049:"),  // 块偏移非连续
         replace_first(valid, "# blockSize: 1024", "# blockSize: zz"),
+        replace_first(valid, "# blockSize: 1024", "# blockSize: 0"),
+        replace_first(valid, "# blockSize: 1024", "# blockSize: 20000000"),
+        // 数据行缺强哈希列（去掉首行第二个冒号）
+        ([&] {
+            const std::string& t = valid;
+            const auto start = t.find("\n0:");
+            EXPECT_NE(start, std::string::npos);
+            const auto end = t.find('\n', start + 1);
+            std::string row = t.substr(start + 1, end - start - 1);
+            const auto c1 = row.find(':');
+            const auto c2 = row.find(':', c1 + 1);
+            if (c2 == std::string::npos) return t;
+            row.erase(c2, 1);  // 删除第二个冒号
+            return t.substr(0, start + 1) + row + t.substr(end);
+        })(),
+        // 偏移非数字
+        replace_first_row(valid, 0, "x0:"),
+        // 强哈希非十六进制
+        ([&] {
+            const std::string& t = valid;
+            const auto start = t.find("\n0:");
+            EXPECT_NE(start, std::string::npos);
+            const auto end = t.find('\n', start + 1);
+            std::string row = t.substr(start + 1, end - start - 1);
+            row[row.size() - 1] = 'z';
+            return t.substr(0, start + 1) + row + t.substr(end);
+        })(),
+        // 偏移溢出（stoull 抛）
+        ([&] {
+            const std::string& t = valid;
+            const auto start = t.find("\n0:");
+            EXPECT_NE(start, std::string::npos);
+            const auto end = t.find('\n', start + 1);
+            std::string row = t.substr(start + 1, end - start - 1);
+            const auto c1 = row.find(':');
+            return t.substr(0, start + 1) +
+                   "99999999999999999999:" + row.substr(c1 + 1) + t.substr(end);
+        })(),
+        // 末块偏移越过文件尾（offset+block_size > file_size）
+        ([&] {
+            const std::string& t = valid;
+            const auto start = t.find("\n4096:");
+            EXPECT_NE(start, std::string::npos);
+            const auto end = t.find('\n', start + 1);
+            std::string row = t.substr(start + 1, end - start - 1);
+            row[0] = '0';  // 把 4096 改成 0096（仍十进制，但 offset 不再连续）
+            return t.substr(0, start + 1) + row + t.substr(end);
+        })(),
     };
+
     for (const auto& text : corrupt) {
         EXPECT_FALSE(IncrementalDownloader::parseRsyncBlockList(text, out))
             << "corrupt variant accepted:\n"
@@ -1829,4 +1892,110 @@ TEST_F(IncrementalDownloadTest, DownloadChangedDivergentCopySurvivesSwappedOrder
     EXPECT_TRUE(downloader.downloadChanged(diff, out_path));
     EXPECT_EQ(read_file(out_path),
               local_content.substr(2048) + local_content.substr(0, 2048));
+}
+
+// ============================================================================
+// rsync 边界收口：不可读文件 / 哈希失败 / 计划降级 / 越界段
+// ============================================================================
+
+// generateRsyncBlockList 对不可读文件（目录）干净失败。
+TEST_F(IncrementalDownloadTest, GenerateRsyncBlockListUnreadableFileFails) {
+    IncrementalDownloader downloader;
+    RsyncBlockList out;
+    EXPECT_FALSE(downloader.generateRsyncBlockList(
+        testDir_ + "/no_such_rsync.bin", 1024, out));
+}
+
+
+#if defined(FALCON_FAILURE_INJECTION)
+// 哈希计算失败（init 注入）→ generateRsyncBlockList 干净失败。
+TEST_F(IncrementalDownloadTest, GenerateRsyncBlockListHashInitFailFails) {
+    const std::string path = createTestFile("rsync_hashinit.bin", 2048);
+    IncrementalDownloader downloader;
+    RsyncBlockList out;
+    ::falcon::detail::ScopedInjection guard(
+        ::falcon::detail::InjectPoint::IncrementalHashInit);
+    EXPECT_FALSE(downloader.generateRsyncBlockList(path, 1024, out));
+}
+#endif
+
+// planRsync 退化：blockSize 越界 / 空块 / 零文件尺寸 → 全量下载单段。
+TEST_F(IncrementalDownloadTest, PlanRsyncDegenerateInputsFallToFullDownload) {
+    const std::string local = createTestFile("rsync_degen_local.bin", 4096);
+    IncrementalDownloader downloader;
+
+    RsyncBlockList bad_size;
+    bad_size.blockSize = 0;
+    bad_size.fileSize = 4096;
+    bad_size.fileHash = "deadbeef";
+    bad_size.blocks = {};
+    auto plan = downloader.planRsync(local, bad_size);
+    ASSERT_EQ(plan.segments.size(), std::size_t{1});
+    EXPECT_EQ(plan.segments[0].kind, RsyncSegment::Kind::Download);
+    EXPECT_EQ(plan.downloadBytes, 4096u);
+
+    RsyncBlockList too_big;
+    too_big.blockSize = 17ull * 1024 * 1024;
+    too_big.fileSize = 4096;
+    too_big.blocks = {};
+    plan = downloader.planRsync(local, too_big);
+    ASSERT_EQ(plan.segments.size(), std::size_t{1});
+
+    RsyncBlockList zero_file;
+    zero_file.blockSize = 1024;
+    zero_file.fileSize = 0;
+    zero_file.blocks = {};
+    plan = downloader.planRsync(local, zero_file);
+    ASSERT_EQ(plan.segments.size(), std::size_t{1});
+}
+
+// planRsync：远端尾部（不足 blockSize）恒为下载段（1178）。
+TEST_F(IncrementalDownloadTest, PlanRsyncTrailingTailIsDownloadSegment) {
+    const std::string content = make_rsync_remote(11);
+    const std::string remote_path = testDir_ + "/rsync_tail_remote.bin";
+    {
+        std::ofstream file(remote_path, std::ios::binary);
+        file.write(content.data(), static_cast<std::streamsize>(content.size()));
+    }
+    const std::string local_path = testDir_ + "/rsync_tail_local.bin";
+    {
+        std::ofstream file(local_path, std::ios::binary);
+        file.write(content.data(), static_cast<std::streamsize>(content.size()));
+    }
+
+    IncrementalDownloader downloader;
+    RsyncBlockList list;
+    ASSERT_TRUE(downloader.generateRsyncBlockList(remote_path, 1024, list));
+
+    const RsyncPlan plan = downloader.planRsync(local_path, list);
+    // 完全相同的本地/远端 → 全部 LocalCopy + 尾巴下载段
+    ASSERT_GE(plan.segments.size(), std::size_t{2});
+    EXPECT_EQ(plan.segments.back().kind, RsyncSegment::Kind::Download);
+    EXPECT_EQ(plan.segments.back().length, 100u);  // 5*1024+100 的尾巴
+    EXPECT_EQ(plan.copyBytes, 5u * 1024);
+    EXPECT_EQ(plan.downloadBytes, 100u);
+}
+
+// planRsync：空本地文件 → 全部下载（含尾巴），无拷贝。
+TEST_F(IncrementalDownloadTest, PlanRsyncEmptyLocalAllDownload) {
+    const std::string content = make_rsync_remote(12);
+    const std::string remote_path = testDir_ + "/rsync_el_remote.bin";
+    {
+        std::ofstream file(remote_path, std::ios::binary);
+        file.write(content.data(), static_cast<std::streamsize>(content.size()));
+    }
+    const std::string local_path = testDir_ + "/rsync_el_local.bin";
+    {
+        std::ofstream file(local_path, std::ios::binary);
+    }
+
+    IncrementalDownloader downloader;
+    RsyncBlockList list;
+    ASSERT_TRUE(downloader.generateRsyncBlockList(remote_path, 1024, list));
+
+    const RsyncPlan plan = downloader.planRsync(local_path, list);
+    ASSERT_GE(plan.segments.size(), std::size_t{2});
+    EXPECT_EQ(plan.copyBytes, 0u);
+    EXPECT_EQ(plan.downloadBytes, content.size());
+    EXPECT_EQ(plan.segments.front().kind, RsyncSegment::Kind::Download);
 }

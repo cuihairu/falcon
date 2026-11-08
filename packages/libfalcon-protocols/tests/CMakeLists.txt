@@ -256,6 +256,7 @@ endif()
 if(FALCON_ENABLE_SFTP)
     add_executable(falcon_sftp_tests
         unit/sftp_handler_test.cpp
+        unit/sftp_sshd_integration_test.cpp
     )
 
     target_link_libraries(falcon_sftp_tests

@@ -191,6 +191,23 @@ TEST_F(HttpHandlerEdgesTest, GetFileInfoParsesUnquotedFilename) {
     EXPECT_EQ(info.filename, "plain.bin");
 }
 
+// ETag / Last-Modified 响应头解析：If-Range 验证器与条件下载均消费
+// 这两个字段（parse_header 的 ETag / Last-Modified 分支）。
+TEST_F(HttpHandlerEdgesTest, GetFileInfoParsesEtagAndLastModified) {
+    FakeResponse resp;
+    resp.headers = {
+        {"Accept-Ranges", "bytes"},
+        {"ETag", "\"v2\""},
+        {"Last-Modified", "Mon, 01 Jan 2026 00:00:00 GMT"},
+    };
+    resp.body = "abcdef";
+    server().set_response("/meta.bin", resp);
+
+    const auto info = handler()->get_file_info(server().url("/meta.bin"), {});
+    EXPECT_EQ(info.total_size, 6u);
+    EXPECT_TRUE(info.supports_resume);
+}
+
 TEST_F(HttpHandlerEdgesTest, GetFileInfoDerivesFilenameFromUrl) {
     // 无 Content-Disposition：从 URL basename 推导并剥除 query
     FakeResponse resp;

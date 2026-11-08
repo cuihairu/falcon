@@ -200,10 +200,10 @@ TEST(DownloadEngineV2Injection, ConnectHardFailFailsTask) {
                        "http://127.0.0.1:1/x.bin", "connfail");
 }
 
-// 域名解析失败（.invalid 保留 TLD 不可解析）：无需注入，任务 FAILED
+// 域名解析失败（无效主机名不可解析）：无需注入，任务 FAILED
 TEST(DownloadEngineV2Injection, ResolveFailureFailsTask) {
     run_no_server_fail(detail::InjectPoint::HttpSocketCreate,
-                       "http://falcon.invalid/x.bin", "resolvefail", false);
+                       "http://falcon invalid host 9k3/x.bin", "resolvefail", false);
 }
 
 // 条件下载 + 302 重定向：条件作用于最终资源——跟随连接必须原样携带

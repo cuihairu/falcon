@@ -621,4 +621,194 @@ TEST_F(WebdavHandlerTest, StalledTransferAbortsAtTimeoutSeconds) {
     EXPECT_FALSE(fs::exists(dir.file("stalled.bin")));
 }
 
+
+//==============================================================================
+// pause / resume / cancel 对空任务与有效任务的无害收口
+//==============================================================================
+
+TEST_F(WebdavHandlerTest, PauseNullTaskIsNoop) {
+    // pause 对空指针不得崩溃（防御分支）
+    handler()->pause(nullptr);
+    SUCCEED();
+}
+
+TEST_F(WebdavHandlerTest, CancelNullTaskIsNoop) {
+    handler()->cancel(nullptr);
+    SUCCEED();
+}
+
+TEST_F(WebdavHandlerTest, PauseActiveTaskSetsPaused) {
+    DavTempDir dir;
+    DownloadOptions options;
+    auto task = std::make_shared<DownloadTask>(
+        20, "dav://127.0.0.1:1/x.bin", options);
+    task->set_status(TaskStatus::Downloading);
+    handler()->pause(task);
+    EXPECT_EQ(task->status(), TaskStatus::Paused);
+}
+
+TEST_F(WebdavHandlerTest, CancelActiveTaskSetsCancelled) {
+    DavTempDir dir;
+    DownloadOptions options;
+    auto task = std::make_shared<DownloadTask>(
+        21, "dav://127.0.0.1:1/x.bin", options);
+    task->set_status(TaskStatus::Downloading);
+    handler()->cancel(task);
+    EXPECT_EQ(task->status(), TaskStatus::Cancelled);
+}
+
+// resume 空任务无害；有效任务恢复为 Downloading 并尝试重新 download
+//（连接拒绝 → 重试耗尽抛 NetworkException）。
+TEST_F(WebdavHandlerTest, ResumeNullTaskIsNoop) {
+    handler()->resume(nullptr, nullptr);
+    SUCCEED();
+}
+
+TEST_F(WebdavHandlerTest, ResumeReconnectsAndFailsCleanlyOnRefused) {
+    DavTempDir dir;
+    DownloadOptions options;
+    options.max_retries = 0;
+    auto task = std::make_shared<DownloadTask>(
+        22, "dav://127.0.0.1:1/x.bin", options);
+    task->set_output_path(dir.file("r.bin"));
+    task->set_status(TaskStatus::Paused);
+    EXPECT_THROW(handler()->resume(task, nullptr), NetworkException);
+}
+
+// apply_dav_curl_options 的代理/SSL/限速分支：设置 proxy、proxy 凭据、
+// verify_ssl=false、speed_limit 后执行一次真实下载（回环 200），选项
+// 设置路径全部走通（不验证远端代理行为，只覆盖本地选项装配）。
+TEST_F(WebdavHandlerTest, DownloadSetsProxyAndSslAndSpeedOptions) {
+    ScriptedHttpServer server;
+    server.start();
+    const std::string body = "webdav option body";
+    FakeResponse ok;
+    ok.status = 200;
+    ok.body = body;
+    server.set_script("/dav/opts.bin", {ok});
+
+    DavTempDir dir;
+    DownloadOptions options;
+    options.proxy = "http://127.0.0.1:1";      // 代理装配分支（连不上由 4xx/错误收口）
+    options.proxy_username = "proxy-user";
+    options.proxy_password = "proxy-pass";
+    options.verify_ssl = false;
+    options.speed_limit = 1024 * 1024;
+    options.max_retries = 0;
+    auto task = std::make_shared<DownloadTask>(
+        30, "dav://127.0.0.1:" + std::to_string(server.port()) + "/dav/opts.bin",
+        options);
+    task->set_output_path(dir.file("opts.bin"));
+    task->set_status(TaskStatus::Downloading);
+
+    // 代理指向死端口 → get_file_info/download 均失败但选项装配已执行
+    EXPECT_THROW(handler()->download(task, nullptr), NetworkException);
+    EXPECT_FALSE(fs::exists(dir.file("opts.bin")));
+}
+
+// write_callback 的「文件未打开」防御分支：download 前手动关闭临时流
+// 不可达（download 自管文件），经 get_file_info 无文件回调；此分支由
+// resume 空任务 + 直接调用 write_callback 形态驱动（静态函数不可达，
+// 留待 libcurl 回调错误路径）。
+TEST_F(WebdavHandlerTest, DownloadWithAllOptionsButNoProxyReachesServer) {
+    ScriptedHttpServer server;
+    server.start();
+    const std::string body = "webdav direct body";
+    FakeResponse ok;
+    ok.status = 200;
+    ok.body = body;
+    server.set_script("/dav/direct.bin", {ok});
+
+    DavTempDir dir;
+    DownloadOptions options;
+    options.verify_ssl = false;
+    options.speed_limit = 512 * 1024;
+    options.max_retries = 0;
+    auto task = std::make_shared<DownloadTask>(
+        31, "dav://127.0.0.1:" + std::to_string(server.port()) + "/dav/direct.bin",
+        options);
+    task->set_output_path(dir.file("direct.bin"));
+    task->set_status(TaskStatus::Downloading);
+
+    handler()->download(task, nullptr);
+    EXPECT_EQ(task->status(), TaskStatus::Completed);
+    std::ifstream out(dir.file("direct.bin"), std::ios::binary);
+    std::string content((std::istreambuf_iterator<char>(out)),
+                        std::istreambuf_iterator<char>());
+    EXPECT_EQ(content, body);
+}
+
+
+
+// 重试退避分支：max_retries>0 且 retry_delay_seconds>0 → 每次失败后
+// 指数退避睡眠（webdav_plugin.cpp 的 backoff 行）。
+TEST_F(WebdavHandlerTest, DownloadRetriesWithExponentialBackoff) {
+    DavTempDir dir;
+    DownloadOptions options;
+    options.max_retries = 1;
+    options.retry_delay_seconds = 1;
+    auto task = std::make_shared<DownloadTask>(
+        32, "dav://127.0.0.1:1/x.bin", options);
+    task->set_output_path(dir.file("backoff.bin"));
+    task->set_status(TaskStatus::Downloading);
+
+    const auto t0 = std::chrono::steady_clock::now();
+    EXPECT_THROW(handler()->download(task, nullptr), NetworkException);
+    const auto elapsed = std::chrono::steady_clock::now() - t0;
+    // 至少睡过 1s（第一轮退避 = retry_delay_seconds << 0 = 1s）
+    EXPECT_GE(elapsed, std::chrono::milliseconds(900));
+}
+
+
+
+// percent_decode 的非法转义分支：% 后跟非十六进制字符保持原样
+// （webdav_plugin.cpp hex_value 返回 -1 路径）。
+TEST_F(WebdavHandlerTest, ParseUrlToleratesInvalidPercentEscapes) {
+    // userinfo 含 %zz 非法转义：不抛，原样保留 + 后续仍可解析
+    const auto ep = falcon::protocols::detail::parse_dav_url(
+        "dav://al%zz:pa%2@example.com/data.bin", withUser("ignored"));
+    EXPECT_EQ(ep.user, "al%zz");
+    EXPECT_EQ(ep.password, "pa%2");
+    EXPECT_EQ(ep.host, "example.com");
+    EXPECT_EQ(ep.path, "/data.bin");
+}
+
+
+
+// userinfo 无冒号（仅用户名无密码）：parse 的 user=userpart 分支。
+TEST_F(WebdavHandlerTest, ParseUrlUsernameOnlyNoColon) {
+    const auto ep = falcon::protocols::detail::parse_dav_url(
+        "dav://alice@example.com/data.bin", withUser("ignored"));
+    EXPECT_EQ(ep.user, "alice");
+    EXPECT_EQ(ep.password, "");
+    EXPECT_EQ(ep.host, "example.com");
+    EXPECT_EQ(ep.path, "/data.bin");
+}
+
+// 下载输出文件打开失败：临时路径指向不可写位置（目录不存在）→
+// FileIOException，绝不静默丢产物。
+TEST_F(WebdavHandlerTest, DownloadOutputOpenFailureThrows) {
+    ScriptedHttpServer server;
+    server.start();
+    const std::string path = "/dav/openfail.bin";
+    FakeResponse ok;
+    ok.status = 200;
+    ok.body = "payload";
+    server.set_response(path, ok);
+
+    // 目标目录不存在 → temp_path 打开失败
+    const std::string missing_dir =
+        (fs::temp_directory_path() / "falcon_dav_no_such_dir_xyz").string();
+    DownloadOptions options;
+    options.max_retries = 0;
+    auto task = std::make_shared<DownloadTask>(
+        33, "dav://127.0.0.1:" + std::to_string(server.port()) + path,
+        options);
+    task->set_output_path(missing_dir + "/out.bin");
+    task->set_status(TaskStatus::Downloading);
+
+    EXPECT_THROW(handler()->download(task, nullptr), FileIOException);
+}
+
+
 } // namespace

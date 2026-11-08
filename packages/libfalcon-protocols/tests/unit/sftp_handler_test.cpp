@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <memory>
 #include <sstream>
@@ -420,6 +421,43 @@ TEST(SftpDetailUtil, ScanKnownHostsFirstMatchWinsOverEarlierMismatch) {
         "example.com ssh-ed25519 " + kB64 + "\n");
     EXPECT_EQ(detail::scan_known_hosts(mixed, kKeyType, kB64, "example.com", 22),
               detail::KnownHostsVerdict::kMatch);
+}
+
+// 暂停/取消/恢复的空任务：无操作，不抛。
+TEST_F(SftpHandlerTest, PauseCancelResumeNullTaskIsNoop) {
+    handler()->pause(nullptr);
+    handler()->cancel(nullptr);
+    handler()->resume(nullptr, nullptr);
+    SUCCEED();
+}
+
+// URL 无 userinfo 且 http_username 缺省且 $USER 未设置：get_file_info
+// 必须拒绝（line "no username" 收口），不尝试连接。
+TEST_F(SftpHandlerTest, GetFileInfoRejectsMissingUsername) {
+    const char* old_user = std::getenv("USER");
+    ::unsetenv("USER");
+    DownloadOptions options;
+    options.max_retries = 0;
+    EXPECT_THROW(handler()->get_file_info("sftp://127.0.0.1:1/f.txt", options),
+                 NetworkException);
+    if (old_user) ::setenv("USER", old_user, 1);
+    else ::unsetenv("USER");
+}
+
+// 暂停/取消/恢复：任务状态翻转（下载未连接，无网络副作用）。
+TEST_F(SftpHandlerTest, PauseCancelResumeFlipsTaskStatus) {
+    DownloadOptions options;
+    options.max_retries = 0;
+    auto task = std::make_shared<DownloadTask>(7, "sftp://127.0.0.1:1/nope.bin",
+                                               options);
+    task->set_output_path((fs::temp_directory_path() / "falcon_sftp_status.bin").string());
+
+    handler()->pause(task);
+    EXPECT_EQ(task->status(), TaskStatus::Paused);
+    // resume 置 Downloading 后立即重试连接（拒绝 → NetworkException）
+    EXPECT_THROW(handler()->resume(task, nullptr), NetworkException);
+    handler()->cancel(task);
+    EXPECT_EQ(task->status(), TaskStatus::Cancelled);
 }
 
 } // namespace

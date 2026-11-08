@@ -902,7 +902,10 @@ TEST(DownloadEngineV2Edges, UnresolvableHostFailsTerminal) {
 
     DownloadOptions options = base_options(out_path);
     const TaskId task_id = engine.add_download(
-        "http://nonexistent-falcon-test.invalid/f.bin", options);
+        // 尾点 FQDN：绕开系统 search-domain 通配（本机
+        // search cuihairu.site 会把 *.invalid 解析到回环网段），保证
+        // 域名解析确定性失败（.invalid 保留 TLD 本身不解析）。
+        "http://nonexistent-falcon-test.invalid./f.bin", options);
     ASSERT_GT(task_id, 0u);
     auto* group = engine.request_group_man()->find_group(task_id);
     ASSERT_NE(group, nullptr);

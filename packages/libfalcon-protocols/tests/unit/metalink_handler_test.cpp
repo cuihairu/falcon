@@ -15,6 +15,7 @@
 #include "plugins/http/http_handler.hpp"
 #include "plugins/metalink/metalink_handler.hpp"
 
+#include <falcon/exceptions.hpp>
 #include <falcon/download_options.hpp>
 #include <falcon/download_task.hpp>
 #include <falcon/event_listener.hpp>
@@ -40,6 +41,7 @@ namespace fs = std::filesystem;
 using falcon::DownloadOptions;
 using falcon::DownloadTask;
 using falcon::IEventListener;
+using falcon::FileIOException;
 using falcon::ProgressInfo;
 using falcon::ProtocolRegistry;
 using falcon::TaskStatus;
@@ -1803,4 +1805,33 @@ TEST_F(MetalinkV2BridgeTest, V2GroupRemovedDuringBridgeFallsBackToSerial) {
 
     ASSERT_EQ(task->status(), TaskStatus::Completed);
     EXPECT_EQ(read_file((dir_.path() / "rmout.bin").string()), body);
+}
+
+// 发布改名失败：final_path 已存在且是目录 → rename 失败 → FileIOException。
+TEST_F(MetalinkHandlerTest, PublishRenameFailsWhenTargetIsDirectory) {
+    server().set_response("/m1.bin",
+                          FakeResponse{200, "OK", {}, kMirror1Body, true, {}, false, false, false, false, 0, {}});
+    server().set_response("/m2.bin",
+                          FakeResponse{200, "OK", {}, kMirror2Body, true, {}, false, false, false, false, 0, {}});
+
+    const std::string meta = local_meta4(
+        "<file name=\"out.bin\"><size>"
+        + std::to_string(std::string(kMirror1Body).size()) +
+        "</size><verification><hash type=\"sha256\">" + kMirror1Sha256 +
+        "</hash></verification>"
+        "<url priority=\"1\">" + server().url("/m1.bin") + "</url>"
+        "<url priority=\"2\">" + server().url("/m2.bin") + "</url>"
+        "</file>");
+
+    // 让目标名成为一个已存在的目录 → rename(part → dir) 失败
+    const fs::path dir_target = dir_.path() / "out.bin";
+    fs::create_directories(dir_target);
+
+    DownloadOptions options;
+    options.output_directory = dir_.path().string();
+    options.output_filename = "out.bin";
+    auto task = make_task(77, "file://" + meta, options);
+
+    EXPECT_THROW(handler_->download(task, nullptr), FileIOException);
+    EXPECT_NE(task->status(), TaskStatus::Completed);
 }
