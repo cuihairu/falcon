@@ -349,3 +349,14 @@ TEST(ReadUrlsFromFileCoverage, DashReadsFromStdin) {
     EXPECT_EQ(urls[0], "http://a.example/stdin-1.zip");
     EXPECT_EQ(urls[1], "http://a.example/stdin-2.zip");
 }
+
+// --certificate / --private-key：客户端证书两选项带值解析（缺值保空）。
+TEST(ArgParserCoverage, ClientCertificateOptions) {
+    auto a = parse_from({"--certificate", "/path/cert.pem"});
+    EXPECT_EQ(a.client_cert, "/path/cert.pem");
+    auto b = parse_from({"--private-key", "/path/key.pem"});
+    EXPECT_EQ(b.client_key, "/path/key.pem");
+    // 缺值：保持默认空
+    EXPECT_TRUE(parse_from({"--certificate"}).client_cert.empty());
+    EXPECT_TRUE(parse_from({"--private-key"}).client_key.empty());
+}

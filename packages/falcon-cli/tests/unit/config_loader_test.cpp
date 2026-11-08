@@ -488,6 +488,17 @@ TEST_F(ConfigLoaderTest, LoadFromEnv) {
 #endif
 }
 
+// 保存到不可写路径：open 失败 → false（错误路径不抛）。
+TEST_F(ConfigLoaderTest, SaveToUnwritablePathFails) {
+    falcon::cli::CliConfig config;
+    config.max_connections = 4;
+    // /proc 只读：任何写都失败
+    EXPECT_FALSE(
+        falcon::cli::ConfigLoader::save(config, "/proc/falcon_save_test.json"));
+    // 目录路径本身也是不可写（ofstream 打开目录失败）
+    EXPECT_FALSE(falcon::cli::ConfigLoader::save(config, test_dir_.string()));
+}
+
 } // anonymous namespace
 
 #endif // FALCON_USE_JSON

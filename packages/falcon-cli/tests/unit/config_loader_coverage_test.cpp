@@ -218,6 +218,11 @@ TEST_F(ConfigLoaderCoverageTest, SaveConfigWithAllOptionalFieldsAndReload) {
     config.cookie_jar = "save.out";
     config.http_username = "shu";
     config.http_password = "shp";
+    config.client_cert = "/save/cert.pem";
+    config.client_key = "/save/key.pem";
+    config.p2sp_share = "true";
+    config.p2sp_advertise = "save-adv";
+    config.swarm_fingerprint = "save-fp";
     config.headers["X-Save"] = "yes";
     config.enable_rpc = true;
     config.rpc_listen_port = 7100;
@@ -260,6 +265,11 @@ TEST_F(ConfigLoaderCoverageTest, SaveConfigWithAllOptionalFieldsAndReload) {
     EXPECT_EQ("save.out", loaded->cookie_jar);
     EXPECT_EQ("shu", loaded->http_username);
     EXPECT_EQ("shp", loaded->http_password);
+    EXPECT_EQ("/save/cert.pem", loaded->client_cert);
+    EXPECT_EQ("/save/key.pem", loaded->client_key);
+    EXPECT_EQ("true", loaded->p2sp_share);
+    EXPECT_EQ("save-adv", loaded->p2sp_advertise);
+    EXPECT_EQ("save-fp", loaded->swarm_fingerprint);
     EXPECT_EQ("yes", loaded->headers.at("X-Save"));
     EXPECT_TRUE(loaded->enable_rpc);
     EXPECT_EQ(7100, loaded->rpc_listen_port);
@@ -615,7 +625,7 @@ TEST_F(ConfigLoaderCoverageTest, MergeConfigsAppliesEveryCliOverride) {
     cli_args.default_download_dir = "/cli/dir";
     cli_args.default_output_filename = "cli.bin";
     cli_args.speed_limit = 4096;
-    cli_args.user_agent = "Falcon/0.2.0";       // default value -> NOT applied
+    cli_args.user_agent = "CliAgent/9.0";       // non-default -> applied
     cli_args.proxy = "http://cli-proxy:2";
     cli_args.proxy_type = "socks5";
     cli_args.proxy_username = "cpu";
@@ -625,6 +635,11 @@ TEST_F(ConfigLoaderCoverageTest, MergeConfigsAppliesEveryCliOverride) {
     cli_args.cookie_jar = "cli.out";
     cli_args.http_username = "chu";
     cli_args.http_password = "chp";
+    cli_args.client_cert = "/cli/cert.pem";
+    cli_args.client_key = "/cli/key.pem";
+    cli_args.p2sp_share = "true";
+    cli_args.p2sp_advertise = "cli-adv";
+    cli_args.swarm_fingerprint = "cli-fp";
     cli_args.headers["X-File"] = "overridden";
     cli_args.headers["X-Cli"] = "added";
     cli_args.rpc_secret = "cli-secret";
@@ -644,7 +659,7 @@ TEST_F(ConfigLoaderCoverageTest, MergeConfigsAppliesEveryCliOverride) {
     EXPECT_EQ("/cli/dir", merged.default_download_dir);
     EXPECT_EQ("cli.bin", merged.default_output_filename);
     EXPECT_EQ(4096ULL, merged.speed_limit);
-    EXPECT_EQ("FileAgent/1.0", merged.user_agent);  // default CLI agent ignored
+    EXPECT_EQ("CliAgent/9.0", merged.user_agent);   // CLI agent applied
     EXPECT_EQ("http://cli-proxy:2", merged.proxy);
     EXPECT_EQ("socks5", merged.proxy_type);
     EXPECT_EQ("cpu", merged.proxy_username);
@@ -654,6 +669,11 @@ TEST_F(ConfigLoaderCoverageTest, MergeConfigsAppliesEveryCliOverride) {
     EXPECT_EQ("cli.out", merged.cookie_jar);
     EXPECT_EQ("chu", merged.http_username);
     EXPECT_EQ("chp", merged.http_password);
+    EXPECT_EQ("/cli/cert.pem", merged.client_cert);
+    EXPECT_EQ("/cli/key.pem", merged.client_key);
+    EXPECT_EQ("true", merged.p2sp_share);
+    EXPECT_EQ("cli-adv", merged.p2sp_advertise);
+    EXPECT_EQ("cli-fp", merged.swarm_fingerprint);
     EXPECT_EQ("overridden", merged.headers.at("X-File"));
     EXPECT_EQ("added", merged.headers.at("X-Cli"));
     EXPECT_EQ("cli-secret", merged.rpc_secret);

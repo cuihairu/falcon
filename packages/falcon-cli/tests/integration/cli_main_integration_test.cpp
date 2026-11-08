@@ -1188,6 +1188,52 @@ TEST_F(CliMainIntegrationTest, InteractiveQuitKeyCancelsDownload) {
     EXPECT_TRUE(contains(r.out, "Download cancelled"));
 }
 
+
+// 配置文件合并全字段：proxy/p2sp/swarm 从 config 注入 args（CLI 非空
+// 覆盖，空 = 保留配置值）。下载经代理失败——仅需证明解析路径执行，
+// 不关心下载结果。
+TEST_F(CliMainIntegrationTest, ConfigMergesProxyAndSwarmFields) {
+    const auto cfg = work_dir_ / "proxy-swarm-config.json";
+    {
+        std::ofstream of(cfg);
+        of << "{\n";
+        of << "  \"proxy\": \"http://127.0.0.1:9\",\n";
+        of << "  \"proxy_username\": \"pu\",\n";
+        of << "  \"proxy_password\": \"pp\",\n";
+        of << "  \"p2sp_share\": \"true\",\n";
+        of << "  \"swarm_server\": \"http://127.0.0.1:9\",\n";
+        of << "  \"p2sp_advertise\": \"127.0.0.1:6800\",\n";
+        of << "  \"swarm_fingerprint\": \"deadbeef\"\n";
+        of << "}\n";
+    }
+
+    auto args = fast_fail_args(out_dir_, kRefusedUrlA);
+    args.push_back("-C");
+    args.push_back(cfg.string());
+    auto r = run_cli(args);
+    EXPECT_EQ(r.exit_code, 1);
+    EXPECT_FALSE(r.timed_out);
+    EXPECT_TRUE(contains(r.err, "FAIL"));
+}
+
+// swarm_fingerprint 非空 + swarm 支持缺失 → 忽略警告（不阻断下载）。
+TEST_F(CliMainIntegrationTest, SwarmFingerprintIgnoredWarningWhenUnsupported) {
+    const auto cfg = work_dir_ / "fingerprint-config.json";
+    {
+        std::ofstream of(cfg);
+        of << "{\n";
+        of << "  \"swarm_fingerprint\": \"abcdef\"\n";
+        of << "}\n";
+    }
+
+    auto args = fast_fail_args(out_dir_, kRefusedUrlA);
+    args.push_back("-C");
+    args.push_back(cfg.string());
+    auto r = run_cli(args);
+    EXPECT_EQ(r.exit_code, 1);
+    EXPECT_FALSE(r.timed_out);
+    EXPECT_TRUE(contains(r.err, "FAIL"));
+}
 } // namespace
 
 #endif // !defined(_WIN32)
