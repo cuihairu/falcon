@@ -31,6 +31,7 @@
 #if !defined(_WIN32) && defined(FALCON_ENABLE_SFTP_PLUGIN)
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <pwd.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -231,6 +232,18 @@ public:
 
     std::uint16_t port() const { return port_; }
     const std::string& private_key() const { return user_key_; }
+    /// sshd 以当前进程用户身份运行；URL/用户名必须与真实登录用户一致，
+    /// 否则授权密钥不匹配（CI runner 用户非仓库作者的本地用户名）。
+    static std::string user() {
+        if (const char* u = std::getenv("USER"); u && *u) {
+            return std::string(u);
+        }
+        if (const passwd* pw = ::getpwuid(::getuid());
+            pw && pw->pw_name && *pw->pw_name) {
+            return std::string(pw->pw_name);
+        }
+        return std::string("nobody");
+    }
     const std::string& remote_path() const { return remote_path_; }
     const std::string& content() const { return content_; }
     const std::string& debug_log() const { return last_log_; }
@@ -286,10 +299,10 @@ TEST(SftpSshdIntegration, DownloadFullFileViaPasswordlessKey) {
 
     DownloadOptions options;
     options.client_private_key = sshd.private_key();
-    options.http_username = "cui";
+    options.http_username = SshdFixture::user();
 
     auto task = std::make_shared<DownloadTask>(
-        1, "sftp://cui@127.0.0.1:" + std::to_string(sshd.port()) +
+        1, "sftp://" + SshdFixture::user() + "@127.0.0.1:" + std::to_string(sshd.port()) +
                sshd.remote_path(),
         options);
     const std::string out = (fs::temp_directory_path() /
@@ -312,11 +325,11 @@ TEST(SftpSshdIntegration, GetFileInfoReportsRemoteSize) {
 
     DownloadOptions options;
     options.client_private_key = sshd.private_key();
-    options.http_username = "cui";
+    options.http_username = SshdFixture::user();
 
     SftpHandler handler;
     const FileInfo info = handler.get_file_info(
-        "sftp://cui@127.0.0.1:" + std::to_string(sshd.port()) +
+        "sftp://" + SshdFixture::user() + "@127.0.0.1:" + std::to_string(sshd.port()) +
             sshd.remote_path(),
         options);
     EXPECT_EQ(info.total_size, sshd.content().size());
@@ -340,11 +353,11 @@ TEST(SftpSshdIntegration, AuthFailureWrongKeyFailsCleanly) {
                           std::ios::binary | std::ios::trunc);
         out << "not-a-real-key";
     }
-    options.http_username = "cui";
+    options.http_username = SshdFixture::user();
     options.max_retries = 0;
 
     auto task = std::make_shared<DownloadTask>(
-        2, "sftp://cui@127.0.0.1:" + std::to_string(sshd.port()) +
+        2, "sftp://" + SshdFixture::user() + "@127.0.0.1:" + std::to_string(sshd.port()) +
                sshd.remote_path(),
         options);
     const std::string out = (fs::temp_directory_path() /
@@ -368,10 +381,10 @@ TEST(SftpSshdIntegration, RemoteStatFailureForMissingPath) {
 
     DownloadOptions options;
     options.client_private_key = sshd.private_key();
-    options.http_username = "cui";
+    options.http_username = SshdFixture::user();
     options.max_retries = 0;
 
-    const std::string url = "sftp://cui@127.0.0.1:" +
+    const std::string url = "sftp://" + SshdFixture::user() + "@127.0.0.1:" +
                             std::to_string(sshd.port()) +
                             sshd.remote_path() + ".missing";
     auto task = std::make_shared<DownloadTask>(3, url, options);
@@ -395,10 +408,10 @@ TEST(SftpSshdIntegration, RemoteDirectoryRejected) {
 
     DownloadOptions options;
     options.client_private_key = sshd.private_key();
-    options.http_username = "cui";
+    options.http_username = SshdFixture::user();
     options.max_retries = 0;
 
-    const std::string url = "sftp://cui@127.0.0.1:" +
+    const std::string url = "sftp://" + SshdFixture::user() + "@127.0.0.1:" +
                             std::to_string(sshd.port()) + "/home";
     auto task = std::make_shared<DownloadTask>(4, url, options);
     const std::string out = (fs::temp_directory_path() /
@@ -422,7 +435,7 @@ TEST(SftpSshdIntegration, ResumeFromPartialTempAppends) {
 
     DownloadOptions options;
     options.client_private_key = sshd.private_key();
-    options.http_username = "cui";
+    options.http_username = SshdFixture::user();
     options.resume_enabled = true;
 
     const std::string out = (fs::temp_directory_path() /
@@ -434,7 +447,7 @@ TEST(SftpSshdIntegration, ResumeFromPartialTempAppends) {
     }
 
     auto task = std::make_shared<DownloadTask>(
-        5, "sftp://cui@127.0.0.1:" + std::to_string(sshd.port()) +
+        5, "sftp://" + SshdFixture::user() + "@127.0.0.1:" + std::to_string(sshd.port()) +
                sshd.remote_path(),
         options);
     task->set_output_path(out);
@@ -469,11 +482,11 @@ TEST(SftpSshdIntegration, HostKeyMismatchFailsHard) {
 
     DownloadOptions options;
     options.client_private_key = sshd.private_key();
-    options.http_username = "cui";
+    options.http_username = SshdFixture::user();
     options.max_retries = 0;
 
     auto task = std::make_shared<DownloadTask>(
-        6, "sftp://cui@127.0.0.1:" + std::to_string(sshd.port()) +
+        6, "sftp://" + SshdFixture::user() + "@127.0.0.1:" + std::to_string(sshd.port()) +
                sshd.remote_path(),
         options);
     const std::string out = (fs::temp_directory_path() /
@@ -500,11 +513,11 @@ TEST(SftpSshdIntegration, DownloadOutputOpenFailureThrows) {
 
     DownloadOptions options;
     options.client_private_key = sshd.private_key();
-    options.http_username = "cui";
+    options.http_username = SshdFixture::user();
     options.max_retries = 0;
 
     auto task = std::make_shared<DownloadTask>(
-        8, "sftp://cui@127.0.0.1:" + std::to_string(sshd.port()) +
+        8, "sftp://" + SshdFixture::user() + "@127.0.0.1:" + std::to_string(sshd.port()) +
                sshd.remote_path(),
         options);
     const std::string missing_dir =
@@ -532,11 +545,11 @@ TEST(SftpSshdIntegration, SpeedLimitPacesAndReportsProgress) {
 
     DownloadOptions options;
     options.client_private_key = sshd.private_key();
-    options.http_username = "cui";
+    options.http_username = SshdFixture::user();
     options.speed_limit = 1024 * 1024;  // 1 MiB/s
 
     auto task = std::make_shared<DownloadTask>(
-        9, "sftp://cui@127.0.0.1:" + std::to_string(sshd.port()) +
+        9, "sftp://" + SshdFixture::user() + "@127.0.0.1:" + std::to_string(sshd.port()) +
                sshd.remote_path(),
         options);
     const std::string out = (fs::temp_directory_path() /
@@ -579,11 +592,11 @@ TEST(SftpSshdIntegration, ListenerSpeedLimitAppliesPacing) {
 
     DownloadOptions options;
     options.client_private_key = sshd.private_key();
-    options.http_username = "cui";
+    options.http_username = SshdFixture::user();
     options.speed_limit = 0;  // 仅监听器限速生效
 
     auto task = std::make_shared<DownloadTask>(
-        10, "sftp://cui@127.0.0.1:" + std::to_string(sshd.port()) +
+        10, "sftp://" + SshdFixture::user() + "@127.0.0.1:" + std::to_string(sshd.port()) +
                 sshd.remote_path(),
         options);
     const std::string out = (fs::temp_directory_path() /
@@ -608,7 +621,7 @@ TEST(SftpSshdIntegration, CompleteTempFilePublishesImmediately) {
 
     DownloadOptions options;
     options.client_private_key = sshd.private_key();
-    options.http_username = "cui";
+    options.http_username = SshdFixture::user();
     options.resume_enabled = true;
     options.max_retries = 0;
 
@@ -622,7 +635,7 @@ TEST(SftpSshdIntegration, CompleteTempFilePublishesImmediately) {
     }
 
     auto task = std::make_shared<DownloadTask>(
-        11, "sftp://cui@127.0.0.1:" + std::to_string(sshd.port()) +
+        11, "sftp://" + SshdFixture::user() + "@127.0.0.1:" + std::to_string(sshd.port()) +
                 sshd.remote_path(),
         options);
     task->set_output_path(out);
@@ -645,7 +658,7 @@ TEST(SftpSshdIntegration, CompleteTempFilePublishRenameFails) {
 
     DownloadOptions options;
     options.client_private_key = sshd.private_key();
-    options.http_username = "cui";
+    options.http_username = SshdFixture::user();
     options.resume_enabled = true;
     options.max_retries = 0;
 
@@ -660,7 +673,7 @@ TEST(SftpSshdIntegration, CompleteTempFilePublishRenameFails) {
     }
 
     auto task = std::make_shared<DownloadTask>(
-        12, "sftp://cui@127.0.0.1:" + std::to_string(sshd.port()) +
+        12, "sftp://" + SshdFixture::user() + "@127.0.0.1:" + std::to_string(sshd.port()) +
                 sshd.remote_path(),
         options);
     task->set_output_path(out);
