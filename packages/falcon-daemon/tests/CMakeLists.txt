@@ -283,6 +283,7 @@ if(NOT WIN32)
     # argument sets and assert exit codes / output (POSIX only).
     add_executable(falcon_daemon_main_tests
         main_integration_test.cpp
+        mcp_main_integration_test.cpp
     )
 
     target_link_libraries(falcon_daemon_main_tests
@@ -302,7 +303,9 @@ if(NOT WIN32)
 
     target_compile_definitions(falcon_daemon_main_tests PRIVATE
         FALCON_DAEMON_BIN="$<TARGET_FILE:falcon-daemon>"
+        FALCON_MCP_BIN="$<TARGET_FILE:falcon-mcp>"
     )
+    add_dependencies(falcon_daemon_main_tests falcon-mcp)
 
     gtest_discover_tests(falcon_daemon_main_tests
         DISCOVERY_TIMEOUT 30

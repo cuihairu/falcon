@@ -200,6 +200,87 @@ TEST(ConfigTest, DownloadSectionTypeMismatchFails) {
               std::string::npos);
 }
 
+TEST(ConfigTest, P2spShareEnabledTypeMismatchFails) {
+    const TempFile file(write_config(R"({ "p2sp": { "share": { "enabled": "yes" } } })"));
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    EXPECT_FALSE(result.ok);
+    EXPECT_NE(result.error.find("invalid type for key 'enabled'"),
+              std::string::npos);
+}
+
+TEST(ConfigTest, P2spShareOneWayTypeMismatchFails) {
+    const TempFile file(write_config(R"({ "p2sp": { "share": { "one_way": 1 } } })"));
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    EXPECT_FALSE(result.ok);
+    EXPECT_NE(result.error.find("invalid type for key 'one_way'"),
+              std::string::npos);
+}
+
+TEST(ConfigTest, P2spShareHashDelayTypeMismatchFails) {
+    const TempFile file(write_config(R"({ "p2sp": { "share": { "hash_delay_s": "1" } } })"));
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    EXPECT_FALSE(result.ok);
+    EXPECT_NE(result.error.find("invalid type for key 'hash_delay_s'"),
+              std::string::npos);
+}
+
+TEST(ConfigTest, P2spShareAnnounceMirrorsTypeMismatchFails) {
+    const TempFile file(write_config(R"({ "p2sp": { "share": { "announce_mirrors": 1 } } })"));
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    EXPECT_FALSE(result.ok);
+    EXPECT_NE(result.error.find("invalid type for key 'announce_mirrors'"),
+              std::string::npos);
+}
+
+TEST(ConfigTest, P2spRendezvousHostTypeMismatchFails) {
+    const TempFile file(write_config(R"({ "p2sp": { "rendezvous": { "host": 123 } } })"));
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    EXPECT_FALSE(result.ok);
+    EXPECT_NE(result.error.find("invalid type for key 'host'"),
+              std::string::npos);
+}
+
+TEST(ConfigTest, P2spRendezvousServerTokenTypeMismatchFails) {
+    const TempFile file(write_config(R"({ "p2sp": { "rendezvous": { "server_token": 5 } } })"));
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    EXPECT_FALSE(result.ok);
+    EXPECT_NE(result.error.find("invalid type for key 'server_token'"),
+              std::string::npos);
+}
+
+TEST(ConfigTest, P2spRendezvousGroupTokenTypeMismatchFails) {
+    const TempFile file(write_config(R"({ "p2sp": { "rendezvous": { "group_token": true } } })"));
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    EXPECT_FALSE(result.ok);
+    EXPECT_NE(result.error.find("invalid type for key 'group_token'"),
+              std::string::npos);
+}
+
+TEST(ConfigTest, P2spRendezvousAdvertiseAddrTypeMismatchFails) {
+    const TempFile file(write_config(R"({ "p2sp": { "rendezvous": { "advertise_addr": 9 } } })"));
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    EXPECT_FALSE(result.ok);
+    EXPECT_NE(result.error.find("invalid type for key 'advertise_addr'"),
+              std::string::npos);
+}
+
+TEST(ConfigTest, P2spRendezvousAdvertiseDirectTypeMismatchFails) {
+    const TempFile file(write_config(R"({ "p2sp": { "rendezvous": { "advertise_direct": "true" } } })"));
+    AllConfigs c;
+    const auto result = load(file.path, c);
+    EXPECT_FALSE(result.ok);
+    EXPECT_NE(result.error.find("invalid type for key 'advertise_direct'"),
+              std::string::npos);
+}
+
 TEST(ConfigTest, PartialConfigKeepsValues) {
     const TempFile file(write_config(R"({
         "rpc": { "port": 7001 }

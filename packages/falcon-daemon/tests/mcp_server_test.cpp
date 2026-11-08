@@ -1166,3 +1166,451 @@ TEST(McpServerHttpTest, SessionTableEvictsOldestAtCapacity) {
     ASSERT_TRUE(stale.has_value());
     EXPECT_EQ(stale->status, 404);
 }
+
+// ===========================================================================
+// falcon_list_tasks 边界：limit/offset 校验、dispatch 非数组错误
+// ===========================================================================
+
+// 非数字 / 负 limit 与 offset → 协议层 -32602。
+TEST(McpServerHttpTest, ListTasksInvalidLimitOffsetReturns32602) {
+    falcon::DownloadEngine engine;
+    auto server = make_server(engine);
+    std::string sid = open_session(server->port(), kSecret);
+    for (const auto& bad : {json("abc"), json(-1), json(1.5), json(true)}) {
+        auto resp = mcp_request(
+            server->port(), "POST", kSecret, sid,
+            rpc_body(17, "tools/call",
+                     json{{"name", "falcon_list_tasks"},
+                          {"arguments", json{{"limit", bad}}}})
+                .dump());
+        ASSERT_TRUE(resp.has_value());
+        EXPECT_EQ(json::parse(resp->body).at("error").at("code"), -32602)
+            << bad.dump();
+    }
+    for (const auto& bad : {json("x"), json(-2)}) {
+        auto resp = mcp_request(
+            server->port(), "POST", kSecret, sid,
+            rpc_body(18, "tools/call",
+                     json{{"name", "falcon_list_tasks"},
+                          {"arguments", json{{"offset", bad}}}})
+                .dump());
+        ASSERT_TRUE(resp.has_value());
+        EXPECT_EQ(json::parse(resp->body).at("error").at("code"), -32602)
+            << bad.dump();
+    }
+}
+
+// status 非字符串 → -32602。
+TEST(McpServerHttpTest, ListTasksStatusNonStringReturns32602) {
+    falcon::DownloadEngine engine;
+    auto server = make_server(engine);
+    std::string sid = open_session(server->port(), kSecret);
+    auto resp = mcp_request(
+        server->port(), "POST", kSecret, sid,
+        rpc_body(19, "tools/call",
+                 json{{"name", "falcon_list_tasks"},
+                      {"arguments", json{{"status", 42}}}})
+            .dump());
+    ASSERT_TRUE(resp.has_value());
+    EXPECT_EQ(json::parse(resp->body).at("error").at("code"), -32602);
+}
+
+// falcon_add_download 参数形状错误：urls 非数组 / 空数组 / 含非字符串、
+// output_dir 非字符串、filename 非字符串、options 非对象。
+TEST(McpServerHttpTest, AddDownloadParamShapeErrorsReturn32602) {
+    falcon::DownloadEngine engine;
+    auto server = make_server(engine);
+    std::string sid = open_session(server->port(), kSecret);
+
+    const std::vector<std::pair<const char*, json>> cases = {
+        {"urls", json("not-an-array")},
+        {"urls", json::array()},
+        {"urls", json::array({42})},
+        {"output_dir", json(7)},
+        {"filename", json(9)},
+    };
+    for (const auto& [key, val] : cases) {
+        json args = json::object();
+        if (std::string(key) == "urls") args["urls"] = val;
+        else {
+            args["urls"] = json::array({"http://127.0.0.1:9/x.bin"});
+            args[key] = val;
+        }
+        auto resp = mcp_request(
+            server->port(), "POST", kSecret, sid,
+            rpc_body(20, "tools/call",
+                     json{{"name", "falcon_add_download"}, {"arguments", args}})
+                .dump());
+        ASSERT_TRUE(resp.has_value()) << key;
+        EXPECT_EQ(json::parse(resp->body).at("error").at("code"), -32602)
+            << key << ": " << resp->body;
+    }
+
+    // options 非对象
+    auto resp = mcp_request(
+        server->port(), "POST", kSecret, sid,
+        rpc_body(21, "tools/call",
+                 json{{"name", "falcon_add_download"},
+                      {"arguments", json{{"urls", json::array({"http://x"})},
+                                         {"options", "not-object"}}}})
+            .dump());
+    ASSERT_TRUE(resp.has_value());
+    EXPECT_EQ(json::parse(resp->body).at("error").at("code"), -32602);
+
+    // filename 与 options.out 冲突 → 业务错误 isError。
+    json conflict = call_tool(
+        server->port(), kSecret, sid, "falcon_add_download",
+        json{{"urls", json::array({"http://127.0.0.1:9/x.bin"})},
+             {"filename", "/tmp/a"},
+             {"options", json{{"out", "/tmp/b"}}}});
+    EXPECT_EQ(conflict.at("isError"), true);
+    EXPECT_NE(conflict.at("content").at(0).at("text").get<std::string>().find(
+                  "Conflicting arguments"),
+              std::string::npos);
+}
+
+// falcon_remove_task 的 force 参数非布尔 → -32602；force=true 走强拆。
+TEST(McpServerHttpTest, RemoveTaskForceNonBooleanReturns32602) {
+    falcon::DownloadEngine engine;
+    auto server = make_server(engine);
+    std::string sid = open_session(server->port(), kSecret);
+    auto resp = mcp_request(
+        server->port(), "POST", kSecret, sid,
+        rpc_body(22, "tools/call",
+                 json{{"name", "falcon_remove_task"},
+                      {"arguments", json{{"gid", "0000000000000001"},
+                                         {"force", "yes"}}}})
+            .dump());
+    ASSERT_TRUE(resp.has_value());
+    EXPECT_EQ(json::parse(resp->body).at("error").at("code"), -32602);
+}
+
+// falcon_set_global_option 的 options 缺失 / 非对象 → -32602。
+TEST(McpServerHttpTest, SetGlobalOptionBadShapeReturns32602) {
+    falcon::DownloadEngine engine;
+    auto server = make_server(engine);
+    std::string sid = open_session(server->port(), kSecret);
+    for (const auto& args : {json::object(), json{{"options", "nope"}},
+                             json{{"options", json::array()}}}) {
+        auto resp = mcp_request(
+            server->port(), "POST", kSecret, sid,
+            rpc_body(23, "tools/call",
+                     json{{"name", "falcon_set_global_option"},
+                          {"arguments", args}})
+                .dump());
+        ASSERT_TRUE(resp.has_value());
+        EXPECT_EQ(json::parse(resp->body).at("error").at("code"), -32602)
+            << args.dump();
+    }
+}
+
+
+// ---- 直接调用 handle_request：mock dispatch 返回非数组响应分支 ----
+
+// falcon_list_tasks 的 dispatch 返回非数组 → 业务错误（Unexpected non-array
+// response），覆盖 translate_tool_call 的 append 容错分支。
+TEST(McpServerDirectTest, ListTasksNonArrayDispatchYieldsBusinessError) {
+    falcon::daemon::rpc::McpServer server;
+
+    using Req = falcon::daemon::rpc::McpServer::Request;
+    using Resp = falcon::daemon::rpc::McpServer::Response;
+    const std::string token = "direct-secret";
+
+    // initialize 建立会话
+    Req init;
+    init.method = "POST";
+    init.headers["authorization"] = "Bearer " + token;
+    init.body = R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"direct","version":"0"}}})";
+    Resp r = server.handle_request(init, token,
+        [](const std::string&, json) { return json::object(); });
+    ASSERT_EQ(r.status_code, 200);
+    auto it = r.headers.find("Mcp-Session-Id");
+    ASSERT_TRUE(it != r.headers.end());
+    const std::string sid = it->second;
+
+    // dispatch 对 tellActive 返回非数组 → 容错分支
+    auto mock_dispatch = [](const std::string& method, json) -> json {
+        if (method == "aria2.tellActive") return json{{"weird", "object"}};
+        return json::array();
+    };
+    Req call;
+    call.method = "POST";
+    call.headers["authorization"] = "Bearer " + token;
+    call.headers["mcp-session-id"] = sid;
+    call.body = R"({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"falcon_list_tasks","arguments":{"status":"active"}}})";
+    r = server.handle_request(call, token, mock_dispatch);
+    ASSERT_EQ(r.status_code, 200);
+    json body = json::parse(r.body);
+    ASSERT_TRUE(body.contains("result"));
+    EXPECT_EQ(body["result"].at("isError"), true);
+    const std::string text = body["result"]["content"][0]["text"].get<std::string>();
+    EXPECT_NE(text.find("non-array"), std::string::npos) << text;
+}
+
+// falcon_list_tasks 的 dispatch 返回 {"error":...} → 直接回传业务错误。
+TEST(McpServerDirectTest, ListTasksDispatchErrorPropagates) {
+    falcon::daemon::rpc::McpServer server;
+
+    using Req = falcon::daemon::rpc::McpServer::Request;
+    using Resp = falcon::daemon::rpc::McpServer::Response;
+    const std::string token = "direct-secret";
+
+    Req init;
+    init.method = "POST";
+    init.headers["authorization"] = "Bearer " + token;
+    init.body = R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"direct","version":"0"}}})";
+    Resp r = server.handle_request(init, token,
+        [](const std::string&, json) { return json::object(); });
+    ASSERT_EQ(r.status_code, 200);
+    auto it = r.headers.find("Mcp-Session-Id");
+    ASSERT_TRUE(it != r.headers.end());
+    const std::string sid = it->second;
+
+    auto mock_dispatch = [](const std::string& method, json) -> json {
+        if (method == "aria2.tellActive")
+            return json{{"error", json{{"code", 2}, {"message", "boom"}}}};
+        return json::array();
+    };
+    Req call;
+    call.method = "POST";
+    call.headers["authorization"] = "Bearer " + token;
+    call.headers["mcp-session-id"] = sid;
+    call.body = R"({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"falcon_list_tasks","arguments":{"status":"active"}}})";
+    r = server.handle_request(call, token, mock_dispatch);
+    ASSERT_EQ(r.status_code, 200);
+    json body = json::parse(r.body);
+    ASSERT_TRUE(body.contains("result"));
+    EXPECT_EQ(body["result"].at("isError"), true);
+    const std::string text = body["result"]["content"][0]["text"].get<std::string>();
+    EXPECT_NE(text.find("boom"), std::string::npos) << text;
+}
+
+
+// falcon_list_tasks status=all：三队列 dispatch 全成功 → 合并后切片。
+TEST(McpServerDirectTest, ListTasksAllQueuesMergeAndSlice) {
+    falcon::daemon::rpc::McpServer server;
+    using Req = falcon::daemon::rpc::McpServer::Request;
+    using Resp = falcon::daemon::rpc::McpServer::Response;
+    const std::string token = "direct-secret";
+
+    Req init;
+    init.method = "POST";
+    init.headers["authorization"] = "Bearer " + token;
+    init.body = R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"direct","version":"0"}}})";
+    Resp r = server.handle_request(init, token,
+        [](const std::string&, json) { return json::object(); });
+    ASSERT_EQ(r.status_code, 200);
+    const std::string sid = r.headers.at("Mcp-Session-Id");
+
+    auto mock_dispatch = [](const std::string& method, json) -> json {
+        if (method == "aria2.tellActive") return json::array({json{{"gid","a"}}});
+        if (method == "aria2.tellWaiting") return json::array({json{{"gid","w"}}});
+        if (method == "aria2.tellStopped") return json::array({json{{"gid","s"}}});
+        return json::array();
+    };
+    Req call;
+    call.method = "POST";
+    call.headers["authorization"] = "Bearer " + token;
+    call.headers["mcp-session-id"] = sid;
+    call.body = R"({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"falcon_list_tasks","arguments":{"status":"all","limit":2}}})";
+    r = server.handle_request(call, token, mock_dispatch);
+    ASSERT_EQ(r.status_code, 200);
+    json body = json::parse(r.body);
+    ASSERT_TRUE(body.contains("result"));
+    const json res = body["result"].at("structuredContent");
+    EXPECT_EQ(res.at("total"), 3);
+    ASSERT_TRUE(res.contains("tasks"));
+    EXPECT_EQ(res["tasks"].size(), 2u);
+}
+
+// falcon_remove_task force=true：dispatch 路由到 forceRemove。
+TEST(McpServerDirectTest, RemoveTaskForceRoutesToForceRemove) {
+    falcon::daemon::rpc::McpServer server;
+    using Req = falcon::daemon::rpc::McpServer::Request;
+    using Resp = falcon::daemon::rpc::McpServer::Response;
+    const std::string token = "direct-secret";
+
+    Req init;
+    init.method = "POST";
+    init.headers["authorization"] = "Bearer " + token;
+    init.body = R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"direct","version":"0"}}})";
+    Resp r = server.handle_request(init, token,
+        [](const std::string&, json) { return json::object(); });
+    ASSERT_EQ(r.status_code, 200);
+    const std::string sid = r.headers.at("Mcp-Session-Id");
+
+    std::string called_method;
+    auto mock_dispatch = [&called_method](const std::string& method, json) -> json {
+        called_method = method;
+        return json{{"result", "removed"}};
+    };
+    Req call;
+    call.method = "POST";
+    call.headers["authorization"] = "Bearer " + token;
+    call.headers["mcp-session-id"] = sid;
+    call.body = R"({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"falcon_remove_task","arguments":{"gid":"0000000000000001","force":true}}})";
+    r = server.handle_request(call, token, mock_dispatch);
+    ASSERT_EQ(r.status_code, 200);
+    EXPECT_EQ(called_method, "aria2.forceRemove");
+}
+
+// falcon_remove_task force 缺省：dispatch 路由到 remove（非强拆）。
+TEST(McpServerDirectTest, RemoveTaskDefaultRoutesToRemove) {
+    falcon::daemon::rpc::McpServer server;
+    using Req = falcon::daemon::rpc::McpServer::Request;
+    using Resp = falcon::daemon::rpc::McpServer::Response;
+    const std::string token = "direct-secret";
+
+    Req init;
+    init.method = "POST";
+    init.headers["authorization"] = "Bearer " + token;
+    init.body = R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"direct","version":"0"}}})";
+    Resp r = server.handle_request(init, token,
+        [](const std::string&, json) { return json::object(); });
+    ASSERT_EQ(r.status_code, 200);
+    const std::string sid = r.headers.at("Mcp-Session-Id");
+
+    std::string called_method;
+    auto mock_dispatch = [&called_method](const std::string& method, json) -> json {
+        called_method = method;
+        return json{{"result", "removed"}};
+    };
+    Req call;
+    call.method = "POST";
+    call.headers["authorization"] = "Bearer " + token;
+    call.headers["mcp-session-id"] = sid;
+    call.body = R"({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"falcon_remove_task","arguments":{"gid":"0000000000000001"}}})";
+    r = server.handle_request(call, token, mock_dispatch);
+    ASSERT_EQ(r.status_code, 200);
+    EXPECT_EQ(called_method, "aria2.remove");
+}
+
+// falcon_pause_all / falcon_resume_all / falcon_get_global_stats：无参工具
+// 直接路由到对应 aria2 dispatch，不要求 arguments。
+TEST(McpServerDirectTest, NoArgControlToolsRouteToDispatch) {
+    falcon::daemon::rpc::McpServer server;
+    using Req = falcon::daemon::rpc::McpServer::Request;
+    using Resp = falcon::daemon::rpc::McpServer::Response;
+    const std::string token = "direct-secret";
+
+    Req init;
+    init.method = "POST";
+    init.headers["authorization"] = "Bearer " + token;
+    init.body = R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"direct","version":"0"}}})";
+    Resp r = server.handle_request(init, token,
+        [](const std::string&, json) { return json::object(); });
+    ASSERT_EQ(r.status_code, 200);
+    const std::string sid = r.headers.at("Mcp-Session-Id");
+
+    const std::vector<std::pair<std::string, std::string>> cases = {
+        {"falcon_pause_all", "aria2.pauseAll"},
+        {"falcon_resume_all", "aria2.unpauseAll"},
+        {"falcon_get_global_stats", "aria2.getGlobalStat"},
+    };
+    int64_t id = 100;
+    for (const auto& [tool, expected] : cases) {
+        std::string called_method;
+        auto mock_dispatch = [&called_method](const std::string& method, json) -> json {
+            called_method = method;
+            return json{{"result", "ok"}};
+        };
+        Req call;
+        call.method = "POST";
+        call.headers["authorization"] = "Bearer " + token;
+        call.headers["mcp-session-id"] = sid;
+        const std::string body =
+            R"({"jsonrpc":"2.0","id":)" + std::to_string(++id) +
+            R"(,"method":"tools/call","params":{"name":")" + tool + R"("}})";
+        call.body = body;
+        r = server.handle_request(call, token, mock_dispatch);
+        ASSERT_EQ(r.status_code, 200);
+        EXPECT_EQ(called_method, expected) << tool;
+        EXPECT_NE(r.body.find("result"), std::string::npos) << tool;
+    }
+}
+
+// tools/call 参数形状错误：name 缺失/非字符串、arguments 非对象 →
+// 协议层 -32602（HTTP 200，无 result）。
+TEST(McpServerDirectTest, ToolsCallParamShapeErrorsReturn32602) {
+    falcon::daemon::rpc::McpServer server;
+    using Req = falcon::daemon::rpc::McpServer::Request;
+    using Resp = falcon::daemon::rpc::McpServer::Response;
+    const std::string token = "direct-secret";
+
+    Req init;
+    init.method = "POST";
+    init.headers["authorization"] = "Bearer " + token;
+    init.body = R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"direct","version":"0"}}})";
+    Resp r = server.handle_request(init, token,
+        [](const std::string&, json) { return json::object(); });
+    ASSERT_EQ(r.status_code, 200);
+    const std::string sid = r.headers.at("Mcp-Session-Id");
+
+    auto mock_dispatch = [](const std::string&, json) -> json {
+        return json::object();
+    };
+
+    // name 缺失
+    Req call;
+    call.method = "POST";
+    call.headers["authorization"] = "Bearer " + token;
+    call.headers["mcp-session-id"] = sid;
+    call.body = R"({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{}})";
+    r = server.handle_request(call, token, mock_dispatch);
+    ASSERT_EQ(r.status_code, 200);
+    EXPECT_NE(r.body.find("-32602"), std::string::npos) << r.body;
+
+    // name 非字符串
+    call.body = R"({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":42}})";
+    r = server.handle_request(call, token, mock_dispatch);
+    ASSERT_EQ(r.status_code, 200);
+    EXPECT_NE(r.body.find("-32602"), std::string::npos) << r.body;
+
+    // arguments 非对象
+    call.body = R"({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"falcon_get_task","arguments":"not-an-object"}})";
+    r = server.handle_request(call, token, mock_dispatch);
+    ASSERT_EQ(r.status_code, 200);
+    EXPECT_NE(r.body.find("-32602"), std::string::npos) << r.body;
+}
+
+// 通知（id 为 null）→ 202 Accepted：无方法（缺 method）与有方法两种
+// 形态都受理不执行（MCP 规范：客户端通知无返回语义）。
+TEST(McpServerDirectTest, NotificationAlwaysAccepted202) {
+    falcon::daemon::rpc::McpServer server;
+    using Req = falcon::daemon::rpc::McpServer::Request;
+    using Resp = falcon::daemon::rpc::McpServer::Response;
+    const std::string token = "direct-secret";
+
+    Req init;
+    init.method = "POST";
+    init.headers["authorization"] = "Bearer " + token;
+    init.body = R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"direct","version":"0"}}})";
+    Resp r = server.handle_request(init, token,
+        [](const std::string&, json) { return json::object(); });
+    ASSERT_EQ(r.status_code, 200);
+    const std::string sid = r.headers.at("Mcp-Session-Id");
+
+    auto mock_dispatch = [](const std::string&, json) -> json {
+        return json::object();
+    };
+
+    // 通知 + 缺失 method → 202
+    Req call;
+    call.method = "POST";
+    call.headers["authorization"] = "Bearer " + token;
+    call.headers["mcp-session-id"] = sid;
+    call.body = R"({"jsonrpc":"2.0","id":null,"params":{}})";
+    r = server.handle_request(call, token, mock_dispatch);
+    EXPECT_EQ(r.status_code, 202);
+
+    // 通知 + 有效 method（tools/call）→ 202，不执行 dispatch
+    bool dispatch_called = false;
+    auto counting_dispatch = [&dispatch_called](const std::string&, json) -> json {
+        dispatch_called = true;
+        return json::object();
+    };
+    call.body = R"({"jsonrpc":"2.0","id":null,"method":"tools/call","params":{"name":"falcon_get_task","arguments":{"gid":"1"}}})";
+    r = server.handle_request(call, token, counting_dispatch);
+    EXPECT_EQ(r.status_code, 202);
+    EXPECT_FALSE(dispatch_called);
+}

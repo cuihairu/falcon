@@ -869,6 +869,58 @@ TEST_F(JsonRpcCoverageTest, AddUriUnsupportedProtocol) {
     EXPECT_EQ(parsed["error"]["code"], -32603);
 }
 
+
+// parse_numeric_option 的 stoull 溢出捕获分支：超界字符串 → nullopt →
+// -32602。
+TEST_F(JsonRpcCoverageTest, AddUriNumericOptionOverflowStringRejected) {
+    start_server();
+    json opts = {{"max-tries", "99999999999999999999999999999999"}};
+    auto parsed = call("aria2.addUri",
+                       json::array({json::array({"test://local/overflow.bin"}), opts}));
+    ASSERT_TRUE(parsed.contains("error")) << parsed.dump();
+    EXPECT_EQ(parsed["error"]["code"], -32602);
+    EXPECT_NE(parsed["error"]["message"].get<std::string>().find("max-tries"),
+              std::string::npos);
+}
+
+// falcon.stopSeeding 的无效参数形状 → -32602。
+TEST_F(JsonRpcCoverageTest, StopSeedingInvalidParamsReturns32602) {
+    start_server();
+    for (const auto& params : {json::object(), json::array(), json::array({42})}) {
+        auto parsed = call("falcon.stopSeeding", params);
+        ASSERT_TRUE(parsed.contains("error")) << parsed.dump();
+        EXPECT_EQ(parsed["error"]["code"], -32602);
+    }
+}
+
+// falcon.stopSeeding：gid 不存在 → code 2（任务未找到）。
+TEST_F(JsonRpcCoverageTest, StopSeedingUnknownGidReturnsNotFound) {
+    start_server();
+    auto parsed = call("falcon.stopSeeding", json::array({"0000000000000abc"}));
+    ASSERT_TRUE(parsed.contains("error")) << parsed.dump();
+    EXPECT_EQ(parsed["error"]["code"], 2);
+}
+
+// falcon.stopSeeding：非做种任务 → code 1（任务不在做种）。
+TEST_F(JsonRpcCoverageTest, StopSeedingNonSeedingTaskReturnsError) {
+    start_server();
+    auto parsed = call("aria2.addUri",
+                       json::array({json::array({"test://local/nonseed.bin"})}));
+    ASSERT_TRUE(parsed.contains("result")) << parsed.dump();
+    const std::string gid = parsed["result"].get<std::string>();
+    auto stop = call("falcon.stopSeeding", json::array({gid}));
+    ASSERT_TRUE(stop.contains("error")) << stop.dump();
+    EXPECT_EQ(stop["error"]["code"], 1);
+}
+
+// aria2.remove 的 gid 不存在 → code 2（任务未找到）。
+TEST_F(JsonRpcCoverageTest, RemoveUnknownGidReturnsNotFound) {
+    start_server();
+    auto parsed = call("aria2.remove", json::array({"0000000000000def"}));
+    ASSERT_TRUE(parsed.contains("error")) << parsed.dump();
+    EXPECT_EQ(parsed["error"]["code"], 2);
+}
+
 TEST_F(JsonRpcCoverageTest, AddUriReturnsGidAndTellStatusReflectsOptions) {
     start_server();
 
@@ -1139,6 +1191,45 @@ TEST_F(JsonRpcCoverageTest, AddUriMinSplitSizeAndCheckCertificateOptions) {
         EXPECT_EQ(parsed["error"]["code"], -32602) << key << ": " << parsed.dump();
     }
 }
+
+// seed-ratio / seed-time 双形态解析：合法字符串与数字都接受，非法字符串
+// 经 stod 抛异常 → 钳 0（不 500）。数值键直接取 double，负值钳 0。
+TEST_F(JsonRpcCoverageTest, AddUriSeedRatioAndSeedTimeParseErrorsClampToZero) {
+    start_server();
+
+    const std::string dir = ::testing::TempDir();
+    // 非法字符串：std::stod 抛异常 → catch 置 -1.0 → max(0,-1)=0
+    for (const char* const bad : {"not-a-number", "12abc", "abc12"}) {
+        json opts = {{"dir", dir},
+                     {"out", "falcon-seed-bad.bin"},
+                     {"seed-ratio", std::string(bad)},
+                     {"seed-time", std::string(bad)}};
+        auto parsed = call("aria2.addUri",
+                           json::array({json::array({"test://local/seedbad.bin"}), opts}));
+        ASSERT_TRUE(parsed.contains("result")) << bad << ": " << parsed.dump();
+    }
+
+    // 合法字符串与数字双形态均接受。
+    for (const json& ratio : {json("1.5"), json(2.5)}) {
+        json opts = {{"dir", dir},
+                     {"out", "falcon-seed-ok.bin"},
+                     {"seed-ratio", ratio},
+                     {"seed-time", "30"}};
+        auto parsed = call("aria2.addUri",
+                           json::array({json::array({"test://local/seedok.bin"}), opts}));
+        ASSERT_TRUE(parsed.contains("result")) << ratio.dump() << ": " << parsed.dump();
+    }
+
+    // 负值钳 0（字符串 "-2" 经 stod → -2 → max 0）。
+    json opts = {{"dir", dir},
+                 {"out", "falcon-seed-neg.bin"},
+                 {"seed-ratio", "-2"},
+                 {"seed-time", -1}};
+    auto parsed = call("aria2.addUri",
+                       json::array({json::array({"test://local/seedneg.bin"}), opts}));
+    ASSERT_TRUE(parsed.contains("result")) << parsed.dump();
+}
+
 
 // ===========================================================================
 // gid validation / task control

@@ -181,3 +181,37 @@ TEST(Aria2SnapshotsTest, FallsBackToUrlExtensionWithoutFiles) {
 }
 
 } // namespace
+
+// Falcon 扩展做种字段：seededSeconds(数字)/seedingActive(布尔)/
+// seedStopReason(字符串) 原样读入快照（非 BT 缺省为零/空）。
+TEST(Aria2SnapshotsTest, ParsesSeedMetricExtensionFields) {
+    auto status = make_status();
+    status["seedUploadedBytes"] = "7777";
+    status["seedDownloadedBytes"] = "8888";
+    status["seedTotalSize"] = "9999";
+    status["seededSeconds"] = 12.5;
+    status["seedingActive"] = true;
+    status["seedStopReason"] = "stop-seeding";
+    auto snap = snapshot_from_status_json(status);
+    ASSERT_TRUE(snap.has_value());
+    EXPECT_EQ(snap->seed_uploaded_bytes, 7777u);
+    EXPECT_EQ(snap->seed_downloaded_bytes, 8888u);
+    EXPECT_EQ(snap->seed_total_size, 9999u);
+    EXPECT_EQ(snap->seeded_seconds, 12.5);
+    EXPECT_TRUE(snap->seeding_active);
+    EXPECT_EQ(snap->seed_stop_reason, "stop-seeding");
+}
+
+// 做种字段类型不符：seededSeconds 字符串 / seedingActive 数字 /
+// seedStopReason 非字符串 → 保持默认值（零/空），不抛。
+TEST(Aria2SnapshotsTest, SeedMetricFieldsWrongTypesKeepDefaults) {
+    auto status = make_status();
+    status["seededSeconds"] = "not-a-number";
+    status["seedingActive"] = 1;
+    status["seedStopReason"] = 42;
+    auto snap = snapshot_from_status_json(status);
+    ASSERT_TRUE(snap.has_value());
+    EXPECT_EQ(snap->seeded_seconds, 0.0);
+    EXPECT_FALSE(snap->seeding_active);
+    EXPECT_TRUE(snap->seed_stop_reason.empty());
+}

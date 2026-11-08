@@ -424,6 +424,52 @@ TEST(SwarmDataServiceTest, ConcurrentClientsServed) {
     std::remove(path.c_str());
 }
 
+TEST(SwarmDataServiceTest, MakeConfigValidAdvertiseBinds) {
+    const auto cfg = falcon::daemon::make_data_service_config("192.168.1.10:8080");
+    EXPECT_EQ(cfg.bind_address, "192.168.1.10");
+    EXPECT_EQ(cfg.listen_port, 8080u);
+}
+
+TEST(SwarmDataServiceTest, MakeConfigInvalidFormsFallback) {
+    EXPECT_EQ(falcon::daemon::make_data_service_config("").bind_address, "0.0.0.0");
+    EXPECT_EQ(falcon::daemon::make_data_service_config("no-colon").bind_address, "0.0.0.0");
+    EXPECT_EQ(falcon::daemon::make_data_service_config(":8080").bind_address, "0.0.0.0");
+    EXPECT_EQ(falcon::daemon::make_data_service_config("1.2.3.4:").bind_address, "0.0.0.0");
+    EXPECT_EQ(falcon::daemon::make_data_service_config("1.2.3.4:abc").bind_address, "0.0.0.0");
+    EXPECT_EQ(falcon::daemon::make_data_service_config("1.2.3.4:0").bind_address, "0.0.0.0");
+    EXPECT_EQ(falcon::daemon::make_data_service_config("1.2.3.4:70000").bind_address, "0.0.0.0");
+    EXPECT_EQ(falcon::daemon::make_data_service_config("not-an-ip:8080").bind_address, "0.0.0.0");
+}
+
+TEST(SwarmDataServiceTest, StartInvalidBindAddressFails) {
+    SwarmDataServiceConfig cfg;
+    cfg.bind_address = "999.999.999.999";
+    cfg.listen_port = 0;
+    SwarmDataService svc(cfg);
+    std::string err;
+    EXPECT_FALSE(svc.start(&err));
+    EXPECT_FALSE(err.empty());
+}
+
+TEST(SwarmDataServiceTest, StartBindInUseFails) {
+    SwarmDataServiceConfig cfg;
+    cfg.bind_address = "127.0.0.1";
+    cfg.listen_port = 0;
+    SwarmDataService first(cfg);
+    ASSERT_TRUE(first.start());
+    const std::uint16_t port = first.port();
+
+    SwarmDataServiceConfig cfg2;
+    cfg2.bind_address = "127.0.0.1";
+    cfg2.listen_port = port;
+    SwarmDataService second(cfg2);
+    std::string err;
+    EXPECT_FALSE(second.start(&err));
+    EXPECT_FALSE(err.empty());
+
+    first.stop();
+}
+
 #else  // _WIN32
 
 TEST(SwarmDataServiceTest, WindowsPlaceholder) {

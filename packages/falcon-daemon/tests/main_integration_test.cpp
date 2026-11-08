@@ -1339,7 +1339,112 @@ TEST_F(MainIntegrationTest, SighupSpeedLimitHotReload) {
     EXPECT_EQ(exit_code_of(p), 0);
 }
 
+
+// SIGHUP 热更 P2SP share：配置翻开（share.enabled=true）触发热启用路径
+// （hot_enable_announcer）。FALCON_HAS_SWARM 未构建时工厂返回 nullptr，
+// 优雅降级不崩溃——进程仍驻留且 RPC 保持可用；数据服务同步调用覆盖
+// sync_data_service(true) 的 start 分支与停机 sync_data_service(false)。
+TEST_F(MainIntegrationTest, SighupP2spShareHotEnableDegradesGracefully) {
+    TempDirGuard tmp(make_temp_dir());
+    const std::string conf = tmp.path + "/daemon.json";
+    const uint16_t port = pick_free_port();
+    ASSERT_NE(port, 0);
+
+    const auto write_conf = [&](bool p2sp_enabled) {
+        std::ofstream out(conf);
+        out << "{\"rpc\":{\"enabled\":true,\"host\":\"127.0.0.1\","
+            << "\"port\":" << port << ",\"secret\":\"p2sp-reload\"}";
+        if (p2sp_enabled) {
+            out << ",\"p2sp\":{\"share\":{\"enabled\":true,"
+                << "\"mode\":\"standard\",\"one_way\":false,"
+                << "\"ttl_s\":600,\"hash_delay_s\":5,"
+                << "\"announce_mirrors\":true},\"rendezvous\":{\"host\":\"127.0.0.1\",\"port\":65530,"
+                << "\"server_token\":\"t\",\"group_token\":\"g\","
+                << "\"advertise_addr\":\"127.0.0.1:65531\","
+                << "\"advertise_direct\":false}}";
+        }
+        out << "}";
+    };
+    write_conf(false);
+
+    Proc p;
+    ASSERT_TRUE(proc_start(p, {"--conf-path", conf}, ""));
+    ASSERT_TRUE(wait_until([&] {
+        poll_drain(p, 20);
+        return tcp_connect(port);
+    }, 8000));
+
+    // 初始：p2sp 关闭，RPC 正常。
+    auto resp = http_post(port, make_rpc_body("aria2.getGlobalOption", "[\"token:p2sp-reload\"]"));
+    ASSERT_TRUE(resp.has_value());
+    EXPECT_TRUE(contains(http_body(*resp), "max-concurrent-downloads")) << *resp;
+
+    // 翻开 share 并 SIGHUP：热启用路径运行，工厂降级（无 swarm 支持）
+    // 返回 nullptr，进程不得崩溃且 RPC 保持可用。
+    write_conf(true);
+    ASSERT_EQ(::kill(p.pid, SIGHUP), 0);
+    bool alive = false;
+    for (int i = 0; i < 250 && !alive; ++i) {
+        poll_drain(p, 20);
+        const auto probe = http_post(port, make_rpc_body("aria2.getGlobalOption", "[\"token:p2sp-reload\"]"));
+        alive = probe.has_value() && contains(http_body(*probe), "max-concurrent-downloads");
+        if (!alive) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    EXPECT_TRUE(alive) << "daemon died or RPC broke after P2SP hot-enable SIGHUP";
+
+    // 翻回关闭并 SIGHUP：sync_data_service(false) 停数据服务，进程仍活。
+    write_conf(false);
+    ASSERT_EQ(::kill(p.pid, SIGHUP), 0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    poll_drain(p, 20);
+    EXPECT_EQ(::kill(p.pid, 0), 0) << "daemon died after disabling P2SP on SIGHUP";
+
+    proc_signal(p, SIGTERM);
+    EXPECT_TRUE(proc_finish(p, 8000));
+    EXPECT_EQ(exit_code_of(p), 0);
+}
+
 // task db 损坏（非 SQLite 文件）：daemon 降级为无持久化继续服务，而非退出
+
+// 启动即 p2sp share.enabled：初始 announcer 构建（工厂降级 nullptr），
+// 进程仍正常驻留服务 RPC；停机路径 sync_data_service(false) 收口。
+TEST_F(MainIntegrationTest, StartupP2spShareEnabledDegradesGracefully) {
+    TempDirGuard tmp(make_temp_dir());
+    const std::string conf = tmp.path + "/daemon.json";
+    const uint16_t port = pick_free_port();
+    ASSERT_NE(port, 0);
+
+    {
+        std::ofstream out(conf);
+        out << "{\"rpc\":{\"enabled\":true,\"host\":\"127.0.0.1\","
+            << "\"port\":" << port << ",\"secret\":\"p2sp-start\"},"
+            << "\"p2sp\":{\"share\":{\"enabled\":true,"
+            << "\"mode\":\"standard\",\"one_way\":false,"
+            << "\"ttl_s\":600,\"hash_delay_s\":5,"
+            << "\"announce_mirrors\":true},\"rendezvous\":{"
+            << "\"host\":\"127.0.0.1\",\"port\":65530,"
+            << "\"server_token\":\"t\",\"group_token\":\"g\","
+            << "\"advertise_addr\":\"127.0.0.1:65531\","
+            << "\"advertise_direct\":false}}";
+        out << "}";
+    }
+
+    Proc p;
+    ASSERT_TRUE(proc_start(p, {"--conf-path", conf}, ""));
+    ASSERT_TRUE(wait_until([&] {
+        poll_drain(p, 20);
+        return tcp_connect(port);
+    }, 8000));
+
+    auto resp = http_post(port, make_rpc_body("aria2.getGlobalOption", "[\"token:p2sp-start\"]"));
+    ASSERT_TRUE(resp.has_value()) << "daemon died with p2sp enabled at startup";
+    EXPECT_TRUE(contains(http_body(*resp), "max-concurrent-downloads")) << *resp;
+
+    proc_signal(p, SIGTERM);
+    EXPECT_TRUE(proc_finish(p, 8000));
+    EXPECT_EQ(exit_code_of(p), 0);
+}
+
 TEST_F(MainIntegrationTest, TaskStorageCorruptDbDegradesGracefully) {
     TempDirGuard tmp(make_temp_dir());
     const std::string db = tmp.path + "/tasks.db";
@@ -1602,3 +1707,37 @@ TEST_F(MainIntegrationTest, ShutdownDrainsActiveDownloadTask) {
 }
 
 } // namespace
+
+// ===========================================================================
+// CLI flag edge coverage: --enable-mcp (implies RPC), --http-engine validation
+// ===========================================================================
+
+// --enable-mcp 隐含启用 RPC（mcp_enabled → enable_rpc），因此无需 --enable-rpc
+// 也会进入 RPC 启动路径；用非法 bind host 让它快速失败并退出码 1。
+TEST_F(MainIntegrationTest, EnableMcpImpliesRpcAndFailsOnBadHost) {
+    auto r = run_wait({"--enable-mcp", "--rpc-listen-host", "not-an-ip"}, 15000);
+    ASSERT_FALSE(r.timed_out) << r.out << r.err;
+    EXPECT_EQ(r.exit_code, 1);
+}
+
+// --enable-mcp=false 关闭 MCP，不隐含 RPC；进程应正常驻留直到 SIGTERM。
+TEST_F(MainIntegrationTest, EnableMcpFalseStaysForeground) {
+    auto r = run_terminate({"--enable-mcp=false"});
+    ASSERT_FALSE(r.timed_out) << r.out << r.err;
+    EXPECT_EQ(r.exit_code, 0);
+}
+
+// --enable-mcp=true 与裸 --enable-mcp 同语义：隐含 RPC，坏 host 快速失败。
+TEST_F(MainIntegrationTest, EnableMcpTrueImpliesRpcAndFailsOnBadHost) {
+    auto r = run_wait({"--enable-mcp=true", "--rpc-listen-host", "not-an-ip"}, 15000);
+    ASSERT_FALSE(r.timed_out) << r.out << r.err;
+    EXPECT_EQ(r.exit_code, 1);
+}
+
+// --http-engine 只接受 v1/v2；非法值在参数解析阶段直接退出 1。
+// --http-engine v1 是默认值，正常驻留直到 SIGTERM。
+TEST_F(MainIntegrationTest, HttpEngineV1StaysForeground) {
+    auto r = run_terminate({"--http-engine", "v1"});
+    ASSERT_FALSE(r.timed_out) << r.out << r.err;
+    EXPECT_EQ(r.exit_code, 0);
+}

@@ -88,7 +88,9 @@ public:
     bool retract(const std::vector<std::string>& sha256s) override {
         std::lock_guard<std::mutex> lock(mu_);
         retract_calls_.push_back(sha256s);
-        return true;
+        const bool ok = fail_next_retracts_ <= 0;
+        if (fail_next_retracts_ > 0) --fail_next_retracts_;
+        return ok;
     }
 
     // ---- 测试线程观测 / 驱动 ----
@@ -142,6 +144,11 @@ public:
         fail_next_announces_ = count;
     }
 
+    void fail_next_retracts(int count) {
+        std::lock_guard<std::mutex> lock(mu_);
+        fail_next_retracts_ = count;
+    }
+
 private:
     mutable std::mutex mu_;
     std::vector<std::vector<SwarmAnnounceItem>> announce_calls_;
@@ -151,6 +158,7 @@ private:
     std::string node_id_ = "0123456789abcdef0123456789abcdef";
     bool start_ok_ = true;
     int fail_next_announces_ = 0;
+    int fail_next_retracts_ = 0;
     int start_calls_ = 0;
     int stop_calls_ = 0;
 };
@@ -177,6 +185,11 @@ struct HashTable {
     void set(const std::string& path, const std::string& hash) {
         std::lock_guard<std::mutex> lock(mu);
         by_path[path] = hash;
+    }
+
+    void erase(const std::string& path) {
+        std::lock_guard<std::mutex> lock(mu);
+        by_path.erase(path);
     }
 
     SwarmHashFn fn() {
@@ -624,6 +637,60 @@ TEST_F(SwarmAnnouncerTest, FileChangedRehashAnnouncesNewThenRetractsOld) {
     EXPECT_EQ(announcer_->active_count(), 1u);
 }
 
+
+// 活跃条目内容变化但重哈希失败：不公告、置 announce_ok=false 并进入退避
+// 窗口（process_active_entry 的 backoff 分支），条目保留待下次 tick 重试。
+TEST_F(SwarmAnnouncerTest, FileChangeRehashFailureBacksOffAndKeepsEntry) {
+    timing_.renewal_cap = std::chrono::milliseconds(60);  // 变化检测随续租节拍
+    tasks_[1] = {"http://m.example/f.bin", ""};
+    const std::string name = "falcon-ann-rehash-fail.bin";
+    const std::string path = write_temp_file(name, std::string(100, 'A'));
+    hashes_.set(path, kHashA);
+    config_.share.enabled = true;
+
+    ASSERT_TRUE(start_announcer());
+    announcer_->on_completed(1, path);
+    ASSERT_TRUE(wait_for([this] { return announcer_->active_count() == 1; }));
+    ASSERT_TRUE(wait_for([this] { return gw_->announce_count() >= 1; }));
+
+    // 文件变化 + 哈希器失联（返回空串）→ 退避分支，不公告新内容
+    hashes_.erase(path);
+    write_temp_file(name, std::string(200, 'B'));
+    const std::size_t before = gw_->announce_count();
+
+    // 退避窗口内不产生新公告；条目保留（不摘除）
+    std::this_thread::sleep_for(std::chrono::milliseconds(60));
+    EXPECT_EQ(gw_->announce_count(), before);
+    EXPECT_EQ(announcer_->active_count(), 1u);
+}
+
+
+// 文件内容变化但重哈希结果与旧哈希相同：元数据刷新 + 续租
+// （process_active_entry 的 hash == entry.sha256 分支），不换绑台账。
+TEST_F(SwarmAnnouncerTest, FileChangeSameHashRefreshesAndRenews) {
+    timing_.renewal_cap = std::chrono::milliseconds(60);  // 变化检测随续租节拍
+    tasks_[1] = {"http://m.example/f.bin", ""};
+    const std::string name = "falcon-ann-samehash.bin";
+    const std::string path = write_temp_file(name, std::string(100, 'A'));
+    hashes_.set(path, kHashA);
+    config_.share.enabled = true;
+
+    ASSERT_TRUE(start_announcer());
+    announcer_->on_completed(1, path);
+    ASSERT_TRUE(wait_for([this] { return announcer_->active_count() == 1; }));
+    const std::size_t first_count = gw_->announce_count();
+    ASSERT_TRUE(wait_for([this] { return gw_->announce_count() >= 1; }));
+
+    // 尺寸变化但哈希表仍返回同一哈希 → 同哈希刷新分支
+    write_temp_file(name, std::string(200, 'B'));
+    ASSERT_TRUE(wait_for([this, first_count] {
+        return gw_->announce_count() > first_count;
+    }));
+    EXPECT_EQ(announcer_->active_count(), 1u);
+    // 同哈希续租不 retract
+    EXPECT_TRUE(gw_->retract_calls().empty());
+}
+
 TEST_F(SwarmAnnouncerTest, SessionChangeReannouncesSameContent) {
     // renewal_cap 60s：第二次公告只可能来自 session 变化补差
     tasks_[1] = {"http://m.example/f.bin", ""};
@@ -1049,5 +1116,73 @@ TEST_F(SwarmAnnouncerTest, StopKeepsRegistryIntact) {
     ASSERT_EQ(state.size(), 1u);
     EXPECT_EQ(state.at(kHashA), path);
 }
+
+// 同任务 id 再次完成：就绪队列旧项被就地替换（§16.4 替换语义）。
+TEST_F(SwarmAnnouncerTest, DuplicateTaskIdReplacesQueuedEntry) {
+    tasks_[1] = {"http://m.example/f.bin", ""};
+    const std::string path1 =
+        write_temp_file("falcon-ann-dup1.bin", std::string(kFileSize, 'x'));
+    const std::string path2 =
+        write_temp_file("falcon-ann-dup2.bin", std::string(kFileSize, 'x'));
+    hashes_.set(path1, kHashA);
+    hashes_.set(path2, kHashB);
+    config_.share.enabled = true;
+    config_.share.hash_delay_s = 1;  // 延迟窗口内第二次完成触发就地替换
+
+    ASSERT_TRUE(start_announcer());
+    announcer_->on_completed(1, path1);
+    announcer_->on_completed(1, path2);
+    EXPECT_EQ(announcer_->queue_depth(), 1u);  // 同 id 不追加
+    // 替换项到期后按 path2 处理并公告
+    ASSERT_TRUE(wait_for([this] { return gw_->announce_count() >= 1; },
+                         std::chrono::seconds(3)));
+    const auto calls = gw_->announce_calls();
+    ASSERT_GE(calls.size(), 1u);
+    const SwarmAnnounceItem* file_item = find_item(calls.front(), true);
+    ASSERT_NE(file_item, nullptr);
+    EXPECT_EQ(file_item->sha256, kHashB);
+    EXPECT_EQ(file_item->name, "falcon-ann-dup2.bin");
+}
+
+// 文件消失/stat 失败：记录警告并跳过（不公告、不 retract、不重试）。
+TEST_F(SwarmAnnouncerTest, QueueItemStatFailureSkipped) {
+    // 队列项 stat 失败：跳过且不重试（无公告、无活跃项、无 retract）。
+    tasks_[1] = {"http://m.example/f.bin", ""};
+    config_.share.enabled = true;
+    config_.share.hash_delay_s = 0;
+
+    ASSERT_TRUE(start_announcer());
+    // 路径指向不存在的文件：last_write_time 失败 → process_queue_item 跳过
+    const std::string missing =
+        ::testing::TempDir() + "falcon-ann-missing.bin";
+    announcer_->on_completed(1, missing);
+
+    ASSERT_TRUE(wait_for([this] { return announcer_->queue_depth() == 0; }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(80));
+    EXPECT_EQ(gw_->announce_count(), 0u);
+    EXPECT_EQ(announcer_->active_count(), 0u);
+    EXPECT_TRUE(gw_->retract_calls().empty());
+}
+
+
+// retract-all 失败（热禁用）：记录警告但仍清空台账与活跃表。
+TEST_F(SwarmAnnouncerTest, DisableRetractAllFailureStillClears) {
+    tasks_[1] = {"http://m.example/f.bin", ""};
+    const std::string path =
+        write_temp_file("falcon-ann-retfail.bin", std::string(kFileSize, 'x'));
+    hashes_.set(path, kHashA);
+    config_.share.enabled = true;
+
+    ASSERT_TRUE(start_announcer());
+    announcer_->on_completed(1, path);
+    ASSERT_TRUE(wait_for([this] { return gw_->announce_count() >= 1; }));
+
+    gw_->fail_next_retracts(1);  // 下一次 retract-all 返回 false
+    announcer_->set_share_enabled(false);
+    ASSERT_TRUE(wait_for([this] { return gw_->retract_count() >= 1; }));
+    EXPECT_EQ(announcer_->active_count(), 0u);
+    EXPECT_EQ(registry_.clear_count(), 1);
+}
+
 
 } // namespace
