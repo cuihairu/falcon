@@ -26,6 +26,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <chrono>
 #include <filesystem>
@@ -1316,16 +1317,28 @@ TEST_F(HttpHandlerEdgesTest, DownloadLoopCurlInitFailsAfterHead) {
 // 不可能 Completed，故 Completed 本身就是选项生效的铁证
 TEST_F(HttpHandlerEdgesTest, MutualTlsClientCertPropagatesToCurl) {
     // curl 的 PEM 客户端证书（CURLOPT_SSLCERT/SSLKEY + PEM 类型）只在
-    // OpenSSL 系 TLS 后端有效；Windows 上 vcpkg curl 默认 Schannel 后
-    // 端不认 PEM 文件，加载直接报 CURLE_SSL_CERTPROBLEM（"Problem with
-    // the local SSL certificate"，run 35488059307 实证）——后端能力
-    // 限制而非接线缺陷，V2 引擎（OpenSSL 直连）的 mTLS 用例三平台全
-    // 绿。Schannel 后端跳过并留待 PFX 支持再放开。
+    // OpenSSL 系 TLS 后端有效；非 OpenSSL 后端按能力限制跳过并留待
+    // 各自证书格式支持再放开：
+    // - Windows vcpkg curl 默认 Schannel 后端不认 PEM 文件，加载直接报
+    //   CURLE_SSL_CERTPROBLEM（"Problem with the local SSL certificate"，
+    //   run 35488059307 实证）。
+    // - macOS CI 链接系统 curl（SecureTransport 后端），PEM 客户端证书
+    //   经弃用的 SecItemImport 路径导入新 runner 镜像上在握手期失败，
+    //   报 CURLE_SSL_CONNECT_ERROR（"SSL connect error"，runs
+    //   42372750556 / 42516711927 双轮复现）；同 job 的 V2 引擎（OpenSSL
+    //   直连）mTLS 用例全绿，证明接线本身正确——后端能力限制而非接线
+    //   缺陷。
+    // 跳过前打印后端标识，future 红面在 ctest -V 输出中可直接辨认所链
+    // 后端。
     const curl_version_info_data* vinfo =
         curl_version_info(CURLVERSION_NOW);
-    if (vinfo && vinfo->ssl_version &&
-        std::strstr(vinfo->ssl_version, "Schannel") != nullptr) {
-        GTEST_SKIP() << "curl Schannel 后端不支持 PEM 客户端证书";
+    const char* backend =
+        (vinfo && vinfo->ssl_version) ? vinfo->ssl_version : "";
+    if (std::strstr(backend, "Schannel") != nullptr ||
+        std::strstr(backend, "SecureTransport") != nullptr) {
+        std::printf("curl TLS backend: %s\n", backend);
+        GTEST_SKIP() << "curl " << backend
+                     << " 后端不支持 PEM 客户端证书";
     }
     namespace fs = std::filesystem;
     TempDir dir;
