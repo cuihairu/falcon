@@ -22,9 +22,10 @@ using icons::Id;
 constexpr int kTopBarHeight = 56;
 constexpr int kToolButtonSize = 36;
 constexpr int kToolIconSize = 18;
-constexpr int kWindowButtonWidth = 46;
-constexpr int kWindowButtonHeight = 32;
-constexpr int kWindowIconSize = 14;
+constexpr int kWindowButtonWidth = 40;
+constexpr int kWindowButtonHeight = 30;
+constexpr int kWindowIconSize = 12;
+constexpr int kWindowButtonSpacing = 4;
 } // namespace
 
 TopBar::TopBar(QWidget* parent)
@@ -41,7 +42,7 @@ void TopBar::setup_ui()
     setObjectName("topBar");
 
     auto* main_layout = new QHBoxLayout(this);
-    main_layout->setContentsMargins(20, 10, 0, 10);
+    main_layout->setContentsMargins(20, 10, 12, 10);
     main_layout->setSpacing(14);
 
     auto* brand_layout = new QHBoxLayout();
@@ -96,7 +97,7 @@ void TopBar::setup_ui()
 
     main_layout->addSpacing(8);
 
-    // 窗口控制按钮(SVG 图标,无边框贴边)
+    // 窗口控制按钮组(圆角胶囊按钮,与全局 8px 圆角语言一致;不再贴边直角)
     minimize_button_ = new QPushButton(this);
     minimize_button_->setObjectName("windowButton");
     minimize_button_->setFixedSize(kWindowButtonWidth, kWindowButtonHeight);
@@ -105,6 +106,8 @@ void TopBar::setup_ui()
     connect(minimize_button_, &QPushButton::clicked, this, &TopBar::minimizeClicked);
     main_layout->addWidget(minimize_button_);
 
+    main_layout->addSpacing(kWindowButtonSpacing);
+
     maximize_button_ = new QPushButton(this);
     maximize_button_->setObjectName("windowButton");
     maximize_button_->setFixedSize(kWindowButtonWidth, kWindowButtonHeight);
@@ -112,6 +115,8 @@ void TopBar::setup_ui()
     maximize_button_->setToolTip(tr("最大化"));
     connect(maximize_button_, &QPushButton::clicked, this, &TopBar::maximizeClicked);
     main_layout->addWidget(maximize_button_);
+
+    main_layout->addSpacing(kWindowButtonSpacing);
 
     close_button_ = new QPushButton(this);
     close_button_->setObjectName("closeButton");

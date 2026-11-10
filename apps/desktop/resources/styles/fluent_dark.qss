@@ -138,30 +138,32 @@ QPushButton#cardActionButton:disabled {
     background: transparent;
 }
 
-/* 窗口控制钮:无边框贴边,close 悬停红(亮暗同值) */
+/* 窗口控制钮:圆角胶囊按钮(与全局 8px 圆角语言统一,不再贴边直角) */
 QPushButton#windowButton,
 QPushButton#closeButton {
     background: transparent;
     border: none;
-    border-radius: 0;
+    border-radius: 6px;
     min-width: 0;
     padding: 0;
 }
 
 QPushButton#windowButton:hover {
-    background-color: rgba(255, 255, 255, 20);
+    background-color: rgba(255, 255, 255, 26);
 }
 
 QPushButton#windowButton:pressed {
-    background-color: rgba(255, 255, 255, 32);
+    background-color: rgba(255, 255, 255, 40);
 }
 
 QPushButton#closeButton:hover {
     background-color: #c42b1c;
+    icon: url(:/icons/x-on-light.svg);
 }
 
 QPushButton#closeButton:pressed {
-    background-color: #b02c1c;
+    background-color: #a52618;
+    icon: url(:/icons/x-on-light.svg);
 }
 
 /* ---------- 2. 输入控件 ---------- */
