@@ -215,6 +215,47 @@ TEST_F(ConfigFileFixture, TypeErrorsReportDaemonKey) {
     EXPECT_EQ(result.error, "invalid type for key 'run_as_daemon'");
 }
 
+// 逐键类型错误：每个 read_key 的 `return result;` 短路（含 read_key catch 的
+// string/vector 模板实例化）。TypeErrorsReportKey（port）与
+// TypeErrorsReportDaemonKey（run_as_daemon）已覆盖 int/bool 实例化与各自
+// 返回行，本表补齐剩余 11 键——每一行都是确定性错误消息断言。
+TEST_F(ConfigFileFixture, TypeErrorsReportEveryKey) {
+    struct KeyCase {
+        const char* section;
+        const char* key;
+        const char* value_json;  // 与该键目标类型不符的 JSON 字面量
+    };
+    const KeyCase cases[] = {
+        {"swarm", "host", "123"},                          // string 实例化
+        {"swarm", "server_token", "123"},
+        {"swarm", "group_token", "123"},
+        {"swarm", "heartbeat_interval_s", "\"x\""},
+        {"swarm", "heartbeat_timeout_s", "\"x\""},
+        {"swarm", "challenge_ttl_s", "\"x\""},
+        {"swarm", "sweep_interval_ms", "\"x\""},
+        {"swarm", "rate_register_per_min", "\"x\""},
+        {"swarm", "rate_query_per_min", "\"x\""},
+        {"swarm", "rate_announce_per_min", "\"x\""},
+        {"swarm", "blacklist", "123"},                     // vector 实例化
+        // daemon 路径键走 read_path_key → read_key<string>（同一 catch）
+        {"daemon", "pid_file", "123"},
+        {"daemon", "working_dir", "123"},
+        {"daemon", "log_file", "123"},
+    };
+
+    for (const auto& c : cases) {
+        SwarmdFileConfig config;
+        const std::string json = std::string("{\"") + c.section + "\": {\"" +
+                                 c.key + "\": " + c.value_json + "}}";
+        const auto result = apply_config_file(write("tkey.json", json), config);
+
+        EXPECT_FALSE(result.ok) << c.key;
+        EXPECT_EQ(result.error, std::string("invalid type for key '") + c.key +
+                                    "'")
+            << c.key;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 告警路径（向前兼容：不失败）
 // ---------------------------------------------------------------------------
