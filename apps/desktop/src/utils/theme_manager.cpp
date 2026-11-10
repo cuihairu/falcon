@@ -31,6 +31,38 @@ QString load_qss(const QString& qrc_path)
 }
 
 /**
+ * fluent_*.qss 是 {{token}} 占位符模板,按 token 集逐项填充为可用的
+ * 样式表。占位符名与 ThemeTokens 字段的对应关系见 theme_tokens.hpp
+ * 字段注释(注意:{{surface}} 是卡片底 t.card,{{card}} 是卡片描边
+ * t.card_border——占位符命名沿模板改造前的任务书)。
+ */
+QString render_qss(QString qss, const ThemeTokens& t)
+{
+    auto sub = [&qss](const char* placeholder, const QColor& color) {
+        qss.replace(QLatin1String(placeholder), color.name(QColor::HexRgb));
+    };
+    sub("{{window}}", t.window);
+    sub("{{surface}}", t.card);
+    sub("{{card}}", t.card_border);
+    sub("{{text}}", t.text);
+    sub("{{text_secondary}}", t.text_secondary);
+    sub("{{text_disabled}}", t.text_disabled);
+    sub("{{input_bg}}", t.input_bg);
+    sub("{{divider}}", t.control_border);
+    sub("{{divider_weak}}", t.card_border_hover);
+    sub("{{surface_deep}}", t.surface_deep);
+    sub("{{accent}}", t.accent);
+    sub("{{accent_hover}}", t.accent_hover);
+    sub("{{accent_pressed}}", t.accent_pressed);
+    sub("{{accent_text}}", t.accent_text);
+    sub("{{danger}}", t.danger);
+    sub("{{danger_pressed}}", t.danger_pressed);
+    sub("{{hover_bg}}", t.hover_bg);
+    sub("{{primary_disabled_bg}}", t.primary_disabled_bg);
+    return qss;
+}
+
+/**
  * 未被 QSS 覆盖的原生部件(原生菜单箭头、对话框按钮、滚动细节)
  * 融合同一套 token,避免与 QSS 混绘两套配色。
  */
@@ -90,16 +122,17 @@ void ThemeManager::toggle_theme()
 
 QString ThemeManager::stylesheet(ThemeType theme) const
 {
-    if (theme == ThemeType::Light) {
-        if (light_cache_.isEmpty()) {
-            light_cache_ = load_qss(QStringLiteral(":/styles/fluent_light.qss"));
-        }
-        return light_cache_;
+    // 家族暂时固定 Warm(warm 值与模板原 hex 一致,行为零变化);
+    // 步骤 2 接设置页家族选择时,缓存需按 (family, theme) 键控。
+    const ThemeFamily family = ThemeFamily::Warm;
+    const char* qrc_path = theme == ThemeType::Light
+                               ? ":/styles/fluent_light.qss"
+                               : ":/styles/fluent_dark.qss";
+    QString& cache = theme == ThemeType::Light ? light_cache_ : dark_cache_;
+    if (cache.isEmpty()) {
+        cache = render_qss(load_qss(QLatin1String(qrc_path)), tokens_for(family, theme));
     }
-    if (dark_cache_.isEmpty()) {
-        dark_cache_ = load_qss(QStringLiteral(":/styles/fluent_dark.qss"));
-    }
-    return dark_cache_;
+    return cache;
 }
 
 void ThemeManager::apply_stylesheet()

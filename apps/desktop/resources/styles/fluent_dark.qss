@@ -1,12 +1,12 @@
 /* ============================================================
    Falcon Desktop · Warm Console Dark
-   token: window #1b1714 · card #262019 · text #f2ede8
-          text-secondary #b5aca3 · text-disabled #6e665e
-          accent #ffa07a (hover #ffb28c / pressed #e0875e)
-          accent 上文字 #27140a · divider #37302a
-          hover rgba(255,255,255,15) · danger #c42b1c
+   token: window {{window}} · card {{surface}} · text {{text}}
+          text-secondary {{text_secondary}} · text-disabled {{text_disabled}}
+          accent {{accent}} (hover {{accent_hover}} / pressed {{accent_pressed}})
+          accent 上文字 {{accent_text}} · divider {{card}}
+          hover rgba(255,255,255,15) · danger {{danger}}
    设计语言与文档站同源「warm console」:暖黑底 + falcon 橙单强调;
-   对比度基线 WCAG AA(#ffa07a 于暗底 9.0:1,深咖啡字于其上 9.1:1)。
+   对比度基线 WCAG AA({{accent}} 于暗底 9.0:1,深咖啡字于其上 9.1:1)。
    形状刻度(单一规则,全表执行):
      按钮/输入 8px · 卡片/面板(组框/菜单/Hero/任务卡) 12px
      · 小件(工具钮/行内钮/菜单项/提示/导航段) 4px · 条形(进度/滚动)
@@ -23,32 +23,32 @@
    QWidget 不设背景:容器透明继承父级;背景只在窗口根与
    明确的表面类控件上给出。 */
 QWidget {
-    color: #f2ede8;
+    color: {{text}};
     font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system,
                  "PingFang SC", "Microsoft YaHei", sans-serif;
     font-size: 14px;
 }
 
 QMainWindow, QDialog {
-    background-color: #1b1714;
+    background-color: {{window}};
 }
 
 #centralWidget {
-    background-color: #1b1714;
+    background-color: {{window}};
 }
 
 QLabel {
     background: transparent;
-    color: #f2ede8;
+    color: {{text}};
 }
 
 /* ---------- 1. 控件通用 ---------- */
 
 /* 次级按钮(细边框、暖深底) */
 QPushButton {
-    background-color: #312a24;
-    color: #f2ede8;
-    border: 1px solid #4a423a;
+    background-color: {{input_bg}};
+    color: {{text}};
+    border: 1px solid {{divider}};
     border-radius: 8px;
     padding: 6px 14px;
     min-height: 14px;
@@ -63,19 +63,19 @@ QPushButton:pressed {
 }
 
 QPushButton:focus {
-    border-color: #ffa07a;
+    border-color: {{accent}};
 }
 
 QPushButton:disabled {
-    background-color: #262019;
-    color: #6e665e;
-    border-color: #37302a;
+    background-color: {{surface}};
+    color: {{text_disabled}};
+    border-color: {{card}};
 }
 
 /* 主按钮:每组操作唯一 accent 实底(dark 下 accent 变亮,文字转深) */
 QPushButton#primaryButton {
-    background-color: #ffa07a;
-    color: #27140a;
+    background-color: {{accent}};
+    color: {{accent_text}};
     border: none;
     border-radius: 8px;
     padding: 7px 16px;
@@ -83,16 +83,16 @@ QPushButton#primaryButton {
 }
 
 QPushButton#primaryButton:hover {
-    background-color: #ffb28c;
+    background-color: {{accent_hover}};
 }
 
 QPushButton#primaryButton:pressed {
-    background-color: #e0875e;
+    background-color: {{accent_pressed}};
 }
 
 QPushButton#primaryButton:disabled {
-    background-color: #312a24;
-    color: #6e665e;
+    background-color: {{input_bg}};
+    color: {{text_disabled}};
 }
 
 /* ghost 工具钮:透明底,悬停浅灰 */
@@ -101,12 +101,12 @@ QPushButton#toolButton {
     border: none;
     border-radius: 4px;
     padding: 6px 10px;
-    color: #b5aca3;
+    color: {{text_secondary}};
 }
 
 QPushButton#toolButton:hover {
     background-color: rgba(255, 255, 255, 15);
-    color: #f2ede8;
+    color: {{text}};
 }
 
 QPushButton#toolButton:pressed {
@@ -157,35 +157,35 @@ QPushButton#windowButton:pressed {
 }
 
 QPushButton#closeButton:hover {
-    background-color: #c42b1c;
+    background-color: {{danger}};
     icon: url(:/icons/x-on-light.svg);
 }
 
 QPushButton#closeButton:pressed {
-    background-color: #a52618;
+    background-color: {{danger_pressed}};
     icon: url(:/icons/x-on-light.svg);
 }
 
 /* ---------- 2. 输入控件 ---------- */
 
 QLineEdit {
-    background-color: #312a24;
-    color: #f2ede8;
-    border: 1px solid #4a423a;
+    background-color: {{input_bg}};
+    color: {{text}};
+    border: 1px solid {{divider}};
     border-radius: 8px;
     padding: 6px 10px;
-    selection-background-color: #ffa07a;
-    selection-color: #27140a;
+    selection-background-color: {{accent}};
+    selection-color: {{accent_text}};
 }
 
 QLineEdit:focus {
-    border-color: #ffa07a;
+    border-color: {{accent}};
 }
 
 QLineEdit:disabled {
-    background-color: #262019;
-    color: #6e665e;
-    border-color: #37302a;
+    background-color: {{surface}};
+    color: {{text_disabled}};
+    border-color: {{card}};
 }
 
 QLineEdit#searchEdit {
@@ -194,9 +194,9 @@ QLineEdit#searchEdit {
 }
 
 QComboBox {
-    background-color: #312a24;
-    color: #f2ede8;
-    border: 1px solid #4a423a;
+    background-color: {{input_bg}};
+    color: {{text}};
+    border: 1px solid {{divider}};
     border-radius: 8px;
     padding: 6px 28px 6px 10px;
 }
@@ -206,12 +206,12 @@ QComboBox:hover {
 }
 
 QComboBox:focus {
-    border-color: #ffa07a;
+    border-color: {{accent}};
 }
 
 QComboBox:disabled {
-    color: #6e665e;
-    border-color: #37302a;
+    color: {{text_disabled}};
+    border-color: {{card}};
 }
 
 QComboBox::drop-down {
@@ -220,34 +220,34 @@ QComboBox::drop-down {
 }
 
 QComboBox QAbstractItemView {
-    background-color: #262019;
-    color: #f2ede8;
-    border: 1px solid #37302a;
+    background-color: {{surface}};
+    color: {{text}};
+    border: 1px solid {{card}};
     selection-background-color: rgba(255, 255, 255, 15);
-    selection-color: #f2ede8;
+    selection-color: {{text}};
     outline: none;
 }
 
 QSpinBox {
-    background-color: #312a24;
-    color: #f2ede8;
-    border: 1px solid #4a423a;
+    background-color: {{input_bg}};
+    color: {{text}};
+    border: 1px solid {{divider}};
     border-radius: 8px;
     padding: 5px 8px;
 }
 
 QSpinBox:focus {
-    border-color: #ffa07a;
+    border-color: {{accent}};
 }
 
 QCheckBox {
     background: transparent;
-    color: #f2ede8;
+    color: {{text}};
     spacing: 8px;
 }
 
 QCheckBox:disabled {
-    color: #6e665e;
+    color: {{text_disabled}};
 }
 
 QCheckBox::indicator {
@@ -266,8 +266,8 @@ QCheckBox::indicator:checked {
 }
 
 QGroupBox {
-    background-color: #262019;
-    border: 1px solid #37302a;
+    background-color: {{surface}};
+    border: 1px solid {{card}};
     border-radius: 12px;
     margin-top: 0px;
     padding: 26px 8px 10px 8px;
@@ -282,7 +282,7 @@ QGroupBox::title {
     left: 24px;
     top: 8px;
     background-color: transparent;
-    color: #b5aca3;
+    color: {{text_secondary}};
     font-size: 12px;
     font-weight: 600;
 }
@@ -290,9 +290,9 @@ QGroupBox::title {
 /* ---------- 3. 菜单与提示 ---------- */
 
 QMenu {
-    background-color: #262019;
-    color: #f2ede8;
-    border: 1px solid #37302a;
+    background-color: {{surface}};
+    color: {{text}};
+    border: 1px solid {{card}};
     border-radius: 12px;
     padding: 4px;
 }
@@ -308,19 +308,19 @@ QMenu::item:selected {
 }
 
 QMenu::item:disabled {
-    color: #6e665e;
+    color: {{text_disabled}};
 }
 
 QMenu::separator {
     height: 1px;
-    background-color: #37302a;
+    background-color: {{card}};
     margin: 4px 8px;
 }
 
 QToolTip {
-    background-color: #262019;
-    color: #f2ede8;
-    border: 1px solid #37302a;
+    background-color: {{surface}};
+    color: {{text}};
+    border: 1px solid {{card}};
     border-radius: 4px;
     padding: 4px 8px;
     font-size: 12px;
@@ -335,7 +335,7 @@ QTableWidget, QTableView {
     gridline-color: transparent;
     outline: none;
     selection-background-color: rgba(255, 255, 255, 28);
-    selection-color: #f2ede8;
+    selection-color: {{text}};
 }
 
 #taskTable::item {
@@ -360,10 +360,10 @@ QHeaderView {
 
 QHeaderView::section {
     background-color: transparent;
-    color: #b5aca3;
+    color: {{text_secondary}};
     padding: 8px;
     border: none;
-    border-bottom: 1px solid #37302a;
+    border-bottom: 1px solid {{card}};
     font-size: 12px;
     font-weight: 600;
 }
@@ -426,7 +426,7 @@ QProgressBar {
 }
 
 QProgressBar::chunk {
-    background-color: #ffa07a;
+    background-color: {{accent}};
     border-radius: 2px;
 }
 
@@ -446,15 +446,15 @@ QProgressBar::chunk {
 
 #progressPctLabel {
     background: transparent;
-    color: #b5aca3;
+    color: {{text_secondary}};
     font-size: 12px;
 }
 
 /* ---------- 6. 顶栏 ---------- */
 
 #topBar {
-    background-color: #1b1714;
-    border-bottom: 1px solid #37302a;
+    background-color: {{window}};
+    border-bottom: 1px solid {{card}};
 }
 
 #brandMark {
@@ -463,7 +463,7 @@ QProgressBar::chunk {
 
 #brandTitle {
     background: transparent;
-    color: #f2ede8;
+    color: {{text}};
     font-size: 16px;
     font-weight: 600;
 }
@@ -471,8 +471,8 @@ QProgressBar::chunk {
 /* ---------- 7. 侧栏 ---------- */
 
 #sideBar {
-    background-color: #1b1714;
-    border-right: 1px solid #37302a;
+    background-color: {{window}};
+    border-right: 1px solid {{card}};
 }
 
 /* 导航项:透明底 + 3px 左缘占位(选中态换 accent 条,文字不跳) */
@@ -483,77 +483,77 @@ QPushButton#navTab {
     border-radius: 4px;
     padding: 9px 12px 9px 9px;
     text-align: left;
-    color: #b5aca3;
+    color: {{text_secondary}};
 }
 
 QPushButton#navTab:hover {
     background-color: rgba(255, 255, 255, 15);
-    color: #f2ede8;
+    color: {{text}};
 }
 
 QPushButton#navTab:checked {
-    background-color: #3a322b;
-    border-left: 3px solid #ffa07a;
-    color: #ffa07a;
+    background-color: {{surface_deep}};
+    border-left: 3px solid {{accent}};
+    color: {{accent}};
     font-weight: 600;
 }
 
 QLabel#sectionLabel {
     background: transparent;
-    color: #b5aca3;
+    color: {{text_secondary}};
     font-size: 12px;
     font-weight: 600;
 }
 
 #sideBarFooter {
     background: transparent;
-    border-top: 1px solid #37302a;
+    border-top: 1px solid {{card}};
 }
 
 #sidebarStatValue {
     background: transparent;
-    color: #f2ede8;
+    color: {{text}};
     font-size: 16px;
     font-weight: 600;
 }
 
 #sidebarStatLabel {
     background: transparent;
-    color: #b5aca3;
+    color: {{text_secondary}};
     font-size: 12px;
 }
 
 /* ---------- 8. 状态栏 ---------- */
 
 #statusBar {
-    background-color: #1b1714;
-    border-top: 1px solid #37302a;
+    background-color: {{window}};
+    border-top: 1px solid {{card}};
 }
 
 #statusBarLabel {
     background: transparent;
-    color: #b5aca3;
+    color: {{text_secondary}};
     font-size: 12px;
 }
 
 /* ---------- 9. 下载页 ---------- */
 
 #downloadHero {
-    background-color: #262019;
-    border: 1px solid #37302a;
+    background-color: {{surface}};
+    border: 1px solid {{card}};
     border-radius: 12px;
 }
 
 #heroTitle {
     background: transparent;
-    color: #f2ede8;
+    color: {{text}};
     font-size: 20px;
     font-weight: 600;
 }
 
 #heroDescription {
     background: transparent;
-    color: #b5aca3;
+    color: {{text_secondary}};
 }
 
 #downloadToolbar {
@@ -563,7 +563,7 @@ QLabel#sectionLabel {
 /* 页头分段切换器(下载中|已完成):暖底胶囊 + 高亮选中段 */
 #viewSegmented {
     background-color: rgba(255, 255, 255, 20);
-    border: 1px solid #37302a;
+    border: 1px solid {{card}};
     border-radius: 8px;
 }
 
@@ -572,59 +572,59 @@ QPushButton#viewSegmentButton {
     border: 1px solid transparent;
     border-radius: 4px;
     padding: 4px 16px;
-    color: #b5aca3;
+    color: {{text_secondary}};
 }
 
 QPushButton#viewSegmentButton:hover {
-    color: #f2ede8;
+    color: {{text}};
 }
 
 QPushButton#viewSegmentButton:checked {
-    background-color: #3a322b;
-    border: 1px solid #554b41;
-    color: #ffa07a;
+    background-color: {{surface_deep}};
+    border: 1px solid {{divider_weak}};
+    color: {{accent}};
     font-weight: 600;
 }
 
 #summaryCard {
-    background-color: #262019;
-    border: 1px solid #37302a;
+    background-color: {{surface}};
+    border: 1px solid {{card}};
     border-radius: 12px;
 }
 
 #summaryValue {
     background: transparent;
-    color: #f2ede8;
+    color: {{text}};
     font-size: 20px;
     font-weight: 600;
 }
 
 #summaryCaption {
     background: transparent;
-    color: #b5aca3;
+    color: {{text_secondary}};
     font-size: 12px;
 }
 
 #taskCard {
-    background-color: #262019;
-    border: 1px solid #37302a;
+    background-color: {{surface}};
+    border: 1px solid {{card}};
     border-radius: 12px;
 }
 
 #taskCard:hover {
-    border-color: #554b41;
+    border-color: {{divider_weak}};
 }
 
 #cardFileName {
     background: transparent;
-    color: #f2ede8;
+    color: {{text}};
     font-size: 14px;
     font-weight: 600;
 }
 
 #cardInfoLabel {
     background: transparent;
-    color: #b5aca3;
+    color: {{text_secondary}};
     font-size: 12px;
 }
 
@@ -636,14 +636,14 @@ QScrollArea#gridScrollArea > QWidget > QWidget {
 
 #emptyStateTitle {
     background: transparent;
-    color: #f2ede8;
+    color: {{text}};
     font-size: 20px;
     font-weight: 600;
 }
 
 #emptyStateBody {
     background: transparent;
-    color: #b5aca3;
+    color: {{text_secondary}};
     font-size: 13px;
 }
 
@@ -651,7 +651,7 @@ QScrollArea#gridScrollArea > QWidget > QWidget {
 
 #sectionTitle {
     background: transparent;
-    color: #f2ede8;
+    color: {{text}};
     font-size: 16px;
     font-weight: 600;
 }
@@ -659,7 +659,7 @@ QScrollArea#gridScrollArea > QWidget > QWidget {
 /* ---------- 11. 通用杂项 ---------- */
 
 #separatorLine {
-    background-color: #37302a;
+    background-color: {{card}};
     border: none;
     max-height: 1px;
 }
