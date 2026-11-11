@@ -26,16 +26,6 @@
 namespace falcon::desktop {
 
 /**
- * @brief 主题家族(整体色相方向):warm 现行暖石底,cold/graphite
- *        为冷中性底变体(强调色分别为克制的蓝与绿)
- */
-enum class ThemeFamily {
-    Warm,
-    Cold,
-    Graphite,
-};
-
-/**
  * @brief 语义角色色彩集合(角色命名,非外观命名)
  */
 struct ThemeTokens {

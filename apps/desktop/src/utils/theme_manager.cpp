@@ -100,6 +100,7 @@ QPalette palette_for(const ThemeTokens& t)
 ThemeManager::ThemeManager(QObject* parent)
     : QObject(parent)
     , current_theme_(ThemeType::Dark)
+    , current_family_(ThemeFamily::Warm)
 {
 }
 
@@ -120,17 +121,25 @@ void ThemeManager::toggle_theme()
     set_theme(current_theme_ == ThemeType::Light ? ThemeType::Dark : ThemeType::Light);
 }
 
+void ThemeManager::set_family(ThemeFamily family)
+{
+    current_family_ = family;
+    // 缓存按主题各存一份,家族切换后必须作废重渲
+    light_cache_.clear();
+    dark_cache_.clear();
+    apply_stylesheet();
+}
+
 QString ThemeManager::stylesheet(ThemeType theme) const
 {
-    // 家族暂时固定 Warm(warm 值与模板原 hex 一致,行为零变化);
-    // 步骤 2 接设置页家族选择时,缓存需按 (family, theme) 键控。
-    const ThemeFamily family = ThemeFamily::Warm;
+    // 缓存按主题各存一份;set_family 家族切换时已作废,故缓存恒对应
+    // current_family_ 当前值。
     const char* qrc_path = theme == ThemeType::Light
                                ? ":/styles/fluent_light.qss"
                                : ":/styles/fluent_dark.qss";
     QString& cache = theme == ThemeType::Light ? light_cache_ : dark_cache_;
     if (cache.isEmpty()) {
-        cache = render_qss(load_qss(QLatin1String(qrc_path)), tokens_for(family, theme));
+        cache = render_qss(load_qss(QLatin1String(qrc_path)), tokens_for(current_family_, theme));
     }
     return cache;
 }

@@ -26,6 +26,16 @@ enum class ThemeType {
 };
 
 /**
+ * @brief 主题家族(整体色相方向):warm 现行暖石底,cold/graphite
+ *        为冷中性底变体(强调色分别为克制的蓝与绿)
+ */
+enum class ThemeFamily {
+    Warm,
+    Cold,
+    Graphite,
+};
+
+/**
  * @brief 主题管理器
  *
  * 管理应用主题切换和样式表加载
@@ -54,6 +64,16 @@ public:
     void toggle_theme();
 
     /**
+     * @brief 获取当前主题家族
+     */
+    ThemeFamily family() const { return current_family_; }
+
+    /**
+     * @brief 设置主题家族(清样式表缓存并重新应用;不发射信号)
+     */
+    void set_family(ThemeFamily family);
+
+    /**
      * @brief 获取指定主题的样式表(qrc 加载,结果缓存)
      */
     QString stylesheet(ThemeType theme) const;
@@ -76,6 +96,7 @@ signals:
 
 private:
     ThemeType current_theme_;
+    ThemeFamily current_family_;
     mutable QString light_cache_;
     mutable QString dark_cache_;
 };
