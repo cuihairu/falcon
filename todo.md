@@ -252,3 +252,11 @@ packages/
 - `packages/libfalcon-protocols/src/commands/http_commands.cpp`（3640 行）是 V2 命令面，却按「commands」目录名放在 protocols/src 下，而其配套头在 `include/falcon/protocols/commands/http_commands.hpp`（979 行），公共接口与私有实现目录语义不一致；且 `incremental_download.cpp`/`download_engine_v2.cpp` 等 V2 传输实现未归入 `commands/`，命令目录并未覆盖全部 V2 文件。
 - `docs/` 根目录仍保留大量历史英文/中文成对设计稿（`docs/aria2_architecture.md` 等），而当前权威文档站源是 `docs/src/`；README 已说明根目录文件属归档，但 `docs/ARCHIVE.md` 未收录部分新增设计稿（如 `docs/design/mcp_server_design.md`、`docs/design/vcpkg_packaging_design.md`），归档索引与实际文件不同步。
 - `packages/libfalcon-protocols/plugins/*` 中每个插件既有 `*_plugin.cpp` 又有 `*_handler.cpp`（如 `http/http_plugin.cpp` 与 `http/http_handler.cpp`、`sftp/sftp_plugin.cpp` 与 `sftp/sftp_handler.cpp`），目录名按插件聚合，文件级再按 plugin/handler 命名，两层粒度并存；建议统一为目录内文件职责命名，避免同一插件两种命名习惯。
+
+## Codex 深审发现（2026-11-13，luna profile 近5 commit 审核，0C/1M/2m，待修）
+
+- [ ] 将 active family 贯穿 QPalette、图标与速度悬浮窗（`apps/desktop/src/utils/theme_manager.cpp:153`、`apps/desktop/src/utils/icon_utils.cpp:63`、`apps/desktop/src/widgets/speed_float_widget.cpp:256`）——消除 Cold/Graphite 切换后的混合主题。
+- [ ] 为 `ThemeManager::set_family()` 增加回归测试（`apps/desktop/tests/CMakeLists.txt:21`）——断言 QSS、Palette、图标 token 与悬浮窗随家族一致变化，并覆盖缓存失效。
+- [ ] 恢复 `pnpm/action-setup@v6.1.1`（`.github/workflows/docs-check.yml:31`、`.github/workflows/docs-deploy.yml:29`）——撤销依赖补丁回退。
+- [ ] 修正 UI-RD-001 的功能面数量记录（`todo.md:215`）——与 `fc124bf` 实际交付的 14 个功能面、84 张图保持一致。
+- [ ] 补齐或重新约定 `todo.md` 已勾选项证据（`todo.md:3`）——使“commit 哈希 + 测试计数”的完成标准可就地验证。
