@@ -201,6 +201,12 @@ packages/
 - [ ] DOC-GIF（P2）：配置开关效果动态图——枚举全部「开启后有效果」的
   开关/配置项，自动流水线生成 off/on 对比 + GIF，落 `docs`「配置效果」
   页（双语）逐开关嵌入，兼作配置效果回归测试。
+- [ ] LANG-AUTO-001 [P2] 文档站浏览器语言自动识别（fleet-docs-audit-G2
+  2026-11-14 调查项）：现况 = vitepress locales 双 locale（root=en-US /
+  zh=zh-CN，`docs/src/.vitepress/config.mts:148`）+ 导航语言下拉手动切换 +
+  页内显式互链；**无 rootLocale 自动跳转、无 navigator.language 探测 JS**。
+  语言自动切换为增强项，默认「手动切换 + 显式链接」为受规基线，待用户拍板
+  是否上自动识别（同舰队拍板项，勿单仓先行实施）。
 
 ## 完成定义
 
