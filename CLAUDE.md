@@ -8,6 +8,7 @@
 - **README 双语**：英文 `### Browser Extension (Chrome / Edge)` / 中文 `### 浏览器扩展（Chrome / Edge）` 各入 Quick Start 一键安装表之后——下载 zip → 解压（解压后目录不可删）→ chrome://extensions（edge://extensions）→ 开发者模式 → Load unpacked（加载已解压的扩展程序）→ 选**根下直接含 manifest.json** 的解压目录；Chrome 不能直接装 zip；源码路径可直接加载 `apps/browser_extension/` 目录
 - **manifest 版本未动**（0.2.0 照仓内，MV3/default_locale en 原样）；扩展代码零改动
 - **验证**：本机完整复刻打包命令链——双 zip 各 20 entries 71677 bytes、sha256 一致、解压后 7 必备文件逐一 `test -f` 过、manifest 解析 0.2.0/mv3/default_locale en、_locales en 与 zh_CN 各 60 键；`sha256sum -c` 往返过；workflow YAML `yaml.safe_load` 语法绿；验收 workflow_dispatch 首跑见工作汇报
+- **验收状态（2026-11-15 如实记录）**：workflow_dispatch 首跑 run `43612446361` 已发起，但账号级 Actions 自 2026-11-14 ~15:35Z 起停摆——run 冻结在途中（linux 与 linux-arm64 两腿 16:11/16:33 绿；macOS 腿 16:44:35Z 起卡 Build、Windows 腿 16:07:32Z 起卡 Configure，逾 20h 无进展），create-nightly-release job 未执行；`nightly` release 仍只有此前 schedule 周期（05:26Z）的 5 个桌面资产——扩展双 zip 与 SHA256SUMS 未上架（**未见验收产物，不视作已发布**）。打包链本机逐字节复刻验证（见上）不受影响；release 页验收（run 绿 + 两 zip 可下载 + 解压 manifest 在根复验）待 Actions 恢复后收口
 
 ### 2026-11-14 - 浏览器扩展下载接管误伤修复（todo EXT-FIX-002，用户报「有些 url 没有下载的东西也弹下载界面」）
 - **根因**：`chrome.downloads.onCreated` 拦截一切浏览器下载，而 `shouldIntercept` 的门禁是 `if (list.length === 0) return true;`——`interceptExtensions` 默认空数组且 Options 文案写「留空 = 全部接管」，于是默认状态下页面资源、小图、配置文件、验证码图等一切触碰下载 API 的东西都被取消并转发给 Falcon。次因：媒体嗅探只按 URL 扩展名归类，接口路由撒谎的后缀（`/video/play` 回 `text/html`）被判成媒体
