@@ -260,3 +260,4 @@ packages/
 - [ ] 恢复 `pnpm/action-setup@v6.1.1`（`.github/workflows/docs-check.yml:31`、`.github/workflows/docs-deploy.yml:29`）——撤销依赖补丁回退。
 - [ ] 修正 UI-RD-001 的功能面数量记录（`todo.md:215`）——与 `fc124bf` 实际交付的 14 个功能面、84 张图保持一致。
 - [ ] 补齐或重新约定 `todo.md` 已勾选项证据（`todo.md:3`）——使“commit 哈希 + 测试计数”的完成标准可就地验证。
+- [ ] OWRT-001 [P1] OpenWrt .ipk 包装 + LuCI 传输面板（2026-11-14 用户令）：①可行性侦察=核心风险 vcpkg 依赖 musl 编译（逐端口核实，跑不通缩小包面 daemon+cli 先行，swarmd 不硬凑）②packaging/openwrt 三分包（falcon/luci-app-falcon/app-meta-falcon 照 meshlet 先例，procd init UCI→daemon.json 渲染/conffiles/幂等）③LuCI 传输面板四卡（服务状态/活动传输 tellActive/全局统计/最近日志）+操作面（addUri 加任务/暂停/继续/删除——daemon aria2 兼容 JSON-RPC 直接当数据源，零引擎改动）④真机 192.168.5.11 验收（装/升/conffile/四卡/真实小文件下载任务走通）⑤nightly musl 双架构出包（aarch64 vcpkg 卡住则 x86_64 先行如实标注）+app-meta（iStore 后续）。验收：musl 编译结论+真机 opkg 全链路+LuCI 加下载任务走通+结构检查（data.tar.gz 整树归档——meshlet opkg 父目录 bug 教训）。
