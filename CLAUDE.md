@@ -2,6 +2,12 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-11-14 - 浏览器扩展下载接管误伤修复（todo EXT-FIX-002，用户报「有些 url 没有下载的东西也弹下载界面」）
+- **根因**：`chrome.downloads.onCreated` 拦截一切浏览器下载，而 `shouldIntercept` 的门禁是 `if (list.length === 0) return true;`——`interceptExtensions` 默认空数组且 Options 文案写「留空 = 全部接管」，于是默认状态下页面资源、小图、配置文件、验证码图等一切触碰下载 API 的东西都被取消并转发给 Falcon。次因：媒体嗅探只按 URL 扩展名归类，接口路由撒谎的后缀（`/video/play` 回 `text/html`）被判成媒体
+- **五项修复**（`apps/browser_extension`）：① **默认行为反转**——`DEFAULT_SETTINGS.interceptExtensions` 由空数组改为安全白名单（zip/rar/7z/tar/gz/tgz/bz2/xz/zst、exe/msi/dmg/pkg/deb/rpm/apk/appimage/iso、mp4/mkv/mp3/flac、pdf/epub），`shouldIntercept` 改为空清单 = 不接管、`*` 通配 = 全部接管（0.1.0 旧行为可恢复）；② **大小下限**——新 `interceptMinBytes`（默认 1048576 字节），`meetsSizeFloor` 在接管前查 `item.fileSize`，小于阈值的下载留在浏览器，0 = 不限制，尺寸未知（undefined/−1）视为满足以免小但未报尺寸的下载被永久跳过；③ **嗅探降噪**——`classifyMediaUrl` 在扩展名判定前加 Content-Type 优先守卫：ct 存在且为 `text/*` 或 `application/json` 直接返回 null；④ **Options 双语文案**——`interceptFilterHint`/`interceptMinBytesLabel`/`interceptMinBytesHint` 新键（en/zh_CN 各 60 键），输入框以 MB 展示、底层存字节（`parseMinMb` 回落 1MB 默认）；⑤ **升级兼容**——`interceptTouched` 布尔标记，读时把旧版存下的空清单按新白名单迁移，用户有意清空（touched）则尊重
+- **门禁次序要点**：大小下限检查放在 `consumeSkipOnceForTab` **之前**，被下限挡掉的下载不会烧掉用户手动点的「跳过下一次」令牌
+- **验证**：`node --check` 四 JS 全过 + ESM 权威解析确认无 top-level await（MV3 service worker 红线，所有 await 均在监听器/async 函数内）；vm 沙箱打桩后直接执行真实 `service_worker.js` 跑 27 项逻辑断言全过（默认接管 5MB zip、默认拒 2KB png、空清单不接管、`*` 全接管、`.`/大写/空白容错、下限 0/边界/未知尺寸、`text/html`+`.mp4` 不误判媒体、`video/mp4` 与无 ct 路径不变、迁移四态含 garbage/显式 0 保留）；i18n 双 locale 键集合一致 + 占位符一致 + options.js 30 个 DOM id 与 19 个 i18n 键全部可解析；manifest 版本保持 0.2.0（未动版本）
+
 ### 2026-10-13 - vcpkg 拆分阶段 1：四包 standalone package config（todo #13，设计 `docs/design/vcpkg_packaging_design.md` §4）
 - **目标**：外部工程可按包粒度 `find_package` 消费（阶段 2 overlay 端口的前置）；继 13433cf（core）/05e44fc（protocols）后，本批补齐 storage（75752e9）与 drives（6ea88ae）——§4.2 四包清单收口
 - **同构四件套**（每包 CMakeLists 头部 + 尾部，monorepo 树内全部跳过零行为变化）：① export 锚 `TARGET falcon_core`（根必然已建/端口树必然没有，不引入第二真值源）→ monorepo 沿用 FalconTargets / 独立 configure 出 `FalconStorageTargets`/`FalconDrivesTargets`；② `FALCON_ENABLE_*` 包头 `NOT DEFINED` 兜底（option 定义权留根目录）；③ 自足块 `find_package(FalconCore CONFIG REQUIRED)` + 目录级 `falcon_core` ALIAS 对齐既有裸链接点（目录级即可——消费方全在本目录子树内，不触 CMP0107 全局 imported ALIAS 限制）；④ `FALCON_FAILURE_INJECTION` 独立形态按根同款条件补定义，**必须先于本包一切 add_library**（库与测试 TU 内联布局分叉即 ODR 红线）
@@ -1546,8 +1552,9 @@
     对话框）或 daemon aria2 兼容 JSON-RPC（`{url}/jsonrpc`，`token:` 前缀
     认证，aria2.addUri 带 out/referer/user-agent/Cookie 选项）——daemon
     模式不弹窗直接入队；发送失败回落 falcon:// 深链仅限 desktop 模式
-  - **下载接管过滤**：`interceptExtensions`（扩展名清单，留空 = 全部接管
-    保持 0.1.0 行为），非空时仅匹配清单的下载被转发并取消浏览器下载
+  - **下载接管过滤**：`interceptExtensions`（扩展名清单，默认安全白名单
+    zip/exe/mp4/pdf 等；含 `*` = 全部接管即 0.1.0 旧行为；空且保存 = 不接管
+    任何下载）+ `interceptMinBytes` 大小下限（默认 1MB，防页面小图/脚本误伤）
   - i18n en/zh_CN 全量补齐（脚本核对：双 locale 键集合一致、代码引用键
     全部存在、manifest __MSG__ 键全部存在）；node --check 四 JS 全过
 - **桌面 IPC 只读查询端点**（falcon-desktop，与扩展任务面板配套）：

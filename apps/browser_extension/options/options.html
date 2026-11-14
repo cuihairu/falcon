@@ -56,7 +56,14 @@
 
       <div class="row field">
         <label for="interceptExtensions" id="interceptFilterLabel"></label>
-        <textarea id="interceptExtensions" rows="5" spellcheck="false"></textarea>
+        <textarea id="interceptExtensions" rows="6" spellcheck="false"></textarea>
+        <small id="interceptFilterHint"></small>
+      </div>
+
+      <div class="row field">
+        <label for="interceptMinBytes" id="interceptMinBytesLabel"></label>
+        <input type="number" id="interceptMinBytes" min="0" step="1" spellcheck="false" />
+        <small id="interceptMinBytesHint"></small>
       </div>
 
       <label class="row toggle">

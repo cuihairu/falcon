@@ -11,8 +11,19 @@ const DEFAULT_SETTINGS = Object.freeze({
   sendTarget: "desktop",
   daemonUrl: "http://127.0.0.1:6800",
   daemonSecret: "",
-  // 接管浏览器下载的文件类型（小写扩展名数组）；空数组 = 全部接管
-  interceptExtensions: [],
+  // 接管浏览器下载的文件类型（小写扩展名数组）。默认安全白名单：只接管
+  // 典型的大文件下载类型，避免误伤普通网页资源（0.1.0 的空数组 = 全部接管）。
+  // 清单里写 "*" = 全部接管；清空并保存 = 不接管任何下载。
+  interceptExtensions: [
+    "zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz", "zst",
+    "exe", "msi", "dmg", "pkg", "deb", "rpm", "apk", "appimage", "iso",
+    "mp4", "mkv", "mp3", "flac",
+    "pdf", "epub",
+  ],
+  // 下载大小下限（字节）：小于该值的下载不接管；0 = 不限制
+  interceptMinBytes: 1048576,
+  // 用户是否编辑过接管清单（升级迁移标记：未编辑过的旧空清单按新默认白名单处理）
+  interceptTouched: false,
 });
 
 function storageGet(keys) {
@@ -87,11 +98,22 @@ function isHostDisabled(host, disabledHosts) {
 
 async function getSettings() {
   const stored = await storageGet(Object.keys(DEFAULT_SETTINGS));
-  return {
+  const merged = {
     ...DEFAULT_SETTINGS,
     ...stored,
     disabledHosts: Array.isArray(stored.disabledHosts) ? stored.disabledHosts : DEFAULT_SETTINGS.disabledHosts,
   };
+  // 升级迁移：接管清单为空且用户从未编辑过（interceptTouched）= 旧版默认（空 = 全部接管），
+  // 按新的安全白名单处理；用户编辑过则尊重其清单（含有意清空 = 不接管任何下载）。
+  if (!Array.isArray(merged.interceptExtensions)) {
+    merged.interceptExtensions = [...DEFAULT_SETTINGS.interceptExtensions];
+  } else if (merged.interceptExtensions.length === 0 && merged.interceptTouched !== true) {
+    merged.interceptExtensions = [...DEFAULT_SETTINGS.interceptExtensions];
+  }
+  const minBytes = Number(merged.interceptMinBytes);
+  merged.interceptMinBytes =
+    Number.isFinite(minBytes) && minBytes >= 0 ? minBytes : DEFAULT_SETTINGS.interceptMinBytes;
+  return merged;
 }
 
 async function setSkipOnceForTab(tabId) {
@@ -283,6 +305,9 @@ function classifyMediaUrl(url, contentType) {
 
   const extMatch = u.match(/\.([a-z0-9]{2,5})(?:$|[?#])/);
   const ext = extMatch ? extMatch[1] : "";
+  // Content-Type 存在且明显是文本/HTML/JSON 时以 Content-Type 为准：URL 带媒体后缀的
+  // 接口路由（如 /video/play 返回 text/html、/media.json 返回 application/json）不算媒体。
+  if (ct && (ct.startsWith("text/") || ct.includes("application/json"))) return null;
   if (["mp4", "webm", "mkv", "mov", "m4v"].includes(ext)) return { kind: "video", label: "Video" };
   if (["mp3", "m4a", "aac", "flac", "wav", "ogg"].includes(ext)) return { kind: "audio", label: "Audio" };
   return null;
@@ -351,12 +376,22 @@ function getExtensionForDownload(url, filename) {
   return m ? m[1].toLowerCase() : "";
 }
 
-/** 拦截过滤器：扩展名清单为空 = 全部接管（0.1.0 行为） */
+/** 拦截过滤器：清单为空 = 不接管任何下载；清单含 "*" = 全部接管（0.1.0 旧行为） */
 function shouldIntercept(item, settings) {
   const list = Array.isArray(settings.interceptExtensions) ? settings.interceptExtensions : [];
-  if (list.length === 0) return true;
+  if (list.length === 0) return false;
+  const normalized = list.map((x) => String(x).trim().toLowerCase().replace(/^\./, ""));
+  if (normalized.includes("*")) return true;
   const ext = getExtensionForDownload(item.url, item.filename);
-  return ext !== "" && list.map((x) => String(x).toLowerCase().replace(/^\./, "")).includes(ext);
+  return ext !== "" && normalized.includes(ext);
+}
+
+/** 大小下限：已知尺寸小于阈值的下载不接管；0 = 不限制；尺寸未知（-1/NaN）视为满足 */
+function meetsSizeFloor(sizeBytes, minBytes) {
+  const floor = Number(minBytes);
+  if (!Number.isFinite(floor) || floor <= 0) return true;
+  const size = Number(sizeBytes);
+  return !Number.isFinite(size) || size < 0 || size >= floor;
 }
 
 const MENU_LINK = "falcon-link";
@@ -395,6 +430,9 @@ chrome.downloads.onCreated.addListener(async (item) => {
   if (host && isHostDisabled(host, settings.disabledHosts)) return;
 
   if (!shouldIntercept(item, settings)) return;
+
+  // 大小下限防误伤：页面小图/脚本/字体之类的小资源即使扩展名命中也不接管
+  if (!meetsSizeFloor(item.fileSize, settings.interceptMinBytes)) return;
 
   if (typeof item.tabId === "number" && item.tabId >= 0) {
     const skip = await consumeSkipOnceForTab(item.tabId);

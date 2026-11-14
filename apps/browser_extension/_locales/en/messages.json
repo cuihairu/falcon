@@ -168,6 +168,15 @@
     "message": "Daemon RPC secret (token)"
   },
   "interceptFilterLabel": {
-    "message": "Intercept file types (one extension per line, empty = all)"
+    "message": "Intercept file types (one extension per line)"
+  },
+  "interceptFilterHint": {
+    "message": "The default list only takes over typical file downloads (zip / exe / mp4 / pdf …). Enter * to take over every download; leave it empty and save to take over nothing."
+  },
+  "interceptMinBytesLabel": {
+    "message": "Minimum download size (MB, 0 = no limit)"
+  },
+  "interceptMinBytesHint": {
+    "message": "Smaller downloads stay in the browser, so page icons, scripts and fonts are not taken over."
   }
 }
