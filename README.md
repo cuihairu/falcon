@@ -61,7 +61,10 @@ lives in [docs/design/ui-sandbox/](docs/design/ui-sandbox/README.md).
 - **Browser Extension** (Chrome / Edge, MV3): download takeover, context-menu
   download, batch link collection, and **media sniffing** — video/audio/HLS
   `.m3u8`/DASH `.mpd` requests detected per tab, optional `ts`/`m4s` segments,
-  one-click send to desktop app or daemon; see
+  one-click send to desktop app or daemon. Takeover is conservative by default:
+  only a safe whitelist of real download types (zip/exe/mp4/pdf etc.) above a
+  1 MB size floor is intercepted, so page assets are left alone (`*` restores
+  full takeover); see
   [`apps/browser_extension/`](apps/browser_extension/README.md)
 - **Performance characteristics**:
   - Multi-connection segmented downloading with adaptive sizing

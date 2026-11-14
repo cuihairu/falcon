@@ -52,7 +52,9 @@
 - **命令行工具** (`falcon-cli`):60+ 个 aria2 兼容参数、批量输入文件、JSON 配置
 - **浏览器扩展** (Chrome / Edge,MV3):下载接管、右键菜单下载、页面链接批量收集,
   以及**媒体嗅探**——按 tab 检测视频/音频/HLS `.m3u8`/DASH `.mpd` 请求,可选包含
-  `ts`/`m4s` 分片,一键发送到桌面应用或 daemon;见
+  `ts`/`m4s` 分片,一键发送到桌面应用或 daemon。接管默认保守:仅拦截安全白名单内
+  的真实下载类型(zip/exe/mp4/pdf 等)且超过 1MB 大小下限,页面小图/脚本不受影响
+  (`*` 通配恢复全接管);见
   [`apps/browser_extension/`](apps/browser_extension/README.md)
 - **性能相关设计**:
   - 多连接分段下载,自适应分段
