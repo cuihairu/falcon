@@ -610,6 +610,33 @@ jobs:
       - name: List downloaded files
         run: ls -la
 
+      - name: Package browser extension
+        run: |
+          cd apps/browser_extension
+          # manifest.json 必须落在 zip 根（Chrome/Edge load unpacked 要求），
+          # 不是含父目录路径
+          zip -qr "$GITHUB_WORKSPACE/falcon-nightly-extension-chrome.zip" .
+          cp "$GITHUB_WORKSPACE/falcon-nightly-extension-chrome.zip" \
+             "$GITHUB_WORKSPACE/falcon-nightly-extension-edge.zip"
+          cd "$GITHUB_WORKSPACE"
+
+      - name: Verify extension package structure
+        run: |
+          for zip in falcon-nightly-extension-chrome.zip falcon-nightly-extension-edge.zip; do
+            rm -rf /tmp/ext-verify
+            mkdir -p /tmp/ext-verify
+            unzip -q "$zip" -d /tmp/ext-verify
+            for f in manifest.json service_worker.js \
+                     _locales/en/messages.json _locales/zh_CN/messages.json \
+                     batch/batch.html options/options.html popup/popup.html; do
+              test -f "/tmp/ext-verify/$f" || { echo "MISSING $f in $zip"; exit 1; }
+            done
+          done
+          echo "extension package structure OK"
+
+      - name: Generate SHA256SUMS
+        run: sha256sum falcon-desktop-* falcon-nightly-extension-*.zip > SHA256SUMS
+
       - name: Clean old Nightly Release assets
         run: |
           # 删除 nightly tag 的所有旧 assets
@@ -637,6 +664,9 @@ jobs:
             | macOS | `falcon-desktop-macos-*.dmg` | 拖拽安装到 Applications |
             | Windows | `falcon-desktop-setup-*.exe` | 运行安装到 Program Files，开始菜单启动，自带卸载 |
             | Windows | `falcon-desktop-windows-*.zip` | 解压后运行 falcon-desktop.exe |
+            | Chrome | `falcon-nightly-extension-chrome.zip` | 浏览器扩展（MV3）。解压后 chrome://extensions 开发者模式 → Load unpacked 选解压目录（不能直接装 zip） |
+            | Edge | `falcon-nightly-extension-edge.zip` | 同一 Chromium 内核包另名发布；Edge 也可直接用 chrome 包 |
+            | 校验 | `SHA256SUMS` | 全部资产的 SHA-256 校验和 |
 
             ### ⚠️ 注意事项
 
@@ -654,8 +684,12 @@ jobs:
             - ✅ 资源搜索功能
             - ✅ 系统托盘集成
             - ✅ 亮色/暗色主题
+            - ✅ 浏览器扩展（下载接管 / 右键下载 / 批量链接收集 / 任务面板）
           files: |
             falcon-desktop-*nightly*
+            falcon-nightly-extension-chrome.zip
+            falcon-nightly-extension-edge.zip
+            SHA256SUMS
           draft: false
           prerelease: true
           fail_on_unmatched_files: false

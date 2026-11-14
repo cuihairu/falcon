@@ -95,6 +95,21 @@ irm https://raw.githubusercontent.com/cuihairu/falcon/main/scripts/install.ps1 |
 | Windows x64 | `falcon-desktop-setup-nightly.exe` | Inno Setup 安装器，静默装到 `Program Files`；用户 PATH（注册表）+ 开始菜单快捷方式；旧版 `%LOCALAPPDATA%\Falcon` zip 布局自动清理 |
 | macOS Intel | — | 暂未构建，请用下方源码构建 |
 
+### 浏览器扩展（Chrome / Edge）
+
+每日构建同时附带 MV3 浏览器扩展（`falcon-nightly-extension-chrome.zip`，
+以及同一份包另名发布的 `falcon-nightly-extension-edge.zip`，供 Edge 使用——
+同为 Chromium 内核，二者内容一致，可任选其一）见
+[Releases](https://github.com/cuihairu/falcon/releases) 页面。Chrome 无法直接
+安装 zip，请先解压：
+
+1. 下载并解压压缩包到一个目录（解压后不要删除该目录）。
+2. 打开 `chrome://extensions`（Edge：`edge://extensions`）。
+3. 开启**开发者模式**，点击**加载已解压的扩展程序**。
+4. 选择解压出的目录——其根目录下直接含有 `manifest.json`。
+
+若从源码构建，可直接加载 `apps/browser_extension/` 目录。
+
 ### 源码构建
 
 ```bash

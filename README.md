@@ -104,6 +104,23 @@ irm https://raw.githubusercontent.com/cuihairu/falcon/main/scripts/install.ps1 |
 | Windows x64 | `falcon-desktop-setup-nightly.exe` | Inno Setup installer, run silently to `Program Files`; user PATH (registry) + Start menu shortcut; legacy `%LOCALAPPDATA%\Falcon` zip layouts are cleaned up automatically |
 | macOS Intel | — | Not built yet; use the source build below |
 
+### Browser Extension (Chrome / Edge)
+
+The nightly release also ships the MV3 browser extension
+(`falcon-nightly-extension-chrome.zip`, plus the same package published under
+`falcon-nightly-extension-edge.zip` for Edge — identical Chromium build, use
+either one) from the [Releases](https://github.com/cuihairu/falcon/releases)
+page. Chrome cannot load a zip directly, so unzip it first:
+
+1. Download and unzip the archive into a directory (do not delete it afterwards).
+2. Open `chrome://extensions` (Edge: `edge://extensions`).
+3. Turn on **Developer mode** and click **Load unpacked** (加载已解压的扩展程序).
+4. Select the unzipped directory — the one containing `manifest.json` at its
+   root.
+
+To build the extension from a source checkout instead, load the
+`apps/browser_extension/` directory directly.
+
 ### Build from Source
 
 ```bash
