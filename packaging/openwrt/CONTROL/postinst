@@ -1,0 +1,13 @@
+#!/bin/sh
+# Idempotent post-install: state directory, init registration, and a
+# conditional restart (opkg upgrade runs prerm stop -> postinst, so the
+# service comes back exactly when the user had it enabled).
+[ -d /etc/falcon ] || mkdir -p /etc/falcon
+
+/etc/init.d/falcon enabled || /etc/init.d/falcon enable
+
+if [ "$(uci -q get falcon.falcon.enabled)" = "1" ]; then
+	/etc/init.d/falcon restart >/dev/null 2>&1
+fi
+
+exit 0

@@ -1,0 +1,22 @@
+# Falcon download daemon configuration (UCI).
+# The procd init script renders these values into /var/etc/falcon-daemon.json
+# on every start; the daemon loads it via --conf-path. Section name must stay
+# "falcon": the LuCI app and the init script address it as falcon.falcon.
+#
+# download_dir is NOT a daemon.json field: the daemon takes the target
+# directory per task (aria2.addUri "dir" option). The LuCI transfer panel
+# reads it from here when adding tasks.
+
+config falcon 'falcon'
+	option enabled '0'
+	option rpc_listen_host '127.0.0.1'
+	option rpc_port '6800'
+	option rpc_secret ''
+	option allow_origin_all '0'
+	option download_dir '/mnt/downloads'
+	option task_db_path '/etc/falcon/tasks.db'
+	option max_concurrent '5'
+	option speed_limit '0'
+	option http_engine 'v1'
+	option mcp_enabled '0'
+	option log_file ''

@@ -1,0 +1,85 @@
+#!/bin/sh /etc/rc.common
+# Falcon download daemon, procd-managed.
+#
+# The daemon reads a single JSON config file (daemon.json, --conf-path).
+# This init renders /var/etc/falcon-daemon.json from UCI (config falcon
+# 'falcon' in /etc/config/falcon) on every start, so runtime edits always
+# take a restart to apply and the rendered file never needs to survive
+# reboot (/var is tmpfs).
+#
+# log_file is optional: when the UCI value is empty the daemon keeps its
+# default console logging, which procd captures into syslog (logread).
+
+START=99
+USE_PROCD=1
+
+CONF_RUN="/var/etc/falcon-daemon.json"
+
+json_bool() {
+	[ "$1" = "1" ] && printf true || printf false
+}
+
+# JSON string escaping for the two character classes the config file
+# actually carries (paths, secret token, host, engine name).
+json_escape() {
+	printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
+
+render_config() {
+	local port host secret allow_origin db maxconc speed engine mcp logf
+	config_get port falcon rpc_port 6800
+	config_get host falcon rpc_listen_host 127.0.0.1
+	config_get secret falcon rpc_secret ""
+	config_get_bool allow_origin falcon allow_origin_all 0
+	config_get db falcon task_db_path /etc/falcon/tasks.db
+	config_get maxconc falcon max_concurrent 5
+	config_get speed falcon speed_limit 0
+	config_get engine falcon http_engine v1
+	config_get_bool mcp falcon mcp_enabled 0
+	config_get logf falcon log_file ""
+
+	mkdir -p /var/etc "$(dirname "$db")"
+
+	local secret_json=""
+	[ -n "$secret" ] && secret_json=",\"secret\":\"$(json_escape "$secret")\""
+
+	local log_json=""
+	[ -n "$logf" ] && log_json=",\"log_file\":\"$(json_escape "$logf")\""
+
+	cat > "$CONF_RUN" <<EOF
+{
+  "rpc": {"enabled": true, "host": "$(json_escape "$host")", "port": $port$secret_json, "allow_origin_all": $(json_bool "$allow_origin")},
+  "storage": {"task_db_path": "$(json_escape "$db")"},
+  "download": {"max_concurrent_tasks": $maxconc, "max_overall_speed_limit": $speed, "http_engine": "$(json_escape "$engine")"},
+  "mcp": {"enabled": $(json_bool "$mcp")},
+  "daemon": {"run_as_daemon": false$log_json}
+}
+EOF
+}
+
+start_service() {
+	local enabled
+	config_get_bool enabled falcon enabled 0
+	[ "$enabled" = "1" ] || return 0
+
+	render_config
+
+	procd_open_instance
+	procd_set_param command /usr/bin/falcon-daemon --conf-path "$CONF_RUN"
+	procd_set_param respawn 3600 5 0
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_set_param file "$CONF_RUN"
+	procd_close_instance
+}
+
+# Only rpc/secret/allow_origin/download options reload live via SIGHUP;
+# keep it simple and deterministic: a full restart on any change.
+reload_service() {
+	stop
+	start
+}
+
+service_triggers() {
+	procd_add_reload_trigger "falcon"
+}

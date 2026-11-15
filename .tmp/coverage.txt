@@ -1,0 +1,263 @@
+------------------------------------------------------------------------------
+                           GCC Code Coverage Report
+Directory: .
+------------------------------------------------------------------------------
+File                                       Lines    Exec  Cover   Missing
+------------------------------------------------------------------------------
+/home/cui/workspaces/falcon/packages/falcon-cli/src/arg_parser.cpp
+                                             221     216    97%   235-236,239-240,320
+/home/cui/workspaces/falcon/packages/falcon-cli/src/config_loader.cpp
+                                             391     374    95%   75,104,144,238,241,298-301,355,623,653,656,674,680,683,708
+/home/cui/workspaces/falcon/packages/falcon-cli/src/main.cpp
+                                             489     478    97%   492,547,627-629,639,1040-1041,1072-1074
+/home/cui/workspaces/falcon/packages/falcon-cli/src/terminal.hpp
+                                              30      30   100%
+/home/cui/workspaces/falcon/packages/falcon-daemon/src/daemon/config.cpp
+                                             186     183    98%   125,241-242
+/home/cui/workspaces/falcon/packages/falcon-daemon/src/daemon/daemon.cpp
+                                             218     213    97%   49,133,156,694,705
+/home/cui/workspaces/falcon/packages/falcon-daemon/src/daemon/swarm_announcer.cpp
+                                             357     340    95%   55,57-60,102-105,107-108,290,293,362,549,741,743
+/home/cui/workspaces/falcon/packages/falcon-daemon/src/daemon/swarm_announcer.hpp
+                                               2       2   100%
+/home/cui/workspaces/falcon/packages/falcon-daemon/src/daemon/swarm_data_service.cpp
+                                             298     280    94%   61,63,87,91,127,206-207,234-236,241-243,328,354-355,472-473
+/home/cui/workspaces/falcon/packages/falcon-daemon/src/daemon/swarm_data_service.hpp
+                                               3       3   100%
+/home/cui/workspaces/falcon/packages/falcon-daemon/src/daemon/swarm_source_provider.cpp
+                                              82      81    98%   123
+/home/cui/workspaces/falcon/packages/falcon-daemon/src/main.cpp
+                                             338     306    90%   279-280,350,414,436-440,442,464-467,470,472,474,506-508,510,512-514,524,693,697,700,734,767-769
+/home/cui/workspaces/falcon/packages/falcon-daemon/src/rpc/aria2_snapshots.cpp
+                                             112     104    92%   26,84-86,125,129,133,148
+/home/cui/workspaces/falcon/packages/falcon-daemon/src/rpc/aria2_snapshots.hpp
+                                               2       2   100%
+/home/cui/workspaces/falcon/packages/falcon-daemon/src/rpc/json_rpc_client.cpp
+                                             143     143   100%
+/home/cui/workspaces/falcon/packages/falcon-daemon/src/rpc/json_rpc_client.hpp
+                                               1       1   100%
+/home/cui/workspaces/falcon/packages/falcon-daemon/src/rpc/json_rpc_server.cpp
+                                            1224    1197    97%   126,169-171,190,262,302,394,431,724,912,950,1007,1071,1128-1129,1131-1132,1174,1356,1379,1390-1391,1448,1675,1789,1814
+/home/cui/workspaces/falcon/packages/falcon-daemon/src/rpc/json_rpc_server.hpp
+                                               1       1   100%
+/home/cui/workspaces/falcon/packages/falcon-daemon/src/rpc/mcp_server.cpp
+                                             515     491    95%   31,54,105,241,243,267,271,273,306,425,480-481,487-488,528,536,564,586,597,608,620,655,678,695
+/home/cui/workspaces/falcon/packages/falcon-daemon/src/rpc/websocket_frame.cpp
+                                             222     219    98%   140,182,216
+/home/cui/workspaces/falcon/packages/falcon-daemon/src/rpc/websocket_frame.hpp
+                                               1       1   100%
+/home/cui/workspaces/falcon/packages/falcon-daemon/src/rpc/websocket_rpc_client.cpp
+                                             372     361    97%   117,304-309,417-419,525
+/home/cui/workspaces/falcon/packages/falcon-daemon/src/rpc/websocket_rpc_client.hpp
+                                               1       1   100%
+/home/cui/workspaces/falcon/packages/falcon-daemon/src/storage/task_storage.cpp
+                                             498     490    98%   586-587,667,669,673,678,719,761
+/home/cui/workspaces/falcon/packages/falcon-daemon/src/storage/task_storage.hpp
+                                               1       1   100%
+/home/cui/workspaces/falcon/packages/falcon-daemon/src/storage/task_storage_listener.cpp
+                                              70      70   100%
+/home/cui/workspaces/falcon/packages/falcon-daemon/tools/falcon-mcp.cpp
+                                              31      31   100%
+/home/cui/workspaces/falcon/packages/falcon-daemon/tools/mcp_curl_post.cpp
+                                              66      66   100%
+/home/cui/workspaces/falcon/packages/falcon-daemon/tools/mcp_stdio.cpp
+                                              52      51    98%   28
+/home/cui/workspaces/falcon/packages/libfalcon-core/include/falcon/detail/injection.hpp
+                                              23      23   100%
+/home/cui/workspaces/falcon/packages/libfalcon-core/include/falcon/download_options.hpp
+                                              29      29   100%
+/home/cui/workspaces/falcon/packages/libfalcon-core/include/falcon/download_task.hpp
+                                              21      20    95%   146
+/home/cui/workspaces/falcon/packages/libfalcon-core/include/falcon/event_dispatcher.hpp
+                                              25      25   100%
+/home/cui/workspaces/falcon/packages/libfalcon-core/include/falcon/event_listener.hpp
+                                              30      27    90%   37-38,60
+/home/cui/workspaces/falcon/packages/libfalcon-core/include/falcon/exceptions.hpp
+                                               4       4   100%
+/home/cui/workspaces/falcon/packages/libfalcon-core/include/falcon/logger.hpp
+                                              26      26   100%
+/home/cui/workspaces/falcon/packages/libfalcon-core/include/falcon/password_manager.hpp
+                                               1       1   100%
+/home/cui/workspaces/falcon/packages/libfalcon-core/include/falcon/protocol_handler.hpp
+                                               4       1    25%   59,62,65
+/home/cui/workspaces/falcon/packages/libfalcon-core/include/falcon/protocol_handler_extension.hpp
+                                               3       3   100%
+/home/cui/workspaces/falcon/packages/libfalcon-core/include/falcon/task_manager.hpp
+                                               4       4   100%
+/home/cui/workspaces/falcon/packages/libfalcon-core/include/falcon/types.hpp
+                                               7       6    85%   80
+/home/cui/workspaces/falcon/packages/libfalcon-core/internal/thread_pool.hpp
+                                              16      16   100%
+/home/cui/workspaces/falcon/packages/libfalcon-core/internal/url_utils.hpp
+                                              52      47    90%   23,33-35,82
+/home/cui/workspaces/falcon/packages/libfalcon-core/src/builtin_protocol_handlers_stub.cpp
+                                               4       4   100%
+/home/cui/workspaces/falcon/packages/libfalcon-core/src/download_engine.cpp
+                                             290     289    99%   212
+/home/cui/workspaces/falcon/packages/libfalcon-core/src/download_task.cpp
+                                             149     145    97%   240-243
+/home/cui/workspaces/falcon/packages/libfalcon-core/src/event_dispatcher.cpp
+                                             184     184   100%
+/home/cui/workspaces/falcon/packages/libfalcon-core/src/logger.cpp
+                                             108     107    99%   215
+/home/cui/workspaces/falcon/packages/libfalcon-core/src/password_manager.cpp
+                                             224     222    99%   107-108
+/home/cui/workspaces/falcon/packages/libfalcon-core/src/protocol_registry.cpp
+                                              84      82    97%   114,135
+/home/cui/workspaces/falcon/packages/libfalcon-core/src/task_manager.cpp
+                                             660     656    99%   893-896
+/home/cui/workspaces/falcon/packages/libfalcon-core/src/thread_pool.cpp
+                                              43      41    95%   13,21
+/home/cui/workspaces/falcon/packages/libfalcon-core/src/version.cpp
+                                              59      59   100%
+/home/cui/workspaces/falcon/packages/libfalcon-drives/include/falcon/drives/cloud_storage_plugin.hpp
+                                               2       2   100%
+/home/cui/workspaces/falcon/packages/libfalcon-drives/include/falcon/drives/config_manager.hpp
+                                               2       2   100%
+/home/cui/workspaces/falcon/packages/libfalcon-drives/include/falcon/drives/resource_search.hpp
+                                               2       1    50%   99
+/home/cui/workspaces/falcon/packages/libfalcon-drives/src/cloud_storage_plugin.cpp
+                                             606     593    97%   231,248,565-566,662-663,755-756,1057-1058,1102,1121,1130
+/home/cui/workspaces/falcon/packages/libfalcon-drives/src/config_manager.cpp
+                                             503     497    98%   278,280,638-639,722,816
+/home/cui/workspaces/falcon/packages/libfalcon-drives/src/dummy.cpp
+                                               2       0     0%   6-7
+/home/cui/workspaces/falcon/packages/libfalcon-drives/src/resource_search.cpp
+                                             482     472    97%   169,215,386,389,486,615-616,619,866,874
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/include/falcon/protocols/commands/command.hpp
+                                              37      36    97%   245
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/include/falcon/protocols/commands/http_commands.hpp
+                                              51      51   100%
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/include/falcon/protocols/download_engine_v2.hpp
+                                              11      11   100%
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/include/falcon/protocols/file_hash.hpp
+                                               1       1   100%
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/include/falcon/protocols/fs_rename.hpp
+                                              22      22   100%
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/include/falcon/protocols/http/http_request.hpp
+                                              26      25    96%   45
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/include/falcon/protocols/incremental_download.hpp
+                                               7       7   100%
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/include/falcon/protocols/net/event_poll.hpp
+                                              19      19   100%
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/include/falcon/protocols/net/port_mapper.hpp
+                                               1       1   100%
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/include/falcon/protocols/net/socket_pool.hpp
+                                             146     141    96%   299,359,368-369,376
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/include/falcon/protocols/request_group.hpp
+                                              88      86    97%   65,565
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/include/falcon/protocols/segment_downloader.hpp
+                                              20      20   100%
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/include/falcon/protocols/v2_engine_host.hpp
+                                               3       3   100%
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/plugins/bittorrent/bencode.cpp
+                                             173     172    99%   120
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/plugins/bittorrent/bencode.hpp
+                                               9       9   100%
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/plugins/bittorrent/bittorrent_plugin.cpp
+                                             321     309    96%   503-507,844-847,869-871
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/plugins/bittorrent/bittorrent_plugin.hpp
+                                               6       4    66%   80,82
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/plugins/bittorrent/dht_node.cpp
+                                             548     534    97%   92,116,142,469,546-547,641-642,654,728,775,854,880,942
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/plugins/bittorrent/dht_node.hpp
+                                              24      17    70%   145,148-150,161-163
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/plugins/bittorrent/pex_protocol.cpp
+                                             309     302    97%   140,157,179,193,216,223,299
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/plugins/bittorrent/pex_protocol.hpp
+                                               5       5   100%
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/plugins/bittorrent/seed_policy.cpp
+                                              15      15   100%
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/plugins/ftp/ftp_handler.hpp
+                                               5       5   100%
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/plugins/ftp/ftp_plugin.cpp
+                                             156     154    98%   38,161
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/plugins/http/http_handler.cpp
+                                             566     541    95%   73-74,92,169-172,217,388,788-789,791,854-857,859-860,862,894,966-969,1060
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/plugins/http/http_handler.hpp
+                                               6       3    50%   39,41,43
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/plugins/http/v2_http_download_adapter.cpp
+                                              85      79    92%   73-74,88,114-116
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/plugins/http/v2_http_download_adapter.hpp
+                                               1       1   100%
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/plugins/metalink/metalink_handler.cpp
+                                             551     516    93%   121,180-186,188-191,427-428,466,482,579,582-585,595-598,672,747,789-790,808-809,848,930,953-954
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/plugins/metalink/metalink_handler.hpp
+                                              22      17    77%   121-123,173,176
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/plugins/metalink/metalink_xml_error.hpp
+                                               6       6   100%
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/plugins/sftp/sftp_handler.hpp
+                                               2       2   100%
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/plugins/sftp/sftp_plugin.cpp
+                                             518     438    84%   138-139,142-143,146,165,207,217,229-230,234-236,241-243,273,277,280,289,291,319-320,322,325,358,360-362,364,366-367,385,397,406,439,458,645-648,650-652,664-665,675-684,709,769-772,774-777,792-793,820,825-827,833,842,848-850,856-857,874,885
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/plugins/webdav/webdav_handler.hpp
+                                               5       5   100%
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/plugins/webdav/webdav_plugin.cpp
+                                             269     262    97%   63,74-77,96,465
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/src/builtin_protocol_handlers.cpp
+                                              23      23   100%
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/src/commands/command.cpp
+                                               4       3    75%   16
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/src/commands/http_commands.cpp
+                                            1866    1762    94%   94,161,346,565-567,599,614,689-690,692-697,712-713,733-734,770-771,801-803,840-841,849-850,956,1058,1060,1064-1065,1100,1355,1360-1361,1448,1484,1492,1499-1501,1506-1508,1673,1720,1741,1962,2047,2049,2079-2080,2083-2085,2112,2201-2202,2206,2294,2296-2297,2332-2333,2336-2337,2436-2437,2453,2533-2534,2614-2616,2734,2736-2740,2813,2876,2946,3031,3040,3042,3052,3135,3161,3261,3379,3428,3431,3464,3469,3502,3507,3523,3554,3557,3624
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/src/download_engine_v2.cpp
+                                             579     566    97%   67,104,417,430,653,660,686,694,903,995-996,1051-1052
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/src/file_hash.cpp
+                                             200     197    98%   280,292,315
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/src/incremental_download.cpp
+                                             726     705    97%   458,528,620,636,639,846,848,859-860,917,936-937,939,1031,1047,1051,1073,1075,1109,1132,1178
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/src/net/event_poll_epoll.cpp
+                                             127     123    96%   41,180-182
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/src/net/event_poll_factory.cpp
+                                              17      16    94%   44
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/src/net/event_poll_poll.cpp
+                                             125     120    96%   138-139,183-185
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/src/net/port_mapper.cpp
+                                              74      72    97%   125,130
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/src/net/socket_pool.cpp
+                                              53      48    90%   70,84-86,92
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/src/request_group.cpp
+                                             493     487    98%   42,91,103,215,291-292
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/src/resume_control.cpp
+                                             130     127    97%   90-91,118
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/src/segment_downloader.cpp
+                                             455     446    98%   194,370,450-452,456-457,547,603
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/src/swarm_mirror_source.cpp
+                                              13      13   100%
+/home/cui/workspaces/falcon/packages/libfalcon-protocols/src/v2_engine_host.cpp
+                                              64      62    96%   66,96
+/home/cui/workspaces/falcon/packages/libfalcon-storage/include/falcon/storage/cloud_url_protocols.hpp
+                                              33      32    97%   70
+/home/cui/workspaces/falcon/packages/libfalcon-storage/include/falcon/storage/resource_browser.hpp
+                                              13      13   100%
+/home/cui/workspaces/falcon/packages/libfalcon-storage/plugins/cos/cos_browser.cpp
+                                             490     486    99%   142,152,174,406
+/home/cui/workspaces/falcon/packages/libfalcon-storage/plugins/ftp_browser.cpp
+                                             344     341    99%   29,196,388
+/home/cui/workspaces/falcon/packages/libfalcon-storage/plugins/kodo/kodo_browser.cpp
+                                             411     399    97%   106,134,153-154,193-194,205-207,266,321,367
+/home/cui/workspaces/falcon/packages/libfalcon-storage/plugins/oss/oss_browser.cpp
+                                             421     416    98%   111,114,136,316,430
+/home/cui/workspaces/falcon/packages/libfalcon-storage/plugins/s3/s3_authenticator.cpp
+                                             101     100    99%   119
+/home/cui/workspaces/falcon/packages/libfalcon-storage/plugins/s3/s3_browser.cpp
+                                             476     469    98%   59,108,126,162,165,187,350
+/home/cui/workspaces/falcon/packages/libfalcon-storage/plugins/s3/s3_list_xml.hpp
+                                              50      50   100%
+/home/cui/workspaces/falcon/packages/libfalcon-storage/plugins/upyun/upyun_browser.cpp
+                                             378     370    97%   56,89,93,99,159-160,341-342
+/home/cui/workspaces/falcon/packages/libfalcon-storage/plugins/webdav/webdav_browser.cpp
+                                             381     368    96%   69,128,145,197,200,289,320,413-414,483,557-558,624
+/home/cui/workspaces/falcon/packages/libfalcon-storage/plugins/webdav/webdav_propfind_xml.hpp
+                                             103     101    98%   61,123
+/home/cui/workspaces/falcon/packages/libfalcon-storage/src/resource_browser.cpp
+                                             237     224    94%   62,66-67,71,74,77,82,87,92,95,100,135,253
+/home/cui/workspaces/falcon/packages/libfalcon-storage/src/resource_browser_utils.cpp
+                                             108     106    98%   162,197
+/home/cui/workspaces/falcon/packages/libfalcon-storage/src/storage_presets.cpp
+                                              10       9    90%   15
+/home/cui/workspaces/falcon/packages/libfalcon-storage/src/xml_scan.hpp
+                                              88      84    95%   62-64,76
+------------------------------------------------------------------------------
+TOTAL                                      22203   21481    96%
+------------------------------------------------------------------------------

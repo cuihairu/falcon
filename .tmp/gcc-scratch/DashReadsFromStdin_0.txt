@@ -1,0 +1,3 @@
+http://a.example/stdin-1.zip
+# comment
+http://a.example/stdin-2.zip

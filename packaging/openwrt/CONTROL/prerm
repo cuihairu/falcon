@@ -1,0 +1,5 @@
+#!/bin/sh
+# Stop the daemon before the binary is replaced or removed. The UCI config
+# is a conffile and survives removal/reinstall.
+/etc/init.d/falcon stop >/dev/null 2>&1
+exit 0

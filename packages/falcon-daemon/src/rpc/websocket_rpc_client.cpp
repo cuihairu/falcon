@@ -32,6 +32,7 @@
 #else
 #include <netdb.h>
 #include <sys/socket.h>
+#include <sys/time.h>  // timeval (SO_RCVTIMEO); musl does not pull it in transitively
 #include <unistd.h>
 #endif
 
