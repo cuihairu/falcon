@@ -9,21 +9,21 @@ CMakeCache.txt
 CMakeFiles/
 CTestTestfile.cmake
 cmake_install.cmake
-Makefile
+/Makefile
 
 # Dependencies
 _deps/
 vcpkg_installed/
 
-# Compiled libraries
-lib/
+# Compiled libraries（锚定仓库根——嵌套 lib/ 如 packaging/openwrt/usr/lib 是源码树）
+/lib/
 *.a
 *.so
 *.dylib
 *.dll
 
-# Binaries
-bin/
+# Binaries（锚定仓库根——packaging/*/usr/bin 是打包源码树）
+/bin/
 *.exe
 *.out
 *.app
