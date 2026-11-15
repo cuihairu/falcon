@@ -50,7 +50,7 @@
 - **桌面应用** (Qt6):Fluent 设计语言、亮暗主题、无边框窗口、表格/网格双任务视图、
   云盘浏览、资源搜索、双后端(进程内引擎或 Daemon RPC + WebSocket 事件刷新)
 - **命令行工具** (`falcon-cli`):60+ 个 aria2 兼容参数、批量输入文件、JSON 配置
-- **浏览器扩展** (Chrome / Edge,MV3):下载接管、右键菜单下载、页面链接批量收集,
+- **浏览器扩展** (Chromium + Firefox,MV3):下载接管、右键菜单下载、页面链接批量收集,
   以及**媒体嗅探**——按 tab 检测视频/音频/HLS `.m3u8`/DASH `.mpd` 请求,可选包含
   `ts`/`m4s` 分片,一键发送到桌面应用或 daemon。接管默认保守:仅拦截安全白名单内
   的真实下载类型(zip/exe/mp4/pdf 等)且超过 1MB 大小下限,页面小图/脚本不受影响
@@ -97,18 +97,30 @@ irm https://raw.githubusercontent.com/cuihairu/falcon/main/scripts/install.ps1 |
 | Windows x64 | `falcon-desktop-setup-nightly.exe` | Inno Setup 安装器，静默装到 `Program Files`；用户 PATH（注册表）+ 开始菜单快捷方式；旧版 `%LOCALAPPDATA%\Falcon` zip 布局自动清理 |
 | macOS Intel | — | 暂未构建，请用下方源码构建 |
 
-### 浏览器扩展（Chrome / Edge）
+### 浏览器扩展（Chromium：Chrome / Edge / Brave）
 
-每日构建同时附带 MV3 浏览器扩展（`falcon-nightly-extension-chrome.zip`，
-以及同一份包另名发布的 `falcon-nightly-extension-edge.zip`，供 Edge 使用——
-同为 Chromium 内核，二者内容一致，可任选其一）见
-[Releases](https://github.com/cuihairu/falcon/releases) 页面。Chrome 无法直接
-安装 zip，请先解压：
+每日构建同时附带 MV3 浏览器扩展（`falcon-nightly-extension.zip`，一份包
+通吃所有 Chromium 内核浏览器——Chrome / Edge / Brave 同 manifest 同构建）
+见 [Releases](https://github.com/cuihairu/falcon/releases) 页面。Firefox 内核
+不同，单独出包（见下节）。浏览器无法直接安装 zip，请先解压：
 
 1. 下载并解压压缩包到一个目录（解压后不要删除该目录）。
 2. 打开 `chrome://extensions`（Edge：`edge://extensions`）。
 3. 开启**开发者模式**，点击**加载已解压的扩展程序**。
 4. 选择解压出的目录——其根目录下直接含有 `manifest.json`。
+
+### 浏览器扩展（Firefox）
+
+每日构建另附 `falcon-nightly-extension-firefox.zip`（Firefox 115+），与
+Chromium 包同源构建，manifest 打了 Firefox 变体补丁（event page
+background scripts + gecko id）。Firefox 侧仅支持临时加载：
+
+1. 下载并解压压缩包到一个目录（解压后不要删除该目录）。
+2. 打开 `about:debugging#/runtime/this-firefox`。
+3. 点击**临时载入附加组件…**（Load Temporary Add-on…），选择解压目录
+   里的 `manifest.json`。
+4. Firefox 重启后临时加载会消失，按同样方式重新加载。（永久安装需要在
+   addons.mozilla.org 上架，见路线图。）
 
 若从源码构建，可直接加载 `apps/browser_extension/` 目录。
 
@@ -368,7 +380,7 @@ HTTP、FTP、BitTorrent、SFTP、WebDAV、Metalink、云存储、资源浏览/�
 - [x] SFTP、WebDAV 协议（libssh2 / libcurl 数据面）
 - [x] 云存储浏览（S3、阿里云OSS、腾讯云COS、七牛云、又拍云）
 - [x] 资源搜索、加密配置管理
-- [x] 浏览器扩展 (Chrome / Edge,MV3):下载接管、媒体嗅探(视频/音频/HLS/DASH)、页面链接批量收集、popup 任务面板
+- [x] 浏览器扩展 (Chromium + Firefox,MV3):下载接管、媒体嗅探(视频/音频/HLS/DASH)、页面链接批量收集、popup 任务面板
 
 ### 进行中
 - [ ] 更多私有协议与网盘直链解析

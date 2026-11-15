@@ -1,5 +1,5 @@
 function i18n(key) {
-  return chrome.i18n.getMessage(key) || key;
+  return api.i18n.getMessage(key) || key;
 }
 
 const MAX_LINKS = 500;
@@ -10,7 +10,7 @@ let sourceTabUrl = "";
 
 /** 从目标 tab 提取全部 http(s) 链接（去重，附链接文本） */
 async function collectLinks(tabId) {
-  const results = await chrome.scripting.executeScript({
+  const results = await api.scripting.executeScript({
     target: { tabId },
     func: (maxLinks) => {
       const seen = new Map();
@@ -121,7 +121,7 @@ async function main() {
   }
 
   try {
-    const tab = await chrome.tabs.get(sourceTabId);
+    const tab = await api.tabs.get(sourceTabId);
     sourceTabUrl = (tab && tab.url) || "";
   } catch {
     // Tab may be gone; proceed with empty referrer.
@@ -160,7 +160,7 @@ async function main() {
     }
     sendBtn.disabled = true;
     sendStatusEl.textContent = "";
-    const res = await chrome.runtime.sendMessage({
+    const res = await api.runtime.sendMessage({
       type: "sendUrlsToFalcon",
       urls,
       referrer: sourceTabUrl,

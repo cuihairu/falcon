@@ -25,15 +25,15 @@ const DEFAULT_SETTINGS = Object.freeze({
 });
 
 function i18n(key) {
-  return chrome.i18n.getMessage(key) || key;
+  return api.i18n.getMessage(key) || key;
 }
 
 function storageGet(keys) {
-  return new Promise((resolve) => chrome.storage.sync.get(keys, resolve));
+  return new Promise((resolve) => api.storage.sync.get(keys, resolve));
 }
 
 function storageSet(values) {
-  return new Promise((resolve) => chrome.storage.sync.set(values, resolve));
+  return new Promise((resolve) => api.storage.sync.set(values, resolve));
 }
 
 function toLines(text) {

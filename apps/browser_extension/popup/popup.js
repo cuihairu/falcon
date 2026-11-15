@@ -11,19 +11,19 @@ const DEFAULT_SETTINGS = Object.freeze({
 });
 
 function i18n(key) {
-  return chrome.i18n.getMessage(key) || key;
+  return api.i18n.getMessage(key) || key;
 }
 
 function storageGet(keys) {
-  return new Promise((resolve) => chrome.storage.sync.get(keys, resolve));
+  return new Promise((resolve) => api.storage.sync.get(keys, resolve));
 }
 
 function storageSet(values) {
-  return new Promise((resolve) => chrome.storage.sync.set(values, resolve));
+  return new Promise((resolve) => api.storage.sync.set(values, resolve));
 }
 
 async function getActiveTab() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const [tab] = await api.tabs.query({ active: true, currentWindow: true });
   return tab;
 }
 
@@ -102,7 +102,7 @@ async function main() {
       return;
     }
 
-    const res = await chrome.runtime.sendMessage({ type: "getMediaForTab", tabId: tab.id });
+    const res = await api.runtime.sendMessage({ type: "getMediaForTab", tabId: tab.id });
     const items = Array.isArray(res?.items) ? res.items : [];
     if (items.length === 0) {
       snifferEmptyEl.textContent = i18n("snifferEmpty");
@@ -139,7 +139,7 @@ async function main() {
         statusEl.textContent = "";
         btnSend.disabled = true;
         const ua = navigator.userAgent || "";
-        const ok = await chrome.runtime.sendMessage({
+        const ok = await api.runtime.sendMessage({
           type: "sendUrlToFalcon",
           url: item.url,
           referrer: item.requestReferrer || tab.url || "",
@@ -155,7 +155,7 @@ async function main() {
       btnDownload.addEventListener("click", async () => {
         statusEl.textContent = "";
         btnDownload.disabled = true;
-        const ok = await chrome.runtime.sendMessage({ type: "downloadInBrowser", url: item.url });
+        const ok = await api.runtime.sendMessage({ type: "downloadInBrowser", url: item.url });
         statusEl.textContent = ok?.ok ? i18n("done") : i18n("failed");
         btnDownload.disabled = false;
       });
@@ -199,18 +199,18 @@ async function main() {
 
   document.getElementById("skipOnce").addEventListener("click", async () => {
     if (typeof tab?.id !== "number") return;
-    await chrome.runtime.sendMessage({ type: "skipOnce", tabId: tab.id });
+    await api.runtime.sendMessage({ type: "skipOnce", tabId: tab.id });
     statusEl.textContent = i18n("saved");
   });
 
   document.getElementById("snifferClear").addEventListener("click", async () => {
     if (typeof tab?.id !== "number") return;
-    await chrome.runtime.sendMessage({ type: "clearMediaForTab", tabId: tab.id });
+    await api.runtime.sendMessage({ type: "clearMediaForTab", tabId: tab.id });
     await refreshMediaList();
   });
 
   document.getElementById("openOptions").addEventListener("click", async () => {
-    await chrome.runtime.openOptionsPage();
+    await api.runtime.openOptionsPage();
   });
 
   //--------------------------------------------------------------------------
@@ -247,7 +247,7 @@ async function main() {
     taskListEl.replaceChildren();
     tasksStatusEl.textContent = i18n("tasksLoading");
 
-    const res = await chrome.runtime.sendMessage({ type: "getTasks" });
+    const res = await api.runtime.sendMessage({ type: "getTasks" });
     if (!res || !res.ok) {
       tasksStatusEl.textContent = `${i18n("failed")}${res && res.error ? `: ${res.error}` : ""}`;
       return;
@@ -313,7 +313,7 @@ async function main() {
           btn.textContent = i18n("pauseTask");
           btn.addEventListener("click", async () => {
             btn.disabled = true;
-            await chrome.runtime.sendMessage({ type: "taskAction", action: "pause", id: task.id });
+            await api.runtime.sendMessage({ type: "taskAction", action: "pause", id: task.id });
             await refreshTasks();
           });
           actions.append(btn);
@@ -323,7 +323,7 @@ async function main() {
           btn.textContent = i18n("resumeTask");
           btn.addEventListener("click", async () => {
             btn.disabled = true;
-            await chrome.runtime.sendMessage({ type: "taskAction", action: "resume", id: task.id });
+            await api.runtime.sendMessage({ type: "taskAction", action: "resume", id: task.id });
             await refreshTasks();
           });
           actions.append(btn);
@@ -339,8 +339,8 @@ async function main() {
 
   document.getElementById("collectLinks").addEventListener("click", async () => {
     if (typeof tab?.id !== "number") return;
-    await chrome.tabs.create({
-      url: chrome.runtime.getURL(`batch/batch.html?tabId=${tab.id}`),
+    await api.tabs.create({
+      url: api.runtime.getURL(`batch/batch.html?tabId=${tab.id}`),
     });
     window.close();
   });

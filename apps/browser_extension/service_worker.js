@@ -1,3 +1,11 @@
+// Chromium loads this file as a classic MV3 service worker (see manifest
+// background). Firefox loads it as the second entry of background.scripts,
+// where importScripts does not exist — api.js is preloaded by the manifest
+// there, so the hook below is Chromium-only and must stay guarded.
+if (typeof importScripts === "function") {
+  importScripts("api.js");
+}
+
 const DEFAULT_SETTINGS = Object.freeze({
   enabled: true,
   apiBaseUrl: "http://127.0.0.1:51337",
@@ -27,14 +35,14 @@ const DEFAULT_SETTINGS = Object.freeze({
 });
 
 function storageGet(keys) {
-  return new Promise((resolve) => chrome.storage.sync.get(keys, resolve));
+  return new Promise((resolve) => api.storage.sync.get(keys, resolve));
 }
 
 function storageSet(values) {
-  return new Promise((resolve) => chrome.storage.sync.set(values, resolve));
+  return new Promise((resolve) => api.storage.sync.set(values, resolve));
 }
 
-const sessionStorage = chrome.storage.session || chrome.storage.local;
+const sessionStorage = api.storage.session || api.storage.local;
 
 function sessionGet(keys) {
   return new Promise((resolve) => sessionStorage.get(keys, resolve));
@@ -49,27 +57,27 @@ function sessionRemove(keys) {
 }
 
 function downloadsCancel(id) {
-  return new Promise((resolve) => chrome.downloads.cancel(id, () => resolve()));
+  return new Promise((resolve) => api.downloads.cancel(id, () => resolve()));
 }
 
 function downloadsErase(id) {
-  return new Promise((resolve) => chrome.downloads.erase({ id }, () => resolve()));
+  return new Promise((resolve) => api.downloads.erase({ id }, () => resolve()));
 }
 
 function downloadsDownload(options) {
-  return new Promise((resolve) => chrome.downloads.download(options, resolve));
+  return new Promise((resolve) => api.downloads.download(options, resolve));
 }
 
 function notificationsCreate(options) {
-  return new Promise((resolve) => chrome.notifications.create(options, resolve));
+  return new Promise((resolve) => api.notifications.create(options, resolve));
 }
 
 function tabsCreate(createProperties) {
-  return new Promise((resolve) => chrome.tabs.create(createProperties, resolve));
+  return new Promise((resolve) => api.tabs.create(createProperties, resolve));
 }
 
 function tabsRemove(tabId) {
-  return new Promise((resolve) => chrome.tabs.remove(tabId, () => resolve()));
+  return new Promise((resolve) => api.tabs.remove(tabId, () => resolve()));
 }
 
 function getHostname(url) {
@@ -255,7 +263,7 @@ function headerValue(headers, name) {
 function getCookieHeaderForUrl(url) {
   return new Promise((resolve) => {
     try {
-      chrome.cookies.getAll({ url }, (cookies) => {
+      api.cookies.getAll({ url }, (cookies) => {
         if (!Array.isArray(cookies) || cookies.length === 0) {
           resolve("");
           return;
@@ -397,29 +405,29 @@ function meetsSizeFloor(sizeBytes, minBytes) {
 const MENU_LINK = "falcon-link";
 const MENU_PAGE = "falcon-page-links";
 
-chrome.runtime.onInstalled.addListener(async () => {
+api.runtime.onInstalled.addListener(async () => {
   const current = await getSettings();
   await storageSet(current);
 
-  chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({
+  api.contextMenus.removeAll(() => {
+    api.contextMenus.create({
       id: MENU_LINK,
-      title: chrome.i18n.getMessage("ctxDownloadLink") || "Download with Falcon",
+      title: api.i18n.getMessage("ctxDownloadLink") || "Download with Falcon",
       contexts: ["link", "video", "audio"],
     });
-    chrome.contextMenus.create({
+    api.contextMenus.create({
       id: MENU_PAGE,
-      title: chrome.i18n.getMessage("ctxCollectPageLinks") || "Collect page links with Falcon",
+      title: api.i18n.getMessage("ctxCollectPageLinks") || "Collect page links with Falcon",
       contexts: ["page"],
     });
   });
 });
 
-chrome.tabs.onRemoved.addListener(async (tabId) => {
+api.tabs.onRemoved.addListener(async (tabId) => {
   await clearMediaForTab(tabId);
 });
 
-chrome.downloads.onCreated.addListener(async (item) => {
+api.downloads.onCreated.addListener(async (item) => {
   if (!item || !item.url || typeof item.id !== "number") return;
   if (item.state === "complete") return;
 
@@ -463,7 +471,7 @@ chrome.downloads.onCreated.addListener(async (item) => {
   await notify("Falcon", "Sent download to Falcon.");
 });
 
-chrome.webRequest.onHeadersReceived.addListener(
+api.webRequest.onHeadersReceived.addListener(
   async (details) => {
     try {
       if (!details || typeof details.tabId !== "number" || details.tabId < 0) return;
@@ -509,10 +517,15 @@ chrome.webRequest.onHeadersReceived.addListener(
     }
   },
   { urls: ["<all_urls>"] },
-  ["responseHeaders", "extraHeaders"],
+  // `extraHeaders` is Chromium-only (Firefox rejects the value and exposes
+  // those headers regardless), so gate it per engine. Both listeners here
+  // are observational — no `blocking` in the spec on either engine.
+  typeof browser !== "undefined"
+    ? ["responseHeaders"]
+    : ["responseHeaders", "extraHeaders"],
 );
 
-chrome.webRequest.onBeforeSendHeaders.addListener(
+api.webRequest.onBeforeSendHeaders.addListener(
   async (details) => {
     try {
       if (!details || typeof details.tabId !== "number" || details.tabId < 0) return;
@@ -550,10 +563,13 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
     }
   },
   { urls: ["<all_urls>"] },
-  ["requestHeaders", "extraHeaders"],
+  // Same engine gate as the onHeadersReceived listener above.
+  typeof browser !== "undefined"
+    ? ["requestHeaders"]
+    : ["requestHeaders", "extraHeaders"],
 );
 
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     if (msg?.type === "getMediaForTab" && typeof msg.tabId === "number") {
       const list = await getMediaForTab(msg.tabId);
@@ -656,7 +672,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return true;
 });
 
-chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+api.contextMenus.onClicked.addListener(async (info, tab) => {
   if (!info || typeof info.menuItemId !== "string") return;
   if (info.menuItemId !== MENU_LINK && info.menuItemId !== MENU_PAGE) return;
 
@@ -680,5 +696,5 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
   // MENU_PAGE：打开批量链接选择页
   const tabId = tab && typeof tab.id === "number" ? tab.id : "";
-  await tabsCreate({ url: chrome.runtime.getURL(`batch/batch.html?tabId=${tabId}`) });
+  await tabsCreate({ url: api.runtime.getURL(`batch/batch.html?tabId=${tabId}`) });
 });

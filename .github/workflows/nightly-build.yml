@@ -613,29 +613,41 @@ jobs:
       - name: Package browser extension
         run: |
           cd apps/browser_extension
-          # manifest.json 必须落在 zip 根（Chrome/Edge load unpacked 要求），
-          # 不是含父目录路径
-          zip -qr "$GITHUB_WORKSPACE/falcon-nightly-extension-chrome.zip" .
-          cp "$GITHUB_WORKSPACE/falcon-nightly-extension-chrome.zip" \
-             "$GITHUB_WORKSPACE/falcon-nightly-extension-edge.zip"
+          # manifest.json 必须落在 zip 根（Chromium 系 load unpacked 要求），
+          # 不是含父目录路径。一份包通吃 Chrome/Edge/Brave（MV3 同核）。
+          zip -qr "$GITHUB_WORKSPACE/falcon-nightly-extension.zip" .
           cd "$GITHUB_WORKSPACE"
 
       - name: Verify extension package structure
         run: |
-          for zip in falcon-nightly-extension-chrome.zip falcon-nightly-extension-edge.zip; do
-            rm -rf /tmp/ext-verify
-            mkdir -p /tmp/ext-verify
-            unzip -q "$zip" -d /tmp/ext-verify
-            for f in manifest.json service_worker.js \
-                     _locales/en/messages.json _locales/zh_CN/messages.json \
-                     batch/batch.html options/options.html popup/popup.html; do
-              test -f "/tmp/ext-verify/$f" || { echo "MISSING $f in $zip"; exit 1; }
-            done
+          rm -rf /tmp/ext-verify
+          mkdir -p /tmp/ext-verify
+          unzip -q falcon-nightly-extension.zip -d /tmp/ext-verify
+          for f in manifest.json api.js service_worker.js \
+                   _locales/en/messages.json _locales/zh_CN/messages.json \
+                   batch/batch.html options/options.html popup/popup.html; do
+            test -f "/tmp/ext-verify/$f" || { echo "MISSING $f"; exit 1; }
           done
           echo "extension package structure OK"
 
+      - name: Build firefox extension package
+        run: |
+          # 同源打包 Firefox 变体：脚本内含 manifest 变体注入
+          # （background.scripts / gecko.id / strict_min_version）与
+          # 结构自检（api.js 在包内 + manifest 形态断言）。
+          KEEP_TREE=/tmp/firefox-ext-src \
+            apps/browser_extension/build_firefox.sh \
+            "$GITHUB_WORKSPACE/falcon-nightly-extension-firefox.zip"
+
+      - name: Lint firefox extension (web-ext)
+        run: |
+          # 门禁：error 必须 0（exit code 非 0 即失败）；warning 允许。
+          npx --yes web-ext@latest lint --source-dir /tmp/firefox-ext-src
+
       - name: Generate SHA256SUMS
-        run: sha256sum falcon-desktop-* falcon-nightly-extension-*.zip > SHA256SUMS
+        # falcon-nightly-extension*.zip 同时覆盖 Chromium 单包与 Firefox 包
+        # （`-*.zip` 带 '-' 字面量，匹配不到改名后的单 zip）。
+        run: sha256sum falcon-desktop-* falcon-nightly-extension*.zip > SHA256SUMS
 
       - name: Clean old Nightly Release assets
         run: |
@@ -664,8 +676,8 @@ jobs:
             | macOS | `falcon-desktop-macos-*.dmg` | 拖拽安装到 Applications |
             | Windows | `falcon-desktop-setup-*.exe` | 运行安装到 Program Files，开始菜单启动，自带卸载 |
             | Windows | `falcon-desktop-windows-*.zip` | 解压后运行 falcon-desktop.exe |
-            | Chrome | `falcon-nightly-extension-chrome.zip` | 浏览器扩展（MV3）。解压后 chrome://extensions 开发者模式 → Load unpacked 选解压目录（不能直接装 zip） |
-            | Edge | `falcon-nightly-extension-edge.zip` | 同一 Chromium 内核包另名发布；Edge 也可直接用 chrome 包 |
+            | Chrome/Edge/Brave | `falcon-nightly-extension.zip` | 浏览器扩展（MV3，Chromium 系通用）。解压后 chrome://extensions（Edge 为 edge://extensions）开发者模式 → Load unpacked 选解压目录（不能直接装 zip） |
+            | Firefox | `falcon-nightly-extension-firefox.zip` | 浏览器扩展 Firefox 版（115+）。解压后 about:debugging#/runtime/this-firefox → Load Temporary Add-on… 选解压目录里的 manifest.json（临时加载，重启 Firefox 失效） |
             | 校验 | `SHA256SUMS` | 全部资产的 SHA-256 校验和 |
 
             ### ⚠️ 注意事项
@@ -684,11 +696,11 @@ jobs:
             - ✅ 资源搜索功能
             - ✅ 系统托盘集成
             - ✅ 亮色/暗色主题
-            - ✅ 浏览器扩展（下载接管 / 右键下载 / 批量链接收集 / 任务面板）
+            - ✅ 浏览器扩展（下载接管 / 右键下载 / 批量链接收集 / 任务面板，Chromium 系 + Firefox）
           files: |
             falcon-desktop-*nightly*
-            falcon-nightly-extension-chrome.zip
-            falcon-nightly-extension-edge.zip
+            falcon-nightly-extension.zip
+            falcon-nightly-extension-firefox.zip
             SHA256SUMS
           draft: false
           prerelease: true

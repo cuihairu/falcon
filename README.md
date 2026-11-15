@@ -58,7 +58,7 @@ lives in [docs/design/ui-sandbox/](docs/design/ui-sandbox/README.md).
   table & grid task views, cloud storage browsing, resource search, dual backend
   (in-process engine or daemon RPC with WebSocket event refresh)
 - **CLI** (`falcon-cli`): 60+ aria2-compatible parameters, batch input files, JSON config
-- **Browser Extension** (Chrome / Edge, MV3): download takeover, context-menu
+- **Browser Extension** (Chromium + Firefox, MV3): download takeover, context-menu
   download, batch link collection, and **media sniffing** — video/audio/HLS
   `.m3u8`/DASH `.mpd` requests detected per tab, optional `ts`/`m4s` segments,
   one-click send to desktop app or daemon. Takeover is conservative by default:
@@ -107,19 +107,36 @@ irm https://raw.githubusercontent.com/cuihairu/falcon/main/scripts/install.ps1 |
 | Windows x64 | `falcon-desktop-setup-nightly.exe` | Inno Setup installer, run silently to `Program Files`; user PATH (registry) + Start menu shortcut; legacy `%LOCALAPPDATA%\Falcon` zip layouts are cleaned up automatically |
 | macOS Intel | — | Not built yet; use the source build below |
 
-### Browser Extension (Chrome / Edge)
+### Browser Extension (Chromium: Chrome / Edge / Brave)
 
 The nightly release also ships the MV3 browser extension
-(`falcon-nightly-extension-chrome.zip`, plus the same package published under
-`falcon-nightly-extension-edge.zip` for Edge — identical Chromium build, use
-either one) from the [Releases](https://github.com/cuihairu/falcon/releases)
-page. Chrome cannot load a zip directly, so unzip it first:
+(`falcon-nightly-extension.zip`) from the [Releases](https://github.com/cuihairu/falcon/releases)
+page. One package covers every Chromium-based browser — same manifest, same
+build. Firefox uses a different extension runtime and gets its own package
+(see below); Safari is planned but not yet built (see the roadmap row for
+the work needed).
+
+Browsers cannot load a zip directly, so unzip it first:
 
 1. Download and unzip the archive into a directory (do not delete it afterwards).
 2. Open `chrome://extensions` (Edge: `edge://extensions`).
 3. Turn on **Developer mode** and click **Load unpacked** (加载已解压的扩展程序).
 4. Select the unzipped directory — the one containing `manifest.json` at its
    root.
+
+### Browser Extension (Firefox)
+
+Nightly also ships `falcon-nightly-extension-firefox.zip` (Firefox 115+),
+built from the same source with a patched manifest (event-page background
+scripts, gecko id). Firefox only supports temporary add-on loading here:
+
+1. Download and unzip the archive into a directory (do not delete it afterwards).
+2. Open `about:debugging#/runtime/this-firefox`.
+3. Click **Load Temporary Add-on…** and pick `manifest.json` inside the
+   unzipped directory.
+4. The add-on disappears when Firefox restarts — reload it the same way.
+   (Permanent install needs listing on addons.mozilla.org; pending a
+   Mozilla account, see the roadmap.)
 
 To build the extension from a source checkout instead, load the
 `apps/browser_extension/` directory directly.
@@ -392,7 +409,7 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 - [x] SFTP, WebDAV protocols (libssh2 / libcurl data planes)
 - [x] Cloud storage browsing (S3, Alibaba Cloud OSS, Tencent COS, Qiniu Kodo, Upyun)
 - [x] Resource search, encrypted configuration management
-- [x] Browser extension (Chrome / Edge, MV3): download takeover, media sniffing (video/audio/HLS/DASH), batch link collection, popup task panel
+- [x] Browser extension (Chromium + Firefox, MV3): download takeover, media sniffing (video/audio/HLS/DASH), batch link collection, popup task panel
 
 ### In Progress
 - [ ] More private protocols and cloud-drive direct-link parsing
