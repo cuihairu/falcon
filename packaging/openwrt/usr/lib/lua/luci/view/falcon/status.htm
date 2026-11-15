@@ -1,0 +1,212 @@
+<%+header%>
+
+<%
+local api = luci.dispatcher.build_url("admin/services/falcon/api")
+%>
+
+<h2 name="content"><%=translate("Falcon 传输面板")%></h2>
+
+<div class="falcon-cbi" style="margin-bottom:1em">
+	<div style="display:flex;gap:1.5em;flex-wrap:wrap;align-items:baseline">
+		<span id="fsvc" style="font-weight:bold"><%=translate("读取中…")%></span>
+		<span id="fglob" style="color:#888"></span>
+	</div>
+	<p id="ferr" style="color:#c00;margin:0.4em 0 0"></p>
+</div>
+
+<fieldset class="cbi-section" id="faddcard">
+	<legend><%=translate("添加下载")%></legend>
+	<form id="fadd">
+		<div style="display:flex;gap:0.5em;flex-wrap:wrap;margin:0.5em 0">
+			<input type="text" id="furl" style="flex:1;min-width:20em"
+				placeholder="http:// https:// ftp:// sftp:// magnet:" />
+			<input type="text" id="fout" style="width:14em"
+				placeholder="<%=translate("文件名（可选）")%>" />
+			<button type="submit" class="cbi-button cbi-button-apply"><%=translate("添加任务")%></button>
+		</div>
+		<p id="faddmsg" style="margin:0;color:#888"></p>
+	</form>
+</fieldset>
+
+<fieldset class="cbi-section">
+	<legend><%=translate("任务列表")%></legend>
+	<table class="table" id="ftasks" style="width:100%">
+		<thead><tr>
+			<th><%=translate("名称")%></th>
+			<th style="width:9em"><%=translate("进度")%></th>
+			<th style="width:7em"><%=translate("速度")%></th>
+			<th style="width:6em"><%=translate("状态")%></th>
+			<th style="width:12em"><%=translate("操作")%></th>
+		</tr></thead>
+		<tbody id="ftbody"></tbody>
+	</table>
+	<p id="fempty" style="color:#888"><%=translate("没有传输任务")%></p>
+</fieldset>
+
+<fieldset class="cbi-section">
+	<legend><%=translate("最近日志")%></legend>
+	<pre id="flog" style="white-space:pre-wrap;max-height:16em;overflow:auto;margin:0.5em 0"></pre>
+</fieldset>
+
+<script type="text/javascript">
+(function () {
+	"use strict";
+	var API = "<%=api%>";
+	var TOKEN = "<%=token%>";
+
+	var $ = function (id) { return document.getElementById(id); };
+	var inflight = false;
+
+	function fmtBytes(n) {
+		if (!n || n <= 0) return "0";
+		var u = ["B", "KB", "MB", "GB", "TB"], i = 0;
+		while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+		return (i === 0 ? n : n.toFixed(1)) + " " + u[i];
+	}
+	function fmtSpeed(n) {
+		return n > 0 ? fmtBytes(n) + "/s" : "—";
+	}
+	function fmtPct(done, total) {
+		if (!total || total <= 0) return "—";
+		return (100 * done / total).toFixed(1) + "%";
+	}
+	// aria2 status -> label; waiting covers paused+queued (tellWaiting).
+	function statusLabel(s) {
+		return {
+			active: "<%=translate("下载中")%>",
+			waiting: "<%=translate("已暂停")%>",
+			paused: "<%=translate("已暂停")%>",
+			complete: "<%=translate("已完成")%>",
+			error: "<%=translate("已失败")%>"
+		}[s] || s;
+	}
+
+	function rowButton(label, op, gid) {
+		var b = document.createElement("button");
+		b.className = "cbi-button cbi-button-action";
+		b.type = "button";
+		b.textContent = label;
+		b.addEventListener("click", function () { control(op, gid); });
+		return b;
+	}
+
+	function renderRow(t) {
+		var tr = document.createElement("tr");
+
+		var tdName = document.createElement("td");
+		tdName.textContent = t.name;
+		tdName.title = t.gid;
+		tr.appendChild(tdName);
+
+		var tdProg = document.createElement("td");
+		tdProg.textContent = fmtPct(t.completed, t.total) +
+			" (" + fmtBytes(t.completed) + " / " + fmtBytes(t.total) + ")";
+		tr.appendChild(tdProg);
+
+		var tdSpd = document.createElement("td");
+		tdSpd.textContent = (t.speed > 0 || t.upload > 0)
+			? fmtSpeed(t.speed) + " ↑" + fmtSpeed(t.upload)
+			: "—";
+		tr.appendChild(tdSpd);
+
+		var tdSt = document.createElement("td");
+		tdSt.textContent = statusLabel(t.status);
+		tr.appendChild(tdSt);
+
+		var tdOp = document.createElement("td");
+		var paused = (t.status === "waiting" || t.status === "paused");
+		tdOp.appendChild(rowButton(
+			paused ? "<%=translate("继续")%>" : "<%=translate("暂停")%>",
+			paused ? "unpause" : "pause", t.gid));
+		tdOp.appendChild(document.createTextNode(" "));
+		tdOp.appendChild(rowButton("<%=translate("删除")%>", "remove", t.gid));
+		tr.appendChild(tdOp);
+
+		return tr;
+	}
+
+	function render(data) {
+		$("fsvc").textContent = data.status === "running"
+			? "<%=translate("服务运行中")%>"
+			: "<%=translate("服务已停止")%>";
+		$("ferr").textContent = data.rpc_error || "";
+
+		var g = data.global;
+		$("fglob").textContent = g
+			? "<%=translate("全局")%>: ↓" + fmtSpeed(g.download_speed) +
+			  " ↑" + fmtSpeed(g.upload_speed) + " · " +
+			  "<%=translate("活动")%> " + g.num_active + " / " +
+			  "<%=translate("等待")%> " + g.num_waiting + " / " +
+			  "<%=translate("已完成")%> " + g.num_stopped
+			: "";
+
+		var tbody = $("ftbody");
+		while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
+		var tasks = data.tasks || [];
+		for (var i = 0; i < tasks.length; i++) {
+			tbody.appendChild(renderRow(tasks[i]));
+		}
+		$("fempty").style.display = tasks.length ? "none" : "";
+
+		var logs = data.log || [];
+		$("flog").textContent = logs.length ? logs.join("\n")
+			: "<%=translate("（暂无日志）")%>";
+	}
+
+	function refresh() {
+		if (inflight || document.hidden) return;
+		inflight = true;
+		fetch(API + "/status", { credentials: "same-origin" })
+			.then(function (r) { return r.json(); })
+			.then(function (d) { render(d); })
+			.catch(function () {
+				$("fsvc").textContent = "<%=translate("读取失败")%>";
+			})
+			.then(function () { inflight = false; });
+	}
+
+	function post(endpoint, payload, cb) {
+		var body = new URLSearchParams();
+		body.append("token", TOKEN);
+		body.append("payload", JSON.stringify(payload));
+		fetch(API + "/" + endpoint, {
+			method: "POST",
+			credentials: "same-origin",
+			body: body
+		}).then(function (r) { return r.json(); })
+		  .then(cb)
+		  .catch(function () { cb({ ok: false, error: "<%=translate("请求失败")%>" }); });
+	}
+
+	function control(op, gid) {
+		post("control", { op: op, gid: gid }, function (r) {
+			if (!r.ok) alert(r.error || "<%=translate("操作失败")%>");
+			refresh();
+		});
+	}
+
+	$("fadd").addEventListener("submit", function (ev) {
+		ev.preventDefault();
+		var url = $("furl").value.trim();
+		if (!url) return;
+		var payload = { url: url };
+		var out = $("fout").value.trim();
+		if (out) payload.out = out;
+		post("add", payload, function (r) {
+			$("faddmsg").textContent = r.ok
+				? "<%=translate("已添加任务")%> " + r.gid
+				: (r.error || "<%=translate("添加失败")%>");
+			if (r.ok) {
+				$("furl").value = "";
+				$("fout").value = "";
+			}
+			refresh();
+		});
+	});
+
+	refresh();
+	setInterval(refresh, 5000);
+})();
+</script>
+
+<%+footer%>
