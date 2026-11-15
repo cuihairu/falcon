@@ -1,6 +1,0 @@
-# leading comment
-  http://a.example/one.zip  
-
-http://a.example/two.zip
-   # indented comment
-	http://a.example/three.zip	

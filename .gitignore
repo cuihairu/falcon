@@ -60,3 +60,9 @@ Thumbs.db
 # Node.js
 node_modules/
 package-lock.json
+
+# 会话临时产物（测试残渣/截图/探针输出；目录名以字面量固定——"--help" 为工具误产出目录）
+.tmp/
+ui_shots*/
+ui_redesign/
+--help/
