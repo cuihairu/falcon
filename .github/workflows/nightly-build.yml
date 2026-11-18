@@ -623,6 +623,12 @@ jobs:
             alpine:3.22 \
             sh /work/packaging/openwrt/build-static.sh
 
+      - name: Normalize build-ipk ownership
+        # alpine 容器以 root 写 build-ipk/（gitignored，不在 checkout
+        # 树内），属主 root 会挡住宿主 runner 用户写 .ipk——出容器后
+        # 归还属主（标准 docker-mount 收尾动作）。
+        run: sudo chown -R "$(id -u):$(id -g)" build-ipk
+
       - name: Package OpenWrt ipk
         run: |
           sh packaging/openwrt/build-ipk.sh \
