@@ -124,6 +124,26 @@ background scripts + gecko id）。Firefox 侧仅支持临时加载：
 
 若从源码构建，可直接加载 `apps/browser_extension/` 目录。
 
+### OpenWrt / iStoreOS（ipk + LuCI）
+
+每日构建附带全静态 musl ipk 包（`falcon_*_x86_64.ipk`、`falcon_*_aarch64.ipk`、
+`luci-app-falcon_*_all.ipk`、`app-meta-falcon_*_all.ipk`、`SHA256SUMS`），
+提供 daemon（aria2 兼容 JSON-RPC）、procd init 与 LuCI 传输面板：
+
+```bash
+# 在路由器上（先校验 SHA256SUMS，再装三个包）
+opkg install falcon_*_x86_64.ipk luci-app-falcon_*_all.ipk app-meta-falcon_*_all.ipk
+```
+
+1. 启用并启动：LuCI「服务 → Falcon」里勾选启用（或 `uci set falcon.falcon.enabled=1 && uci commit falcon`），
+   然后 `/etc/init.d/falcon start`。procd init 每次启动时从 UCI 渲染
+   `/var/etc/falcon-daemon.json`。
+2. 传输面板：「服务 → Falcon」展示服务状态、活动传输（aria2 `tellActive`）、
+   全局统计与最近日志；经 daemon JSON-RPC 可添加/暂停/继续/删除任务。
+3. `/etc/config/falcon` 与 `/etc/init.d/falcon` 是 conffile——升级保留你的修改。
+   RPC 默认监听 `127.0.0.1:6800`（设 `falcon.falcon.rpc_listen_host` 可对局域网开放）。
+4. `app-meta-falcon` 携带 iStore 应用元数据（图标 + 清单），用于 iStore 应用商店展示。
+
 ### 源码构建
 
 ```bash

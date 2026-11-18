@@ -141,6 +141,31 @@ scripts, gecko id). Firefox only supports temporary add-on loading here:
 To build the extension from a source checkout instead, load the
 `apps/browser_extension/` directory directly.
 
+### OpenWrt / iStoreOS (ipk + LuCI)
+
+The nightly release ships statically linked musl ipk packages (`falcon_*_x86_64.ipk`,
+`falcon_*_aarch64.ipk`, `luci-app-falcon_*_all.ipk`, `app-meta-falcon_*_all.ipk`,
+`SHA256SUMS`). They provide the daemon with an aria2-compatible JSON-RPC API, a
+procd init and a LuCI transfer panel:
+
+```bash
+# on the router (verify checksums first, then install all three)
+opkg install falcon_*_x86_64.ipk luci-app-falcon_*_all.ipk app-meta-falcon_*_all.ipk
+```
+
+1. Enable and start: set `falcon.falcon.enabled=1` in LuCI (Services → Falcon)
+   or `uci set falcon.falcon.enabled=1 && uci commit falcon`, then
+   `/etc/init.d/falcon start`. The procd init renders `/var/etc/falcon-daemon.json`
+   from UCI on every start.
+2. Transfer panel: Services → Falcon shows service state, active transfers
+   (aria2 `tellActive`), global stats and recent logs; tasks can be added,
+   paused, resumed and removed via the daemon JSON-RPC.
+3. `/etc/config/falcon` and `/etc/init.d/falcon` are conffiles — upgrades keep
+   your edits. RPC listens on `127.0.0.1:6800` by default (set
+   `falcon.falcon.rpc_listen_host` to expose it to your LAN).
+4. `app-meta-falcon` carries the iStore app metadata (icon + manifest) for
+   listing in the iStore app store.
+
 ### Build from Source
 
 ```bash
