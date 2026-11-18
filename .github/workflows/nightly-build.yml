@@ -580,10 +580,107 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
+  build-openwrt-ipk:
+    name: OpenWrt ipk (${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.timeout }}
+    # aarch64 为 qemu 用户态仿真实验腿：失败不拦截 release 发布
+    #（x86_64 先行；真机 arm64 验收另行覆盖）
+    continue-on-error: ${{ matrix.experimental || false }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            platform: linux/amd64
+            timeout: 45
+            experimental: false
+          - arch: aarch64
+            platform: linux/arm64
+            timeout: 165
+            experimental: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        if: matrix.experimental
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build static musl binaries
+        run: |
+          # 容器内路径必须是绝对的（容器 WORKDIR 是 /，相对路径指向
+          # 不到挂载树——本机复跑踩过）。alpine 3.20 为配方验证版本。
+          docker run --rm \
+            --platform ${{ matrix.platform }} \
+            -v "$PWD":/work \
+            alpine:3.20 \
+            sh /work/packaging/openwrt/build-static.sh
+
+      - name: Package OpenWrt ipk
+        run: |
+          sh packaging/openwrt/build-ipk.sh \
+            build-ipk/bin-${{ matrix.arch }} \
+            build-ipk \
+            --arch ${{ matrix.arch }}
+
+      - name: Verify ipk structure
+        run: |
+          # opkg 不会补建缺失父目录（meshlet 教训）：data.tar.gz 必须
+          # 整树归档（含目录项），且成员不得带 ./ 前缀。
+          set -e
+          file build-ipk/bin-${{ matrix.arch }}/falcon-daemon | grep -q 'statically linked'
+          file build-ipk/bin-${{ matrix.arch }}/falcon-cli | grep -q 'statically linked'
+          ls build-ipk/*.ipk
+          for ipk in build-ipk/*.ipk; do
+            rm -rf /tmp/ipk-verify && mkdir -p /tmp/ipk-verify
+            tar -xzf "$ipk" -C /tmp/ipk-verify
+            test -f /tmp/ipk-verify/debian-binary
+            test -f /tmp/ipk-verify/control.tar.gz
+            test -f /tmp/ipk-verify/data.tar.gz
+            case "$(basename "$ipk")" in
+              falcon_*)
+                tar -xzOf /tmp/ipk-verify/control.tar.gz ./conffiles \
+                  | grep -qx '/etc/config/falcon' \
+                  || { echo "conffiles missing /etc/config/falcon"; exit 1; }
+                tar -tzf /tmp/ipk-verify/data.tar.gz | grep -qx 'etc/config/falcon'
+                tar -tzf /tmp/ipk-verify/data.tar.gz | grep -qx 'etc/init.d/falcon'
+                tar -tzf /tmp/ipk-verify/data.tar.gz | grep -qx 'usr/bin/falcon-daemon'
+                tar -tzf /tmp/ipk-verify/data.tar.gz | grep -qx 'usr/bin/falcon-cli'
+                tar -tzf /tmp/ipk-verify/data.tar.gz | grep -qx 'usr/bin/'
+                ;;
+              luci-app-falcon_*)
+                tar -tzf /tmp/ipk-verify/data.tar.gz | grep -qx 'usr/lib/lua/luci/controller/falcon.lua'
+                tar -tzf /tmp/ipk-verify/data.tar.gz | grep -qx 'usr/lib/lua/luci/model/cbi/falcon.lua'
+                tar -tzf /tmp/ipk-verify/data.tar.gz | grep -qx 'usr/lib/lua/luci/view/falcon/status.htm'
+                ;;
+              app-meta-falcon_*)
+                tar -tzf /tmp/ipk-verify/data.tar.gz | grep -qx 'usr/lib/opkg/meta/falcon.json'
+                tar -tzf /tmp/ipk-verify/data.tar.gz | grep -qx 'www/luci-static/resources/app-icons/falcon.png'
+                ;;
+            esac
+            if tar -tzf /tmp/ipk-verify/data.tar.gz | grep -q '^\./'; then
+              echo "data.tar.gz members must not carry ./ prefix: $ipk"; exit 1
+            fi
+          done
+          echo "ipk structure OK"
+
+      - name: Upload ipk artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: falcon-openwrt-ipk-${{ matrix.arch }}
+          path: build-ipk/*.ipk
+          if-no-files-found: error
+          retention-days: 7
+
   create-nightly-release:
     name: Create Nightly Release
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
-    needs: build-nightly
+    needs: [build-nightly, build-openwrt-ipk]
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     timeout-minutes: 15
 
@@ -604,6 +701,16 @@ jobs:
         uses: actions/download-artifact@v8.0.2
         with:
           pattern: falcon-desktop-*
+          path: .
+          merge-multiple: true
+
+      - name: Download OpenWrt ipk artifacts
+        # 两腿全灭（qemu 实验腿 + 极端情况）时不红 release：步级放行，
+        # 后续 ipk glob 有 ls 守卫兜底。
+        uses: actions/download-artifact@v8.0.2
+        continue-on-error: true
+        with:
+          pattern: falcon-openwrt-ipk-*
           path: .
           merge-multiple: true
 
@@ -647,7 +754,11 @@ jobs:
       - name: Generate SHA256SUMS
         # falcon-nightly-extension*.zip 同时覆盖 Chromium 单包与 Firefox 包
         # （`-*.zip` 带 '-' 字面量，匹配不到改名后的单 zip）。
-        run: sha256sum falcon-desktop-* falcon-nightly-extension*.zip > SHA256SUMS
+        # ipk 追加行带 ls 守卫：OpenWrt 两腿全灭时 glob 不展开，
+        # 直接把字面量传给 sha256sum 会报错。
+        run: |
+          sha256sum falcon-desktop-* falcon-nightly-extension*.zip > SHA256SUMS
+          ls ./*.ipk >/dev/null 2>&1 && sha256sum ./*.ipk >> SHA256SUMS || true
 
       - name: Clean old Nightly Release assets
         run: |
@@ -678,6 +789,8 @@ jobs:
             | Windows | `falcon-desktop-windows-*.zip` | 解压后运行 falcon-desktop.exe |
             | Chrome/Edge/Brave | `falcon-nightly-extension.zip` | 浏览器扩展（MV3，Chromium 系通用）。解压后 chrome://extensions（Edge 为 edge://extensions）开发者模式 → Load unpacked 选解压目录（不能直接装 zip） |
             | Firefox | `falcon-nightly-extension-firefox.zip` | 浏览器扩展 Firefox 版（115+）。解压后 about:debugging#/runtime/this-firefox → Load Temporary Add-on… 选解压目录里的 manifest.json（临时加载，重启 Firefox 失效） |
+            | OpenWrt | `falcon_*_x86_64.ipk` | x86_64 设备（软路由/虚拟机）。`opkg install` 三包：falcon + luci-app-falcon + app-meta-falcon，静态链接 musl，无额外依赖 |
+            | OpenWrt | `falcon_*_aarch64.ipk` | aarch64 设备（qemu 仿真构建，实验性） |
             | 校验 | `SHA256SUMS` | 全部资产的 SHA-256 校验和 |
 
             ### ⚠️ 注意事项
@@ -697,10 +810,12 @@ jobs:
             - ✅ 系统托盘集成
             - ✅ 亮色/暗色主题
             - ✅ 浏览器扩展（下载接管 / 右键下载 / 批量链接收集 / 任务面板，Chromium 系 + Firefox）
+            - ✅ OpenWrt ipk 三分包（daemon + CLI + LuCI 传输面板，x86_64 + aarch64 静态构建）
           files: |
             falcon-desktop-*nightly*
             falcon-nightly-extension.zip
             falcon-nightly-extension-firefox.zip
+            *.ipk
             SHA256SUMS
           draft: false
           prerelease: true
