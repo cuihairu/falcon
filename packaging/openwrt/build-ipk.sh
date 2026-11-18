@@ -119,8 +119,11 @@ Description: Multi-protocol download engine: HTTP/FTP/SFTP/WebDAV/Metalink with 
 EOF
 
 chmod 755 "$R"/CONTROL/postinst "$R"/CONTROL/prerm
-tar -czf "$R/control.tar.gz" -C "$R/CONTROL" ./control ./postinst ./prerm ./conffiles
-tar -czf "$R/data.tar.gz" -C "$R/data" etc usr
+# --owner/--group 0: the builder's uid would otherwise ride inside the
+# archives and surface as a nonexistent uid on the device (observed 1001
+# from the CI runner on real hardware).
+tar --owner=0 --group=0 -czf "$R/control.tar.gz" -C "$R/CONTROL" ./control ./postinst ./prerm ./conffiles
+tar --owner=0 --group=0 -czf "$R/data.tar.gz" -C "$R/data" etc usr
 echo "2.0" > "$R/debian-binary"
 mkdir -p "$OUT"
 tar -czf "$OUT/falcon_${REL}_${ARCH}.ipk" -C "$R" \
@@ -164,8 +167,8 @@ Description: LuCI interface for falcon: settings page (UCI) and a transfer panel
 EOF
 
 chmod 755 "$R"/CONTROL/postinst "$R"/CONTROL/prerm
-tar -czf "$R/control.tar.gz" -C "$R/CONTROL" ./control ./postinst ./prerm
-tar -czf "$R/data.tar.gz" -C "$R/data" usr
+tar --owner=0 --group=0 -czf "$R/control.tar.gz" -C "$R/CONTROL" ./control ./postinst ./prerm
+tar --owner=0 --group=0 -czf "$R/data.tar.gz" -C "$R/data" usr
 echo "2.0" > "$R/debian-binary"
 tar -czf "$OUT/luci-app-falcon_${REL}_all.ipk" -C "$R" \
 	./debian-binary ./control.tar.gz ./data.tar.gz
@@ -206,8 +209,8 @@ Description: iStore app metadata for falcon (icon and app manifest).
 EOF
 
 chmod 755 "$R"/CONTROL/postinst "$R"/CONTROL/prerm
-tar -czf "$R/control.tar.gz" -C "$R/CONTROL" ./control ./postinst ./prerm
-tar -czf "$R/data.tar.gz" -C "$R/data" usr www
+tar --owner=0 --group=0 -czf "$R/control.tar.gz" -C "$R/CONTROL" ./control ./postinst ./prerm
+tar --owner=0 --group=0 -czf "$R/data.tar.gz" -C "$R/data" usr www
 echo "2.0" > "$R/debian-binary"
 tar -czf "$OUT/app-meta-falcon_${REL}_all.ipk" -C "$R" \
 	./debian-binary ./control.tar.gz ./data.tar.gz

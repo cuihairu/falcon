@@ -58,6 +58,11 @@ EOF
 }
 
 start_service() {
+	# config_get reads the in-memory config cache; without config_load it
+	# is empty and every config_get returns its default (enabled=0) —
+	# the service would register "active with no instances" forever.
+	config_load falcon
+
 	local enabled
 	config_get_bool enabled falcon enabled 0
 	[ "$enabled" = "1" ] || return 0
