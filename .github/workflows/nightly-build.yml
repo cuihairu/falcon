@@ -614,11 +614,13 @@ jobs:
       - name: Build static musl binaries
         run: |
           # 容器内路径必须是绝对的（容器 WORKDIR 是 /，相对路径指向
-          # 不到挂载树——本机复跑踩过）。alpine 3.20 为配方验证版本。
+          # 不到挂载树——本机复跑踩过）。alpine 3.22 为配方验证版本
+          # （完整绿构建 + RPC smoke；3.20 的 c-ares 静态归档拆分包布局
+          # 不同，改版本需同步核对 build-static.sh 的包清单）。
           docker run --rm \
             --platform ${{ matrix.platform }} \
             -v "$PWD":/work \
-            alpine:3.20 \
+            alpine:3.22 \
             sh /work/packaging/openwrt/build-static.sh
 
       - name: Package OpenWrt ipk

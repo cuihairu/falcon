@@ -4,7 +4,7 @@
 # point works:
 #
 #   docker run --rm -v "$PWD":/work alpine:3.22 \
-#       sh packaging/openwrt/build-static.sh
+#       sh /work/packaging/openwrt/build-static.sh
 #
 # Output: build-ipk/bin-<arch>/falcon-{daemon,cli} (stripped, statically
 # linked against musl) — feed them to packaging/openwrt/build-ipk.sh.
@@ -29,7 +29,8 @@
 # No spdlog: alpine has no static spdlog, falcon falls back to its basic
 # logger (compile/link proven in the earlier attempt).
 #
-# alpine 3.20 is the version this recipe was validated on; pin it.
+# alpine 3.22 is the version this recipe was validated on (full green build
+# + RPC smoke); pin it — the c-ares static-archive layout differs on 3.20.
 set -eux
 
 ARCH=$(uname -m)
@@ -57,9 +58,17 @@ apk add --no-cache \
 	libpsl-static sqlite-dev sqlite-static zlib-dev zlib-static \
 	zstd-static c-ares c-ares-dev
 
-# Proof that the c-ares archive is present (alpine ships it inside the
-# unsplit -dev package, so the tail loop can pick up -lares).
-ls -la /usr/lib/libcares.a >> "$LOG" 2>&1 || true
+# Proof that the c-ares archive is present. The package layout is
+# version-specific: v3.20 splits libcares.a into a separate c-ares-static
+# package (c-ares-dev carries only the .so symlink) while v3.22 ships it
+# unsplit inside c-ares-dev (no c-ares-static package exists there). This
+# recipe is pinned to 3.22; if re-pinned to 3.20, c-ares-static must be
+# added to the list above or this gate will fail with the message below.
+ls -la /usr/lib/libcares.a >> "$LOG" 2>&1 || {
+	echo "FATAL: /usr/lib/libcares.a missing (c-ares-static not installed?)" >&2
+	tail -30 "$LOG" >&2
+	exit 1
+}
 
 # Tail of static libs appended to every link. Short-form -l resolves .a
 # under -static; entries without a static archive are pruned here.
@@ -148,7 +157,11 @@ cmake -S "$REPO_DIR" -B /tmp/build -G Ninja \
 	-DFALCON_BUILD_DESKTOP=OFF \
 	-DFALCON_BUILD_TESTS=OFF \
 	-DFALCON_BUILD_EXAMPLES=OFF \
-	>> "$LOG" 2>&1 || { echo "=== configure failed ===" >> "$LOG"; exit 1; }
+	>> "$LOG" 2>&1 || {
+		echo "=== configure failed ===" >> "$LOG"
+		tail -40 "$LOG" >&2
+		exit 1
+	}
 
 echo "=== cache library resolution ===" >> "$LOG"
 grep -E "_LIBRARY" /tmp/build/CMakeCache.txt \
@@ -159,6 +172,7 @@ if ninja -C /tmp/build >> "$LOG" 2>&1; then
 	echo "=== done ===" >> "$LOG"
 else
 	echo "=== build failed ===" >> "$LOG"
+	tail -60 "$LOG" >&2
 	exit 1
 fi
 
@@ -169,7 +183,11 @@ strip /tmp/build/bin/falcon-daemon /tmp/build/bin/falcon-cli
 ls -la /tmp/build/bin/falcon-daemon /tmp/build/bin/falcon-cli >> "$LOG"
 
 echo "=== smoke: falcon-cli --version ===" >> "$LOG"
-/tmp/build/bin/falcon-cli --version >> "$LOG" 2>&1
+/tmp/build/bin/falcon-cli --version >> "$LOG" 2>&1 || {
+	echo "=== cli --version failed ===" >> "$LOG"
+	tail -30 "$LOG" >&2
+	exit 1
+}
 
 echo "=== smoke: daemon aria2.getVersion ===" >> "$LOG"
 cat > /tmp/d.json <<'EOF'
@@ -197,6 +215,7 @@ echo "smoke attempts: $((i + 1))" >> "$LOG"
 kill "$DPID" 2>/dev/null || true
 if [ "$SMOKE_OK" != 1 ]; then
 	echo "=== smoke failed: daemon RPC never answered ===" >> "$LOG"
+	tail -40 "$LOG" >&2
 	exit 1
 fi
 cat /tmp/smoke.json >> "$LOG"
