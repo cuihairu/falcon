@@ -60,7 +60,7 @@ jobs:
             c_compiler: cl
 
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
 
       - name: Install dependencies (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
@@ -172,7 +172,7 @@ jobs:
     # 预算同步放宽
     timeout-minutes: 150
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
         with:
           submodules: false
 
@@ -261,7 +261,7 @@ jobs:
             vcpkg-triplet: 'x64-windows'
 
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
 
       - name: Install dependencies (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
