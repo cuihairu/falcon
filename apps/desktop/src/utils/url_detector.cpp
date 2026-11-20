@@ -86,6 +86,57 @@ bool UrlDetector::contains_url(const QString& text)
     return false;
 }
 
+bool UrlDetector::looks_like_download_url(const QString& text)
+{
+    if (text.isEmpty()) {
+        return false;
+    }
+
+    const UrlInfo info = parse_url(text);
+    if (!info.is_valid) {
+        return false;
+    }
+
+    switch (info.protocol) {
+        // 下载语义协议：本身就是下载目标，剪贴板出现即弹窗
+        case UrlProtocol::MAGNET:
+        case UrlProtocol::THUNDER:
+        case UrlProtocol::QQLINK:
+        case UrlProtocol::FLASHGET:
+        case UrlProtocol::ED2K:
+        // FTP 没有网页形态，指向的基本是文件
+        case UrlProtocol::FTP:
+            return true;
+        default: {
+            // 网盘分享链接：下载语义
+            const CloudPlatform platform = to_cloud_platform(info.protocol);
+            if (platform != CloudPlatform::Unknown) {
+                return true;
+            }
+            // HTTP/HTTPS：要求路径末段带文件扩展名。纯网页 URL（路由
+            // 形态、无扩展名、或以 / 结尾）不触发剪贴板弹窗。
+            const QString file_name = info.file_name;
+            if (file_name.isEmpty()) {
+                return false;
+            }
+            const qsizetype dot = file_name.lastIndexOf('.');
+            if (dot <= 0 || dot >= file_name.length() - 1) {
+                return false;
+            }
+            static const QRegularExpression kExtension(
+                R"(^[A-Za-z0-9]{1,10}$)");
+            // 网页文档/接口响应形态：地址栏复制和 API 响应是剪贴板误弹
+            // 的主要来源，即便带扩展名也不当下载弹窗。
+            static const QRegularExpression kWebDoc(
+                R"(^(html?|php\d?|aspx?|jsp|shtml|json|xml)$)",
+                QRegularExpression::CaseInsensitiveOption);
+            const QString extension = file_name.mid(dot + 1);
+            return kExtension.match(extension).hasMatch()
+                && !kWebDoc.match(extension).hasMatch();
+        }
+    }
+}
+
 UrlInfo UrlDetector::parse_url(const QString& text)
 {
     UrlInfo info;

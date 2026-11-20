@@ -100,6 +100,39 @@ TEST(UrlDetectorTest, ContainsUrlCloudAndGarbage) {
     EXPECT_FALSE(UrlDetector::contains_url(""));
 }
 
+// 剪贴板弹窗门（looks_like_download_url）：下载语义协议与网盘一律算；
+// HTTP/HTTPS 必须路径末段带文件扩展名——纯网页 URL 不弹。
+TEST(UrlDetectorTest, LooksLikeDownloadUrlClipboardGate) {
+    // 下载语义协议：无条件弹
+    EXPECT_TRUE(UrlDetector::looks_like_download_url(
+        "magnet:?xt=urn:btih:abcdef&dn=ubuntu.iso"));
+    EXPECT_TRUE(UrlDetector::looks_like_download_url(
+        "ed2k://|file|demo.bin|1024|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA|/"));
+    EXPECT_TRUE(UrlDetector::looks_like_download_url("ftp://host/pub/tools/7zip.exe"));
+    EXPECT_TRUE(UrlDetector::looks_like_download_url("thunder://QUFodHRwOi8v"));
+
+    // 网盘分享链接：一律弹
+    EXPECT_TRUE(UrlDetector::looks_like_download_url("https://pan.baidu.com/s/1abc_XY"));
+    EXPECT_TRUE(UrlDetector::looks_like_download_url("https://www.alipan.com/s/zz9"));
+
+    // HTTP 文件 URL（路径末段带扩展名）：弹
+    EXPECT_TRUE(UrlDetector::looks_like_download_url("https://example.com/files/setup.zip"));
+    EXPECT_TRUE(UrlDetector::looks_like_download_url("https://example.com/media/movie.mp4"));
+    EXPECT_TRUE(UrlDetector::looks_like_download_url("https://example.com/d/iso/ubuntu-24.04-live-server-amd64.iso"));
+
+    // 纯网页 URL：不弹（用户反馈的误弹形态）
+    EXPECT_FALSE(UrlDetector::looks_like_download_url("https://www.qidian.com/"));
+    EXPECT_FALSE(UrlDetector::looks_like_download_url("https://github.com/cuihairu/falcon"));
+    EXPECT_FALSE(UrlDetector::looks_like_download_url("https://example.com/article?id=123"));
+    EXPECT_FALSE(UrlDetector::looks_like_download_url("https://example.com/docs/page.html"));
+    EXPECT_FALSE(UrlDetector::looks_like_download_url("https://example.com/files/"));
+    EXPECT_FALSE(UrlDetector::looks_like_download_url("https://example.com/api/v2/items.json"));
+
+    // 垃圾文本与空串：不弹
+    EXPECT_FALSE(UrlDetector::looks_like_download_url("hello world"));
+    EXPECT_FALSE(UrlDetector::looks_like_download_url(""));
+}
+
 TEST(UrlDetectorTest, PrivateProtocolsUnaffected) {
     const UrlInfo magnet = UrlDetector::parse_url(
         "magnet:?xt=urn:btih:abcdef&dn=ubuntu.iso&xl=123");

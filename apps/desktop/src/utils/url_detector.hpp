@@ -89,6 +89,17 @@ public:
     static bool contains_url(const QString& text);
 
     /**
+     * @brief Check if text is a download-worthy URL for the clipboard popup
+     *
+     * 下载语义协议（magnet/thunder/qqlink/flashget/ed2k/ftp/网盘分享）
+     * 一律算；HTTP/HTTPS 要求路径末段带文件扩展名——纯网页 URL 不触发
+     * 剪贴板弹窗（剪贴板监控是唯一调用方，浏览页面复制个链接不该弹）。
+     * @param text Text to check
+     * @return true if the text should trigger the clipboard popup
+     */
+    static bool looks_like_download_url(const QString& text);
+
+    /**
      * @brief Detect and parse URL from text
      * @param text Text to parse
      * @return UrlInfo structure with parsed information

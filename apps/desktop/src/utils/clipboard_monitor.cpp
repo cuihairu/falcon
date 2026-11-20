@@ -103,7 +103,7 @@ void ClipboardMonitor::process_text(const QString& text)
     }
 
     // Check if text contains a supported URL
-    if (!UrlDetector::contains_url(text)) {
+    if (!UrlDetector::looks_like_download_url(text)) {
         return;
     }
 
