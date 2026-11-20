@@ -759,13 +759,30 @@ jobs:
           # 门禁：error 必须 0（exit code 非 0 即失败）；warning 允许。
           npx --yes web-ext@latest lint --source-dir /tmp/firefox-ext-src
 
+      - name: Build Chromium extension CRX3 (drag-install package)
+        run: |
+          # CRX3 = Chromium 可直接拖装的封装（zip 只能开发者模式 load
+          # unpacked）。固定密钥 packaging/extension/falcon-crx.pem 钉住
+          # 扩展 ID：换 key = 换 ID = 老版本升级后设置全丢，绝不能每次
+          # 构建重新生成。源目录直接复用 /tmp/ext-verify（上一已过结构
+          # 校验的解包）。工具：crx3 npm 包（协议头 Cr24 v3 已本地验证）。
+          test -f /tmp/ext-verify/manifest.json
+          npx --yes crx3@latest \
+            --keyPath packaging/extension/falcon-crx.pem \
+            --crxPath "$GITHUB_WORKSPACE/falcon-nightly-extension.crx" \
+            /tmp/ext-verify
+          # 结构门禁：CRX3 头（Cr24 v3）+ 尺寸非零
+          head -c4 "$GITHUB_WORKSPACE/falcon-nightly-extension.crx" | grep -q "Cr24"
+          [ "$(stat -c%s "$GITHUB_WORKSPACE/falcon-nightly-extension.crx")" -gt 100 ]
+          echo "crx3 package OK"
+
       - name: Generate SHA256SUMS
         # falcon-nightly-extension*.zip 同时覆盖 Chromium 单包与 Firefox 包
-        # （`-*.zip` 带 '-' 字面量，匹配不到改名后的单 zip）。
+        # （`-*.zip` 带 '-' 字面量，匹配不到改名后的单 zip）。crx 单独列。
         # ipk 追加行带 ls 守卫：OpenWrt 两腿全灭时 glob 不展开，
         # 直接把字面量传给 sha256sum 会报错。
         run: |
-          sha256sum falcon-desktop-* falcon-nightly-extension*.zip > SHA256SUMS
+          sha256sum falcon-desktop-* falcon-nightly-extension*.zip falcon-nightly-extension.crx > SHA256SUMS
           ls ./*.ipk >/dev/null 2>&1 && sha256sum ./*.ipk >> SHA256SUMS || true
 
       - name: Clean old Nightly Release assets
@@ -795,6 +812,7 @@ jobs:
             | macOS | `falcon-desktop-macos-*.dmg` | 拖拽安装到 Applications |
             | Windows | `falcon-desktop-setup-*.exe` | 运行安装到 Program Files，开始菜单启动，自带卸载 |
             | Windows | `falcon-desktop-windows-*.zip` | 解压后运行 falcon-desktop.exe |
+            | Chrome/Edge/Brave | `falcon-nightly-extension.crx` | 浏览器扩展 CRX3 封装（扩展 ID 固定）。chrome://extensions 开发者模式 → 直接把 .crx 拖进页面安装（Chrome 135+ 需在扩展页临时允许或用 zip 包） |
             | Chrome/Edge/Brave | `falcon-nightly-extension.zip` | 浏览器扩展（MV3，Chromium 系通用）。解压后 chrome://extensions（Edge 为 edge://extensions）开发者模式 → Load unpacked 选解压目录（不能直接装 zip） |
             | Firefox | `falcon-nightly-extension-firefox.zip` | 浏览器扩展 Firefox 版（115+）。解压后 about:debugging#/runtime/this-firefox → Load Temporary Add-on… 选解压目录里的 manifest.json（临时加载，重启 Firefox 失效） |
             | OpenWrt | `falcon_*_x86_64.ipk` | x86_64 设备（软路由/虚拟机）。`opkg install` 三包：falcon + luci-app-falcon + app-meta-falcon，静态链接 musl，无额外依赖 |
@@ -822,6 +840,7 @@ jobs:
           files: |
             falcon-desktop-*nightly*
             falcon-nightly-extension.zip
+            falcon-nightly-extension.crx
             falcon-nightly-extension-firefox.zip
             *.ipk
             SHA256SUMS
