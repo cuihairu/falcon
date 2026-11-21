@@ -2,6 +2,15 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-11-21 - 主题家族贯穿三站点（todo UI-RD-002 A3：family 与 theme 同构的消费链）
+- **范围**：主题家族（Warm/Cold/Graphite）从「token 表已就位」推进到「全部取色站点经 family 取值」——应用整体 QSS、themed 图标着色、悬浮速度窗局部 QSS 三站点同族切换（此前三站点各取 Warm 或无 family 通道，切家族后局部面残留旧色）
+- **`ThemeManager`**（`utils/theme_manager.{hpp,cpp}`）：`ThemeFamily` 枚举 + `family()` 访问器 + `set_family()`（`set_theme()` 同构：变更检测 → 作废 `light_cache_`/`dark_cache_` 双缓存 → `apply_stylesheet()` 重渲 → **仅家族实际变化时** `emit family_changed`）；`apply_stylesheet()` 取 `tokens_for(current_family_, current_theme_)` 单点取色（palette/QSS/图标同源）
+- **信号拆分（与 theme_changed 对称）**：新增 `family_changed(ThemeFamily)`——家族切换**不改变主题类型**，`theme_changed` 恒不发射；家族是独立维度，消费方必须经本信号跟随，否则局部 QSS 面（悬浮窗）在切家族后永不刷新
+- **`icon_utils`**：`set_current_family()` + `std::atomic<ThemeFamily> g_family{Warm}`（与既有 `g_theme` 同模式），`role_color()` 改 `tokens_for(g_family.load(), g_theme.load())`——27 枚 Lucide 图标着色随家族换色
+- **`SpeedFloatWidget`**（局部样式表，不进全局 QSS）：新增 `apply_family(ThemeFamily)` + 成员 `family_`，`restyle()` 改 `tokens_for(family_, theme_)` 双参取色（与 `apply_theme` 对称）
+- **接线**（`MainWindow::setup_speed_float`）：`connect(theme_manager_, &ThemeManager::family_changed, speed_float_, &SpeedFloatWidget::apply_family)`
+- **验证**：build-desktop 增量重建绿（本批零新告警，既有 `-Wconversion` 三处非本批文件）；desktop 全部 8 测试二进制 113/113
+
 ### 2026-11-21 - 主题家族系统落地（todo UI-RD-002：Warm/Cold/Graphite × 亮暗，checkbox 12 家族变体 + 关闭钮 x-on-light 修复 + 沙盒移植）
 - **目标**：单一 warm console 主题扩为家族系统——Warm / Cold / Graphite 三家族 × 亮暗两主题；设计语言与文档站同源不变，家族只换 accent 与中性底/文字色板
 - **token 接线**（`theme_tokens.hpp` + `theme_manager.cpp`）：`make_tokens` 构造家族×主题 key（family_key/theme_key）→ `ThemeTokens` 增 `checkbox_checked`/`checkbox_unchecked` 两个 qrc 路径字段（`:/icons/checkbox-{checked,unchecked}-<family>-<theme>.svg`，默认家族 Warm）；`render_qss` 把双 QSS 的 `{{checkbox_checked}}`/`{{checkbox_unchecked}}` 占位符替换为对应路径
