@@ -115,6 +115,9 @@ add_library(falcon_protocols
     src/swarm_mirror_source.cpp
     src/commands/command.cpp
     src/commands/http_commands.cpp
+    src/commands/http_response_command.cpp
+    src/commands/http_download_command.cpp
+    src/commands/http_retry_commands.cpp
     src/net/event_poll_poll.cpp
     src/net/event_poll_factory.cpp
     src/net/socket_pool.cpp
