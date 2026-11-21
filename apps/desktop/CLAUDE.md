@@ -2,6 +2,15 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-11-21 - 主题家族系统落地（todo UI-RD-002：Warm/Cold/Graphite × 亮暗，checkbox 12 家族变体 + 关闭钮 x-on-light 修复 + 沙盒移植）
+- **目标**：单一 warm console 主题扩为家族系统——Warm / Cold / Graphite 三家族 × 亮暗两主题；设计语言与文档站同源不变，家族只换 accent 与中性底/文字色板
+- **token 接线**（`theme_tokens.hpp` + `theme_manager.cpp`）：`make_tokens` 构造家族×主题 key（family_key/theme_key）→ `ThemeTokens` 增 `checkbox_checked`/`checkbox_unchecked` 两个 qrc 路径字段（`:/icons/checkbox-{checked,unchecked}-<family>-<theme>.svg`，默认家族 Warm）；`render_qss` 把双 QSS 的 `{{checkbox_checked}}`/`{{checkbox_unchecked}}` 占位符替换为对应路径
+- **checkbox 家族变体（12 枚预生成 SVG）**：`resources/icons/checkbox-{checked,unchecked}-{warm,cold,graphite}-{dark,light}.svg`——几何同形（B23 复验），着色取家族色板：checked = accent 实底 rx=3 + 对比色勾（dark #ffa07a/#27140a、#5b9df5/#0d1a2b、#34d399/#052017；light #c2410c/#fff、#2f6fd0/#fff、#0b7d59/#fff）；unchecked ring stroke（light #aba49b/#a3acb6/#a3aca8；dark #756c62/#5a6169/#5d6663）。旧 4 枚单主题变体 rename 为 warm 前缀 + 补 cold/graphite 8 枚
+- **Warm 家族 token 顺带微调**（家族变体表对账）：dark window #1b1714→#16120f / card #262019→#221c16 / text #f2ede8→#f7f2ec；light window #f6f4f1→#f7f5f2 / text #292524→#262220——三家族全部 24 个前景/背景配对 ≥4.5:1（WCAG AA）
+- **关闭钮 x-on-light 修复（既有缺资产 bug）**：双 QSS `#closeButton:hover/:pressed` 的 `icon: url(:/icons/x-on-light.svg)`——此前引用不存在的资产，danger 红底上无叉形；新增 `resources/icons/x-on-light.svg`（白叉透明底，currentColor 在 QSS icon:url() 上下文不可控，与 checkbox 同法预烘 #ffffff）
+- **沙盒移植**（`ui_sandbox.cpp`）：`RedesignHexMap` 改家族映射表（warm/cold/graphite × 亮暗），`apply_direction_theme` hex 替换循环 + 整路径 qrc warm→家族 checkbox 替换（warm 方向按设计 no-op）；redesign 矩阵 3 家族 × 2 主题 × 14 视图 = 84 PNG
+- **验证**：build-desktop 全量重建绿（195/195）；desktop 全部 8 二进制 113/113；沙盒 redesign 84 PNG 逐张像素级核对（三家族 accent/中性底/checkbox 环与勾精确色 + 零破版）
+
 ### 2026-10-07 - B18 已完成任务双击打开文件（双击行为可配 + 右键菜单「打开文件」+ 缺文件不静默 + 走查 19 图）
 - **修法**（`download_page.{hpp,cpp}` + `settings_page.{hpp,cpp}` + `main_window.cpp`）：双击门控 Completed 视图——表格走既有 `cellDoubleClicked` 连接（加 `view_mode_==Completed` 判定），网格卡片 `installEventFilter` 捕 `QEvent::MouseButtonDblClick`（QTableWidget 默认吃双击，卡片无此信号）；行为按 QSettings `desktop/completed_double_click_action`（0=打开文件默认 / 1=打开所在文件夹）`QDesktopServices::openUrl`，**每次双击即时重读**（切换免重启）；两视图右键菜单补「打开文件」+「打开文件夹」（值捕获选中项 save_path）；文件不存在/被移动 → 警告框明示路径 + 「打开所在文件夹」回退钮（复用同一 open 入口，非静默调用 xdg-open），`openUrl` 失败 → 「系统没有找到能打开「%1」的程序」。设置页「下载完成后」组增下拉框，`completed_double_click_changed` → MainWindow 即时写 QSettings（不等「应用」），`reset_to_defaults` 回 0
 - **真实走查**（Xvfb :96 + openbox + xdg-open 探针 stub，19 图 `/home/cui/fb-shots/b18/`）：默认表格双击 → log1 文件 URL / 网格卡片双击 → log2 同 URL → 设置页切换 → conf 即时 =1（不点应用）→ 双击 → log3 目录 URL → 切回 conf=0 → 移走文件双击 → 零新增 xdg-open 调用（警告框接管，17 图）→ 回退钮 → log4 目录 URL → 右键菜单两视图在位（18/19 图）
