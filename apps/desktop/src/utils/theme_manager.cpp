@@ -68,6 +68,10 @@ QString render_qss(QString qss, const ThemeTokens& t)
     subn("{{radius_card}}", t.shape.radius_card);
     subn("{{radius_control}}", t.shape.radius_control);
     subn("{{radius_small}}", t.shape.radius_small);
+    // 资源路径占位符:checkbox 图标按家族×主题挑选 qrc 里的预生成 SVG
+    // 变体(12 枚;几何同形,着色走家族色板)。
+    qss.replace(QLatin1String("{{checkbox_checked}}"), t.checkbox_checked);
+    qss.replace(QLatin1String("{{checkbox_unchecked}}"), t.checkbox_unchecked);
     return qss;
 }
 

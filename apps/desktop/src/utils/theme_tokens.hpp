@@ -9,9 +9,10 @@
  * tokens_for(family, theme) 逐 token 填充;图标着色共用同一组 token。
  * 调色只改这里,禁止在页面代码里出现硬编码颜色。
  *
- * 对比度基线(WCAG AA,warm 家族):亮 accent #c2410c 于亮底 4.8:1、
- * 白字于其上 5.0:1;暗 accent #ffa07a 于暗底 9.0:1、深咖啡字
- * #27140a 于其上 9.1:1(与文档站同值同验)。
+ * 对比度基线(WCAG AA,warm 家族,按变体表色值 Python 实算):亮 text
+ * 14.5:1、accent 4.8:1、白字于 accent 上 5.2:1、secondary 8.4:1;暗
+ * text 16.7:1、accent 9.4:1、accent 上深字 8.9:1、secondary 8.1:1
+ * ——三家族全部 24 个前景/背景配对 ≥4.5:1。
  *
  * @author Falcon Team
  * @date 2026-09-17
@@ -22,6 +23,7 @@
 #include "theme_manager.hpp"
 
 #include <QColor>
+#include <QString>
 
 namespace falcon::desktop {
 
@@ -64,6 +66,8 @@ struct ThemeTokens {
     QColor danger_pressed;    // {{danger_pressed}} 危险钮按压底
     QColor hover_bg;          // {{hover_bg}} 实底悬停(亮色表;dark 走 hover_overlay)
     QColor primary_disabled_bg; // {{primary_disabled_bg}} 主按钮禁用底(亮色表)
+    QString checkbox_checked;   // {{checkbox_checked}} 勾选态图标 qrc 路径(家族×主题变体)
+    QString checkbox_unchecked; // {{checkbox_unchecked}} 未勾选态图标 qrc 路径
     ThemeShape shape;         // 控件圆角三档(卡片 12/控件 8/小件 4)
 };
 
@@ -85,21 +89,21 @@ inline ThemeTokens make_tokens(ThemeFamily family, ThemeType theme)
         t.danger_pressed = QColor(0xa5, 0x26, 0x18);
         switch (family) {
             case ThemeFamily::Warm:
-                t.window          = QColor(0x1b, 0x17, 0x14);
-                t.card            = QColor(0x26, 0x20, 0x19);
-                t.text            = QColor(0xf2, 0xed, 0xe8);
-                t.text_secondary  = QColor(0xb5, 0xac, 0xa3);
-                t.text_disabled   = QColor(0x6e, 0x66, 0x5e);
+                t.window          = QColor(0x16, 0x12, 0x0f);
+                t.card            = QColor(0x22, 0x1c, 0x16);
+                t.text            = QColor(0xf7, 0xf2, 0xec);
+                t.text_secondary  = QColor(0xbc, 0xb2, 0xa6);
+                t.text_disabled   = QColor(0x75, 0x6c, 0x62);
                 t.accent          = QColor(0xff, 0xa0, 0x7a);
                 t.accent_hover    = QColor(0xff, 0xb2, 0x8c);
                 t.accent_pressed  = QColor(0xe0, 0x87, 0x5e);
                 t.accent_text     = QColor(0x27, 0x14, 0x0a);
-                t.divider         = QColor(0x37, 0x30, 0x2a);
-                t.input_bg        = QColor(0x31, 0x2a, 0x24);
+                t.divider         = QColor(0x3a, 0x32, 0x2a);
+                t.input_bg        = QColor(0x2d, 0x26, 0x20);
                 t.card_border     = t.divider;
-                t.control_border  = QColor(0x4a, 0x42, 0x3a);
-                t.card_border_hover = QColor(0x55, 0x4b, 0x41);
-                t.surface_deep    = QColor(0x3a, 0x32, 0x2b);
+                t.control_border  = QColor(0x4e, 0x45, 0x3c);
+                t.card_border_hover = QColor(0x5a, 0x4f, 0x44);
+                t.surface_deep    = QColor(0x36, 0x2e, 0x26);
                 t.hover_bg        = t.input_bg;
                 t.primary_disabled_bg = t.input_bg;
                 break;
@@ -148,23 +152,23 @@ inline ThemeTokens make_tokens(ThemeFamily family, ThemeType theme)
         t.danger_pressed = QColor(0xb0, 0x2c, 0x1c);
         switch (family) {
             case ThemeFamily::Warm:
-                t.window          = QColor(0xf6, 0xf4, 0xf1);
+                t.window          = QColor(0xf7, 0xf5, 0xf2);
                 t.card            = QColor(0xff, 0xff, 0xff);
-                t.text            = QColor(0x29, 0x25, 0x24);
-                t.text_secondary  = QColor(0x57, 0x53, 0x4e);
-                t.text_disabled   = QColor(0xa8, 0xa2, 0x9e);
+                t.text            = QColor(0x26, 0x22, 0x20);
+                t.text_secondary  = QColor(0x52, 0x4d, 0x47);
+                t.text_disabled   = QColor(0xaa, 0xa3, 0x9c);
                 t.accent          = QColor(0xc2, 0x41, 0x0c);
                 t.accent_hover    = QColor(0x9a, 0x34, 0x12);
                 t.accent_pressed  = QColor(0x7c, 0x2d, 0x12);
                 t.accent_text     = QColor(0xff, 0xff, 0xff);
-                t.divider         = QColor(0xe7, 0xe5, 0xe4);
-                t.input_bg        = QColor(0xed, 0xea, 0xe5);
+                t.divider         = QColor(0xe4, 0xe1, 0xdc);
+                t.input_bg        = QColor(0xea, 0xe6, 0xdf);
                 t.card_border     = t.divider;
-                t.control_border  = QColor(0xdc, 0xd7, 0xd1);
-                t.card_border_hover = QColor(0xca, 0xc2, 0xb9);
+                t.control_border  = QColor(0xd8, 0xd3, 0xcb);
+                t.card_border_hover = QColor(0xc5, 0xbd, 0xb2);
                 t.surface_deep    = t.input_bg;
-                t.hover_bg        = QColor(0xf5, 0xf2, 0xee);
-                t.primary_disabled_bg = QColor(0xe8, 0xe3, 0xdd);
+                t.hover_bg        = QColor(0xf4, 0xf1, 0xec);
+                t.primary_disabled_bg = QColor(0xe7, 0xe1, 0xd9);
                 break;
             case ThemeFamily::Cold:
                 t.window          = QColor(0xf4, 0xf6, 0xf8);
@@ -206,6 +210,21 @@ inline ThemeTokens make_tokens(ThemeFamily family, ThemeType theme)
                 break;
         }
     }
+    // checkbox 图标走家族×主题 12 枚 qrc 预生成 SVG 变体
+    // (resources/icons/checkbox-*-<family>-<theme>.svg):几何同形,
+    // 着色取本家族色板(checked 底=accent/勾=accent_text,unchecked
+    // 底=card/描边环=亮暗各自的中性环色),由 render_qss 经
+    // {{checkbox_*}} 占位符写入 QSS 模板的 url() 引用。
+    const char* family_key = family == ThemeFamily::Warm   ? "warm"
+                             : family == ThemeFamily::Cold ? "cold"
+                                                           : "graphite";
+    const char* theme_key  = theme == ThemeType::Light ? "light" : "dark";
+    t.checkbox_checked     = QStringLiteral(":/icons/checkbox-checked-%1-%2.svg")
+                                 .arg(QLatin1String(family_key),
+                                      QLatin1String(theme_key));
+    t.checkbox_unchecked   = QStringLiteral(":/icons/checkbox-unchecked-%1-%2.svg")
+                                 .arg(QLatin1String(family_key),
+                                      QLatin1String(theme_key));
     return t;
 }
 
@@ -220,7 +239,7 @@ inline ThemeTokens tokens_for(ThemeFamily family, ThemeType theme)
 }
 
 /**
- * @brief 默认家族(Warm)便捷重载——数值与既有 warm 现值完全一致
+ * @brief 默认家族(Warm)便捷重载——数值即 warm 家族变体表列(生产默认)
  */
 inline ThemeTokens tokens_for(ThemeType theme)
 {

@@ -31,7 +31,6 @@
 
 #include <QApplication>
 #include <QDir>
-#include <QFile>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QMenu>
@@ -43,7 +42,6 @@
 #include <QVector>
 #include <cstdio>
 #include <cstring>
-#include <utility>
 
 #include "dialogs/add_download_dialog.hpp"
 #include "navigation/sidebar.hpp"
@@ -170,8 +168,8 @@ std::vector<falcon::desktop::TrashEntry> demo_trash_entries()
 // 设计原型 B「cold utility」:冷峻工具感暗色变体(对标 Motrix)
 //
 // 机制:token 值仅在本次沙盒会话内替换——对 ThemeManager 的暗色 QSS 文本
-// 做 hex 热冷映射 + 整串替换 checkbox 内嵌 base64 SVG,再按冷 token 重建
-// QPalette。生产 theme_tokens.hpp / fluent_dark.qss 零改动。
+// 做 hex 热冷映射 + checkbox qrc 路径换到 cold 家族变体,再按冷 token
+// 重建 QPalette。生产 theme_tokens.hpp / fluent_dark.qss 零改动。
 //
 // 色板(WCAG AA 实算):window #131519 / card #1b1e24 / text #f5f7fa(17.0:1,
 // 高于 warm 的 15.3)/ secondary #98a0ab(6.9:1)/ accent #5b9df5(6.6:1,
@@ -189,16 +187,16 @@ struct ColdHexMap {
     const char* note;
 };
 const ColdHexMap kColdHexMap[] = {
-    {"#1b1714", "#131519", "window"},
-    {"#262019", "#1b1e24", "card"},
-    {"#37302a", "#2b3038", "divider"},
-    {"#f2ede8", "#f5f7fa", "text"},
-    {"#b5aca3", "#98a0ab", "text_secondary"},
-    {"#6e665e", "#5a6169", "text_disabled"},
-    {"#312a24", "#22262d", "控件底(按钮/输入)"},
-    {"#4a423a", "#363c45", "控件描边"},
-    {"#3a322b", "#262b33", "分段钮 checked 底"},
-    {"#554b41", "#3d444e", "卡片 hover 描边"},
+    {"#16120f", "#131519", "window"},
+    {"#221c16", "#1b1e24", "card"},
+    {"#3a322a", "#2b3038", "divider"},
+    {"#f7f2ec", "#f5f7fa", "text"},
+    {"#bcb2a6", "#98a0ab", "text_secondary"},
+    {"#756c62", "#5a6169", "text_disabled"},
+    {"#2d2620", "#22262d", "控件底(按钮/输入)"},
+    {"#4e453c", "#363c45", "控件描边"},
+    {"#362e26", "#262b33", "分段钮 checked 底"},
+    {"#5a4f44", "#3d444e", "卡片 hover 描边"},
     {"#ffa07a", "#5b9df5", "accent"},
     {"#ffb28c", "#7ab1f8", "accent hover"},
     {"#e0875e", "#4585e0", "accent pressed"},
@@ -243,19 +241,20 @@ QPalette cold_palette()
     return pal;
 }
 
-/// 会话内应用冷色变体:暗色 QSS hex 替换 + checkbox base64 SVG 整串替换
+/// 会话内应用冷色变体:暗色 QSS hex 替换 + checkbox qrc 路径替换
 void apply_cold_dark_theme(const QString& dark_qss)
 {
     QString qss = dark_qss;
     for (const auto& m : kColdHexMap) {
         qss.replace(QString::fromLatin1(m.warm), QString::fromLatin1(m.cold));
     }
-    // checkbox 内嵌 base64 SVG 的 hex 藏在 base64 内,hex 替换够不到——整串换
-    // (warm/cold 串均由 tools 级 python 解码-替换-重编码生成,绝不手抄)
-    qss.replace(QStringLiteral("PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+PHJlY3QgeD0iMC41IiB5PSIwLjUiIHdpZHRoPSIxNSIgaGVpZ2h0PSIxNSIgcng9IjMiIGZpbGw9IiMyNjIwMTkiIHN0cm9rZT0iIzZlNjY1ZSIvPjwvc3ZnPg=="),
-                QStringLiteral("PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+PHJlY3QgeD0iMC41IiB5PSIwLjUiIHdpZHRoPSIxNSIgaGVpZ2h0PSIxNSIgcng9IjMiIGZpbGw9IiMxYjFlMjQiIHN0cm9rZT0iIzVhNjE2OSIvPjwvc3ZnPg=="));
-    qss.replace(QStringLiteral("PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+PHJlY3Qgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2IiByeD0iMyIgZmlsbD0iI2ZmYTA3YSIvPjxwYXRoIGQ9Ik00IDguNWwyLjggMi44TDEyIDUuNSIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMjcxNDBhIiBzdHJva2Utd2lkdGg9IjEuOCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+PC9zdmc+"),
-                QStringLiteral("PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+PHJlY3Qgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2IiByeD0iMyIgZmlsbD0iIzViOWRmNSIvPjxwYXRoIGQ9Ik00IDguNWwyLjggMi44TDEyIDUuNSIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMGQxYTJiIiBzdHJva2Utd2lkdGg9IjEuOCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+PC9zdmc+"));
+    // checkbox 走 qrc 家族变体(QSS url() 引用)——渲染产物是 warm-dark 路径,
+    // 整路径换成 cold-dark 变体即可(B23 后 checkbox 已非 base64 内嵌,hex
+    // 替换够不到 SVG 色值;家族变体是独立 SVG 文件,无需 hex 换)
+    qss.replace(QStringLiteral(":/icons/checkbox-checked-warm-dark.svg"),
+                QStringLiteral(":/icons/checkbox-checked-cold-dark.svg"));
+    qss.replace(QStringLiteral(":/icons/checkbox-unchecked-warm-dark.svg"),
+                QStringLiteral(":/icons/checkbox-unchecked-cold-dark.svg"));
     qApp->setStyleSheet(qss);
     qApp->setPalette(cold_palette());
 }
@@ -263,14 +262,11 @@ void apply_cold_dark_theme(const QString& dark_qss)
 // ---------------------------------------------------------------------------
 // --redesign 模式(todo UI-RD-001,2026-11):重设计提案三方向全集
 //
-// 与上方 --prototype 单变体的差异:三方向 × 亮暗双主题 × 14 功能面,
-// 且修正 --prototype 时代的两处过时假设:
-//   ① checkbox 已随 B23 迁到 qrc 图标(QSS url() 引用)——apply_cold_dark_
-//      theme 的 base64 整串替换成为死代码(替换目标串已不在 QSS 里),旧
-//      cold-utility 原型渲染的是生产暖色 qrc checkbox;本模式改为 QSS
-//      url() 路径替换 → 会话内生成的方向变体 SVG 文件(结构逐字节同生产
-//      assets/icons/checkbox-*.svg,仅色值取方向 token)。
-//   ② 亮色主题此前无变体——三方向均补齐 light 面(含各自 token 表)。
+// 与上方 --prototype 单变体的差异:三方向 × 亮暗双主题 × 14 功能面。
+// checkbox 随 B23 迁到 qrc 图标、又经 theme_tokens 家族化(12 枚预生成
+// SVG 变体),两模式统一为 QSS url() 路径整串切换(prototype 换
+// warm→cold;redesign 按方向 slug 换)——生产 icons 是唯一 SVG 源,
+// 沙盒不再写会话变体文件。
 // 生产 theme_tokens.hpp / 双 QSS / qrc 零改动。
 //
 // 三方向(色值全部经 WCAG 实算,对比脚本 /tmp/wcag_check.py 口径):
@@ -474,61 +470,29 @@ QPalette direction_palette(const RedesignHexMap* map, std::size_t n, bool dark)
     return pal;
 }
 
-/// 生成方向 × 主题的 checkbox SVG 变体(结构逐字节同生产 assets/icons/
-/// checkbox-*.svg,仅色值取方向 token:checked = accent 底 + accent_text
-/// 勾;unchecked = card 底 + 描边环)。QSS url() 接受绝对文件路径。
-void write_checkbox_variants(const QString& dir, const QString& accent,
-                             const QString& accent_text, const QString& card,
-                             const QString& ring, QString* checked_path,
-                             QString* unchecked_path)
-{
-    QDir().mkpath(dir);
-    const QString checked_svg = QStringLiteral(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\">"
-        "<rect width=\"16\" height=\"16\" rx=\"3\" fill=\"%1\"/>"
-        "<path d=\"M4 8.5l2.8 2.8L12 5.5\" fill=\"none\" stroke=\"%2\" "
-        "stroke-width=\"1.8\" stroke-linecap=\"round\" "
-        "stroke-linejoin=\"round\"/></svg>");
-    const QString unchecked_svg = QStringLiteral(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\">"
-        "<rect x=\"0.5\" y=\"0.5\" width=\"15\" height=\"15\" rx=\"3\" "
-        "fill=\"%1\" stroke=\"%2\"/></svg>");
-    *checked_path = dir + QStringLiteral("/checkbox-checked.svg");
-    *unchecked_path = dir + QStringLiteral("/checkbox-unchecked.svg");
-    const std::pair<QString, QString> files[] = {
-        {checked_svg.arg(accent, accent_text), *checked_path},
-        {unchecked_svg.arg(card, ring), *unchecked_path},
-    };
-    for (const auto& file : files) {
-        QFile out(file.second);
-        if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-            std::fprintf(stderr, "cannot write %s\n",
-                         qPrintable(file.second));
-            continue;
-        }
-        out.write(file.first.toUtf8());
-    }
-}
-
-/// 会话内应用方向变体:QSS hex 映射 + checkbox qrc 路径 → 变体文件路径
+/// 会话内应用方向变体:QSS hex 映射 + checkbox qrc 路径家族切换
 void apply_direction_theme(const QString& qss_in, const RedesignHexMap* map,
-                           std::size_t n, bool dark,
-                           const QString& checked_path,
-                           const QString& unchecked_path)
+                           std::size_t n, bool dark, const char* family_key)
 {
     QString qss = qss_in;
     for (std::size_t i = 0; i < n; ++i) {
         qss.replace(QString::fromLatin1(map[i].warm),
                     QString::fromLatin1(map[i].variant));
     }
-    // B23 起 checkbox 走 qrc 图标——两条 url() 引用是全部 QSS 中仅有的
-    // 资源引用,整路径替换即可(无 disabled 变体图标,与生产一致)
-    qss.replace(dark ? QStringLiteral(":/icons/checkbox-checked-dark.svg")
-                     : QStringLiteral(":/icons/checkbox-checked-light.svg"),
-                checked_path);
-    qss.replace(dark ? QStringLiteral(":/icons/checkbox-unchecked-dark.svg")
-                     : QStringLiteral(":/icons/checkbox-unchecked-light.svg"),
-                unchecked_path);
+    // B23 起 checkbox 走 qrc 图标,theme_manager 按家族×主题把 {{checkbox_*}}
+    // 填成 :/icons/checkbox-*-<family>-<theme>.svg;沙盒以默认 Warm 家族渲
+    // 染,整路径替换到方向家族即可(warm 方向恒 no-op;家族变体是预生成
+    // SVG,几何同形、色值取方向 token,无需再写会话文件)
+    const QString theme_key =
+        dark ? QStringLiteral("dark") : QStringLiteral("light");
+    qss.replace(
+        QStringLiteral(":/icons/checkbox-checked-warm-%1.svg").arg(theme_key),
+        QStringLiteral(":/icons/checkbox-checked-%1-%2.svg")
+            .arg(QLatin1String(family_key), theme_key));
+    qss.replace(
+        QStringLiteral(":/icons/checkbox-unchecked-warm-%1.svg").arg(theme_key),
+        QStringLiteral(":/icons/checkbox-unchecked-%1-%2.svg")
+            .arg(QLatin1String(family_key), theme_key));
     qApp->setStyleSheet(qss);
 }
 
@@ -837,24 +801,12 @@ int main(int argc, char** argv)
                 const bool dark = t == 1;
                 const ThemeType theme_type = dark ? ThemeType::Dark : ThemeType::Light;
                 theme.set_theme(theme_type);
-                // checkbox 变体锚点(经方向映射):checked = accent 底 +
-                // accent_text 勾;unchecked = card 底 + 描边环(环色独立于
-                // token,见区块注释)。dark/light 各自取自对应方向映射。
                 const RedesignHexMap* map = dark ? dir.dark_map : dir.light_map;
                 const std::size_t n = dark ? dir.dark_n : dir.light_n;
-                QString checked_path;
-                QString unchecked_path;
-                const QString assets_dir = out_dir + "/assets/"
-                    + QString::fromLatin1(dir.slug) + "-"
-                    + (dark ? QStringLiteral("dark") : QStringLiteral("light"));
-                write_checkbox_variants(assets_dir,
-                                        hex_mapped(map, n, dark ? "#ffa07a" : "#c2410c"),
-                                        hex_mapped(map, n, dark ? "#27140a" : "#ffffff"),
-                                        hex_mapped(map, n, dark ? "#262019" : "#ffffff"),
-                                        hex_mapped(map, n, dark ? "#6e665e" : "#a29a92"),
-                                        &checked_path, &unchecked_path);
+                // checkbox 图标直接切 qrc 家族变体(色值即方向 token,见
+                // apply_direction_theme 注释),不再写会话 SVG 文件
                 apply_direction_theme(theme.stylesheet(theme_type), map, n,
-                                      dark, checked_path, unchecked_path);
+                                      dark, dir.slug);
                 qApp->setPalette(direction_palette(map, n, dark));
                 const QString suffix = QString::fromLatin1(dir.slug) + "_"
                     + (dark ? QStringLiteral("dark") : QStringLiteral("light"));

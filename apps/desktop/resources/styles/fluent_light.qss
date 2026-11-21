@@ -157,10 +157,12 @@ QPushButton#windowButton:pressed {
 
 QPushButton#closeButton:hover {
     background-color: {{danger}};
+    icon: url(:/icons/x-on-light.svg);
 }
 
 QPushButton#closeButton:pressed {
     background-color: {{danger_pressed}};
+    icon: url(:/icons/x-on-light.svg);
 }
 
 /* ---------- 2. 输入控件 ---------- */
@@ -252,14 +254,15 @@ QCheckBox::indicator {
     height: 16px;
 }
 
-/* 指示器 = qrc SVG（Qt QSS 不支持 data: URI，2026-10-04 B23 根因——
-   此前的 data:image/svg+xml;base64 形态零渲染，勾选/未勾选全不可见） */
+/* 指示器 = qrc SVG 变体（Qt QSS 不支持 data: URI，2026-10-04 B23 根因；
+   路径是 {{checkbox_*}} 占位符，ThemeManager 按家族×主题填入 12 枚预生成
+   变体之一——几何同形，着色取家族色板） */
 QCheckBox::indicator:unchecked {
-    image: url(:/icons/checkbox-unchecked-light.svg);
+    image: url({{checkbox_unchecked}});
 }
 
 QCheckBox::indicator:checked {
-    image: url(:/icons/checkbox-checked-light.svg);
+    image: url({{checkbox_checked}});
 }
 
 QGroupBox {
