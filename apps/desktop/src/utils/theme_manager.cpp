@@ -59,6 +59,15 @@ QString render_qss(QString qss, const ThemeTokens& t)
     sub("{{danger_pressed}}", t.danger_pressed);
     sub("{{hover_bg}}", t.hover_bg);
     sub("{{primary_disabled_bg}}", t.primary_disabled_bg);
+    // 形状参数:数值裸替换。占位符只给数值,px 单位留在 QSS 模板侧——
+    // Qt QSS 长度值必须带单位,裸数字可能解析失败,故模板写成
+    // `border-radius: {{radius_card}}px`。
+    auto subn = [&qss](const char* placeholder, int value) {
+        qss.replace(QLatin1String(placeholder), QString::number(value));
+    };
+    subn("{{radius_card}}", t.shape.radius_card);
+    subn("{{radius_control}}", t.shape.radius_control);
+    subn("{{radius_small}}", t.shape.radius_small);
     return qss;
 }
 

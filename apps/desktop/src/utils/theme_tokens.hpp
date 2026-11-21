@@ -26,6 +26,20 @@
 namespace falcon::desktop {
 
 /**
+ * @brief 控件形状参数(圆角,单位 px)
+ *
+ * 三家族初始同值——变体表只定义色板,形状差异待 Phase B
+ * 对照原型裁决后按需分档。经 ThemeManager::render_qss 的 subn
+ * 数值替换写入 QSS 模板占位符({{radius_card}}/{{radius_control}}/
+ * {{radius_small}}),渲染产物与旧字面值逐字节一致。
+ */
+struct ThemeShape {
+    int radius_card    = 12; // 卡片/面板/菜单
+    int radius_control = 8;  // 按钮/输入/下拉/spinbox
+    int radius_small   = 4;  // toolButton/行内钮/菜单项/tooltip/navTab/分段容器
+};
+
+/**
  * @brief 语义角色色彩集合(角色命名,非外观命名)
  */
 struct ThemeTokens {
@@ -50,6 +64,7 @@ struct ThemeTokens {
     QColor danger_pressed;    // {{danger_pressed}} 危险钮按压底
     QColor hover_bg;          // {{hover_bg}} 实底悬停(亮色表;dark 走 hover_overlay)
     QColor primary_disabled_bg; // {{primary_disabled_bg}} 主按钮禁用底(亮色表)
+    ThemeShape shape;         // 控件圆角三档(卡片 12/控件 8/小件 4)
 };
 
 namespace detail {

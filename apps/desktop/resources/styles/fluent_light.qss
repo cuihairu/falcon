@@ -48,7 +48,7 @@ QPushButton {
     background-color: {{surface}};
     color: {{text}};
     border: 1px solid {{divider}};
-    border-radius: 8px;
+    border-radius: {{radius_control}}px;
     padding: 6px 14px;
     min-height: 14px;
 }
@@ -76,7 +76,7 @@ QPushButton#primaryButton {
     background-color: {{accent}};
     color: {{accent_text}};
     border: none;
-    border-radius: 8px;
+    border-radius: {{radius_control}}px;
     padding: 7px 16px;
     font-weight: 600;
 }
@@ -98,7 +98,7 @@ QPushButton#primaryButton:disabled {
 QPushButton#toolButton {
     background: transparent;
     border: none;
-    border-radius: 4px;
+    border-radius: {{radius_small}}px;
     padding: 6px 10px;
     color: {{text_secondary}};
 }
@@ -117,7 +117,7 @@ QPushButton#rowActionButton,
 QPushButton#cardActionButton {
     background: transparent;
     border: none;
-    border-radius: 4px;
+    border-radius: {{radius_small}}px;
     min-width: 0;
     padding: 4px;
 }
@@ -169,7 +169,7 @@ QLineEdit {
     background-color: {{surface}};
     color: {{text}};
     border: 1px solid {{divider}};
-    border-radius: 8px;
+    border-radius: {{radius_control}}px;
     padding: 6px 10px;
     selection-background-color: {{accent}};
     selection-color: {{accent_text}};
@@ -187,14 +187,14 @@ QLineEdit:disabled {
 
 QLineEdit#searchEdit {
     padding: 7px 12px;
-    border-radius: 8px;
+    border-radius: {{radius_control}}px;
 }
 
 QComboBox {
     background-color: {{surface}};
     color: {{text}};
     border: 1px solid {{divider}};
-    border-radius: 8px;
+    border-radius: {{radius_control}}px;
     padding: 6px 28px 6px 10px;
 }
 
@@ -229,7 +229,7 @@ QSpinBox {
     background-color: {{surface}};
     color: {{text}};
     border: 1px solid {{divider}};
-    border-radius: 8px;
+    border-radius: {{radius_control}}px;
     padding: 5px 8px;
 }
 
@@ -265,7 +265,7 @@ QCheckBox::indicator:checked {
 QGroupBox {
     background-color: {{surface}};
     border: 1px solid {{card}};
-    border-radius: 12px;
+    border-radius: {{radius_card}}px;
     margin-top: 0px;
     padding: 26px 8px 10px 8px;
     font-size: 14px;
@@ -290,13 +290,13 @@ QMenu {
     background-color: {{surface}};
     color: {{text}};
     border: 1px solid {{card}};
-    border-radius: 12px;
+    border-radius: {{radius_card}}px;
     padding: 4px;
 }
 
 QMenu::item {
     padding: 7px 24px 7px 12px;
-    border-radius: 4px;
+    border-radius: {{radius_small}}px;
     background: transparent;
 }
 
@@ -318,7 +318,7 @@ QToolTip {
     background-color: {{surface}};
     color: {{text}};
     border: 1px solid {{card}};
-    border-radius: 4px;
+    border-radius: {{radius_small}}px;
     padding: 4px 8px;
     font-size: 12px;
 }
@@ -477,7 +477,7 @@ QPushButton#navTab {
     background: transparent;
     border: none;
     border-left: 3px solid transparent;
-    border-radius: 4px;
+    border-radius: {{radius_small}}px;
     padding: 9px 12px 9px 9px;
     text-align: left;
     color: {{text_secondary}};
@@ -538,7 +538,7 @@ QLabel#sectionLabel {
 #downloadHero {
     background-color: {{surface}};
     border: 1px solid {{card}};
-    border-radius: 12px;
+    border-radius: {{radius_card}}px;
 }
 
 #heroTitle {
@@ -561,13 +561,13 @@ QLabel#sectionLabel {
 #viewSegmented {
     background-color: {{input_bg}};
     border: 1px solid {{card}};
-    border-radius: 8px;
+    border-radius: {{radius_control}}px;
 }
 
 QPushButton#viewSegmentButton {
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 4px;
+    border-radius: {{radius_small}}px;
     padding: 4px 16px;
     color: {{text_secondary}};
 }
@@ -586,7 +586,7 @@ QPushButton#viewSegmentButton:checked {
 #summaryCard {
     background-color: {{surface}};
     border: 1px solid {{card}};
-    border-radius: 12px;
+    border-radius: {{radius_card}}px;
 }
 
 #summaryValue {
@@ -605,7 +605,7 @@ QPushButton#viewSegmentButton:checked {
 #taskCard {
     background-color: {{surface}};
     border: 1px solid {{card}};
-    border-radius: 12px;
+    border-radius: {{radius_card}}px;
 }
 
 #taskCard:hover {
