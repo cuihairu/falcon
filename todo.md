@@ -253,7 +253,7 @@ packages/
 
 ### 超大文件候选（>1000 行）
 
-- [ ] LAY-001 [P1] 拆分 `packages/libfalcon-protocols/src/commands/http_commands.cpp`（3640 行）——HTTP 多连接分段、TLS/代理、文件分配与 V2 重试命令混合在单 TU（`packages/libfalcon-protocols/src/commands/http_commands.cpp:61`）。
+- [x] LAY-001 [P1] 拆分 `packages/libfalcon-protocols/src/commands/http_commands.cpp`（3640 行）——HTTP 多连接分段、TLS/代理、文件分配与 V2 重试命令混合在单 TU（`packages/libfalcon-protocols/src/commands/http_commands.cpp:61`）（commit `c7c23ae`）。
 - [ ] LAY-002 [P1] 拆分 `packages/falcon-daemon/src/rpc/json_rpc_server.cpp`（1979 行）——HTTP/WS 传输、MCP 分流、会话与 30+ 个 aria2 方法共居一文件（`packages/falcon-daemon/src/rpc/json_rpc_server.cpp:575`、`packages/falcon-daemon/src/rpc/json_rpc_server.cpp:1176`）。
 - [ ] LAY-003 [P1] 拆分 `apps/desktop/src/pages/download_page.cpp`（1666 行）——任务表格/网格视图、筛选、操作菜单与 QSettings 记忆集中（`apps/desktop/src/pages/download_page.cpp:81`、`apps/desktop/src/pages/download_page.cpp:847`）。
 - [ ] LAY-004 [P1] 拆分 `apps/desktop/src/main_window.cpp`（1372 行）——窗口装配、侧栏/页面创建、托盘、IPC、设置与 40+ 信号槽共存（`apps/desktop/src/main_window.cpp:187`、`apps/desktop/src/main_window.cpp:935`）。
