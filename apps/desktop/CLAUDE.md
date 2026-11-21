@@ -2,6 +2,15 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-11-21 - 设置页主题模式/家族下拉三站点接线（todo UI-RD-002 A4：Mode 与 Family 双向同步 + 选择即存）
+- **目标**：设置页「外观」组的主题模式（浅色/深色/跟随系统）与主题家族（Warm/Cold/Graphite）两下拉此前只显 UI——选择不回写 ThemeManager、不持久化；本批沿既有三站点模式贯通（theme 开关先例同构）
+- **站点 1 `ThemeManager`**（`utils/theme_manager.{hpp,cpp}`）：`mode()`/`family()` 访问器 + `family_changed(ThemeFamily)` 信号（A3 已落）——下拉读端与家族跟随端的数据源；`set_theme_mode` 解析 System→`detect_system_theme()`、`set_family` 变更检测后发射
+- **站点 2 `SettingsPage`**（`pages/settings_page.{hpp,cpp}`）：`set_theme_mode_display(int)`（194-203）/`set_theme_family_display(int)`（205-213）回写 setter——`QSignalBlocker` 包裹 `setCurrentIndex`（程序化回写不反向触发 `theme_mode_changed`/`theme_family_changed`，杜绝设置页→主窗→设置页回环）+ 越界与同值守卫；两下拉构造（1295-1312）`currentIndexChanged` → `emit theme_{mode,family}_changed(currentIndex())`——**下拉索引与枚举值对齐**（mode 0=浅色 1=深色 2=跟随系统；family 0=Warm 1=Cold 2=Graphite）
+- **站点 3 `MainWindow`**（`main_window.cpp`）：启动同步——构造器按 QSettings 读 `theme_family`/`theme_mode` 后 `set_family`/`set_theme_mode`（158-165）；654-655 连接 `theme_mode_changed`/`theme_family_changed` → 两新槽；676-687 首同步 `set_theme_{mode,family}_display(manager 当前值)` + `theme_changed`→`set_theme_display`、`family_changed`→`set_theme_family_display` 两跟随连接。新增槽 `on_theme_mode_changed(int)`（1057）/`on_theme_family_changed(int)`（1083）——越界防御 → `theme_manager_->set_theme_mode/set_family` → 按构造器同款字符串口径写 QSettings（`theme_mode`="system"/"dark"/"light"、`theme_family`="warm"/"cold"/"graphite"）+ `sync()`；mode 变更顺带把解析出的主题写 `theme` 键（保持旧读取路径 theme 作 theme_mode 缺省与顶栏切换路径一致）
+- **信号拆分契约（A3 同款）**：模式下拉**不**跟随 `theme_changed`（mode 反映用户显式选择——「跟随系统」下系统解析出的亮暗不移动下拉）；家族下拉跟随 `family_changed`——两下拉各自单向，互不串扰
+- **顺带收口**：删除 `on_theme_toggle_requested()` 孤儿定义（头文件声明与连接早已替换为新双槽，函数体无声明/无连接/零引用残留——编译错误即此，grep 全 src 零命中）
+- **验证**：build-desktop 增量重建绿（`[15/15] Linking CXX executable bin/falcon-ui-sandbox`，本批零新告警，既有 `-Wconversion` 三处非本批文件）；desktop 全部 8 测试二进制 113/113（backend 26 / clipboard 12 / ipc 23 / order 14 / storage 16 / update 7 / url 9 / visibility 6）；设置项纯 UI getter/setter 无独立单测（沿既有分工，行为面以 Xvfb 走查为准）
+
 ### 2026-11-21 - 主题家族贯穿三站点（todo UI-RD-002 A3：family 与 theme 同构的消费链）
 - **范围**：主题家族（Warm/Cold/Graphite）从「token 表已就位」推进到「全部取色站点经 family 取值」——应用整体 QSS、themed 图标着色、悬浮速度窗局部 QSS 三站点同族切换（此前三站点各取 Warm 或无 family 通道，切家族后局部面残留旧色）
 - **`ThemeManager`**（`utils/theme_manager.{hpp,cpp}`）：`ThemeFamily` 枚举 + `family()` 访问器 + `set_family()`（`set_theme()` 同构：变更检测 → 作废 `light_cache_`/`dark_cache_` 双缓存 → `apply_stylesheet()` 重渲 → **仅家族实际变化时** `emit family_changed`）；`apply_stylesheet()` 取 `tokens_for(current_family_, current_theme_)` 单点取色（palette/QSS/图标同源）

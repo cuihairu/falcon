@@ -11,10 +11,15 @@
 #include "icon_utils.hpp"
 
 #include <QApplication>
+#include <QEvent>
 #include <QFile>
+#include <QGuiApplication>
 #include <QPalette>
 #include <QStyle>
 #include <QStyleFactory>
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+#include <QStyleHints>
+#endif
 
 namespace falcon::desktop {
 
@@ -114,7 +119,13 @@ ThemeManager::ThemeManager(QObject* parent)
     : QObject(parent)
     , current_theme_(ThemeType::Dark)
     , current_family_(ThemeFamily::Warm)
+    , current_mode_(ThemeMode::Light)
 {
+    // 跟随系统模式:平台主题变化经 ThemeChange 事件到达(安装在 qApp 的
+    // 事件过滤器,eventFilter 只在 mode == System 时重解析,否则零开销)。
+    if (QApplication* app = qApp) {
+        app->installEventFilter(this);
+    }
 }
 
 ThemeManager::~ThemeManager() = default;
@@ -132,6 +143,53 @@ void ThemeManager::set_theme(ThemeType theme)
 void ThemeManager::toggle_theme()
 {
     set_theme(current_theme_ == ThemeType::Light ? ThemeType::Dark : ThemeType::Light);
+}
+
+void ThemeManager::set_theme_mode(ThemeMode mode)
+{
+    current_mode_ = mode;
+    // 解析出目标主题;与当前主题一致时不重渲(避免跟随系统启动时重复应用)
+    const ThemeType resolved =
+        mode == ThemeMode::System ? detect_system_theme()
+                                  : (mode == ThemeMode::Dark ? ThemeType::Dark
+                                                             : ThemeType::Light);
+    if (resolved != current_theme_) {
+        set_theme(resolved);
+    }
+}
+
+ThemeType ThemeManager::detect_system_theme()
+{
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+    // Qt 6.5+ 平台 colorScheme(Windows/macOS 系统暗色开关、Linux 主题)。
+    const QStyleHints* hints = QGuiApplication::styleHints();
+    if (hints && hints->colorScheme() == Qt::ColorScheme::Dark) {
+        return ThemeType::Dark;
+    }
+    return ThemeType::Light;
+#else
+    // Qt < 6.5 无 colorScheme:回退到系统窗口底色亮度(融合调色板形态)。
+    return QApplication::palette().color(QPalette::Window).lightness() < 128
+        ? ThemeType::Dark
+        : ThemeType::Light;
+#endif
+}
+
+bool ThemeManager::eventFilter(QObject* watched, QEvent* event)
+{
+    Q_UNUSED(watched)
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+    // 系统主题变化:仅跟随系统模式下重解析并应用(set_theme 写入
+    // current_theme_ 先于 apply_stylesheet,同值判定天然防重入)。
+    if (event && event->type() == QEvent::ThemeChange &&
+        current_mode_ == ThemeMode::System) {
+        const ThemeType detected = detect_system_theme();
+        if (detected != current_theme_) {
+            set_theme(detected);
+        }
+    }
+#endif
+    return QObject::eventFilter(watched, event);
 }
 
 void ThemeManager::set_family(ThemeFamily family)
@@ -181,6 +239,32 @@ QString ThemeManager::theme_name(ThemeType theme)
             return tr("亮色");
         case ThemeType::Dark:
             return tr("暗色");
+    }
+    return QString();
+}
+
+QString ThemeManager::family_name(ThemeFamily family)
+{
+    switch (family) {
+        case ThemeFamily::Warm:
+            return tr("Warm Console II");
+        case ThemeFamily::Cold:
+            return tr("Cold Utility II");
+        case ThemeFamily::Graphite:
+            return tr("Graphite Emerald");
+    }
+    return QString();
+}
+
+QString ThemeManager::mode_name(ThemeMode mode)
+{
+    switch (mode) {
+        case ThemeMode::Light:
+            return tr("浅色");
+        case ThemeMode::Dark:
+            return tr("深色");
+        case ThemeMode::System:
+            return tr("跟随系统");
     }
     return QString();
 }

@@ -82,8 +82,10 @@ private slots:
     void on_tray_show_clicked();
     void on_tray_quit_clicked();
 
-    // 主题切换槽函数
-    void on_theme_toggle_requested();
+    // 主题切换槽函数（设置页三级切换：0=浅色 / 1=深色 / 2=跟随系统）
+    void on_theme_mode_changed(int mode);
+    /// 主题家族（0=Warm / 1=Cold / 2=Graphite）
+    void on_theme_family_changed(int family);
 
     void on_download_requested(const IncomingDownloadRequest& request);
     void on_new_task_requested();

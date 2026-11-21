@@ -10,6 +10,7 @@
 #include "../dialogs/search_engine_dialog.hpp"
 #include "../services/search_engine_catalog.hpp"
 #include "../services/update_checker.hpp"
+#include "../utils/theme_manager.hpp"
 
 #include <QFontMetrics>
 #include <QMessageBox>
@@ -56,7 +57,8 @@ SettingsPage::SettingsPage(QWidget* parent)
     , float_opacity_spin_(nullptr)
     , float_click_through_checkbox_(nullptr)
     , current_theme_label_(nullptr)
-    , theme_toggle_button_(nullptr)
+    , theme_mode_combo_(nullptr)
+    , theme_family_combo_(nullptr)
     , task_view_combo_(nullptr)
     , check_updates_button_(nullptr)
     , update_result_label_(nullptr)
@@ -187,8 +189,26 @@ void SettingsPage::set_theme_display(bool dark_mode)
     if (current_theme_label_) {
         current_theme_label_->setText(dark_mode ? tr("深色") : tr("浅色"));
     }
-    if (theme_toggle_button_) {
-        theme_toggle_button_->setText(dark_mode ? tr("切换浅色") : tr("切换深色"));
+}
+
+void SettingsPage::set_theme_mode_display(int mode)
+{
+    if (theme_mode_combo_ && mode >= 0 &&
+        mode < theme_mode_combo_->count() &&
+        theme_mode_combo_->currentIndex() != mode) {
+        // 程序化回写不反向触发 theme_mode_changed（避免设置页→主窗→设置页回环）
+        QSignalBlocker blocker(theme_mode_combo_);
+        theme_mode_combo_->setCurrentIndex(mode);
+    }
+}
+
+void SettingsPage::set_theme_family_display(int family)
+{
+    if (theme_family_combo_ && family >= 0 &&
+        family < theme_family_combo_->count() &&
+        theme_family_combo_->currentIndex() != family) {
+        QSignalBlocker blocker(theme_family_combo_);
+        theme_family_combo_->setCurrentIndex(family);
     }
 }
 
@@ -1264,29 +1284,46 @@ QWidget* SettingsPage::create_appearance_section_widget()
     layout->setSpacing(16);
     layout->setContentsMargins(16, 8, 16, 16);
 
-    // 主题设置行
+    // 主题设置行（三级切换：主题家族 / 亮暗模式 / 跟随系统，选择即生效并记住）
     auto* theme_layout = new QHBoxLayout();
     theme_layout->setSpacing(12);
 
     auto* theme_label = new QLabel(tr("主题:"), this);
     theme_layout->addWidget(theme_label);
 
-    current_theme_label_ = new QLabel(tr("浅色"), this);
-    theme_layout->addWidget(current_theme_label_);
+    // 主题家族：整体色相方向（强调色与中性底色随家族切换，设计语言不变）
+    theme_family_combo_ = new QComboBox(this);
+    theme_family_combo_->addItem(ThemeManager::family_name(ThemeFamily::Warm));
+    theme_family_combo_->addItem(ThemeManager::family_name(ThemeFamily::Cold));
+    theme_family_combo_->addItem(ThemeManager::family_name(ThemeFamily::Graphite));
+    theme_family_combo_->setCursor(Qt::PointingHandCursor);
+    connect(theme_family_combo_, &QComboBox::currentIndexChanged, this,
+            [this](int) { emit theme_family_changed(theme_family_combo_->currentIndex()); });
+    theme_layout->addWidget(theme_family_combo_);
+
+    // 亮暗模式：浅色 / 深色 / 跟随系统
+    theme_mode_combo_ = new QComboBox(this);
+    theme_mode_combo_->addItem(ThemeManager::mode_name(ThemeMode::Light));
+    theme_mode_combo_->addItem(ThemeManager::mode_name(ThemeMode::Dark));
+    theme_mode_combo_->addItem(ThemeManager::mode_name(ThemeMode::System));
+    theme_mode_combo_->setCursor(Qt::PointingHandCursor);
+    connect(theme_mode_combo_, &QComboBox::currentIndexChanged, this,
+            [this](int) { emit theme_mode_changed(theme_mode_combo_->currentIndex()); });
+    theme_layout->addWidget(theme_mode_combo_);
 
     theme_layout->addStretch();
 
-    theme_toggle_button_ = new QPushButton(tr("切换深色"), this);
-    theme_toggle_button_->setCursor(Qt::PointingHandCursor);
-    theme_toggle_button_->setObjectName("toolButton");
-    connect(theme_toggle_button_, &QPushButton::clicked, this, &SettingsPage::on_theme_button_clicked);
-    theme_layout->addWidget(theme_toggle_button_);
+    // 当前实际生效的亮暗（跟随系统时按系统亮暗解析后显示）
+    current_theme_label_ = new QLabel(tr("浅色"), this);
+    theme_layout->addWidget(current_theme_label_);
 
     layout->addLayout(theme_layout);
 
     // 说明文字
-    auto* desc_label = new QLabel(tr("在浅色与深色主题之间切换。"), this);
+    auto* desc_label = new QLabel(tr("选择主题家族与亮暗模式；跟随系统时按系统亮暗自动切换。切换后立即生效并记住。"),
+                                 this);
     desc_label->setObjectName("cardInfoLabel");
+    desc_label->setWordWrap(true);
     layout->addWidget(desc_label);
 
     // 任务列表视图（默认卡片；与顶栏/下载页内的切换按钮共用同一份记忆，
@@ -1336,11 +1373,6 @@ bool SettingsPage::is_task_view_grid() const
         return true;  // 默认卡片视图
     }
     return task_view_combo_->currentData().toBool();
-}
-
-void SettingsPage::on_theme_button_clicked()
-{
-    emit theme_toggle_requested();
 }
 
 } // namespace falcon::desktop

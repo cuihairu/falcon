@@ -60,6 +60,10 @@ public:
     void set_completed_double_click_action(int action);
     int get_completed_double_click_action() const;
     void set_theme_display(bool dark_mode);
+    /// 主题模式下拉（0=浅色 / 1=深色 / 2=跟随系统）
+    void set_theme_mode_display(int mode);
+    /// 主题家族下拉（0=Warm / 1=Cold / 2=Graphite）
+    void set_theme_family_display(int family);
     /// 任务列表视图（true=卡片视图，默认；与顶栏/页内切换共用同一份记忆）
     void set_task_view_grid(bool grid_view);
     void set_float_widget_enabled(bool enabled);
@@ -185,9 +189,16 @@ signals:
     void float_widget_toggled(bool enabled);
 
     /**
-     * @brief Signal emitted when theme toggle is requested
+     * @brief Signal emitted when the theme mode is selected
+     * @param mode 0=浅色 / 1=深色 / 2=跟随系统
      */
-    void theme_toggle_requested();
+    void theme_mode_changed(int mode);
+
+    /**
+     * @brief Signal emitted when the theme family is selected
+     * @param family 0=Warm / 1=Cold / 2=Graphite
+     */
+    void theme_family_changed(int family);
 
     /**
      * @brief Signal emitted when the task list view style is changed here
@@ -238,8 +249,6 @@ private:
     QWidget* create_appearance_section_widget();
     QWidget* create_about_section_widget();
     QLayout* create_action_buttons_layout();
-
-    void on_theme_button_clicked();
 
     // 资源搜索引擎行容器（engines.json 的只读投影 + 增删改入口）
     QWidget* search_engine_rows_host_ = nullptr;
@@ -292,7 +301,8 @@ private:
 
     // Appearance settings
     QLabel* current_theme_label_;
-    QPushButton* theme_toggle_button_;
+    QComboBox* theme_mode_combo_;
+    QComboBox* theme_family_combo_;
     QComboBox* task_view_combo_;
 
     // About & update settings

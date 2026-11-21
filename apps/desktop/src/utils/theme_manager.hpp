@@ -15,6 +15,8 @@
 #include <QObject>
 #include <QString>
 
+class QEvent;
+
 namespace falcon::desktop {
 
 /**
@@ -33,6 +35,16 @@ enum class ThemeFamily {
     Warm,
     Cold,
     Graphite,
+};
+
+/**
+ * @brief 主题模式(设置页「主题」三级切换):显式浅色/深色,或跟随系统
+ *        (桌面亮暗由平台主题决定,系统切换时动态跟随)
+ */
+enum class ThemeMode {
+    Light,
+    Dark,
+    System,
 };
 
 /**
@@ -69,6 +81,22 @@ public:
     ThemeFamily family() const { return current_family_; }
 
     /**
+     * @brief 获取当前主题模式
+     */
+    ThemeMode mode() const { return current_mode_; }
+
+    /**
+     * @brief 设置主题模式:浅色/深色直接生效,跟随系统按当前系统亮暗
+     *        解析出主题并生效;系统主题变化时经 ThemeChange 事件重解析
+     */
+    void set_theme_mode(ThemeMode mode);
+
+    /**
+     * @brief 探测系统亮暗(Qt >= 6.5 用平台 colorScheme,更早回落窗口底色)
+     */
+    static ThemeType detect_system_theme();
+
+    /**
      * @brief 设置主题家族(清样式表缓存并重新应用;家族实际变化时发射
      *        family_changed——悬浮速度窗等局部 QSS 消费方据此跟随)
      */
@@ -89,6 +117,22 @@ public:
      */
     static QString theme_name(ThemeType theme);
 
+    /**
+     * @brief 获取主题家族名称(设置页下拉文案)
+     */
+    static QString family_name(ThemeFamily family);
+
+    /**
+     * @brief 获取主题模式名称(设置页下拉文案)
+     */
+    static QString mode_name(ThemeMode mode);
+
+protected:
+    /**
+     * @brief 平台主题变化转发(跟随系统模式下重解析亮暗)
+     */
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
 signals:
     /**
      * @brief 主题改变信号(仅主题实际变化时发射)
@@ -106,6 +150,7 @@ signals:
 private:
     ThemeType current_theme_;
     ThemeFamily current_family_;
+    ThemeMode current_mode_;
     mutable QString light_cache_;
     mutable QString dark_cache_;
 };

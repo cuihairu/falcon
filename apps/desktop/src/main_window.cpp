@@ -151,12 +151,20 @@ MainWindow::MainWindow(QWidget* parent)
 {
     // 初始化主题管理器（必须在 setup_ui 之前）
     theme_manager_ = new ThemeManager(this);
-    // 从设置加载主题
+    // 从设置加载主题家族与模式（模式缺省回落旧 theme 键，兼容既有安装；
+    // 先家族后模式——家族切换清缓存重渲，模式再解析亮暗）
     QSettings settings;
     settings.beginGroup("desktop");
-    const QString theme_str = settings.value("theme", "light").toString();
+    const QString family_str = settings.value("theme_family", "warm").toString();
+    const QString mode_str = settings.value("theme_mode",
+                                            settings.value("theme", "light")).toString();
     settings.endGroup();
-    theme_manager_->set_theme(theme_str == "dark" ? ThemeType::Dark : ThemeType::Light);
+    theme_manager_->set_family(family_str == "cold" ? ThemeFamily::Cold
+                                : (family_str == "graphite" ? ThemeFamily::Graphite
+                                                            : ThemeFamily::Warm));
+    theme_manager_->set_theme_mode(
+        mode_str == "system" ? ThemeMode::System
+        : (mode_str == "dark" ? ThemeMode::Dark : ThemeMode::Light));
 
     setup_ui();
     setup_speed_float();
@@ -641,7 +649,10 @@ void MainWindow::create_pages()
         save_settings();
         apply_settings_to_runtime();
     });
-    connect(settings_page_, &SettingsPage::theme_toggle_requested, this, &MainWindow::on_theme_toggle_requested);
+    // 设置页三级切换：模式（浅色/深色/跟随系统）与家族（三家族）分别
+    // 落盘热生效（沿浮窗/双击行为范式，不等「应用」按钮）
+    connect(settings_page_, &SettingsPage::theme_mode_changed, this, &MainWindow::on_theme_mode_changed);
+    connect(settings_page_, &SettingsPage::theme_family_changed, this, &MainWindow::on_theme_family_changed);
     // 设置页下拉框 → 下载页即时生效（经 set_display_style 回发
     // display_style_changed 完成落盘，程序化回写有 QSignalBlocker 不回环）
     connect(settings_page_, &SettingsPage::task_view_grid_changed, this,
@@ -662,9 +673,18 @@ void MainWindow::create_pages()
             });
     if (theme_manager_) {
         settings_page_->set_theme_display(theme_manager_->current_theme() == ThemeType::Dark);
+        settings_page_->set_theme_mode_display(static_cast<int>(theme_manager_->mode()));
+        settings_page_->set_theme_family_display(static_cast<int>(theme_manager_->family()));
         connect(theme_manager_, &ThemeManager::theme_changed, settings_page_, [this](ThemeType theme) {
             if (settings_page_) {
                 settings_page_->set_theme_display(theme == ThemeType::Dark);
+            }
+        });
+        // 家族切换回写设置页下拉（模式下拉不随 theme_changed 移动——
+        // 模式反映用户选择，跟随系统下解析出的亮暗不动下拉位置）
+        connect(theme_manager_, &ThemeManager::family_changed, settings_page_, [this](ThemeFamily family) {
+            if (settings_page_) {
+                settings_page_->set_theme_family_display(static_cast<int>(family));
             }
         });
     }
@@ -1034,19 +1054,50 @@ void MainWindow::on_tray_quit_clicked()
     QApplication::quit();
 }
 
-void MainWindow::on_theme_toggle_requested()
+void MainWindow::on_theme_mode_changed(int mode)
 {
     if (!theme_manager_) {
         return;
     }
+    // 下拉索引与 ThemeMode 枚举对齐(0=浅色 1=深色 2=跟随系统);越界防御
+    if (mode < static_cast<int>(ThemeMode::Light) ||
+        mode > static_cast<int>(ThemeMode::System)) {
+        return;
+    }
+    theme_manager_->set_theme_mode(static_cast<ThemeMode>(mode));
 
-    // 切换主题
-    theme_manager_->toggle_theme();
-
-    // 保存主题设置
+    // 持久化模式键(构造器同款字符串口径);解析出的主题同步写入 theme
+    // 键,保持旧读取路径(theme 作 theme_mode 缺省)与顶栏切换路径一致
     QSettings settings;
     settings.beginGroup("desktop");
-    settings.setValue("theme", theme_manager_->current_theme() == ThemeType::Dark ? "dark" : "light");
+    const auto m = static_cast<ThemeMode>(mode);
+    settings.setValue("theme_mode",
+                      m == ThemeMode::System ? "system"
+                      : (m == ThemeMode::Dark ? "dark" : "light"));
+    settings.setValue("theme",
+                      theme_manager_->current_theme() == ThemeType::Dark ? "dark" : "light");
+    settings.endGroup();
+    settings.sync();
+}
+
+void MainWindow::on_theme_family_changed(int family)
+{
+    if (!theme_manager_) {
+        return;
+    }
+    // 下拉索引与 ThemeFamily 枚举对齐(0=Warm 1=Cold 2=Graphite);越界防御
+    if (family < static_cast<int>(ThemeFamily::Warm) ||
+        family > static_cast<int>(ThemeFamily::Graphite)) {
+        return;
+    }
+    theme_manager_->set_family(static_cast<ThemeFamily>(family));
+
+    QSettings settings;
+    settings.beginGroup("desktop");
+    const auto f = static_cast<ThemeFamily>(family);
+    settings.setValue("theme_family",
+                      f == ThemeFamily::Cold ? "cold"
+                      : (f == ThemeFamily::Graphite ? "graphite" : "warm"));
     settings.endGroup();
     settings.sync();
 }
