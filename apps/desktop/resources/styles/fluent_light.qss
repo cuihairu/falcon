@@ -137,12 +137,12 @@ QPushButton#cardActionButton:disabled {
     background: transparent;
 }
 
-/* 窗口控制钮:无边框贴边,close 悬停红(亮暗同值) */
+/* 窗口控制钮:圆角胶囊按钮(与全局 8px 圆角语言统一,不再贴边直角) */
 QPushButton#windowButton,
 QPushButton#closeButton {
     background: transparent;
     border: none;
-    border-radius: 0;
+    border-radius: 6px;
     min-width: 0;
     padding: 0;
 }
