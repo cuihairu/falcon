@@ -71,6 +71,14 @@ enum class ColorRole {
 void set_current_theme(ThemeType theme);
 
 /**
+ * @brief 同步当前主题家族(与 set_current_theme 同模式)
+ *
+ * ThemeManager::apply_stylesheet() 时调用——themed 图标的 accent 等语义
+ * 角色色随家族色板换色(冷蓝/石墨绿/暖橙)。
+ */
+void set_current_family(ThemeFamily family);
+
+/**
  * @brief 以指定颜色渲染图标(一次性着色,不随主题变化)
  */
 QIcon make(Id id, const QColor& color, QSize size = QSize(16, 16));

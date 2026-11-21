@@ -63,6 +63,9 @@ public:
     /// 主题切换时刷新配色(tokens_for 全量取自当前主题)
     void apply_theme(ThemeType theme);
 
+    /// 家族切换时刷新配色(tokens_for 按家族色板取值,与 apply_theme 对称)
+    void apply_family(ThemeFamily family);
+
     /// 喂入新统计(数据由 MainWindow 在 stats 快照回调装配)
     void update_stats(const Stats& stats);
 
@@ -112,6 +115,7 @@ private:
     QSize size_for_preset(SizePreset preset) const;
 
     ThemeType theme_ = ThemeType::Dark;
+    ThemeFamily family_ = ThemeFamily::Warm;
     Stats stats_;
     TaskPreview preview_;
 

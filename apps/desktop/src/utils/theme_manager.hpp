@@ -69,7 +69,8 @@ public:
     ThemeFamily family() const { return current_family_; }
 
     /**
-     * @brief 设置主题家族(清样式表缓存并重新应用;不发射信号)
+     * @brief 设置主题家族(清样式表缓存并重新应用;家族实际变化时发射
+     *        family_changed——悬浮速度窗等局部 QSS 消费方据此跟随)
      */
     void set_family(ThemeFamily family);
 
@@ -93,6 +94,14 @@ signals:
      * @brief 主题改变信号(仅主题实际变化时发射)
      */
     void theme_changed(ThemeType theme);
+
+    /**
+     * @brief 主题家族改变信号(仅家族实际变化时发射)
+     *
+     * 独立于 theme_changed:家族切换不改变主题类型,应用整体经
+     * apply_stylesheet() 重渲,悬浮速度窗等局部 QSS 消费方经本信号跟随。
+     */
+    void family_changed(ThemeFamily family);
 
 private:
     ThemeType current_theme_;

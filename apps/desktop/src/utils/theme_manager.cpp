@@ -136,11 +136,15 @@ void ThemeManager::toggle_theme()
 
 void ThemeManager::set_family(ThemeFamily family)
 {
+    const bool changed = current_family_ != family;
     current_family_ = family;
     // 缓存按主题各存一份,家族切换后必须作废重渲
     light_cache_.clear();
     dark_cache_.clear();
     apply_stylesheet();
+    if (changed) {
+        emit family_changed(family);
+    }
 }
 
 QString ThemeManager::stylesheet(ThemeType theme) const
@@ -163,8 +167,9 @@ void ThemeManager::apply_stylesheet()
     if (qApp->style()->objectName().compare(QLatin1String("fusion"), Qt::CaseInsensitive) != 0) {
         qApp->setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
     }
-    const ThemeTokens tokens = tokens_for(current_theme_);
+    const ThemeTokens tokens = tokens_for(current_family_, current_theme_);
     icons::set_current_theme(current_theme_);
+    icons::set_current_family(current_family_);
     qApp->setPalette(palette_for(tokens));
     qApp->setStyleSheet(stylesheet(current_theme_));
 }

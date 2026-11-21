@@ -700,6 +700,11 @@ void MainWindow::setup_speed_float()
     connect(theme_manager_, &ThemeManager::theme_changed, speed_float_,
             &SpeedFloatWidget::apply_theme);
 
+    // 家族切换与主题切换对称:家族仅改色相不动主题类型,浮窗经
+    // apply_family 重取家族×主题 token 重渲(theme_changed 不发射)
+    connect(theme_manager_, &ThemeManager::family_changed, speed_float_,
+            &SpeedFloatWidget::apply_family);
+
     // 浮窗按钮/右键菜单的暂停/继续请求 → 下载服务（与下载页行内按钮同路径）
     connect(speed_float_, &SpeedFloatWidget::pause_resume_requested, this,
             [this](std::uint64_t task_id, bool pause) {

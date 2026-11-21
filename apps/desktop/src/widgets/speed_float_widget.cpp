@@ -147,6 +147,12 @@ void SpeedFloatWidget::apply_theme(ThemeType theme)
     restyle();
 }
 
+void SpeedFloatWidget::apply_family(ThemeFamily family)
+{
+    family_ = family;
+    restyle();
+}
+
 void SpeedFloatWidget::update_stats(const Stats& stats)
 {
     stats_ = stats;
@@ -253,8 +259,9 @@ void SpeedFloatWidget::refresh_name_elide()
 
 void SpeedFloatWidget::restyle()
 {
-    const ThemeTokens t = tokens_for(theme_);
-    // 局部样式表(悬浮窗不进全局 QSS);色值全部取自双主题 token 表
+    // 家族×主题双参取色(家族切换经 apply_family 重进此处,与 apply_theme 对称)
+    const ThemeTokens t = tokens_for(family_, theme_);
+    // 局部样式表(悬浮窗不进全局 QSS);色值全部取自家族×主题 token 表
     setStyleSheet(QStringLiteral(
         "#speedFloat { background: %1; border: 1px solid %2;"
         "  border-radius: 10px; }"

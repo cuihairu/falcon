@@ -22,6 +22,7 @@ namespace falcon::desktop::icons {
 namespace {
 
 std::atomic<ThemeType> g_theme{ThemeType::Light};
+std::atomic<ThemeFamily> g_family{ThemeFamily::Warm};
 
 /** Id → qrc 图标路径(:/icons/<file>) */
 QString icon_path(Id id)
@@ -60,7 +61,7 @@ QString icon_path(Id id)
 
 QColor role_color(ColorRole role)
 {
-    const ThemeTokens tokens = tokens_for(g_theme.load());
+    const ThemeTokens tokens = tokens_for(g_family.load(), g_theme.load());
     switch (role) {
         case ColorRole::Text:          return tokens.text;
         case ColorRole::TextSecondary: return tokens.text_secondary;
@@ -162,6 +163,11 @@ private:
 void set_current_theme(ThemeType theme)
 {
     g_theme.store(theme);
+}
+
+void set_current_family(ThemeFamily family)
+{
+    g_family.store(family);
 }
 
 QIcon make(Id id, const QColor& color, QSize size)
