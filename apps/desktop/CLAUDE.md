@@ -2,6 +2,11 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-11-21 - 主题默认态收口：全新安装默认 Warm + 亮色（todo UI-RD-002 A5）
+- **目标**：无 QSettings 的全新安装默认 **Warm Console II + 亮色**。MainWindow 构造器读路径本就缺省 `theme_family="warm"`/`theme_mode` 回落旧 `theme`→`"light"`（A4 已落），但 `ThemeManager` 自身默认 `current_theme_(ThemeType::Dark)` 与 `current_mode_(ThemeMode::Light)` **自相矛盾**——旧值是 A4 之前的遗留（当时无 mode 概念），独立构造/单测场景会报「Dark 主题 + Light 模式」
+- **收口**（`utils/theme_manager.cpp` 构造器，1 处）：`current_theme_` 默认 `Dark`→`Light`——ThemeManager 自身默认态与产品默认态（Warm + 亮色）自洽，`current_theme_`/`current_mode_`/`current_family_` 三者恒一致；MainWindow 随后按 QSettings 重设不受影响，本默认仅作无外部设置的兜底（顺带消除全新安装启动时构造器默认 Dark→`set_theme_mode(Light)` 的一次冗余 `apply_stylesheet` 重渲）
+- **验证**：build-desktop 增量重建绿（`theme_manager.cpp.o` 重编 + 双 target 链接，零告警）；desktop 全部 8 测试二进制 113/113；**全新安装真实走查**（Xvfb :95 + `XDG_CONFIG_HOME` 空目录模拟无 QSettings）——启动后 QSettings 文件仅含 `clipboard_monitoring_enabled`（主题缺省不落盘，用户改选才写）；1200×800 截图像素级核对——主导背景 `#f7f5f2`（A2 Warm 亮色窗口 token 精确命中）+ accent `#c2410c`（Warm accent）2388 px，零 Cold（`#131519`）/Graphite（`#111418`）背景残留——全新安装渲染 **Warm + 亮色**实证
+
 ### 2026-11-21 - 设置页主题模式/家族下拉三站点接线（todo UI-RD-002 A4：Mode 与 Family 双向同步 + 选择即存）
 - **目标**：设置页「外观」组的主题模式（浅色/深色/跟随系统）与主题家族（Warm/Cold/Graphite）两下拉此前只显 UI——选择不回写 ThemeManager、不持久化；本批沿既有三站点模式贯通（theme 开关先例同构）
 - **站点 1 `ThemeManager`**（`utils/theme_manager.{hpp,cpp}`）：`mode()`/`family()` 访问器 + `family_changed(ThemeFamily)` 信号（A3 已落）——下拉读端与家族跟随端的数据源；`set_theme_mode` 解析 System→`detect_system_theme()`、`set_family` 变更检测后发射

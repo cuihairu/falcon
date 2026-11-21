@@ -117,7 +117,12 @@ QPalette palette_for(const ThemeTokens& t)
 
 ThemeManager::ThemeManager(QObject* parent)
     : QObject(parent)
-    , current_theme_(ThemeType::Dark)
+    // 默认态 = 产品默认(Warm + 亮色):current_theme_ 与 current_mode_ 保持
+    // 一致(旧值 Dark 与 Light 模式自相矛盾——全新安装未走 MainWindow
+    // set_theme_mode 前,独立构造/单测的 ThemeManager 会报 Dark 主题 +
+    // Light 模式)。MainWindow 构造器随后按 QSettings 重设,本默认仅作
+    // 无外部设置的兜底。
+    , current_theme_(ThemeType::Light)
     , current_family_(ThemeFamily::Warm)
     , current_mode_(ThemeMode::Light)
 {
