@@ -208,7 +208,10 @@ jobs:
           -S ${{ github.workspace }}
 
       - name: Build
-        timeout-minutes: 15
+        # Debug+coverage instrumented build with full vcpkg source deps
+        # (libtorrent etc): 15m cap killed it 6 nights in a row at ~68%
+        # (run 44957637287 exit 143); align with the main matrix's 40m cap
+        timeout-minutes: 40
         run: cmake --build ${{ github.workspace }}/build-coverage --config Debug --parallel
 
       - name: Test
