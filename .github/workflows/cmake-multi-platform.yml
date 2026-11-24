@@ -210,9 +210,12 @@ jobs:
       - name: Build
         # Debug+coverage instrumented build with full vcpkg source deps
         # (libtorrent etc): 15m cap killed it 6 nights in a row at ~68%
-        # (run 44957637287 exit 143); align with the main matrix's 40m cap
+        # (run 44957637287 exit 143); align with the main matrix's 40m cap.
+        # --parallel 2: full-instrumented parallel g++ compaction OOM-killed
+        # the 40m run at ~9m40s (run 45107199307 exit 143 SIGTERM); halve
+        # the fan-out to stay under the runner memory ceiling.
         timeout-minutes: 40
-        run: cmake --build ${{ github.workspace }}/build-coverage --config Debug --parallel
+        run: cmake --build ${{ github.workspace }}/build-coverage --config Debug --parallel 2
 
       - name: Test
         timeout-minutes: 30
