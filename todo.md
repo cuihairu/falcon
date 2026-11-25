@@ -124,13 +124,31 @@ packages/
     `libfalcon-storage[core,s3]` 装后 S3Browser 125 处、其余浏览器
     0 处（nm 核对）；④ `libfalcon-protocols[bittorrent]` 装后
     bt 冒烟（libtorrent 2.0.11 真构建 23min）。
-- [ ] vcpkg 阶段 2 残余：DLL 导出接线（共享构建产出零导出符号坏
+- [x] vcpkg 阶段 2 残余：DLL 导出接线（共享构建产出零导出符号坏
   DLL，四端口已锁 `vcpkg_check_linkage(ONLY_STATIC_LIBRARY)`）。
-- [ ] vcpkg 阶段 2 残余：Windows 平台缺口（`falcon-daemon`
+  - 证据：commit `87686da`——MSVC `WINDOWS_EXPORT_ALL_SYMBOLS` 四包接线 +
+    `FALCON_VERSION` 改 C++17 inline 变量消除 extern 数据 dllimport 面 +
+    四插件恒 STATIC（消除 DSO missing from command line）；共享构建树
+    `ctest` 3106/3106 绿，`nm -D libfalcon_protocols.so` 实测 1089 导出符号
+    含 `create_*_handler` / `extract_info_hash`；commit `fea09e8` 解锁四端口
+    `vcpkg_check_linkage` 与 protocols/storage 的 `BUILD_SHARED_LIBS=OFF`
+    覆盖，REF/SHA512 钉 `87686da`，version-date 2026-11-26；vcpkg overlay
+    实测 `libfalcon-core:x64-linux@2026-11-26` 静态装出 `libfalcon_core.a`
+    3.4 分钟绿 + 87686da tarball SHA512 校验通过 + toolchain 注入
+    `BUILD_SHARED_LIBS:UNINITIALIZED=OFF` 实证；CI run 45666563447
+    linux/macOS/cl build 全绿。
+- [x] vcpkg 阶段 2 残余：Windows 平台缺口（`falcon-daemon`
   `websocket_frame.cpp:328` MSVC 语法红 + `mock_ftp_server.hpp`
   POSIX-only 头）。
+  - 证据：commit `87686da`——`websocket_frame.cpp` 语法修正 +
+    `mock_ftp_server.hpp` Windows 分支（POSIX 头 `#ifndef _WIN32` 门控）；
+    根与四包补 MSVC `/utf-8` 编译选项；桌面树增量重建绿，精灵全量
+    `ctest` 唯一红 `MainIntegrationTest.EnableRpcFalsyVariantsAllRun`
+    串行复跑绿 + 全量二进制 46/46（并行负载抖动，既有定性）；CI run
+    45664628552/45666563447 `build (windows-latest, Release, cl)` 双腿
+    Build+Test 全绿。
 - [ ] vcpkg 阶段 3：overlay 端口上游化（默认不排期，触发判定注记见
-  设计文档 §12）。
+  设计文档 §6）。
 
 ### 文档双语
 
