@@ -6,6 +6,24 @@ project(libfalcon-drives
     LANGUAGES CXX
 )
 
+# MSVC：源码/执行字符集统一 UTF-8。全库注释与字符串字面量携带 UTF-8
+# 中文，无 BOM 时 MSVC 按 locale 代码页解码（zh-CN CP936 双字节配对
+# 可吞换行/引号 → C4819/C2001 类红面），/utf-8 消除 locale 依赖。
+# 独立 configure（vcpkg 端口形态）不经根 CMakeLists，必须自带
+if(MSVC)
+    add_compile_options(/utf-8)
+endif()
+
+# ============================================================================
+# Shared-build wiring（BUILD_SHARED_LIBS=ON，vcpkg 动态 triplet 形态）
+#
+# PIC 开关只挂共享构建——静态构建整块跳过（零行为变化）。共享形态下
+# 库对象必须位置无关
+# ============================================================================
+if(BUILD_SHARED_LIBS)
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+endif()
+
 # ============================================================================
 # Export set anchor（先于一切 install 计算）
 #
@@ -98,10 +116,10 @@ if(WIN32)
 endif()
 
 if(BUILD_SHARED_LIBS)
-    target_compile_definitions(falcon_drives
-        PRIVATE FALCON_EXPORTS
-        INTERFACE FALCON_IMPORTS
-    )
+    # MSVC 共享库导出接线：FALCON_EXPORTS/FALCON_IMPORTS 宏全库零消费
+    # （无任何 __declspec 接线），共享构建导出表为空 = 坏 DLL。CMake 在
+    # MSVC 构建期枚举符号生成 .def 自动导出（非 MSVC 平台忽略此属性）
+    set_target_properties(falcon_drives PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 endif()
 
 find_package(OpenSSL QUIET)

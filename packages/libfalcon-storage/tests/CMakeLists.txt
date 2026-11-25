@@ -56,12 +56,16 @@ if(FALCON_ENABLE_RESOURCE_BROWSER)
         unit/resource_browser_edges_test.cpp
         unit/xml_scan_coverage_test.cpp
         unit/webdav_browser_mock_test.cpp
-        unit/ftp_browser_mock_test.cpp
         unit/storage_presets_test.cpp
         unit/storage_isolation_test.cpp
     )
     if(FALCON_ENABLE_STORAGE_S3)
         target_sources(falcon_storage_tests PRIVATE unit/s3_browser_mock_test.cpp)
+    endif()
+    # mock_ftp_server.hpp POSIX-only（netinet/in.h 等零 _WIN32 适配）——
+    # FTP mock 测试仅 POSIX 平台编入
+    if(NOT WIN32)
+        target_sources(falcon_storage_tests PRIVATE unit/ftp_browser_mock_test.cpp)
     endif()
 
     target_link_libraries(falcon_storage_tests

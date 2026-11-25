@@ -233,7 +233,10 @@ endif()
 # ============================================================================
 # FTP plugin tests (conditional)
 # ============================================================================
-if(FALCON_ENABLE_FTP)
+# mock_ftp_server.hpp unconditionally includes POSIX headers (netinet/in.h
+# etc., no _WIN32 adaptation) -- FTP tests are POSIX-only. The main CI
+# Windows matrix runs FTP=OFF so these targets never compiled there.
+if(FALCON_ENABLE_FTP AND NOT WIN32)
     add_executable(falcon_ftp_tests
         unit/ftp_handler_test.cpp
     )

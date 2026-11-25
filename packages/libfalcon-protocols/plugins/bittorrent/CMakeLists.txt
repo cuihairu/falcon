@@ -9,7 +9,11 @@ project(falcon_plugin_bittorrent
 # 选项控制是否启用 libtorrent
 option(FALCON_USE_LIBTORRENT "Use libtorrent-rasterbar for BitTorrent support" ON)
 
-add_library(falcon_plugin_bittorrent
+# 恒静态：插件是 falcon_protocols 的 PRIVATE 实现细节，对象恒被吸收进
+# 该库。共享形态下随 BUILD_SHARED_LIBS 提升为独立 DSO 会让直连
+# builtin_protocol_handlers 目标对象的可执行文件链接失败
+# （DSO missing from command line）
+add_library(falcon_plugin_bittorrent STATIC
     bittorrent_plugin.cpp
     seed_policy.cpp
     dht_node.cpp

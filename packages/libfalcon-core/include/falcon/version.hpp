@@ -38,7 +38,10 @@ struct Version {
 
 std::ostream& operator<<(std::ostream& os, const Version& version);
 
-extern const Version FALCON_VERSION;
+// C++17 inline 变量（多 TU 单实例）：公共 API 中唯一的 extern 数据——
+// 共享构建下 extern 数据需要跨 DLL 导入导出接线，inline 变量彻底消除
+// dllimport 面，SHARED/STATIC 两形态零差别
+inline const Version FALCON_VERSION{0, 1, 0};
 
 /// 获取完整版本字符串（包含编译信息）
 const char* get_version_string();

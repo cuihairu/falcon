@@ -125,6 +125,10 @@ elseif(MSVC)
         /W4
         /permissive-
         /Zc:__cplusplus
+        # 源码/执行字符集统一 UTF-8（与 GCC/Clang 默认对齐）。全库中文
+        # 注释/字面量无 BOM，MSVC 默认按 locale 代码页解码，zh-CN CP936
+        # 双字节配对可吞换行/引号产生 C4819/C2001 类红面
+        /utf-8
     )
 
     # MSVC 不原生支持代码覆盖率，需要使用 OpenCppCoverage 等工具

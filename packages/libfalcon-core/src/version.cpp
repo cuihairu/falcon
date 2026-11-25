@@ -109,8 +109,6 @@ std::ostream& operator<<(std::ostream& os, const Version& version) {
     return os;
 }
 
-const Version FALCON_VERSION{0, 1, 0};
-
 const char* get_version_string() {
     static std::string version = FALCON_VERSION.to_full_string();
     return version.c_str();
