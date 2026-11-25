@@ -976,10 +976,10 @@ TEST(RequestGroupCovR, CustomDirJoinsRelativeFilename) {
               std::filesystem::path(dir) / "custom.bin");
 }
 
-// 代理门禁：socks 系列在 init 阶段明确失败，不静默直连
+// 代理门禁：socks4 在 init 阶段明确失败，不静默直连
 TEST(RequestGroupCovR, InitRejectsUnsupportedProxy) {
     DownloadOptions options;
-    options.proxy = "socks5://127.0.0.1:1080";
+    options.proxy = "socks4://127.0.0.1:1080";
 
     RequestGroup group(4, {"http://127.0.0.1:1/f.bin"}, options);
     EXPECT_FALSE(group.init());

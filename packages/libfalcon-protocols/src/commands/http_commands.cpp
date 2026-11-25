@@ -178,6 +178,67 @@ std::string ascii_lower(std::string text) {
     return text;
 }
 
+/// socks5 CONNECT 请求的目标地址块（ATYP + ADDR + 大端 PORT）：
+/// IPv4/IPv6 字面量走 ATYP 0x01/0x04；其余按域名 ATYP 0x03（socks5h
+/// 语义：目标主机名交由代理解析）。域名超 255 字节（长度域单字节）
+/// 返回 false
+bool append_socks_address(std::string& out, const std::string& host,
+                          uint16_t port) {
+    in_addr v4 = {};
+    in6_addr v6 = {};
+    if (inet_pton(AF_INET, host.c_str(), &v4) == 1) {
+        out += '\x01';
+        out.append(reinterpret_cast<const char*>(&v4), sizeof(v4));
+    } else if (inet_pton(AF_INET6, host.c_str(), &v6) == 1) {
+        out += '\x04';
+        out.append(reinterpret_cast<const char*>(&v6), sizeof(v6));
+    } else {
+        if (host.empty() || host.size() > 255) {
+            return false;
+        }
+        out += '\x03';
+        out += static_cast<char>(static_cast<unsigned char>(host.size()));
+        out += host;
+    }
+    out += static_cast<char>((port >> 8) & 0xffu);
+    out += static_cast<char>(port & 0xffu);
+    return true;
+}
+
+/// CONNECT 应答 ATYP 合法性（收满 4 字节后可判定；不足 4 字节不算
+/// 非法，交由收齐判定继续等待）
+bool socks_atyp_valid(const std::string& data) {
+    if (data.size() < 4) {
+        return true;
+    }
+    const auto atyp = static_cast<unsigned char>(data[3]);
+    return atyp == 0x01 || atyp == 0x03 || atyp == 0x04;
+}
+
+/// CONNECT 应答收齐所需总长度（4 + 地址 + 2；域名 ATYP 需先收满 5
+/// 字节读出地址长度）。返回 0 = 还需更多字节
+std::size_t socks_connect_reply_len(const std::string& data) {
+    if (data.size() < 4) {
+        return 0;
+    }
+    const auto atyp = static_cast<unsigned char>(data[3]);
+    switch (atyp) {
+        case 0x01:
+            return 4 + 4 + 2;
+        case 0x04:
+            return 4 + 16 + 2;
+        case 0x03:
+            if (data.size() < 5) {
+                return 0;
+            }
+            return 5 + static_cast<std::size_t>(
+                            static_cast<unsigned char>(data[4])) +
+                   2;
+        default:
+            return 0;  // 非法 ATYP（socks_atyp_valid 先行拦截）
+    }
+}
+
 }  // namespace
 
 HttpProxyConfig parse_http_proxy(const DownloadOptions& options) {
@@ -194,18 +255,30 @@ HttpProxyConfig parse_http_proxy(const DownloadOptions& options) {
 
     std::string rest = raw;
     uint16_t default_port = 80;
+    bool is_socks5 = false;
 
     if (rest.rfind("http://", 0) == 0) {
         rest = rest.substr(7);
+    } else if (rest.rfind("socks5h://", 0) == 0 || rest.rfind("socks5://", 0) == 0) {
+        // socks5 原生数据面（socks5h 语义：目标主机名交代理解析）；
+        // socks4 仍 Unsupported 回退 V1 curl
+        is_socks5 = true;
+        default_port = 1080;
+        rest = rest.substr(rest.rfind("socks5h://", 0) == 0 ? 10 : 9);
     } else if (rest.rfind("https://", 0) == 0 || rest.rfind("socks", 0) == 0) {
-        // TLS 代理与 socks 系列不支持——适配层回退 V1 curl
+        // TLS 代理与 socks4 不支持——适配层回退 V1 curl
         return unsupported();
     } else if (rest.find("://") != std::string::npos) {
         return unsupported();  // 未知 scheme
     }  // 无 scheme：按明文 HTTP 代理（curl 对无 scheme 代理同语义）
 
-    // proxy_type 显式声明 socks 的兜底（字段语义：覆盖 URL scheme）
-    if (ascii_lower(options.proxy_type).find("socks") != std::string::npos) {
+    // proxy_type 显式声明的兜底（字段语义：覆盖 URL scheme）：
+    // socks5 → 原生 socks5 数据面；其余 socks 变体（socks4a/socks4）回退
+    const std::string proxy_type_lc = ascii_lower(options.proxy_type);
+    if (proxy_type_lc.find("socks5") != std::string::npos) {
+        is_socks5 = true;
+        default_port = 1080;
+    } else if (proxy_type_lc.find("socks") != std::string::npos) {
         return unsupported();
     }
 
@@ -247,7 +320,7 @@ HttpProxyConfig parse_http_proxy(const DownloadOptions& options) {
     }
 
     HttpProxyConfig cfg;
-    cfg.kind = HttpProxyKind::HttpProxy;
+    cfg.kind = is_socks5 ? HttpProxyKind::Socks5 : HttpProxyKind::HttpProxy;
     cfg.host = host;
     cfg.port = port;
     cfg.username = username.empty() ? options.proxy_username : username;
@@ -323,6 +396,9 @@ HttpInitiateConnectionCommand::HttpInitiateConnectionCommand(
     if (proxy_cfg_.kind == HttpProxyKind::HttpProxy) {
         FALCON_LOG_INFO_STREAM("使用 HTTP 代理: " << proxy_cfg_.host << ":"
                                                   << proxy_cfg_.port);
+    } else if (proxy_cfg_.kind == HttpProxyKind::Socks5) {
+        FALCON_LOG_INFO_STREAM("使用 socks5 代理: " << proxy_cfg_.host << ":"
+                                                    << proxy_cfg_.port);
     }
 }
 
@@ -430,16 +506,24 @@ bool HttpInitiateConnectionCommand::execute(DownloadEngineV2* engine) {
 
                 connection_state_ = HttpConnectionState::CONNECTED;
                 if (use_https_) {
-                    // HTTPS 经代理：先建 CONNECT 隧道再握手（隧道内字节
-                    // 端到端加密，代理只见 host:port）；明文代理与直连
-                    // 均直接发请求
+                    // HTTPS 经代理：先建 CONNECT 隧道（或 socks5 握
+                    // 手）再 TLS 握手（隧道内字节端到端加密，代理
+                    // 只见 host:port）；直连直接进 TLS 握手
                     if (proxy_cfg_.kind == HttpProxyKind::HttpProxy) {
                         connection_state_ =
                             HttpConnectionState::PROXY_TUNNEL_SEND;
+                    } else if (proxy_cfg_.kind == HttpProxyKind::Socks5) {
+                        connection_state_ =
+                            HttpConnectionState::SOCKS_HANDSHAKE_SEND;
                     } else {
                         connection_state_ =
                             HttpConnectionState::TLS_HANDSHAKING;
                     }
+                } else if (proxy_cfg_.kind == HttpProxyKind::Socks5) {
+                    // socks5 明文目标同样先握手：隧道内发 origin-form
+                    // 请求（代理负责解析主机名，见 CONNECT 请求 ATYP）
+                    connection_state_ =
+                        HttpConnectionState::SOCKS_HANDSHAKE_SEND;
                 }
                 [[fallthrough]];
 
@@ -464,12 +548,40 @@ bool HttpInitiateConnectionCommand::execute(DownloadEngineV2* engine) {
                 }
                 [[fallthrough]];
 
+            case HttpConnectionState::SOCKS_HANDSHAKE_SEND:
+                if (connection_state_ == HttpConnectionState::SOCKS_HANDSHAKE_SEND) {
+                    // 发送 socks5 握手报文（greeting / RFC 1929 子协商 /
+                    // CONNECT）：未发完注册 WRITE 挂起，发完置
+                    // SOCKS_HANDSHAKE_RECV 注册 READ 挂起等应答；阶段
+                    // 转换由 socks_stage_ 记账（收到子协商应答后置回
+                    // SOCKS_HANDSHAKE_SEND）
+                    return handle_result(send_socks_handshake(engine));
+                }
+                [[fallthrough]];
+
+            case HttpConnectionState::SOCKS_HANDSHAKE_RECV:
+                if (connection_state_ == HttpConnectionState::SOCKS_HANDSHAKE_RECV) {
+                    const auto socks_res = receive_socks_handshake_reply(engine);
+                    if (socks_res != ExecutionResult::OK) {
+                        return handle_result(socks_res);
+                    }
+                    // 收到方法选择 0x02 时子协商需再发报文——回 SOCKS_
+                    // HANDSHAKE_SEND case 发送（不落下方请求发送是
+                    // 误发）；其余路径（CONNECT 应答）已置 TLS_
+                    // HANDSHAKING 或 CONNECTED 落下方同轮推进
+                    if (connection_state_ == HttpConnectionState::SOCKS_HANDSHAKE_SEND) {
+                        return handle_result(send_socks_handshake(engine));
+                    }
+                }
+                [[fallthrough]];
+
             case HttpConnectionState::CONNECTED:
                 // 请求发送 WANT_WRITE 挂起后的重入：连接/隧道/握手均
                 // 已完成且状态停在 CONNECTED（初始进入时 CONNECTING 置
-                // CONNECTED 后径直落到下方请求发送），重入必须直接续推
-                // 请求发送——落到 default 按失败收口是假失败（真实网络
-                // 拥塞下内核发送缓冲满即可触发）
+                // CONNECTED 后径直落到下方请求发送；socks5 明文握手完
+                // 成也置 CONNECTED），重入必须直接续推请求发送——落到
+                // default 按失败收口是假失败（真实网络拥塞下内核发送
+                // 缓冲满即可触发）
                 [[fallthrough]];
 
             case HttpConnectionState::TLS_HANDSHAKING:
@@ -550,9 +662,12 @@ bool HttpInitiateConnectionCommand::resolve_host(
 }
 
 bool HttpInitiateConnectionCommand::resolve_connect_endpoint() {
-    // 代理生效时连接对象是代理主机（v6 字面量代理已被 parse_http_proxy
-    // 拒绝；代理主机名可解析出 v6，家族判定同路径）
-    const bool use_proxy = proxy_cfg_.kind == HttpProxyKind::HttpProxy;
+    // 代理生效时（明文 HTTP 代理或 socks5）连接对象是代理主机——两者均
+    // 不本地解析目标主机名（明文代理经 absolute-form 把目标交给代理解析，
+    // socks5 经 CONNECT ATYP 0x03 交给代理解析）；v6 字面量代理已被
+    // parse_http_proxy 拒绝，代理主机名可解析出 v6，家族判定同路径
+    const bool use_proxy = proxy_cfg_.kind == HttpProxyKind::HttpProxy ||
+                           proxy_cfg_.kind == HttpProxyKind::Socks5;
     const std::string& connect_host = use_proxy ? proxy_cfg_.host : host_;
 
     // 字面量快路径（IPv6 字面量 host_ 已剥括号，两者同为裸地址判定）
@@ -621,11 +736,13 @@ bool HttpInitiateConnectionCommand::create_socket() {
 }
 
 bool HttpInitiateConnectionCommand::connect_socket() {
-    // 代理生效时连接代理服务器（absolute-form 请求与 CONNECT 隧道均在
-    // 代理连接上承载）；目标主机名的解析延迟到隧道建立之后（TLS 握手
-    // 也只与目标主机相关）。端点解析已在 resolve_connect_endpoint 完成
-    // （execute 的连接步骤 1），此处只按家族组装地址并 connect
-    const bool use_proxy = proxy_cfg_.kind == HttpProxyKind::HttpProxy;
+    // 代理生效时（明文 HTTP 代理或 socks5）连接代理服务器（absolute-form
+    // 请求、CONNECT 隧道或 socks5 握手均在代理连接上承载）；目标主机名
+    // 的解析延迟到隧道建立之后（TLS 握手也只与目标主机相关）。端点解析
+    // 已在 resolve_connect_endpoint 完成（execute 的连接步骤 1），此处
+    // 只按家族组装地址并 connect
+    const bool use_proxy = proxy_cfg_.kind == HttpProxyKind::HttpProxy ||
+                           proxy_cfg_.kind == HttpProxyKind::Socks5;
     const std::string& connect_host = use_proxy ? proxy_cfg_.host : host_;
     const uint16_t connect_port = use_proxy ? proxy_cfg_.port : port_;
 
@@ -1086,6 +1203,336 @@ HttpInitiateConnectionCommand::receive_proxy_connect_response(
 
     FALCON_LOG_INFO_STREAM("代理隧道已建立: " << host_ << ":" << port_);
     connection_state_ = HttpConnectionState::TLS_HANDSHAKING;
+    return ExecutionResult::OK;
+}
+
+AbstractCommand::ExecutionResult
+HttpInitiateConnectionCommand::send_socks_handshake(
+    DownloadEngineV2* engine) {
+    // 按当前 socks 阶段构造握手报文（每阶段首次进入构造一次，阶段
+    // 转换时由调用方复位 proxy_request_/proxy_sent_/proxy_response_）
+    if (proxy_request_.empty()) {
+        const bool has_credentials =
+            !proxy_cfg_.username.empty() || !proxy_cfg_.password.empty();
+        if (socks_stage_ == SocksStage::Greeting) {
+            // 方法协商：VER=5 + NMETHODS + METHODS；有凭据才声明
+            // 0x02（用户名密码）——绝不声明无法执行的认证方法
+            proxy_request_ += '\x05';
+            proxy_request_ += has_credentials ? '\x02' : '\x01';
+            proxy_request_ += '\x00';  // 无认证
+            if (has_credentials) {
+                proxy_request_ += '\x02';  // 用户名/密码（RFC 1929）
+            }
+        } else if (socks_stage_ == SocksStage::Auth) {
+            // RFC 1929 子协商：VER=1 + ULEN + UNAME + PLEN + PASSWD；
+            // 用户名/密码各限 255 字节（单字节长度域）——超长在发送前收口
+            if (proxy_cfg_.username.size() > 255 ||
+                proxy_cfg_.password.size() > 255) {
+                FALCON_LOG_ERROR_STREAM(
+                    "socks5 代理用户名或密码超过 255 字节，无法编码");
+                notify_segment_failure(
+                    engine,
+                    "socks5 credentials exceed 255 bytes");
+                close_socket_fd(socket_fd_);
+                socket_fd_ = -1;
+                return ExecutionResult::ERROR_OCCURRED;
+            }
+            proxy_request_ += '\x01';
+            proxy_request_ += static_cast<char>(
+                static_cast<unsigned char>(proxy_cfg_.username.size()));
+            proxy_request_ += proxy_cfg_.username;
+            proxy_request_ += static_cast<char>(
+                static_cast<unsigned char>(proxy_cfg_.password.size()));
+            proxy_request_ += proxy_cfg_.password;
+        } else {
+            // CONNECT 请求：VER=5 + CMD=0x01(connect) + RSV + ATYP + 目标
+            // 地址 + 端口。目标 = host_/port_；域名按 socks5h 语义交给
+            // 代理解析（ATYP 0x03）；v6 字面量（无括号）走 0x04；
+            // 其余按 0x03
+            // 先编码地址体（失败时 proxy_request_ 仍为空），再加三字节头
+            std::string address_body;
+            if (!append_socks_address(address_body, host_, port_)) {
+                FALCON_LOG_ERROR_STREAM(
+                    "socks5 CONNECT 目标地址编码失败: " << host_);
+                notify_segment_failure(engine, "Invalid socks5 target address");
+                close_socket_fd(socket_fd_);
+                socket_fd_ = -1;
+                return ExecutionResult::ERROR_OCCURRED;
+            }
+            // assign 显式长度——字面量含 \x00，operator=(const char*) 会在 NUL 处截断
+            proxy_request_.assign("\x05\x01\x00", 3);
+            proxy_request_ += address_body;
+        }
+        proxy_sent_ = 0;
+    }
+
+    while (proxy_sent_ < proxy_request_.size()) {
+        const char* data = proxy_request_.data() + proxy_sent_;
+        const std::size_t remaining = proxy_request_.size() - proxy_sent_;
+#ifdef _WIN32
+        ssize_t n;
+        if (::falcon::detail::inject_failure(
+                ::falcon::detail::InjectPoint::HttpSendWantWrite)) {
+            // 模拟内核发送缓冲满：置 WOULDBLOCK 走 WANT_WRITE 重入
+            WSASetLastError(WSAEWOULDBLOCK);
+            n = -1;
+        } else if (::falcon::detail::inject_failure(
+                       ::falcon::detail::InjectPoint::ProxyConnectSendFail)) {
+            WSASetLastError(WSAECONNRESET);
+            n = -1;
+        } else {
+            n = send(socket_fd_, data, static_cast<int>(remaining),
+                     kSendFlags);
+        }
+#else
+        ssize_t n;
+        if (::falcon::detail::inject_failure(
+                ::falcon::detail::InjectPoint::HttpSendWantWrite)) {
+            // 模拟内核发送缓冲满：置 WOULDBLOCK 走 WANT_WRITE 重入
+            errno = EAGAIN;
+            n = -1;
+        } else if (::falcon::detail::inject_failure(
+                       ::falcon::detail::InjectPoint::ProxyConnectSendFail)) {
+            errno = ECONNRESET;
+            n = -1;
+        } else {
+            n = send(socket_fd_, data, remaining, kSendFlags);
+        }
+#endif
+        if (n < 0) {
+            if (sock_would_block(sock_errno())) {
+                if (!engine->register_socket_event(
+                        socket_fd_, static_cast<int>(net::IOEvent::WRITE),
+                        id())) {
+                    notify_segment_failure(
+                        engine, "Failed to register socks handshake event");
+                    close_socket_fd(socket_fd_);
+                    socket_fd_ = -1;
+                    return ExecutionResult::ERROR_OCCURRED;
+                }
+                return ExecutionResult::WAIT_FOR_SOCKET;
+            }
+            FALCON_LOG_ERROR_STREAM("发送 socks5 握手报文失败: "
+                                    << sock_err_str(sock_errno()));
+            notify_segment_failure(engine, "Failed to send socks5 handshake");
+            close_socket_fd(socket_fd_);
+            socket_fd_ = -1;
+            return ExecutionResult::ERROR_OCCURRED;
+        }
+        proxy_sent_ += static_cast<std::size_t>(n);
+    }
+
+    proxy_response_.clear();
+    connection_state_ = HttpConnectionState::SOCKS_HANDSHAKE_RECV;
+    if (!engine->register_socket_event(
+            socket_fd_, static_cast<int>(net::IOEvent::READ), id())) {
+        FALCON_LOG_ERROR_STREAM("socks5 握手后注册读事件失败");
+        notify_segment_failure(engine, "Failed to register socks read event");
+        close_socket_fd(socket_fd_);
+        socket_fd_ = -1;
+        return ExecutionResult::ERROR_OCCURRED;
+    }
+    return ExecutionResult::WAIT_FOR_SOCKET;
+}
+
+AbstractCommand::ExecutionResult
+HttpInitiateConnectionCommand::receive_socks_handshake_reply(
+    DownloadEngineV2* engine) {
+    // 按当前阶段判定收齐：方法协商/子协商应答恰 2 字节；CONNECT 应答
+    // = 4 头部 + 地址（ATYP 0x03 需先收满 5 字节读出地址长度）+ 2 端口
+    auto stage_complete = [this]() -> bool {
+        if (socks_stage_ == SocksStage::Connect) {
+            if (proxy_response_.size() < 4) {
+                return false;
+            }
+            if (!socks_atyp_valid(proxy_response_)) {
+                return true;  // 非法 ATYP——收齐头部即按失败收口
+            }
+            const std::size_t total = socks_connect_reply_len(proxy_response_);
+            return total > 0 && proxy_response_.size() >= total;
+        }
+        return proxy_response_.size() >= 2;
+    };
+
+    char buf[4096];
+    while (!stage_complete() && proxy_response_.size() < 64 * 1024) {
+#ifdef _WIN32
+        const ssize_t n = recv(socket_fd_, buf,
+                               static_cast<int>(sizeof(buf)), 0);
+#else
+        const ssize_t n = recv(socket_fd_, buf, sizeof(buf), 0);
+#endif
+        if (n < 0) {
+            if (sock_would_block(sock_errno())) {
+                if (engine->register_socket_event(
+                        socket_fd_, static_cast<int>(net::IOEvent::READ),
+                        id())) {
+                    return ExecutionResult::WAIT_FOR_SOCKET;
+                }
+                FALCON_LOG_ERROR_STREAM("socks5 应答挂起后注册读事件失败");
+                notify_segment_failure(
+                    engine, "Failed to register socks read event");
+                close_socket_fd(socket_fd_);
+                socket_fd_ = -1;
+                return ExecutionResult::ERROR_OCCURRED;
+            }
+            FALCON_LOG_ERROR_STREAM("接收 socks5 应答失败: "
+                                    << sock_err_str(sock_errno()));
+            notify_segment_failure(engine, "Failed to receive socks5 reply");
+            close_socket_fd(socket_fd_);
+            socket_fd_ = -1;
+            return ExecutionResult::ERROR_OCCURRED;
+        }
+        if (n == 0) {
+            FALCON_LOG_ERROR_STREAM("socks5 代理在应答完成前关闭连接");
+            notify_segment_failure(
+                engine, "socks5 proxy closed connection before reply");
+            close_socket_fd(socket_fd_);
+            socket_fd_ = -1;
+            return ExecutionResult::ERROR_OCCURRED;
+        }
+        proxy_response_.append(buf, static_cast<std::size_t>(n));
+    }
+
+    if (socks_stage_ == SocksStage::Greeting) {
+        const auto ver = static_cast<unsigned char>(proxy_response_[0]);
+        const auto method =
+            static_cast<unsigned char>(proxy_response_[1]);
+        if (ver != 0x05) {
+            FALCON_LOG_ERROR_STREAM("socks5 方法协商应答版本错误: "
+                                    << ver);
+            notify_segment_failure(engine,
+                                   "socks5 greeting reply has wrong version");
+            close_socket_fd(socket_fd_);
+            socket_fd_ = -1;
+            return ExecutionResult::ERROR_OCCURRED;
+        }
+        if (method == 0xFF) {
+            FALCON_LOG_ERROR_STREAM("socks5 代理不接受任何认证方法");
+            notify_segment_failure(
+                engine, "socks5 proxy accepts no auth method");
+            close_socket_fd(socket_fd_);
+            socket_fd_ = -1;
+            return ExecutionResult::ERROR_OCCURRED;
+        }
+        if (method == 0x02) {
+            if (proxy_cfg_.username.empty() && proxy_cfg_.password.empty()) {
+                // 代理要求认证但客户端无凭据——握手报文未声明 0x02，
+                // 属于代理越权，按失败收口
+                FALCON_LOG_ERROR_STREAM("socks5 代理要求用户名密码认证但无凭据");
+                notify_segment_failure(
+                    engine,
+                    "socks5 proxy demands auth but no credentials");
+                close_socket_fd(socket_fd_);
+                socket_fd_ = -1;
+                return ExecutionResult::ERROR_OCCURRED;
+            }
+            socks_stage_ = SocksStage::Auth;
+            connection_state_ = HttpConnectionState::SOCKS_HANDSHAKE_SEND;
+            proxy_request_.clear();
+            proxy_sent_ = 0;
+            proxy_response_.clear();
+            return send_socks_handshake(engine);
+        }
+        if (method != 0x00) {
+            FALCON_LOG_ERROR_STREAM("socks5 代理选择了不支持的认证方法: "
+                                    << static_cast<unsigned>(method));
+            notify_segment_failure(
+                engine, "socks5 proxy selected unsupported auth method");
+            close_socket_fd(socket_fd_);
+            socket_fd_ = -1;
+            return ExecutionResult::ERROR_OCCURRED;
+        }
+        socks_stage_ = SocksStage::Connect;
+        connection_state_ = HttpConnectionState::SOCKS_HANDSHAKE_SEND;
+        proxy_request_.clear();
+        proxy_sent_ = 0;
+        proxy_response_.clear();
+        return send_socks_handshake(engine);
+    }
+
+    if (socks_stage_ == SocksStage::Auth) {
+        const auto ver = static_cast<unsigned char>(proxy_response_[0]);
+        const auto status =
+            static_cast<unsigned char>(proxy_response_[1]);
+        if (ver != 0x01) {
+            FALCON_LOG_ERROR_STREAM("socks5 认证应答版本错误: " << ver);
+            notify_segment_failure(engine,
+                                   "socks5 auth reply has wrong version");
+            close_socket_fd(socket_fd_);
+            socket_fd_ = -1;
+            return ExecutionResult::ERROR_OCCURRED;
+        }
+        if (status != 0x00) {
+            FALCON_LOG_ERROR_STREAM("socks5 用户名密码认证失败: status="
+                                    << static_cast<unsigned>(status));
+            notify_segment_failure(engine, "socks5 auth failed");
+            close_socket_fd(socket_fd_);
+            socket_fd_ = -1;
+            return ExecutionResult::ERROR_OCCURRED;
+        }
+        socks_stage_ = SocksStage::Connect;
+        connection_state_ = HttpConnectionState::SOCKS_HANDSHAKE_SEND;
+        proxy_request_.clear();
+        proxy_sent_ = 0;
+        proxy_response_.clear();
+        return send_socks_handshake(engine);
+    }
+
+    // CONNECT 应答：VER REP RSV ATYP BND.ADDR BND.PORT
+    if (proxy_response_.size() < 2) {
+        FALCON_LOG_ERROR_STREAM("socks5 CONNECT 应答为空或截断");
+        notify_segment_failure(engine, "socks5 CONNECT reply truncated");
+        close_socket_fd(socket_fd_);
+        socket_fd_ = -1;
+        return ExecutionResult::ERROR_OCCURRED;
+    }
+    // stage_complete 会对非法 ATYP 提前放行等待循环，64KB 上限也可在
+    // 应答收齐前退出——两者都不是完整合法应答，绝不进入成功收口
+    if (!socks_atyp_valid(proxy_response_) ||
+        proxy_response_.size() <
+            socks_connect_reply_len(proxy_response_)) {
+        FALCON_LOG_ERROR_STREAM("socks5 CONNECT 应答地址块非法或截断");
+        notify_segment_failure(engine, "socks5 CONNECT reply truncated");
+        close_socket_fd(socket_fd_);
+        socket_fd_ = -1;
+        return ExecutionResult::ERROR_OCCURRED;
+    }
+    {
+        const auto ver =
+            static_cast<unsigned char>(proxy_response_[0]);
+        const auto rep =
+            static_cast<unsigned char>(proxy_response_[1]);
+        if (ver != 0x05) {
+            FALCON_LOG_ERROR_STREAM("socks5 CONNECT 应答版本错误: "
+                                    << ver);
+            notify_segment_failure(engine,
+                                   "socks5 CONNECT reply has wrong version");
+            close_socket_fd(socket_fd_);
+            socket_fd_ = -1;
+            return ExecutionResult::ERROR_OCCURRED;
+        }
+        if (rep != 0x00) {
+            FALCON_LOG_ERROR_STREAM("socks5 代理拒绝 CONNECT: REP="
+                                    << static_cast<unsigned>(rep));
+            notify_segment_failure(
+                engine, "socks5 proxy refused CONNECT: REP=" +
+                            std::to_string(static_cast<unsigned>(rep)));
+            close_socket_fd(socket_fd_);
+            socket_fd_ = -1;
+            return ExecutionResult::ERROR_OCCURRED;
+        }
+    }
+
+    FALCON_LOG_INFO_STREAM("socks5 隧道已建立: " << host_ << ":" << port_);
+    // https 目标接着 TLS 握手；明文目标回落 CONNECTED（既有状态机
+    // fallthrough 到 origin-form 请求发送——socks5 隧道内目标地址
+    // 已由 ATYP 字段承载，请求行保持 origin-form）
+    connection_state_ =
+        use_https_ ? HttpConnectionState::TLS_HANDSHAKING
+                   : HttpConnectionState::CONNECTED;
+    proxy_request_.clear();
+    proxy_response_.clear();
     return ExecutionResult::OK;
 }
 

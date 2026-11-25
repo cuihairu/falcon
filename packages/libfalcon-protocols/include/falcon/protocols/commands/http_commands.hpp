@@ -49,6 +49,11 @@ enum class HttpConnectionState {
     PROXY_TUNNEL_SEND,
     /// 等待/接收代理对 CONNECT 的最终应答（收满 \r\n\r\n 判定）
     PROXY_TUNNEL_RECV,
+    /// socks5 握手报文发送中（greeting / RFC 1929 子协商 / CONNECT，
+    /// 非阻塞 send 挂起等重入续推；阶段由 socks_stage_ 记账）
+    SOCKS_HANDSHAKE_SEND,
+    /// 等待/接收 socks5 服务器应答（按当前阶段判定收齐长度）
+    SOCKS_HANDSHAKE_RECV,
     REQUEST_SENT,
     RECEIVING,
     COMPLETE
@@ -57,14 +62,17 @@ enum class HttpConnectionState {
 /**
  * @brief 代理配置解析结论
  *
- * V2 数据面仅支持明文 HTTP 代理（absolute-form 请求行 + CONNECT
- * 隧道）；socks 系列与 TLS 代理明确判 Unsupported——M2 适配层据此
- * 回退 V1 curl（libcurl 自带 socks 支持）
+ * V2 数据面支持明文 HTTP 代理（absolute-form 请求行 + CONNECT
+ * 隧道）与 socks5 代理（RFC 1928 握手 + RFC 1929 用户名密码子协商，
+ * socks5h 语义：目标主机名经 ATYP 0x03 交由代理解析）；TLS 代理与
+ * socks4 明确判 Unsupported——M2 适配层据此回退 V1 curl
+ * （libcurl 自带相应支持）
  */
 enum class HttpProxyKind {
     None,         ///< 无代理（proxy 配置为空）
     HttpProxy,    ///< 明文 HTTP 代理
-    Unsupported   ///< socks / https 代理 / 未知 scheme / 无法解析
+    Socks5,       ///< socks5 代理（socks5:// / socks5h://；默认端口 1080）
+    Unsupported   ///< socks4 / https 代理 / 未知 scheme / 无法解析
 };
 
 struct HttpProxyConfig {
@@ -80,6 +88,10 @@ struct HttpProxyConfig {
  *
  * 接受 `http://[user:pass@]host[:port]` 与无 scheme 的
  * `[user:pass@]host[:port]`（按明文 HTTP 代理，默认端口 80）；
+ * `socks5://` 与 `socks5h://`（socks5h 语义：目标主机名交由
+ * 代理解析，默认端口 1080）按 socks5 代理解析，userinfo 凭据经
+ * RFC 1929 用户名密码子协商发送；proxy_type 含 "socks5" 的无
+ * scheme authority 同样按 socks5 解析。
  * userinfo 凭据优先，缺省回落 proxy_username/proxy_password 字段。
  */
 HttpProxyConfig parse_http_proxy(const DownloadOptions& options);
@@ -348,6 +360,8 @@ private:
     ExecutionResult advance_tls_handshake(DownloadEngineV2* engine);
     ExecutionResult send_proxy_connect(DownloadEngineV2* engine);
     ExecutionResult receive_proxy_connect_response(DownloadEngineV2* engine);
+    ExecutionResult send_socks_handshake(DownloadEngineV2* engine);
+    ExecutionResult receive_socks_handshake_reply(DownloadEngineV2* engine);
     bool prepare_http_request();
     ExecutionResult send_http_request(DownloadEngineV2* engine);
     void notify_segment_failure(DownloadEngineV2* engine, const std::string& reason);
@@ -403,10 +417,20 @@ private:
     // 代理配置（构造时 parse 一次；None = 直连，语义零变化）
     HttpProxyConfig proxy_cfg_;
 
-    // CONNECT 隧道状态（仅 HTTPS + 代理使用）
-    std::string proxy_request_;   ///< 待发 CONNECT 报文
+    // CONNECT 隧道 / socks5 握手状态（HTTP 代理 CONNECT 或 socks5 代理
+    // 握手使用；socks5 三阶段共用，阶段由 socks_stage_ 记账）
+    std::string proxy_request_;   ///< 待发 CONNECT / socks5 握手报文
     std::size_t proxy_sent_ = 0;  ///< 已发送字节数
-    std::string proxy_response_;  ///< 累积的代理应答（收满 \r\n\r\n 判定）
+    std::string proxy_response_;  ///< 累积的代理应答（CONNECT 收满 \r\n\r\n；socks5 按阶段判定收齐长度）
+
+    /// socks5 握手子阶段（RFC 1928）：greeting →（服务端选 0x02 时
+    /// RFC 1929 用户名密码子协商）→ CONNECT
+    enum class SocksStage {
+        Greeting,  ///< 发送方法协商报文（0x00 常备；带凭据时加 0x02）
+        Auth,      ///< RFC 1929 用户名密码子协商（仅服务端选 0x02 时进入）
+        Connect    ///< 发送 CONNECT 请求（CMD=0x01，ATYP 按目标形态）
+    };
+    SocksStage socks_stage_ = SocksStage::Greeting;
 
     std::string request_data_;
     std::size_t request_sent_ = 0;

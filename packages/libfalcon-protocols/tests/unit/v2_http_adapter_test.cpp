@@ -873,7 +873,7 @@ TEST_F(V2HttpAdapterSupports, FallbackTable) {
 
     DownloadOptions options;
     options.proxy = "socks5://192.0.2.1:1080";
-    EXPECT_FALSE(V2HttpDownloadAdapter::supports(options)) << "socks 代理回退";
+    EXPECT_TRUE(V2HttpDownloadAdapter::supports(options)) << "socks5 已原生化";
 
     options = DownloadOptions{};
     options.proxy = "socks4://192.0.2.1:1080";
@@ -896,7 +896,8 @@ TEST_F(V2HttpAdapterSupports, FallbackTable) {
     options = DownloadOptions{};
     options.proxy = "http://192.0.2.1:8080";
     options.proxy_type = "socks5";  // 类型覆盖指向 socks
-    EXPECT_FALSE(V2HttpDownloadAdapter::supports(options));
+    EXPECT_TRUE(V2HttpDownloadAdapter::supports(options))
+        << "proxy_type socks5 已原生化";
 
     options = DownloadOptions{};
     options.cookie_file = "cookies.txt";
@@ -908,11 +909,13 @@ TEST_F(V2HttpAdapterSupports, FallbackTable) {
 
     options = DownloadOptions{};
     options.http_username = "user";
-    EXPECT_FALSE(V2HttpDownloadAdapter::supports(options));
+    EXPECT_TRUE(V2HttpDownloadAdapter::supports(options))
+        << "Basic 认证已原生化：V2 prepare_http_request 发送 Authorization，不回退";
 
     options = DownloadOptions{};
     options.http_password = "pass";
-    EXPECT_FALSE(V2HttpDownloadAdapter::supports(options));
+    EXPECT_TRUE(V2HttpDownloadAdapter::supports(options))
+        << "Basic 认证已原生化：V2 prepare_http_request 发送 Authorization，不回退";
 
     options = DownloadOptions{};
     options.referer = "http://example.com/";

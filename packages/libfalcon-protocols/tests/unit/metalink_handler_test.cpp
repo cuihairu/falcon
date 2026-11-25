@@ -1690,14 +1690,14 @@ TEST_F(MetalinkV2BridgeTest, V2GateRejectsCurlSpecificOptions) {
 
     run_case(240, [](DownloadOptions& o) { o.cookie_file = "cookies.txt"; },
              "gt-cookie.bin");
+    // HTTP Basic 认证已原生化：门禁放行走 V2，服务器 200 即完成
     run_case(241,
              [](DownloadOptions& o) {
                  o.http_username = "user";
                  o.http_password = "pass";
              },
              "gt-auth.bin");
-    // socks 代理:门禁判 Unsupported 回退阶段1;V1 curl 走死代理 →
-    // 两镜像皆不可达,干净失败(门禁行本身已被评估并命中)
+    // socks5 代理已原生化：门禁放行走 V2，死代理下两镜像不可达 → 干净失败
     {
         DownloadOptions options;
         options.output_directory = dir_.string();
@@ -1708,8 +1708,8 @@ TEST_F(MetalinkV2BridgeTest, V2GateRejectsCurlSpecificOptions) {
         EXPECT_THROW(handler_->download(task, nullptr), std::exception);
     }
 
-    // 四条门禁路径全部前置回退:宿主从未启动引擎
-    EXPECT_EQ(V2EngineHost::instance().try_engine(), nullptr);
+    // 仅 cookie 保持前置回退:宿主从未启动引擎
+    // (auth/socks5 已原生化,各自路径已启动并收口引擎)
 }
 
 /// 桥接轮询中宿主停机:try_engine 返回 null → kFailed → 清残留回落

@@ -697,9 +697,8 @@ TEST(ParseHttpProxy, CredentialFieldsUsedWithoutUserinfo) {
     EXPECT_EQ(cfg.password, "pw");
 }
 
-TEST(ParseHttpProxy, SocksIsUnsupported) {
-    for (const char* raw :
-         {"socks5://proxy:1080", "socks4://proxy:1080", "socks://proxy:1080"}) {
+TEST(ParseHttpProxy, Socks4IsUnsupported) {
+    for (const char* raw : {"socks4://proxy:1080", "socks://proxy:1080"}) {
         DownloadOptions options;
         options.proxy = raw;
         EXPECT_EQ(parse_http_proxy(options).kind, HttpProxyKind::Unsupported)
@@ -713,10 +712,19 @@ TEST(ParseHttpProxy, HttpsProxyIsUnsupported) {
     EXPECT_EQ(parse_http_proxy(options).kind, HttpProxyKind::Unsupported);
 }
 
-TEST(ParseHttpProxy, ProxyTypeSocksFieldIsUnsupported) {
+TEST(ParseHttpProxy, ProxyTypeSocks5OverridesScheme) {
     DownloadOptions options;
     options.proxy = "http://proxy.local:8080";
     options.proxy_type = "SOCKS5";
+    EXPECT_EQ(parse_http_proxy(options).kind, HttpProxyKind::Socks5);
+    EXPECT_EQ(parse_http_proxy(options).host, "proxy.local");
+    EXPECT_EQ(parse_http_proxy(options).port, 8080);
+}
+
+TEST(ParseHttpProxy, ProxyTypeSocksFieldIsUnsupported) {
+    DownloadOptions options;
+    options.proxy = "http://proxy.local:8080";
+    options.proxy_type = "SOCKS4";
     EXPECT_EQ(parse_http_proxy(options).kind, HttpProxyKind::Unsupported);
 }
 
