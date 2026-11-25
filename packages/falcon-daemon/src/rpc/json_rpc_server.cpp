@@ -1,5 +1,7 @@
 #include "json_rpc_server.hpp"
 
+#include "json_rpc_server_detail.hpp"
+
 #include "rpc/mcp_server.hpp"
 #include "rpc/websocket_frame.hpp"
 
@@ -90,19 +92,6 @@ struct ScopedFd {
     }
 };
 
-static std::string to_lower(std::string s) {
-    std::transform(s.begin(), s.end(), s.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return s;
-}
-
-static std::string trim(std::string s) {
-    auto is_ws = [](unsigned char c) { return std::isspace(c) != 0; };
-    while (!s.empty() && is_ws(static_cast<unsigned char>(s.front()))) s.erase(s.begin());
-    while (!s.empty() && is_ws(static_cast<unsigned char>(s.back()))) s.pop_back();
-    return s;
-}
-
 static std::optional<std::size_t> parse_content_length(const std::unordered_map<std::string, std::string>& headers) {
     auto it = headers.find("content-length");
     if (it == headers.end()) return std::nullopt;
@@ -110,259 +99,6 @@ static std::optional<std::size_t> parse_content_length(const std::unordered_map<
         return static_cast<std::size_t>(std::stoull(it->second));
     } catch (...) {
         return std::nullopt;
-    }
-}
-
-// per-download 数值选项的字符串/整数双形态解析（aria2 addUri options 惯例）。
-// 缺省语义由调用方以 contains 判定；key 存在但无法解析时返回 nullopt——
-// addUri 必须以 -32602 收口，而非让裸 std::stoull 抛异常被 dispatch 兜底成
-// -32603 Internal error（错误码与 JSON-RPC 参数错误语义不符）。stoull 前缀
-// 解析（"12abc" -> 12）与既有 getOption/seed 系键一致，取宽松方向
-static std::optional<std::size_t> parse_numeric_option(const json& value) {
-    if (value.is_number_unsigned()) return value.get<std::size_t>();
-    if (value.is_number_integer()) {
-        const auto n = value.get<std::int64_t>();
-        if (n < 0) return std::nullopt;
-        return static_cast<std::size_t>(n);
-    }
-    if (value.is_string()) {
-        try {
-            return static_cast<std::size_t>(std::stoull(value.get<std::string>()));
-        } catch (...) {
-            return std::nullopt;
-        }
-    }
-    return std::nullopt;
-}
-
-// per-download 布尔选项的 JSON 布尔/"true"/"false" 字符串双形态解析；
-// 其余形态（数字、非法字面量）返回 nullopt
-static std::optional<bool> parse_bool_option(const json& value) {
-    if (value.is_boolean()) return value.get<bool>();
-    if (value.is_string()) {
-        const std::string s = to_lower(trim(value.get<std::string>()));
-        if (s == "true") return true;
-        if (s == "false") return false;
-    }
-    return std::nullopt;
-}
-
-static std::string task_id_to_gid(falcon::TaskId id) {
-    std::ostringstream oss;
-    oss << std::hex << std::setw(16) << std::setfill('0') << static_cast<std::uint64_t>(id);
-    return oss.str();
-}
-
-static std::optional<falcon::TaskId> gid_to_task_id(const std::string& gid) {
-    std::string s = gid;
-    if (s.rfind("0x", 0) == 0 || s.rfind("0X", 0) == 0) {
-        s = s.substr(2);
-    }
-    if (s.empty() || s.size() > 16) return std::nullopt;
-    for (char c : s) {
-        if (!std::isxdigit(static_cast<unsigned char>(c))) return std::nullopt;
-    }
-    try {
-        std::uint64_t value = std::stoull(s, nullptr, 16);
-        if (value == 0) return std::nullopt;
-        return static_cast<falcon::TaskId>(value);
-    } catch (...) {
-        return std::nullopt;
-    }
-}
-
-static std::string aria2_status_from_task_status(falcon::TaskStatus status) {
-    switch (status) {
-        case falcon::TaskStatus::Downloading:
-        case falcon::TaskStatus::Preparing:
-            return "active";
-        case falcon::TaskStatus::Pending:
-            return "waiting";
-        case falcon::TaskStatus::Paused:
-            return "paused";
-        case falcon::TaskStatus::Completed:
-            return "complete";
-        case falcon::TaskStatus::Cancelled:
-            return "removed";
-        case falcon::TaskStatus::Failed:
-            return "error";
-    }
-    return "error";
-}
-
-static std::string aria2_status_from_task(const falcon::DownloadTask& task) {
-    return aria2_status_from_task_status(task.status());
-}
-
-// aria2 风格的文件条目（tellStatus.files / getFiles 共用）
-static json files_json(const std::string& path, falcon::Bytes total,
-                       falcon::Bytes completed, const std::string& url,
-                       bool include_selected) {
-    json file{
-        {"path", path},
-        {"length", std::to_string(total)},
-        {"completedLength", std::to_string(completed)},
-        {"uris", json::array({json{{"uri", url}, {"status", "used"}}})},
-    };
-    if (include_selected) {
-        file["selected"] = "true";
-    }
-    return json::array({std::move(file)});
-}
-
-// 将任务的下载选项映射回 aria2 选项键（getOption / 便于客户端回显）
-static json download_options_to_json(const falcon::DownloadOptions& options) {
-    json out;
-    out["dir"] = options.output_directory;
-    out["out"] = options.output_filename;
-    out["user-agent"] = options.user_agent;
-    out["referer"] = options.referer;
-    out["load-cookies"] = options.cookie_file;
-    out["save-cookies"] = options.cookie_jar;
-    out["http-user"] = options.http_username;
-    out["http-passwd"] = options.http_password;
-    out["certificate"] = options.client_certificate;
-    out["private-key"] = options.client_private_key;
-    out["all-proxy"] = options.proxy;
-    out["all-proxy-user"] = options.proxy_username;
-    out["all-proxy-passwd"] = options.proxy_password;
-    out["check-certificate"] = options.verify_ssl ? "true" : "false";
-    out["max-tries"] = std::to_string(options.max_retries);
-    out["retry-wait"] = std::to_string(options.retry_delay_seconds);
-    out["timeout"] = std::to_string(options.timeout_seconds);
-    out["max-connection-per-server"] = std::to_string(options.max_connections);
-    out["min-split-size"] = std::to_string(options.min_segment_size);
-    out["max-download-limit"] = std::to_string(options.speed_limit);
-    out["split"] = std::to_string(options.max_connections);
-    out["continue"] = options.resume_enabled ? "true" : "false";
-    out["allow-overwrite"] = options.overwrite_existing ? "true" : "false";
-    out["auto-file-renaming"] = options.auto_file_renaming ? "true" : "false";
-    out["file-allocation"] = options.file_allocation;
-    out["conditional-get"] = options.conditional_get ? "true" : "false";
-    out["seed-ratio"] = std::to_string(options.seed_ratio);
-    out["seed-time"] = std::to_string(options.seed_time_minutes);
-    out["p2sp-share"] = options.p2sp_share;
-    json headers = json::object();
-    for (const auto& [key, value] : options.headers) {
-        headers[key] = value;
-    }
-    out["header"] = std::move(headers);
-    return out;
-}
-
-// aria2 tellWaiting/tellStopped 的 offset/num 分页语义
-static json paginate_items(const std::vector<json>& items, int offset, int num) {
-    json out = json::array();
-    const int start = std::max(0, offset);
-    const int end = std::min<int>(static_cast<int>(items.size()), start + std::max(0, num));
-    for (int i = start; i < end; ++i) {
-        out.push_back(items[static_cast<std::size_t>(i)]);
-    }
-    return out;
-}
-
-static json task_to_status_json(const falcon::DownloadTask& task) {
-    json out;
-    out["gid"] = task_id_to_gid(task.id());
-    out["status"] = aria2_status_from_task(task);
-    // Falcon 扩展字段：aria2 原生没有优先级，桌面客户端用它还原任务列表
-    out["priority"] = static_cast<int>(task.get_priority());
-    out["totalLength"] = std::to_string(task.total_bytes());
-    out["completedLength"] = std::to_string(task.downloaded_bytes());
-    out["downloadSpeed"] = std::to_string(task.speed());
-    out["errorMessage"] = task.error_message();
-    out["files"] = files_json(task.output_path(), task.total_bytes(),
-                              task.downloaded_bytes(), task.url(), false);
-    // Falcon 扩展字段：做种计量快照（BitTorrent；非 BT 任务恒零）
-    const auto seed = task.get_seed_info();
-    out["seedUploadedBytes"] = std::to_string(seed.uploaded_bytes);
-    out["seedDownloadedBytes"] = std::to_string(seed.downloaded_bytes);
-    out["seedTotalSize"] = std::to_string(seed.total_size);
-    out["seededSeconds"] = seed.seeded_seconds;
-    out["seedingActive"] = seed.seeding_active;
-    out["seedStopReason"] = seed.stop_reason;
-    return out;
-}
-
-#ifdef FALCON_HAS_SQLITE3
-// 引擎内任务（内存态）转状态 JSON；历史记录转状态 JSON
-static json task_record_to_status_json(const TaskRecord& record) {
-    json out;
-    out["gid"] = task_id_to_gid(record.id);
-    out["status"] = aria2_status_from_task_status(record.status);
-    // storage 未持久化优先级，历史记录回默认 Normal
-    out["priority"] = static_cast<int>(falcon::TaskPriority::Normal);
-    out["totalLength"] = std::to_string(record.total_bytes);
-    out["completedLength"] = std::to_string(record.downloaded_bytes);
-    out["downloadSpeed"] = std::to_string(record.speed);
-    out["errorMessage"] = record.error_message;
-    out["files"] = files_json(record.output_path, record.total_bytes,
-                              record.downloaded_bytes, record.url, false);
-    return out;
-}
-
-// 收集 storage 中存在、但引擎当前不持有的记录（典型场景：重启后
-// 终态任务只保留在数据库中，引擎恢复时跳过终态）。引擎内任务以
-// 内存状态为准，通过 engine_ids 去重避免同一任务重复出现。
-static std::vector<TaskRecord> storage_extra_records(
-    TaskStorage* storage,
-    const std::vector<falcon::DownloadTask::Ptr>& engine_tasks,
-    const std::vector<falcon::TaskStatus>& statuses) {
-    std::unordered_set<falcon::TaskId> engine_ids;
-    for (const auto& task : engine_tasks) {
-        if (task) engine_ids.insert(task->id());
-    }
-    std::vector<TaskRecord> out;
-    for (auto status : statuses) {
-        for (auto& record : storage->get_tasks_by_status(status)) {
-            if (engine_ids.count(record.id) == 0) {
-                out.push_back(std::move(record));
-            }
-        }
-    }
-    return out;
-}
-#endif
-
-static json make_error(const json& id, int code, std::string message) {
-    return json{
-        {"jsonrpc", "2.0"},
-        {"id", id.is_null() ? json(nullptr) : id},
-        {"error", json{{"code", code}, {"message", std::move(message)}}},
-    };
-}
-
-static json make_result(const json& id, json result) {
-    return json{
-        {"jsonrpc", "2.0"},
-        {"id", id.is_null() ? json(nullptr) : id},
-        {"result", std::move(result)},
-    };
-}
-
-static bool validate_and_strip_token(json& params, const std::string& secret) {
-    if (secret.empty()) {
-        return true;
-    }
-    if (!params.is_array() || params.empty() || !params[0].is_string()) {
-        return false;
-    }
-    const std::string token = params[0].get<std::string>();
-    const std::string expected = "token:" + secret;
-    if (token != expected) {
-        return false;
-    }
-    params.erase(params.begin());
-    return true;
-}
-
-static void maybe_strip_token(json& params, const std::string& secret) {
-    if (secret.empty()) return;
-    if (!params.is_array() || params.empty() || !params[0].is_string()) return;
-    const std::string token = params[0].get<std::string>();
-    const std::string expected = "token:" + secret;
-    if (token == expected) {
-        params.erase(params.begin());
     }
 }
 
@@ -385,8 +121,8 @@ namespace {
 /// 额外字段对严格客户端是透明超集）
 static json notification_entry(const falcon::DownloadTask* task) {
     json entry;
-    entry["gid"] = task_id_to_gid(task->id());
-    entry["status"] = aria2_status_from_task(*task);
+    entry["gid"] = detail::task_id_to_gid(task->id());
+    entry["status"] = detail::aria2_status_from_task(*task);
     entry["totalLength"] = std::to_string(task->total_bytes());
     entry["completedLength"] = std::to_string(task->downloaded_bytes());
     entry["downloadSpeed"] = std::to_string(task->speed());
@@ -455,7 +191,7 @@ public:
         if (auto task = engine_->get_task(task_id)) {
             params.push_back(notification_entry(task.get()));
         } else {
-            params.push_back(json{{"gid", task_id_to_gid(task_id)}});
+            params.push_back(json{{"gid", detail::task_id_to_gid(task_id)}});
         }
 
         JsonRpcServer* server = server_ptr();
@@ -484,9 +220,9 @@ public:
 
         json params = json::array();
         json entry;
-        entry["gid"] = task_id_to_gid(info.task_id);
+        entry["gid"] = detail::task_id_to_gid(info.task_id);
         if (auto task = engine_->get_task(info.task_id)) {
-            entry["status"] = aria2_status_from_task(*task);
+            entry["status"] = detail::aria2_status_from_task(*task);
         }
         entry["progress"] = info.progress;
         entry["totalLength"] = std::to_string(info.total_bytes);
@@ -782,8 +518,8 @@ static std::optional<JsonRpcServer::HttpRequest> read_http_request(int fd) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
         auto pos = line.find(':');
         if (pos == std::string::npos) continue;
-        std::string key = to_lower(trim(line.substr(0, pos)));
-        std::string value = trim(line.substr(pos + 1));
+        std::string key = detail::to_lower(detail::trim(line.substr(0, pos)));
+        std::string value = detail::trim(line.substr(pos + 1));
         req.headers[key] = value;
     }
 
@@ -865,7 +601,7 @@ bool JsonRpcServer::is_websocket_upgrade(const HttpRequest& req) const {
     if (req.method != "GET") return false;
     auto upgrade = req.headers.find("upgrade");
     if (upgrade == req.headers.end() ||
-        to_lower(upgrade->second).find("websocket") == std::string::npos) {
+        detail::to_lower(upgrade->second).find("websocket") == std::string::npos) {
         return false;
     }
     auto key = req.headers.find("sec-websocket-key");
@@ -1173,754 +909,6 @@ JsonRpcServer::HttpResponse JsonRpcServer::handle_http_request(const HttpRequest
     return resp;
 }
 
-nlohmann::json JsonRpcServer::dispatch_rpc(const std::string& method, nlohmann::json params) {
-    // MCP tools/call 翻译层与 JSON-RPC 共用的方法分发（原 handle_jsonrpc 内联
-    // lambda 提取）：token 容错剥离后按方法分发；业务错误以
-    // {"error":{code,message}} 形状返回，由调用方决定映射为
-    // JSON-RPC error 还是 MCP result.isError。
-    // For system.multicall inner calls, some clients may redundantly include token again.
-    maybe_strip_token(params, auth_secret());
-
-    if (method == "system.listMethods") {
-        return json::array({
-            "aria2.addUri",
-            "aria2.pause",
-            "aria2.pauseAll",
-            "aria2.forcePause",
-            "aria2.unpause",
-            "aria2.unpauseAll",
-            "aria2.remove",
-            "aria2.forceRemove",
-            "aria2.forceShutdown",
-            "aria2.tellStatus",
-            "aria2.tellActive",
-            "aria2.tellWaiting",
-            "aria2.tellStopped",
-            "aria2.getFiles",
-            "aria2.getUris",
-            "aria2.getOption",
-            "aria2.getGlobalOption",
-            "aria2.changeGlobalOption",
-            "aria2.changePriority",
-            "aria2.getGlobalStat",
-            "aria2.getVersion",
-            "aria2.getSessionInfo",
-            "aria2.saveSession",
-            "aria2.purgeDownloadResult",
-            "aria2.removeDownloadResult",
-            "falcon.stopSeeding",
-            "falcon.swarm.status",
-            "falcon.swarm.setShare",
-            "system.listMethods",
-            "system.multicall",
-        });
-    }
-
-    if (method == "system.multicall") {
-        if (!params.is_array() || params.empty() || !params[0].is_array()) {
-            return json{{"error", json{{"code", -32602}, {"message", "Invalid params"}}}};
-        }
-        json results = json::array();
-        for (const auto& call : params[0]) {
-            // 非对象或缺失字符串 methodName 的条目不是合法调用（JSON-RPC 2.0）
-            if (!call.is_object() || !call.contains("methodName") ||
-                !call["methodName"].is_string()) {
-                results.push_back(json{{"code", -32600}, {"message", "Invalid Request"}});
-                continue;
-            }
-            const std::string cm = call.value("methodName", "");
-            json cp = call.value("params", json::array());
-            json r = dispatch_rpc(cm, cp);
-            if (r.is_object() && r.contains("error")) {
-                results.push_back(r["error"]);
-            } else {
-                results.push_back(json::array({r}));
-            }
-        }
-        return results;
-    }
-
-    if (method == "aria2.getVersion") {
-        json out;
-        out["version"] = "0.1.0";
-        out["enabledFeatures"] = json::array({"jsonrpc", "asyncdns", "https"});
-        return out;
-    }
-
-    if (method == "aria2.getSessionInfo") {
-        return json{{"sessionId", session_id_}};
-    }
-
-    // 会话通过 TaskStorage 持续落库，无需显式快照；
-    // 接受 aria2 的 filePath 参数但忽略
-    if (method == "aria2.saveSession") {
-        return "OK";
-    }
-
-    if (method == "aria2.pauseAll" || method == "aria2.unpauseAll") {
-#ifdef FALCON_HAS_SQLITE3
-        std::vector<falcon::TaskId> affected;
-        if (storage_) {
-            // pause 对 Downloading 任务经 handler 异步生效，回读有竞态；
-            // 先收集受影响任务，操作后按 aria2 语义直接落目标状态
-            if (method == "aria2.pauseAll") {
-                for (const auto& t : engine_->get_active_tasks()) {
-                    if (t) affected.push_back(t->id());
-                }
-            } else {
-                for (const auto& t :
-                     engine_->get_tasks_by_status(falcon::TaskStatus::Paused)) {
-                    if (t) affected.push_back(t->id());
-                }
-            }
-        }
-#endif
-        if (method == "aria2.pauseAll") {
-            engine_->pause_all();
-        } else {
-            engine_->resume_all();
-        }
-#ifdef FALCON_HAS_SQLITE3
-        if (storage_) {
-            if (method == "aria2.pauseAll") {
-                for (auto id : affected) {
-                    storage_->update_status(id, TaskStatus::Paused);
-                }
-            } else {
-                // 恢复经任务队列重新入队，RPC 返回时通常为 Pending，
-                // 后续状态变化由持久化监听器异步修正
-                for (auto id : affected) {
-                    if (auto t = engine_->get_task(id)) {
-                        storage_->update_status(id, t->status());
-                    }
-                }
-            }
-        }
-#endif
-        return "OK";
-    }
-
-    if (method == "aria2.forceShutdown" || method == "aria2.shutdown") {
-        FALCON_LOG_WARN_STREAM("Daemon shutdown requested via JSON-RPC (" << method << ")");
-        if (shutdown_handler_) {
-            shutdown_handler_();
-        } else {
-            FALCON_LOG_WARN_STREAM("No shutdown handler registered; ignoring " << method);
-        }
-        return "OK";
-    }
-
-    if (method == "aria2.purgeDownloadResult") {
-        engine_->remove_finished_tasks();
-#ifdef FALCON_HAS_SQLITE3
-        if (storage_) {
-            for (auto status : {falcon::TaskStatus::Completed, falcon::TaskStatus::Failed,
-                                falcon::TaskStatus::Cancelled}) {
-                for (const auto& record : storage_->get_tasks_by_status(status)) {
-                    storage_->delete_task(record.id);
-                }
-            }
-        }
-#endif
-        return "OK";
-    }
-
-    if (method == "aria2.getGlobalOption") {
-        json out;
-        out["max-overall-download-limit"] = std::to_string(engine_->get_global_speed_limit());
-        out["max-concurrent-downloads"] = std::to_string(engine_->get_max_concurrent_tasks());
-        // daemon 没有全局默认下载目录的概念（addUri 逐任务指定），保持 aria2 键位存在
-        out["dir"] = "";
-        return out;
-    }
-
-    if (method == "aria2.changePriority") {
-        // params = [gid, priority]；priority 用 falcon::TaskPriority 的数值
-        // （0=Low 1=Normal 2=High 3=Critical），与 aria2 原生语义不同，
-        // 这是 Falcon 客户端约定
-        if (!params.is_array() || params.size() < 2 || !params[0].is_string() ||
-            (!params[1].is_number_integer() && !params[1].is_string())) {
-            return json{{"error", json{{"code", -32602}, {"message", "Invalid params"}}}};
-        }
-        auto tid = gid_to_task_id(params[0].get<std::string>());
-        if (!tid) {
-            return json{{"error", json{{"code", -32602}, {"message", "Invalid params"}}}};
-        }
-        int value = -1;
-        try {
-            value = params[1].is_number_integer()
-                        ? params[1].get<int>()
-                        : std::stoi(params[1].get<std::string>());
-        } catch (const std::exception&) {
-            return json{{"error", json{{"code", -32602}, {"message", "Invalid priority"}}}};
-        }
-        if (value < 0 || value > 3) {
-            return json{{"error", json{{"code", 1},
-                                       {"message", "Priority must be 0..3"}}}};
-        }
-        auto task = engine_->get_task(*tid);
-        if (!task) {
-            return json{{"error", json{{"code", 2}, {"message", "Task not found"}}}};
-        }
-        engine_->adjust_task_priority(
-            *tid, static_cast<falcon::TaskPriority>(value));
-        return task_id_to_gid(*tid);
-    }
-
-    if (method == "falcon.stopSeeding") {
-        // Falcon 扩展：params = [gid]——请求任务停止做种（BitTorrent）。
-        // 置粘性标志，BT 监控循环下一 tick 与策略达标同路径收口。
-        // 错误码约定：1 = 任务不支持做种（非 BT/未在做种），2 = gid 不存在
-        if (!params.is_array() || params.empty() || !params[0].is_string()) {
-            return json{{"error", json{{"code", -32602}, {"message", "Invalid params"}}}};
-        }
-        auto tid = gid_to_task_id(params[0].get<std::string>());
-        if (!tid) {
-            return json{{"error", json{{"code", 2}, {"message", "Task not found"}}}};
-        }
-        auto task = engine_->get_task(*tid);
-        if (!task) {
-            return json{{"error", json{{"code", 2}, {"message", "Task not found"}}}};
-        }
-        const auto seed = task->get_seed_info();
-        if (!seed.seeding_active) {
-            return json{{"error", json{{"code", 1},
-                                       {"message", "Task is not seeding"}}}};
-        }
-        task->request_stop_seeding();
-        return task_id_to_gid(*tid);
-    }
-
-    if (method == "falcon.swarm.status") {
-        // Falcon 扩展（§16.5）：announcer 快照。处理器由 main 注入——
-        // FALCON_HAS_SWARM 缺席（未链 swarm client）时未注册，报 -32603
-        if (!swarm_status_handler_) {
-            return json{{"error", json{{"code", -32603},
-                                       {"message", "Swarm announcer unavailable"}}}};
-        }
-        return swarm_status_handler_();
-    }
-
-    if (method == "falcon.swarm.setShare") {
-        // Falcon 扩展（§16.5）：params = [{enabled: bool}]——运行期共享
-        // 开关（与 SIGHUP 热更同语义：翻关全量 retract，announcer 不停机）
-        if (!swarm_share_handler_) {
-            return json{{"error", json{{"code", -32603},
-                                       {"message", "Swarm announcer unavailable"}}}};
-        }
-        if (!params.is_array() || params.empty() || !params[0].is_object() ||
-            !params[0].contains("enabled") || !params[0]["enabled"].is_boolean()) {
-            return json{{"error", json{{"code", -32602},
-                                       {"message", "Invalid params"}}}};
-        }
-        return swarm_share_handler_(params[0]["enabled"].get<bool>());
-    }
-
-    if (method == "aria2.changeGlobalOption") {
-        // aria2 签名是 (secret, options)：token 剥离后 options 就在 params[0]
-        if (!params.is_array() || params.empty() || !params[0].is_object()) {
-            return json{{"error", json{{"code", -32602}, {"message", "Invalid params"}}}};
-        }
-        json result;
-        for (const auto& [key, value] : params[0].items()) {
-            try {
-                if (key == "max-overall-download-limit") {
-                    const std::string v = value.is_string()
-                                              ? value.get<std::string>()
-                                              : value.dump();
-                    falcon::BytesPerSecond limit = 0;
-                    if (v != "none" && v != "0") {
-                        limit = static_cast<falcon::BytesPerSecond>(std::stoull(v));
-                    }
-                    engine_->set_global_speed_limit(limit);
-                } else if (key == "max-concurrent-downloads") {
-                    const std::size_t n = value.is_number_integer()
-                        ? static_cast<std::size_t>(value.get<int>())
-                        : static_cast<std::size_t>(std::stoull(value.get<std::string>()));
-                    engine_->set_max_concurrent_tasks(n);
-                } else {
-                    return json{{"error", json{{"code", 1},
-                                               {"message", "Option not supported: " + key}}}};
-                }
-            } catch (const std::exception&) {
-                return json{{"error", json{{"code", 1},
-                                           {"message", "Invalid option value: " + key}}}};
-            }
-        }
-        return "OK";
-    }
-
-    if (method == "aria2.getGlobalStat") {
-        auto tasks = engine_->get_all_tasks();
-        std::size_t active = 0, waiting = 0, stopped = 0;
-        for (const auto& t : tasks) {
-            if (!t) continue;
-            switch (t->status()) {
-                case falcon::TaskStatus::Downloading:
-                case falcon::TaskStatus::Preparing:
-                    active++;
-                    break;
-                case falcon::TaskStatus::Pending:
-                case falcon::TaskStatus::Paused:
-                    waiting++;
-                    break;
-                case falcon::TaskStatus::Completed:
-                case falcon::TaskStatus::Failed:
-                case falcon::TaskStatus::Cancelled:
-                    stopped++;
-                    break;
-            }
-        }
-
-#ifdef FALCON_HAS_SQLITE3
-        // 重启后终态历史只存在于 storage（引擎恢复时跳过终态），
-        // 计数需合并 storage 独有记录，与 tell* 视图保持一致
-        if (storage_) {
-            waiting += storage_extra_records(
-                storage_, tasks, {falcon::TaskStatus::Pending, falcon::TaskStatus::Paused}).size();
-            stopped += storage_extra_records(
-                storage_, tasks,
-                {falcon::TaskStatus::Completed, falcon::TaskStatus::Failed,
-                 falcon::TaskStatus::Cancelled}).size();
-        }
-#endif
-
-        json out;
-        out["downloadSpeed"] = std::to_string(engine_->get_total_speed());
-        out["uploadSpeed"] = "0";
-        out["numActive"] = std::to_string(active);
-        out["numWaiting"] = std::to_string(waiting);
-        out["numStopped"] = std::to_string(stopped);
-        out["numStoppedTotal"] = std::to_string(stopped);
-        return out;
-    }
-
-    if (method == "aria2.addUri") {
-        if (!params.is_array() || params.empty() || !params[0].is_array() || params[0].empty()) {
-            return json{{"error", json{{"code", -32602}, {"message", "Invalid params"}}}};
-        }
-        const auto& uris = params[0];
-        const std::string url = uris[0].get<std::string>();
-
-        falcon::DownloadOptions options;
-        if (params.size() >= 2 && params[1].is_object()) {
-            const auto& o = params[1];
-            if (o.contains("dir") && o["dir"].is_string()) options.output_directory = o["dir"].get<std::string>();
-            if (o.contains("out") && o["out"].is_string()) options.output_filename = o["out"].get<std::string>();
-            if (o.contains("user-agent") && o["user-agent"].is_string()) options.user_agent = o["user-agent"].get<std::string>();
-            if (o.contains("referer") && o["referer"].is_string()) options.referer = o["referer"].get<std::string>();
-            if (o.contains("load-cookies") && o["load-cookies"].is_string()) options.cookie_file = o["load-cookies"].get<std::string>();
-            if (o.contains("save-cookies") && o["save-cookies"].is_string()) options.cookie_jar = o["save-cookies"].get<std::string>();
-            if (o.contains("http-user") && o["http-user"].is_string()) options.http_username = o["http-user"].get<std::string>();
-            if (o.contains("http-passwd") && o["http-passwd"].is_string()) options.http_password = o["http-passwd"].get<std::string>();
-            if (o.contains("certificate") && o["certificate"].is_string()) options.client_certificate = o["certificate"].get<std::string>();
-            if (o.contains("private-key") && o["private-key"].is_string()) options.client_private_key = o["private-key"].get<std::string>();
-            if (o.contains("all-proxy") && o["all-proxy"].is_string()) options.proxy = o["all-proxy"].get<std::string>();
-            if (o.contains("all-proxy-user") && o["all-proxy-user"].is_string()) options.proxy_username = o["all-proxy-user"].get<std::string>();
-            if (o.contains("all-proxy-passwd") && o["all-proxy-passwd"].is_string()) options.proxy_password = o["all-proxy-passwd"].get<std::string>();
-
-            if (o.contains("check-certificate")) {
-                auto v = parse_bool_option(o["check-certificate"]);
-                if (!v) return json{{"error", json{{"code", -32602}, {"message", "Invalid value for option: check-certificate"}}}};
-                options.verify_ssl = *v;
-            }
-
-            if (o.contains("max-tries")) {
-                auto v = parse_numeric_option(o["max-tries"]);
-                if (!v) return json{{"error", json{{"code", -32602}, {"message", "Invalid value for option: max-tries"}}}};
-                options.max_retries = *v;
-            }
-            if (o.contains("retry-wait")) {
-                auto v = parse_numeric_option(o["retry-wait"]);
-                if (!v) return json{{"error", json{{"code", -32602}, {"message", "Invalid value for option: retry-wait"}}}};
-                options.retry_delay_seconds = *v;
-            }
-            if (o.contains("timeout")) {
-                auto v = parse_numeric_option(o["timeout"]);
-                if (!v) return json{{"error", json{{"code", -32602}, {"message", "Invalid value for option: timeout"}}}};
-                options.timeout_seconds = *v;
-            }
-            if (o.contains("max-connection-per-server")) {
-                auto v = parse_numeric_option(o["max-connection-per-server"]);
-                if (!v) return json{{"error", json{{"code", -32602}, {"message", "Invalid value for option: max-connection-per-server"}}}};
-                options.max_connections = *v;
-            }
-            // min-split-size（aria2 同名键）：分段最小段长，接受裸字
-            // 节数与 K/M/G/T 后缀形态（复用核心 parse_size_with_suffix，
-            // 永不抛，溢出即 -32602）
-            if (o.contains("min-split-size")) {
-                if (!o["min-split-size"].is_string()) {
-                    return json{{"error", json{{"code", -32602}, {"message", "Invalid value for option: min-split-size"}}}};
-                }
-                auto v = falcon::parse_size_with_suffix(o["min-split-size"].get<std::string>());
-                if (!v) return json{{"error", json{{"code", -32602}, {"message", "Invalid value for option: min-split-size"}}}};
-                options.min_segment_size = static_cast<std::size_t>(*v);
-            }
-            if (o.contains("max-download-limit")) {
-                auto v = parse_numeric_option(o["max-download-limit"]);
-                if (!v) return json{{"error", json{{"code", -32602}, {"message", "Invalid value for option: max-download-limit"}}}};
-                options.speed_limit = static_cast<falcon::BytesPerSecond>(*v);
-            }
-
-            // split / continue / allow-overwrite / auto-file-renaming：
-            // MCP falcon_add_download 白名单与文档长期广告、但 addUri 一直
-            // 零映射（aria2 客户端传来即被静默丢弃）。split/continue 在
-            // V1 数据面有真实消费点（http_handler 分段连接数 / http_plugin
-            // 等协议的 resume 开关）；allow-overwrite/auto-file-renaming
-            // 在 V2 引擎（request_group 覆盖门禁）生效——V1 侧与 CLI
-            // --auto-file-renaming 同姿态
-            if (o.contains("split")) {
-                auto v = parse_numeric_option(o["split"]);
-                if (!v) return json{{"error", json{{"code", -32602}, {"message", "Invalid value for option: split"}}}};
-                options.max_connections = *v;
-            }
-            if (o.contains("continue")) {
-                auto v = parse_bool_option(o["continue"]);
-                if (!v) return json{{"error", json{{"code", -32602}, {"message", "Invalid value for option: continue"}}}};
-                options.resume_enabled = *v;
-            }
-            if (o.contains("allow-overwrite")) {
-                auto v = parse_bool_option(o["allow-overwrite"]);
-                if (!v) return json{{"error", json{{"code", -32602}, {"message", "Invalid value for option: allow-overwrite"}}}};
-                options.overwrite_existing = *v;
-            }
-            if (o.contains("auto-file-renaming")) {
-                auto v = parse_bool_option(o["auto-file-renaming"]);
-                if (!v) return json{{"error", json{{"code", -32602}, {"message", "Invalid value for option: auto-file-renaming"}}}};
-                options.auto_file_renaming = *v;
-            }
-
-            // file-allocation / conditional-get：同样有真实引擎消费方
-            // （V2 request_group 预分配 / 条件下载门禁）。file-allocation
-            // 与 CLI 同 stance 裸字符串透传——非法值由引擎侧
-            // parse_file_allocation 按 none 处理（稀疏，不打扰），此处只
-            // 拒绝非字符串形状；conditional-get 走布尔解析
-            if (o.contains("file-allocation")) {
-                if (!o["file-allocation"].is_string()) {
-                    return json{{"error", json{{"code", -32602}, {"message", "Invalid value for option: file-allocation"}}}};
-                }
-                options.file_allocation = o["file-allocation"].get<std::string>();
-            }
-            if (o.contains("conditional-get")) {
-                auto v = parse_bool_option(o["conditional-get"]);
-                if (!v) return json{{"error", json{{"code", -32602}, {"message", "Invalid value for option: conditional-get"}}}};
-                options.conditional_get = *v;
-            }
-
-            // 做种策略（BitTorrent）：字符串（aria2 风格）与数值双
-            // 形态；负值钳 0（与 CLI --seed-ratio/--seed-time 同语义）
-            if (o.contains("seed-ratio")) {
-                double ratio = -1.0;
-                if (o["seed-ratio"].is_string()) {
-                    try {
-                        ratio = std::stod(o["seed-ratio"].get<std::string>());
-                    } catch (const std::exception&) {
-                        ratio = -1.0;
-                    }
-                }
-                if (o["seed-ratio"].is_number()) {
-                    ratio = o["seed-ratio"].get<double>();
-                }
-                options.seed_ratio = std::max(0.0, ratio);
-            }
-            if (o.contains("seed-time")) {
-                double minutes = -1.0;
-                if (o["seed-time"].is_string()) {
-                    try {
-                        minutes = std::stod(o["seed-time"].get<std::string>());
-                    } catch (const std::exception&) {
-                        minutes = -1.0;
-                    }
-                }
-                if (o["seed-time"].is_number()) {
-                    minutes = o["seed-time"].get<double>();
-                }
-                options.seed_time_minutes = static_cast<std::size_t>(
-                    std::max(0.0, minutes));
-            }
-
-            // P2SP 共享三态（§16.5）：仅接受 "true"/"false" 字符串
-            //（aria2 风格）；缺省 = ""（回落全局开关），其余值 -32602
-            if (o.contains("p2sp-share")) {
-                if (!o["p2sp-share"].is_string() ||
-                    (o["p2sp-share"].get<std::string>() != "true" &&
-                     o["p2sp-share"].get<std::string>() != "false")) {
-                    return json{{"error", json{{"code", -32602},
-                                               {"message", "p2sp-share must be \"true\" or \"false\""}}}};
-                }
-                options.p2sp_share = o["p2sp-share"].get<std::string>();
-            }
-
-            if (o.contains("header")) {
-                if (o["header"].is_array()) {
-                    for (const auto& hv : o["header"]) {
-                        if (!hv.is_string()) continue;
-                        const std::string h = hv.get<std::string>();
-                        auto pos = h.find(':');
-                        if (pos == std::string::npos) continue;
-                        options.headers[trim(h.substr(0, pos))] = trim(h.substr(pos + 1));
-                    }
-                } else if (o["header"].is_string()) {
-                    const std::string h = o["header"].get<std::string>();
-                    auto pos = h.find(':');
-                    if (pos != std::string::npos) {
-                        options.headers[trim(h.substr(0, pos))] = trim(h.substr(pos + 1));
-                    }
-                }
-            }
-        }
-
-        auto task = engine_->add_task(url, options);
-        if (!task) {
-            return json{{"error", json{{"code", 1}, {"message", "Unsupported URL"}}}};
-        }
-
-#ifdef FALCON_HAS_SQLITE3
-        // Persist task to database if storage is available
-        if (storage_) {
-            TaskRecord record;
-            record.id = task->id();
-            record.url = task->url();
-            record.output_path = task->output_path();
-            record.status = task->status();
-            record.progress = task->progress();
-            record.total_bytes = task->total_bytes();
-            record.downloaded_bytes = task->downloaded_bytes();
-            record.speed = task->speed();
-            record.error_message = task->error_message();
-            record.options = options;
-            record.created_at = std::chrono::system_clock::now();
-            record.updated_at = std::chrono::system_clock::now();
-
-            storage_->create_task(record);
-        }
-#endif
-
-        engine_->start_task(task->id());
-        return task_id_to_gid(task->id());
-    }
-
-    if (method == "aria2.tellStatus") {
-        if (!params.is_array() || params.empty() || !params[0].is_string()) {
-            return json{{"error", json{{"code", -32602}, {"message", "Invalid params"}}}};
-        }
-        auto tid = gid_to_task_id(params[0].get<std::string>());
-        if (!tid) {
-            return json{{"error", json{{"code", 2}, {"message", "Task not found"}}}};
-        }
-        // 引擎内存态优先；引擎查不到时（重启后终态历史）回落到 storage
-        if (auto task = engine_->get_task(*tid)) {
-            return task_to_status_json(*task);
-        }
-#ifdef FALCON_HAS_SQLITE3
-        if (storage_) {
-            if (auto record = storage_->get_task(*tid)) {
-                return task_record_to_status_json(*record);
-            }
-        }
-#endif
-        return json{{"error", json{{"code", 2}, {"message", "Task not found"}}}};
-    }
-
-    if (method == "aria2.getFiles" || method == "aria2.getUris" || method == "aria2.getOption") {
-        if (!params.is_array() || params.empty() || !params[0].is_string()) {
-            return json{{"error", json{{"code", -32602}, {"message", "Invalid params"}}}};
-        }
-        auto tid = gid_to_task_id(params[0].get<std::string>());
-        if (!tid) {
-            return json{{"error", json{{"code", 2}, {"message", "Task not found"}}}};
-        }
-
-        auto task = engine_->get_task(*tid);
-#ifdef FALCON_HAS_SQLITE3
-        std::optional<TaskRecord> record;
-        if (!task && storage_) {
-            record = storage_->get_task(*tid);
-        }
-        if (!task && !record) {
-            return json{{"error", json{{"code", 2}, {"message", "Task not found"}}}};
-        }
-        if (method == "aria2.getFiles") {
-            if (task) {
-                return files_json(task->output_path(), task->total_bytes(),
-                                  task->downloaded_bytes(), task->url(), true);
-            }
-            return files_json(record->output_path, record->total_bytes,
-                              record->downloaded_bytes, record->url, true);
-        }
-        if (method == "aria2.getUris") {
-            const std::string& uri = task ? task->url() : record->url;
-            return json::array({json{{"uri", uri}, {"status", "used"}}});
-        }
-        return download_options_to_json(task ? task->options() : record->options);
-#else
-        if (!task) {
-            return json{{"error", json{{"code", 2}, {"message", "Task not found"}}}};
-        }
-        if (method == "aria2.getFiles") {
-            return files_json(task->output_path(), task->total_bytes(),
-                              task->downloaded_bytes(), task->url(), true);
-        }
-        if (method == "aria2.getUris") {
-            return json::array({json{{"uri", task->url()}, {"status", "used"}}});
-        }
-        return download_options_to_json(task->options());
-#endif
-    }
-
-    if (method == "aria2.pause" || method == "aria2.forcePause" ||
-        method == "aria2.unpause" ||
-        method == "aria2.remove" || method == "aria2.forceRemove") {
-        if (!params.is_array() || params.empty() || !params[0].is_string()) {
-            return json{{"error", json{{"code", -32602}, {"message", "Invalid params"}}}};
-        }
-        const std::string gid = params[0].get<std::string>();
-        auto tid = gid_to_task_id(gid);
-        if (!tid) {
-            return json{{"error", json{{"code", 2}, {"message", "Task not found"}}}};
-        }
-        auto task = engine_->get_task(*tid);
-        if (!task) {
-            return json{{"error", json{{"code", 2}, {"message", "Task not found"}}}};
-        }
-
-        if (method == "aria2.pause" || method == "aria2.forcePause") {
-            if (!engine_->pause_task(*tid)) {
-                return json{{"error", json{{"code", 1}, {"message", "Pause failed"}}}};
-            }
-#ifdef FALCON_HAS_SQLITE3
-            // Update storage
-            if (storage_) storage_->update_status(*tid, TaskStatus::Paused);
-#endif
-            return gid;
-        }
-        if (method == "aria2.unpause") {
-            if (!engine_->resume_task(*tid)) {
-                return json{{"error", json{{"code", 1}, {"message", "Resume failed"}}}};
-            }
-#ifdef FALCON_HAS_SQLITE3
-            // Update storage - task will be in Downloading state
-            if (storage_) {
-                auto current_task = engine_->get_task(*tid);
-                if (current_task) {
-                    storage_->update_status(*tid, current_task->status());
-                }
-            }
-#endif
-            return gid;
-        }
-        // aria2.remove / aria2.forceRemove
-        if (!engine_->cancel_task(*tid)) {
-            return json{{"error", json{{"code", 1}, {"message", "Remove failed"}}}};
-        }
-#ifdef FALCON_HAS_SQLITE3
-        // Update storage
-        if (storage_) storage_->update_status(*tid, TaskStatus::Cancelled);
-#endif
-        return gid;
-    }
-
-    if (method == "aria2.tellActive") {
-        json out = json::array();
-        for (const auto& t : engine_->get_active_tasks()) {
-            if (!t) continue;
-            out.push_back(task_to_status_json(*t));
-        }
-        return out;
-    }
-
-    if (method == "aria2.tellWaiting") {
-        if (!params.is_array() || params.size() < 2) {
-            return json{{"error", json{{"code", -32602}, {"message", "Invalid params"}}}};
-        }
-        const int offset = params[0].is_number_integer() ? params[0].get<int>() : std::stoi(params[0].get<std::string>());
-        const int num = params[1].is_number_integer() ? params[1].get<int>() : std::stoi(params[1].get<std::string>());
-
-        std::vector<json> items;
-        auto tasks = engine_->get_all_tasks();
-        for (const auto& t : tasks) {
-            if (!t) continue;
-            if (t->status() == falcon::TaskStatus::Pending ||
-                t->status() == falcon::TaskStatus::Paused) {
-                items.push_back(task_to_status_json(*t));
-            }
-        }
-#ifdef FALCON_HAS_SQLITE3
-        if (storage_) {
-            for (const auto& record : storage_extra_records(
-                     storage_, tasks,
-                     {falcon::TaskStatus::Pending, falcon::TaskStatus::Paused})) {
-                items.push_back(task_record_to_status_json(record));
-            }
-        }
-#endif
-        return paginate_items(items, offset, num);
-    }
-
-    if (method == "aria2.tellStopped") {
-        if (!params.is_array() || params.size() < 2) {
-            return json{{"error", json{{"code", -32602}, {"message", "Invalid params"}}}};
-        }
-        const int offset = params[0].is_number_integer() ? params[0].get<int>() : std::stoi(params[0].get<std::string>());
-        const int num = params[1].is_number_integer() ? params[1].get<int>() : std::stoi(params[1].get<std::string>());
-
-        std::vector<json> items;
-        auto tasks = engine_->get_all_tasks();
-        for (const auto& t : tasks) {
-            if (!t) continue;
-            if (t->status() == falcon::TaskStatus::Completed ||
-                t->status() == falcon::TaskStatus::Failed ||
-                t->status() == falcon::TaskStatus::Cancelled) {
-                items.push_back(task_to_status_json(*t));
-            }
-        }
-#ifdef FALCON_HAS_SQLITE3
-        if (storage_) {
-            for (const auto& record : storage_extra_records(
-                     storage_, tasks,
-                     {falcon::TaskStatus::Completed, falcon::TaskStatus::Failed,
-                      falcon::TaskStatus::Cancelled})) {
-                items.push_back(task_record_to_status_json(record));
-            }
-        }
-#endif
-        return paginate_items(items, offset, num);
-    }
-
-    if (method == "aria2.removeDownloadResult") {
-        if (!params.is_array() || params.empty() || !params[0].is_string()) {
-            return json{{"error", json{{"code", -32602}, {"message", "Invalid params"}}}};
-        }
-        auto tid = gid_to_task_id(params[0].get<std::string>());
-        if (!tid) {
-            return json{{"error", json{{"code", 2}, {"message", "Task not found"}}}};
-        }
-
-        bool existed = false;
-        if (auto task = engine_->get_task(*tid)) {
-            existed = true;
-            // 引擎只允许移除终态任务；活动任务返回失败
-            if (!engine_->remove_task(*tid)) {
-                return json{{"error", json{{"code", 1},
-                                           {"message", "Task cannot be removed while active"}}}};
-            }
-        }
-#ifdef FALCON_HAS_SQLITE3
-        if (storage_) {
-            if (storage_->task_exists(*tid)) {
-                existed = true;
-                storage_->delete_task(*tid);
-            }
-        }
-#endif
-        if (!existed) {
-            return json{{"error", json{{"code", 2}, {"message", "Task not found"}}}};
-        }
-        return "OK";
-    }
-
-    return json{{"error", json{{"code", -32601}, {"message", "Method not found"}}}};
-}
 
 
 JsonRpcServer::HttpResponse JsonRpcServer::handle_jsonrpc(const std::string& body) {
@@ -1935,7 +923,7 @@ JsonRpcServer::HttpResponse JsonRpcServer::handle_jsonrpc(const std::string& bod
     try {
         auto req = json::parse(body);
         if (!req.is_object()) {
-            resp.body = make_error(id, -32600, "Invalid Request").dump();
+            resp.body = detail::make_error(id, -32600, "Invalid Request").dump();
             return resp;
         }
 
@@ -1944,34 +932,34 @@ JsonRpcServer::HttpResponse JsonRpcServer::handle_jsonrpc(const std::string& bod
         json params = req.value("params", json::array());
 
         if (method.empty() || (!params.is_array() && !params.is_object())) {
-            resp.body = make_error(id, -32600, "Invalid Request").dump();
+            resp.body = detail::make_error(id, -32600, "Invalid Request").dump();
             return resp;
         }
 
         // aria2-style authentication: first param "token:<secret>"
-        if (!validate_and_strip_token(params, auth_secret)) {
-            resp.body = make_error(id, -32001, "Unauthorized").dump();
+        if (!detail::validate_and_strip_token(params, auth_secret)) {
+            resp.body = detail::make_error(id, -32001, "Unauthorized").dump();
             return resp;
         }
 
 
         json result = dispatch_rpc(method, params);
         if (result.is_object() && result.contains("error")) {
-            resp.body = make_error(id, result["error"].value("code", -32000),
+            resp.body = detail::make_error(id, result["error"].value("code", -32000),
                                    result["error"].value("message", "Error"))
                             .dump();
             return resp;
         }
 
-        resp.body = make_result(id, result).dump();
+        resp.body = detail::make_result(id, result).dump();
         return resp;
     } catch (const json::parse_error& e) {
         // -32700 专属于请求体不是合法 JSON 的情形
-        resp.body = make_error(id, -32700, std::string("Parse error: ") + e.what()).dump();
+        resp.body = detail::make_error(id, -32700, std::string("Parse error: ") + e.what()).dump();
         return resp;
     } catch (const std::exception& e) {
         // dispatch 内部的运行时失败（如输出目录不可写）是服务端错误，不是解析错误
-        resp.body = make_error(id, -32603, std::string("Internal error: ") + e.what()).dump();
+        resp.body = detail::make_error(id, -32603, std::string("Internal error: ") + e.what()).dump();
         return resp;
     }
 }

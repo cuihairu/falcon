@@ -104,6 +104,8 @@ if(nlohmann_json_FOUND)
     add_library(falcon_daemon_rpc STATIC
         src/rpc/json_rpc_server.cpp
         src/rpc/json_rpc_server.hpp
+        src/rpc/json_rpc_server_detail.hpp
+        src/rpc/json_rpc_server_dispatch.cpp
         src/rpc/mcp_server.cpp
         src/rpc/mcp_server.hpp
         src/rpc/json_rpc_client.cpp
