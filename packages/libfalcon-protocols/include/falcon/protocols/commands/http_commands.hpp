@@ -596,6 +596,14 @@ private:
                                             RequestGroup& group,
                                             std::size_t except_segment);
 
+    /// 401 认证：按 WWW-Authenticate 挑战构造 Basic/Digest 凭据并同
+    /// 连接重发请求（auth_send_data_ 非空时 execute 优先续推发送，
+    /// 支持 WAIT_FOR_SOCKET 分段重入）；auth_error_ 携带不可重试的
+    /// 认证失败原因（挑战不受支持等）；auth_retried_ 一次性门禁由
+    /// execute 的 401 分支前置检查
+    ExecutionResult begin_auth_resend(DownloadEngineV2* engine);
+    ExecutionResult continue_auth_send(DownloadEngineV2* engine);
+
     int socket_fd_;
     std::shared_ptr<HttpRequest> http_request_;
     std::shared_ptr<HttpResponse> http_response_;
@@ -649,6 +657,12 @@ private:
     /// （Accept-Encoding: identity），此字段仅用于强制压缩响应的
     /// 观测日志——响应体恒按字节原样落盘（aria2 同语义）
     std::string content_encoding_;
+
+    // 401 认证状态（同连接重发请求的进行中状态与一次性门禁）
+    bool auth_retried_ = false;          ///< 已重发过一次凭据（第二个 401 即失败）
+    std::string auth_error_;             ///< 不可重试的认证失败原因
+    std::string auth_send_data_;         ///< 待重发的完整请求（非空 = 发送进行中）
+    std::size_t auth_send_offset_ = 0;   ///< 重发请求已发出字节数
 };
 
 /**

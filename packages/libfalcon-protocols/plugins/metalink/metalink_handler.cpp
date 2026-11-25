@@ -709,9 +709,8 @@ bool MetalinkHandler::v2_multi_source_gate(const DownloadOptions& options,
     if (!options.cookie_file.empty() || !options.cookie_jar.empty()) {
         return false;  // cookie 引擎(CURLOPT_COOKIEFILE/JAR)
     }
-    if (!options.http_username.empty() || !options.http_password.empty()) {
-        return false;  // HTTP 401 认证
-    }
+    // HTTP 401 认证已原生化：V2 引擎按 WWW-Authenticate 挑战完成
+    // Basic/Digest 授权（http_response_command.cpp），不再门禁
     // Referer 已原生化:V2 引擎按 options_.referer 发该头,不再门禁
 
     // 3. V2 可拉的镜像(http/https;FTP 镜像留阶段1)至少 1 条——

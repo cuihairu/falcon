@@ -41,6 +41,7 @@ using falcon::protocols::detail::sock_err_str;
 using falcon::protocols::detail::sock_would_block;
 using falcon::protocols::detail::make_connection_retry;
 using falcon::protocols::detail::fail_group_terminal;
+using falcon::protocols::detail::base64_encode;
 
 //==============================================================================
 // 多连接分段计划
@@ -148,45 +149,6 @@ bool apply_group_resume_range(HttpInitiateConnectionCommand& cmd,
 //==============================================================================
 
 namespace {
-
-/// 标准 Base64（RFC 4648，带填充）——Proxy-Authorization: Basic 用
-std::string base64_encode(const std::string& in) {
-    static const char* kTable =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-    std::string out;
-    out.reserve(((in.size() + 2) / 3) * 4);
-
-    // 字节先经 unsigned char 转 unsigned int（保 8 位语义、无符号扩
-    // 展），移位全程在无符号域进行——uchar 参与移位会先提升为 int，
-    // 再并入 unsigned 会触发符号转换告警
-    const auto u8 = [&in](std::size_t k) -> unsigned int {
-        return static_cast<unsigned char>(in[k]);
-    };
-
-    std::size_t i = 0;
-    while (i + 2 < in.size()) {
-        const unsigned int v = (u8(i) << 16) | (u8(i + 1) << 8) | u8(i + 2);
-        out += kTable[(v >> 18) & 0x3fu];
-        out += kTable[(v >> 12) & 0x3fu];
-        out += kTable[(v >> 6) & 0x3fu];
-        out += kTable[v & 0x3fu];
-        i += 3;
-    }
-    if (i + 1 == in.size()) {
-        const unsigned int v = u8(i) << 16;
-        out += kTable[(v >> 18) & 0x3fu];
-        out += kTable[(v >> 12) & 0x3fu];
-        out += "==";
-    } else if (i + 2 == in.size()) {
-        const unsigned int v = (u8(i) << 16) | (u8(i + 1) << 8);
-        out += kTable[(v >> 18) & 0x3fu];
-        out += kTable[(v >> 12) & 0x3fu];
-        out += kTable[(v >> 6) & 0x3fu];
-        out += '=';
-    }
-    return out;
-}
 
 /// 端口串严格解析（全数字且 1-65535；任何不合法都判 Unsupported）
 bool parse_proxy_port(const std::string& text, uint16_t& port) {

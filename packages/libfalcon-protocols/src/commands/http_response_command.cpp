@@ -39,8 +39,25 @@ using falcon::protocols::detail::sock_errno;
 using falcon::protocols::detail::sock_err_str;
 using falcon::protocols::detail::sock_would_block;
 using falcon::protocols::detail::make_connection_retry;
+using falcon::protocols::detail::parse_www_authenticate;
+using falcon::protocols::detail::build_basic_authorization;
+using falcon::protocols::detail::generate_cnonce;
+using falcon::protocols::detail::digest_request_uri;
+#ifdef FALCON_ENABLE_OPENSSL
+using falcon::protocols::detail::build_digest_authorization;
+#endif
 
 namespace {
+
+// POSIX send 的 SIGPIPE 免疫（与 http_commands.cpp 同款：Windows 无
+// 此语义传 0；macOS 走 socket 级 SO_NOSIGPIPE，MSG_NOSIGNAL 可用即用）
+#ifdef _WIN32
+constexpr int kSendFlags = 0;
+#elif defined(MSG_NOSIGNAL)
+constexpr int kSendFlags = MSG_NOSIGNAL;
+#else
+constexpr int kSendFlags = 0;
+#endif
 
 std::string to_lower(std::string s) {
     for (auto& ch : s) {
@@ -174,64 +191,107 @@ bool HttpResponseCommand::execute(DownloadEngineV2* engine) {
         return handle_result(ExecutionResult::ERROR_OCCURRED);
     };
 
-    if (!headers_received_) {
-        auto res = receive_response_headers(engine);
-        if (res == ExecutionResult::WAIT_FOR_SOCKET) {
-            return handle_result(ExecutionResult::WAIT_FOR_SOCKET);
+    // 401 挑战-应答循环：同连接重发认证请求并重新接收响应，直到非
+    // 401 的最终响应。auth_retried_ 一次性门禁保证至多一轮重发——
+    // 第二个 401 即凭据错误的确定性收口。WAIT_FOR_SOCKET 重入从
+    // execute 顶部重来，进行中的重发状态由 auth_send_data_ 承载
+    for (;;) {
+        // 同连接重发进行中（begin_auth_resend 已构造完整请求）：
+        // 优先续推发送
+        if (!auth_send_data_.empty()) {
+            auto res = continue_auth_send(engine);
+            if (res == ExecutionResult::WAIT_FOR_SOCKET) {
+                return handle_result(ExecutionResult::WAIT_FOR_SOCKET);
+            }
+            if (res != ExecutionResult::OK) {
+                return fail("Failed to send authenticated request",
+                            /*retryable=*/true);
+            }
+            auth_send_data_.clear();
+            auth_send_offset_ = 0;
         }
-        if (res != ExecutionResult::OK) {
-            return fail("Failed to receive HTTP response headers",
-                        /*retryable=*/true);
-        }
-    }
 
-    if (!parse_headers() || !http_response_) {
-        return fail("Failed to parse HTTP response headers");
-    }
-
-    if (is_redirect_) {
-        // 跟随重定向：解析 Location 重新发起连接（深度沿命令链传递，
-        // 超链/无法解析/https 目标在此按失败收口）
-        if (!handle_redirect(engine)) {
-            return fail("Failed to follow redirect to \"" + redirect_url_ +
-                        "\" (status " + std::to_string(status_code_) + ")");
+        if (!headers_received_) {
+            auto res = receive_response_headers(engine);
+            if (res == ExecutionResult::WAIT_FOR_SOCKET) {
+                return handle_result(ExecutionResult::WAIT_FOR_SOCKET);
+            }
+            if (res != ExecutionResult::OK) {
+                return fail("Failed to receive HTTP response headers",
+                            /*retryable=*/true);
+            }
         }
-        return handle_result(ExecutionResult::OK);  // 本命令完成，新命令接管
-    }
 
-    if (status_code_ == 304) {
-        // RFC 7232 §4.1：条件请求命中——本地文件仍是最新，按成功收口
-        // 且原样保留（aria2 --conditional-get 同语义）。仅当本组确实
-        // 携带过 If-Modified-Since（全新条件 GET）才走此路：304 没有
-        // 响应体，无条件下误当成功会把"空响应"当成果，落进下载路径
-        // 更会把本地文件截断成零字节——必须按失败收口
-        const auto group_status = group ? group->status()
-                                        : RequestGroupStatus::REMOVED;
-        const bool conditional_armed =
-            group && task && !group->if_modified_since().empty() &&
-            group_status != RequestGroupStatus::PAUSED &&
-            group_status != RequestGroupStatus::REMOVED &&
-            group_status != RequestGroupStatus::COMPLETED &&
-            group_status != RequestGroupStatus::FAILED;
-        if (conditional_armed) {
-            FALCON_LOG_INFO_STREAM("条件请求命中（304 Not Modified），本地文件"
-                                   "已是最新: " << task->output_path());
-            std::error_code size_ec;
-            const auto local_size =
-                std::filesystem::file_size(task->output_path(), size_ec);
-            const auto total =
-                size_ec ? static_cast<std::uintmax_t>(task->downloaded_bytes())
-                        : local_size;
-            // 终态进度不经节流（监听者必须看到 100%）；无网络传输，
-            // 进度取自本地文件尺寸
-            task->update_progress(total, total, 0);
-            task->set_status(TaskStatus::Completed);
-            group->set_status(RequestGroupStatus::COMPLETED);
-            close_socket_fd(socket_fd_);
-            socket_fd_ = -1;
-            return handle_result(ExecutionResult::OK);
+        if (!parse_headers() || !http_response_) {
+            return fail("Failed to parse HTTP response headers");
         }
-        return fail("Unexpected HTTP status: 304 (conditional-get not armed)");
+
+        if (is_redirect_) {
+            // 跟随重定向：解析 Location 重新发起连接（深度沿命令链传递，
+            // 超链/无法解析/https 目标在此按失败收口）
+            if (!handle_redirect(engine)) {
+                return fail("Failed to follow redirect to \"" + redirect_url_ +
+                            "\" (status " + std::to_string(status_code_) + ")");
+            }
+            return handle_result(ExecutionResult::OK);  // 本命令完成，新命令接管
+        }
+
+        if (status_code_ == 304) {
+            // RFC 7232 §4.1：条件请求命中——本地文件仍是最新，按成功收口
+            // 且原样保留（aria2 --conditional-get 同语义）。仅当本组确实
+            // 携带过 If-Modified-Since（全新条件 GET）才走此路：304 没有
+            // 响应体，无条件下误当成功会把"空响应"当成果，落进下载路径
+            // 更会把本地文件截断成零字节——必须按失败收口
+            const auto group_status = group ? group->status()
+                                            : RequestGroupStatus::REMOVED;
+            const bool conditional_armed =
+                group && task && !group->if_modified_since().empty() &&
+                group_status != RequestGroupStatus::PAUSED &&
+                group_status != RequestGroupStatus::REMOVED &&
+                group_status != RequestGroupStatus::COMPLETED &&
+                group_status != RequestGroupStatus::FAILED;
+            if (conditional_armed) {
+                FALCON_LOG_INFO_STREAM("条件请求命中（304 Not Modified），本地文件"
+                                       "已是最新: " << task->output_path());
+                std::error_code size_ec;
+                const auto local_size =
+                    std::filesystem::file_size(task->output_path(), size_ec);
+                const auto total =
+                    size_ec ? static_cast<std::uintmax_t>(task->downloaded_bytes())
+                            : local_size;
+                // 终态进度不经节流（监听者必须看到 100%）；无网络传输，
+                // 进度取自本地文件尺寸
+                task->update_progress(total, total, 0);
+                task->set_status(TaskStatus::Completed);
+                group->set_status(RequestGroupStatus::COMPLETED);
+                close_socket_fd(socket_fd_);
+                socket_fd_ = -1;
+                return handle_result(ExecutionResult::OK);
+            }
+            return fail("Unexpected HTTP status: 304 (conditional-get not armed)");
+        }
+
+        if (status_code_ == 401) {
+            // RFC 7235 挑战-应答：按 WWW-Authenticate 构造凭据（Basic/
+            // Digest，aria2 同语义）同连接重发请求。一次性门禁：第二
+            // 个 401 即凭据错误，确定性收口不再重试
+            if (auth_retried_) {
+                return fail("HTTP 401 (Unauthorized) after authentication — "
+                            "check username/password");
+            }
+            auto res = begin_auth_resend(engine);
+            if (res == ExecutionResult::WAIT_FOR_SOCKET) {
+                return handle_result(ExecutionResult::WAIT_FOR_SOCKET);
+            }
+            if (res != ExecutionResult::OK) {
+                return fail(auth_error_.empty()
+                                ? "HTTP 401 authentication failed"
+                                : auth_error_);
+            }
+            continue;  // 同连接重发并重新接收响应
+        }
+
+        break;  // 非 401 的最终响应：进入常规响应处理
     }
 
     if (status_code_ < 200 || status_code_ >= 300) {
@@ -257,6 +317,125 @@ bool HttpResponseCommand::execute(DownloadEngineV2* engine) {
     }
 
     return handle_result(ExecutionResult::OK);
+}
+
+//------------------------------------------------------------------------------
+// HTTP 401 认证（同连接重发）
+//------------------------------------------------------------------------------
+
+AbstractCommand::ExecutionResult HttpResponseCommand::continue_auth_send(
+    DownloadEngineV2* engine) {
+    while (auth_send_offset_ < auth_send_data_.size()) {
+        const char* data = auth_send_data_.data() + auth_send_offset_;
+        const std::size_t remaining =
+            auth_send_data_.size() - auth_send_offset_;
+#ifdef _WIN32
+        const ssize_t n = send(socket_fd_, data,
+                               static_cast<int>(remaining), kSendFlags);
+#else
+        const ssize_t n = send(socket_fd_, data, remaining, kSendFlags);
+#endif
+        if (n < 0) {
+            if (sock_would_block(sock_errno())) {
+                if (engine && !engine->register_socket_event(
+                                  socket_fd_,
+                                  static_cast<int>(net::IOEvent::WRITE),
+                                  id())) {
+                    return ExecutionResult::ERROR_OCCURRED;
+                }
+                return ExecutionResult::WAIT_FOR_SOCKET;
+            }
+            FALCON_LOG_ERROR_STREAM("认证请求重发 send() 失败: "
+                                    << sock_err_str(sock_errno()));
+            return ExecutionResult::ERROR_OCCURRED;
+        }
+        if (n == 0) {
+            // 非零长度 send 返回 0 属异常，按错误收口防忙旋
+            FALCON_LOG_ERROR_STREAM("认证请求重发 send() 返回 0");
+            return ExecutionResult::ERROR_OCCURRED;
+        }
+        auth_send_offset_ += static_cast<std::size_t>(n);
+    }
+    return ExecutionResult::OK;
+}
+
+AbstractCommand::ExecutionResult HttpResponseCommand::begin_auth_resend(
+    DownloadEngineV2* engine) {
+    if (!engine || socket_fd_ < 0) {
+        return ExecutionResult::ERROR_OCCURRED;
+    }
+    // 一次性门禁置位先行：后续任何失败路径都以"已重试过"收口
+    auth_retried_ = true;
+
+    const auto auth_it = headers_.find("www-authenticate");
+    std::string authorization;
+    std::string scheme_desc;
+    if (auth_it != headers_.end()) {
+        const auto challenge = parse_www_authenticate(auth_it->second);
+        if (challenge.scheme == "basic") {
+            authorization = build_basic_authorization(options_.http_username,
+                                                      options_.http_password);
+            scheme_desc = "Basic";
+        } else if (challenge.scheme == "digest") {
+#ifdef FALCON_ENABLE_OPENSSL
+            authorization = build_digest_authorization(
+                challenge, options_.http_username, options_.http_password,
+                http_request_->method(),
+                digest_request_uri(http_request_->url()), generate_cnonce());
+            scheme_desc = "Digest";
+            if (authorization.empty()) {
+                auth_error_ = "HTTP 401: unsupported Digest challenge "
+                              "(algorithm or qop)";
+            }
+#else
+            auth_error_ =
+                "HTTP 401: Digest authentication requires an OpenSSL build";
+#endif
+        } else {
+            // NTLM/Negotiate 等不受支持：明确失败（aria2 同语义，
+            // 不静默降级 Basic——服务器点名方案即协商结果）
+            auth_error_ =
+                "HTTP 401: unsupported authentication scheme \"" +
+                challenge.scheme + "\" (supported: Basic, Digest)";
+        }
+    } else {
+        // 401 无 WWW-Authenticate：有凭据按 Basic 兜底（个别服务器
+        // 漏发挑战头，curl 同姿态）；无凭据明确失败
+        if (!options_.http_username.empty() || !options_.http_password.empty()) {
+            authorization = build_basic_authorization(options_.http_username,
+                                                      options_.http_password);
+            scheme_desc = "Basic";
+        } else {
+            auth_error_ =
+                "HTTP 401 (Unauthorized) — no credentials provided";
+        }
+    }
+    if (!auth_error_.empty()) {
+        return ExecutionResult::ERROR_OCCURRED;
+    }
+
+    http_request_->set_header("Authorization", authorization);
+    FALCON_LOG_INFO_STREAM("HTTP 401 认证: " << scheme_desc << " (task "
+                            << get_task_id() << ")，同连接重发请求");
+    auth_send_data_ = http_request_->to_string();
+    auth_send_offset_ = 0;
+
+    // 复位全部解析状态：同一连接上重新接收并解析响应
+    response_buffer_.clear();
+    initial_body_.clear();
+    headers_received_ = false;
+    status_code_ = 0;
+    headers_.clear();
+    is_redirect_ = false;
+    redirect_url_.clear();
+    supports_resume_ = false;
+    content_length_ = 0;
+    accepts_range_ = false;
+    is_chunked_response_ = false;
+    content_encoding_.clear();
+    http_response_.reset();
+
+    return continue_auth_send(engine);
 }
 
 AbstractCommand::ExecutionResult HttpResponseCommand::receive_response_headers(DownloadEngineV2* engine) {
