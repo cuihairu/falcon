@@ -155,10 +155,26 @@ packages/
 - [x] `docs/` 根目录 12 份文档中英配对（`X.md`/`X.zh.md` + 语言切换器）。
   - 证据：2026-10-16 完成；`aria2c-migration-plan`（1326 行）过长仅
     英文侧占位并标注「暂无译版」。
-- [ ] `docs/design/` 中英配对（vcpkg_packaging_design / mcp_server_design /
+- [x] `docs/design/` 中英配对（vcpkg_packaging_design / mcp_server_design /
   p2sp_network_design 等）。
-- [ ] `docs/api/` 中英配对。
-- [ ] `docs/src/`（VitePress 站源，对外文档）中英配对。
+  - 证据：2026-11-26 收口（docs 提交后补勾）；`docs/design/` 内
+    mcp_server_design（250 行 zh）/ vcpkg_packaging_design（252 行 zh）
+    双 .zh.md 均带 `[English] | **中文**` 切换器、内容为真实译版；
+    p2sp_network_design 实际位于 `docs/` 根（782 行 zh 译版 + 切换器），
+    已配对；子目录配对全清——prototypes/README、ui-sandbox/README、
+    redesign-2026-11/{index,cold,graphite,warm}/README 四主题 README
+    均 .zh.md 成对；docs/design 下无第三份英文设计稿。
+- [x] `docs/api/` 中英配对。
+  - 证据：2026-11-26 收口；`docs/api/`（CLAUDE.md 目录树中的 Doxygen
+    生成位）从未落地为目录，无内容可配对——实际 API 文档为
+    `docs/src/api/`（core/events/plugins/index 四份），EN/ZH 已成对
+    见下条，配对目标以实际所在位置计量即满足。
+- [x] `docs/src/`（VitePress 站源，对外文档）中英配对。
+  - 证据：2026-11-26 收口；26 份 EN 内容文件与 `zh/` 下 26 份一一对集
+    （api 4 + developer 10 + faq 1 + guide 4 + index 1 + protocols 6），
+    零占位（无「暂无译版/TODO 翻译」），抽查 zh 均为真实译版
+    （zh/guide/getting-started.md 173 行、zh/api/core.md 272 行）；
+    `.vitepress/config.mts` `locales: {root, zh}` 双 locale 已接线。
 
 ### 功能对齐与可选增强
 
