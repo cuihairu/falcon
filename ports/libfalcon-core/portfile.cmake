@@ -1,15 +1,14 @@
 vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
     REPO cuihairu/falcon
-    REF 5ba5843b7fdcbe9442f27add21f39eccff2d23e0
-    SHA512 c8a588ed817bdcff33098ea00b1ece959f3820b1256a66a0b98e024df6d0c7256cc618aad13fada4a80b49493e480219d95862f5da8088f0f8f581126b084ab9
+    REF 87686dac6b6361791281ffcf95517f98c40fd05d
+    SHA512 6ad26158b5f76dbfcbf682c987c7db0f07e1c4357a738c19935deb37b885b5907c747df5c716f1e38ad042bfe9813a694cb3e051e451a1ffbfb0a212b3eae898
     HEAD_REF main
 )
 
-# Windows DLL 路径未接线：FALCON_EXPORTS/FALCON_IMPORTS 宏无任何头文件
-# 消费点（零 dllexport 标注），共享构建产出零导出符号的坏 DLL；monorepo
-# 亦默认静态（根未开 BUILD_SHARED_LIBS）——端口按 vcpkg 惯例锁静态
-vcpkg_check_linkage(ONLY_STATIC_LIBRARY)
+# 共享/静态由 VCPKG_LIBRARY_LINKAGE 驱动（toolchain 注入
+# BUILD_SHARED_LIBS）；共享形态经 WINDOWS_EXPORT_ALL_SYMBOLS 导出符号
+# （todo vcpkg 阶段 2 已接线，monorepo 内外行为一致）
 
 # core 自足块（阶段 1）在独立 configure 下自行完成依赖查找，无需注入项
 vcpkg_cmake_configure(

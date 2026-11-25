@@ -1,6 +1,6 @@
 {
   "name": "libfalcon-core",
-  "version-date": "2026-10-16",
+  "version-date": "2026-11-26",
   "description": "Falcon download engine core: resource abstraction, download engine, events (no protocol/storage/drive knowledge)",
   "homepage": "https://github.com/cuihairu/falcon",
   "license": "Apache-2.0",

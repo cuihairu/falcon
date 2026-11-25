@@ -1,13 +1,12 @@
 vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
     REPO cuihairu/falcon
-    REF 5ba5843b7fdcbe9442f27add21f39eccff2d23e0
-    SHA512 c8a588ed817bdcff33098ea00b1ece959f3820b1256a66a0b98e024df6d0c7256cc618aad13fada4a80b49493e480219d95862f5da8088f0f8f581126b084ab9
+    REF 87686dac6b6361791281ffcf95517f98c40fd05d
+    SHA512 6ad26158b5f76dbfcbf682c987c7db0f07e1c4357a738c19935deb37b885b5907c747df5c716f1e38ad042bfe9813a694cb3e051e451a1ffbfb0a212b3eae898
     HEAD_REF main
 )
 
-# 同 libfalcon-core：共享构建产出零导出符号 DLL，端口锁静态
-vcpkg_check_linkage(ONLY_STATIC_LIBRARY)
+# 共享/静态由 VCPKG_LIBRARY_LINKAGE 驱动（todo vcpkg 阶段 2 解锁）
 
 # drives 首版零 feature（候选网盘未实现，设计裁定不给虚假承诺）
 vcpkg_cmake_configure(

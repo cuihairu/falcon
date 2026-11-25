@@ -1,6 +1,6 @@
 {
   "name": "libfalcon-storage",
-  "version-date": "2026-10-16",
+  "version-date": "2026-11-26",
   "description": "Falcon object storage browsers (s3/oss/cos/kodo/upyun)",
   "homepage": "https://github.com/cuihairu/falcon",
   "license": "Apache-2.0",
