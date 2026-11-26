@@ -1,4 +1,4 @@
-// P2SP 公告组件测试（docs/p2sp_network_design.md §16.4 SwarmAnnouncer +
+// P2SP 公告组件测试（docs/developer/p2sp-network.md §16.4 SwarmAnnouncer +
 // §16.6 时序注入）。swarm_announcer.cpp 以 #else 分支（无 FALCON_HAS_SWARM）
 // 编入本目标：真实网关经 SwarmAnnouncerGateway 接缝替换为记录型 fake，
 // 时序用短间隔（poll 10ms）替代虚拟时钟。

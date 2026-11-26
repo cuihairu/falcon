@@ -1,11 +1,10 @@
 # Node modules
 node_modules/
 
-# VuePress 构建输出
-src/.vuepress/dist/
-src/.vuepress/cache/
-src/.vuepress/temp/
-src/.vuepress/.temp/
+# VitePress 构建输出
+.vitepress/dist/
+.vitepress/cache/
+.vitepress/.temp/
 dist/
 
 # 日志

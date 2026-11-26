@@ -1,7 +1,7 @@
 /**
  * @file swarm_announcer.hpp
  * @brief P2SP 阶段 1 增量 3：完成后公告 + TTL 续租组件（设计文档
- *        docs/p2sp_network_design.md §16.4）
+ *        docs/developer/p2sp-network.md §16.4）
  *
  * SwarmAnnouncer 挂引擎事件监听（on_completed 入后台哈希队列），哈希与
  * 网络全部在自有工作线程——完成回调路径零新增延迟。活跃公告表由工作

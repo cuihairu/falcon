@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.15)
 
 # ============================================================================
 # falcon-swarmd：P2SP swarm 目录服务器 + 节点侧客户端库
-# （docs/p2sp_network_design.md §12 阶段 0）
+# （docs/developer/p2sp-network.md §12 阶段 0）
 #
 # 守卫链：缺基础 target（daemon 包拆出的 falcon_ws_protocol /
 # falcon_daemon_core）或缺 OpenSSL 时整包优雅跳过——线协议签名

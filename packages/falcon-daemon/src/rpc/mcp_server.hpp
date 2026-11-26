@@ -12,7 +12,7 @@
 
 namespace falcon::daemon::rpc {
 
-/// MCP Streamable HTTP 协议层（设计文档 docs/design/mcp_server_design.md）。
+/// MCP Streamable HTTP 协议层（设计文档 docs/developer/mcp-server.md）。
 ///
 /// JsonRpcServer 把 /mcp 路径的原始请求转成 Request，由本类按 MCP 契约
 /// 处理：initialize 建会话（Mcp-Session-Id 响应头）→ 会话校验 →

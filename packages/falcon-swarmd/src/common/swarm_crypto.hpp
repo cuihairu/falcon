@@ -2,7 +2,7 @@
 
 // ============================================================================
 // SwarmCrypto：Ed25519 密钥/签名与 SHA-256 摘要
-// （docs/p2sp_network_design.md §8.1 线协议密码学）
+// （docs/developer/p2sp-network.md §8.1 线协议密码学）
 //
 // 全部走 OpenSSL EVP 便携 API（3.0 弃用的低层接口一律不触碰）；
 // Ed25519 签名用一步式 EVP_DigestSign/EVP_DigestVerify（md=nullptr，

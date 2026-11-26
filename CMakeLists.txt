@@ -38,7 +38,7 @@ option(FALCON_BUILD_TESTS "Build tests" ON)
 option(FALCON_BUILD_EXAMPLES "Build examples" ON)
 option(FALCON_BUILD_CLI "Build CLI tool" ON)
 option(FALCON_BUILD_DAEMON "Build daemon service" ON)
-# Swarm 目录服务器（P2SP 网络，docs/p2sp_network_design.md §12 阶段 0）。
+# Swarm 目录服务器（P2SP 网络，docs/developer/p2sp-network.md §12 阶段 0）。
 # 依赖 FALCON_BUILD_DAEMON=ON（复用 daemon 包的 falcon_ws_protocol /
 # falcon_daemon_core）；缺 nlohmann_json 或 OpenSSL 时整包优雅跳过
 option(FALCON_BUILD_SWARMD "Build swarm rendezvous service (falcon-swarmd)" ON)
@@ -63,7 +63,7 @@ option(FALCON_ENABLE_HLS "Enable HLS/DASH protocol plugin" OFF)
 # Storage/Drives 功能开关
 option(FALCON_ENABLE_RESOURCE_BROWSER "Enable resource browser functionality" ON)
 # Per-provider browser switches（vcpkg feature 映射面，见
-# docs/design/vcpkg_packaging_design.md §5.2）；仅 RESOURCE_BROWSER
+# docs/developer/packaging.md §5.2）；仅 RESOURCE_BROWSER
 # 生效时有效，默认 ON 保持现行为
 option(FALCON_ENABLE_STORAGE_S3 "Enable S3 resource browser" ON)
 option(FALCON_ENABLE_STORAGE_OSS "Enable Aliyun OSS resource browser" ON)

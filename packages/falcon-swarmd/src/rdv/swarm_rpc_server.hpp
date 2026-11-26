@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// SwarmRendezvousServer：swarmd 传输层（docs/p2sp_network_design.md §7.2/§7.3）
+// SwarmRendezvousServer：swarmd 传输层（docs/developer/p2sp-network.md §7.2/§7.3）
 //
 // 独立瘦传输层（与 daemon JsonRpcServer 形制同源、代码零共享）：TCP accept
 // 线程 + 每连接 worker + 同端口 WebSocket 升级（ws://host:port/jsonrpc）。

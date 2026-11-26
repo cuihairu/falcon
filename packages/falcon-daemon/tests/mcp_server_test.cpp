@@ -1,5 +1,5 @@
 /// MCP Streamable HTTP 端点测试（协议契约 + 工具翻译层）。
-/// 设计文档 docs/design/mcp_server_design.md §2 契约逐条钉住：
+/// 设计文档 docs/developer/mcp-server.md §2 契约逐条钉住：
 /// 认证分级（403/401）、initialize 会话握手、会话校验 404、
 /// 通知 202、DELETE 拆除 204、未知方法 405、GET/SSE 通知流
 ///（认证与会话准入 + data 行扇出 + 停机/断开收尾，阶段 2 增量 3）、

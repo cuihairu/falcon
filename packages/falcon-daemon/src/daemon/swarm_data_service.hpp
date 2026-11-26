@@ -1,7 +1,7 @@
 /**
  * @file swarm_data_service.hpp
  * @brief P2SP 阶段 2 增量 1：入站只读 HTTP 数据服务（设计文档
- *        docs/p2sp_network_design.md §10.3）
+ *        docs/developer/p2sp-network.md §10.3）
  *
  * 进程内只读 HTTP 端点 `GET /by-sha256/<hex>`：圈内节点凭已知 sha256
  * 直连本机拉取成品文件字节。支持 Range（V2 P2SP 拉取方的分段请求），

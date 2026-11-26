@@ -167,9 +167,9 @@ packages/
 - [x] `docs/api/` 中英配对。
   - 证据：2026-11-26 收口；`docs/api/`（CLAUDE.md 目录树中的 Doxygen
     生成位）从未落地为目录，无内容可配对——实际 API 文档为
-    `docs/src/api/`（core/events/plugins/index 四份），EN/ZH 已成对
+    `docs/api/`（core/events/plugins/index 四份），EN/ZH 已成对
     见下条，配对目标以实际所在位置计量即满足。
-- [x] `docs/src/`（VitePress 站源，对外文档）中英配对。
+- [x] `docs/`（VitePress 站源，对外文档）中英配对。
   - 证据：2026-11-26 收口；26 份 EN 内容文件与 `zh/` 下 26 份一一对集
     （api 4 + developer 10 + faq 1 + guide 4 + index 1 + protocols 6），
     零占位（无「暂无译版/TODO 翻译」），抽查 zh 均为真实译版
@@ -247,7 +247,7 @@ packages/
   页（双语）逐开关嵌入，兼作配置效果回归测试。
 - [ ] LANG-AUTO-001 [P2] 文档站浏览器语言自动识别（fleet-docs-audit-G2
   2026-11-14 调查项）：现况 = vitepress locales 双 locale（root=en-US /
-  zh=zh-CN，`docs/src/.vitepress/config.mts:148`）+ 导航语言下拉手动切换 +
+  zh=zh-CN，`docs/.vitepress/config.mts:148`）+ 导航语言下拉手动切换 +
   页内显式互链；**无 rootLocale 自动跳转、无 navigator.language 探测 JS**。
   语言自动切换为增强项，默认「手动切换 + 显式链接」为受规基线，待用户拍板
   是否上自动识别（同舰队拍板项，勿单仓先行实施）。
@@ -283,7 +283,7 @@ packages/
 
 ## 源码分层分析 2026-11-07
 
-分析提交 `28143a0b2673e065498137d9558c01e735e8298a`（先通读源码再归纳，层=运行时职责而非目录名；双语正文在 `docs/src/developer/{glossary,glossary.zh}.md` 与 `docs/src/{developer,zh/developer}/architecture.md`）。
+分析提交 `28143a0b2673e065498137d9558c01e735e8298a`（先通读源码再归纳，层=运行时职责而非目录名；双语正文在 `docs/developer/{glossary,glossary.zh}.md` 与 `docs/{developer,zh/developer}/architecture.md`）。
 
 ### 抽象层清单（7 层）
 
@@ -316,7 +316,7 @@ packages/
 
 - `packages/libfalcon-drives/include/falcon/{cloud_storage_plugin.hpp,config_manager.hpp,resource_search.hpp}` 与 `packages/libfalcon-drives/include/falcon/drives/` 双份同名公共头并存（根 `falcon/` 兼容转发 + `falcon/drives/` 实际定义，见 `packages/libfalcon-drives/include/falcon/drives/config_manager.hpp:38`）。历史兼容转发可保留，但新增公共 API 应只落 `falcon/drives/`，避免两个真值源。
 - `packages/libfalcon-protocols/src/commands/http_commands.cpp`（3640 行）是 V2 命令面，却按「commands」目录名放在 protocols/src 下，而其配套头在 `include/falcon/protocols/commands/http_commands.hpp`（979 行），公共接口与私有实现目录语义不一致；且 `incremental_download.cpp`/`download_engine_v2.cpp` 等 V2 传输实现未归入 `commands/`，命令目录并未覆盖全部 V2 文件。
-- `docs/` 根目录仍保留大量历史英文/中文成对设计稿（`docs/aria2_architecture.md` 等），而当前权威文档站源是 `docs/src/`；README 已说明根目录文件属归档，但 `docs/ARCHIVE.md` 未收录部分新增设计稿（如 `docs/design/mcp_server_design.md`、`docs/design/vcpkg_packaging_design.md`），归档索引与实际文件不同步。
+- `docs/` 已完成整理：历史设计稿已合并（仍有价值的进入 `developer/` 与 `api/`）或删除，`ARCHIVE.md` 已移除；VitePress 源直接位于 `docs/` 根目录，核心文档与 `ui/` 设计文档分模块维护。
 - `packages/libfalcon-protocols/plugins/*` 中每个插件既有 `*_plugin.cpp` 又有 `*_handler.cpp`（如 `http/http_plugin.cpp` 与 `http/http_handler.cpp`、`sftp/sftp_plugin.cpp` 与 `sftp/sftp_handler.cpp`），目录名按插件聚合，文件级再按 plugin/handler 命名，两层粒度并存；建议统一为目录内文件职责命名，避免同一插件两种命名习惯。
 
 ## Codex 深审发现（2026-11-13，luna profile 近5 commit 审核，0C/1M/2m，待修）

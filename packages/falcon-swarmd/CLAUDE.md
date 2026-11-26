@@ -4,7 +4,7 @@
 
 # falcon-swarmd
 
-P2SP 共享网络的 **Rendezvous Service**（会合/发现服务，俗称 tracker）与节点侧客户端（设计文档 `docs/p2sp_network_design.md` §12 阶段 0）。单一包内三个静态库 + 一个可执行：服务端与 client 共享 `swarm_protocol` 单一事实源，回环测试一处覆盖两端。
+P2SP 共享网络的 **Rendezvous Service**（会合/发现服务，俗称 tracker）与节点侧客户端（设计文档 `docs/developer/p2sp-network.md` §12 阶段 0）。单一包内三个静态库 + 一个可执行：服务端与 client 共享 `swarm_protocol` 单一事实源，回环测试一处覆盖两端。
 
 ## 变更记录 (Changelog)
 

@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// falcon-swarmd 线协议单一事实源（docs/p2sp_network_design.md §7.3/§8）
+// falcon-swarmd 线协议单一事实源（docs/developer/p2sp-network.md §7.3/§8）
 //
 // 方法/通知/错误码/线字段名常量 + canonical JSON 序列化 + 签名 payload
 // 组装 + 时间格式助手。client 与 Rendezvous 服务端共用本头文件，两端对拍以这里

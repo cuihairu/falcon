@@ -34,7 +34,7 @@
 - **门禁次序要点**：大小下限检查放在 `consumeSkipOnceForTab` **之前**，被下限挡掉的下载不会烧掉用户手动点的「跳过下一次」令牌
 - **验证**：`node --check` 四 JS 全过 + ESM 权威解析确认无 top-level await（MV3 service worker 红线，所有 await 均在监听器/async 函数内）；vm 沙箱打桩后直接执行真实 `service_worker.js` 跑 27 项逻辑断言全过（默认接管 5MB zip、默认拒 2KB png、空清单不接管、`*` 全接管、`.`/大写/空白容错、下限 0/边界/未知尺寸、`text/html`+`.mp4` 不误判媒体、`video/mp4` 与无 ct 路径不变、迁移四态含 garbage/显式 0 保留）；i18n 双 locale 键集合一致 + 占位符一致 + options.js 30 个 DOM id 与 19 个 i18n 键全部可解析；manifest 版本保持 0.2.0（未动版本）
 
-### 2026-10-13 - vcpkg 拆分阶段 1：四包 standalone package config（todo #13，设计 `docs/design/vcpkg_packaging_design.md` §4）
+### 2026-10-13 - vcpkg 拆分阶段 1：四包 standalone package config（todo #13，设计 `docs/developer/packaging.md` §4）
 - **目标**：外部工程可按包粒度 `find_package` 消费（阶段 2 overlay 端口的前置）；继 13433cf（core）/05e44fc（protocols）后，本批补齐 storage（75752e9）与 drives（6ea88ae）——§4.2 四包清单收口
 - **同构四件套**（每包 CMakeLists 头部 + 尾部，monorepo 树内全部跳过零行为变化）：① export 锚 `TARGET falcon_core`（根必然已建/端口树必然没有，不引入第二真值源）→ monorepo 沿用 FalconTargets / 独立 configure 出 `FalconStorageTargets`/`FalconDrivesTargets`；② `FALCON_ENABLE_*` 包头 `NOT DEFINED` 兜底（option 定义权留根目录）；③ 自足块 `find_package(FalconCore CONFIG REQUIRED)` + 目录级 `falcon_core` ALIAS 对齐既有裸链接点（目录级即可——消费方全在本目录子树内，不触 CMP0107 全局 imported ALIAS 限制）；④ `FALCON_FAILURE_INJECTION` 独立形态按根同款条件补定义，**必须先于本包一切 add_library**（库与测试 TU 内联布局分叉即 ODR 红线）
 - **闭包打标沿 target 存在性**（非 FOUND 布尔——构建侧要求 targets 齐备才链接，导出闭包只在链接时才引用它们）：storage 三枚 `FALCON_STORAGE_PACKAGE_NEEDS_{CURL,NLOHMANN_JSON,OPENSSL}`；drives 四枚 + SQLITE3 直接复用 config_manager 链接点的既有 `FALCON_PACKAGE_NEEDS_SQLITE3` CACHE INTERNAL 标记（§4.3 单一事实源收敛，不另起名）；storage 的 curl 查找门与链接点同条件（RESOURCE_BROWSER 是该包唯一 curl 消费方，与根 Dependencies.cmake 的全包并集门不同）
@@ -117,14 +117,14 @@
 - W1 与 B14-b 维持挂起待拍板（不动）
 
 ### 2026-10-08 - MCP server 阶段 2 收口（全局选项与做种工具 13 个 + stdio 薄壳 `falcon-mcp` + `GET /mcp` SSE 进度订阅）
-- **三增量全部落地**（设计文档 `docs/design/mcp_server_design.md` 阶段 2，2026-10-08 收口）：① 增量 1 全局选项与做种工具——tools 10 → 13（`falcon_get_global_option`/`falcon_set_global_option`/`falcon_get_seeding_status`，翻译层零新增业务逻辑）；② 增量 2 stdio 薄壳——独立小二进制 `falcon-mcp`（stdin 逐行 MCP JSON-RPC → POST `/mcp` → stdout 逐行响应，`Mcp-Session-Id` 自动捕获/404 自动清除/EOF DELETE 拆会话，不链 libfalcon-core 纯转发，CURL 缺席不构建）；③ 增量 3 SSE 进度订阅——`GET /mcp` 通知流
+- **三增量全部落地**（设计文档 `docs/developer/mcp-server.md` 阶段 2，2026-10-08 收口）：① 增量 1 全局选项与做种工具——tools 10 → 13（`falcon_get_global_option`/`falcon_set_global_option`/`falcon_get_seeding_status`，翻译层零新增业务逻辑）；② 增量 2 stdio 薄壳——独立小二进制 `falcon-mcp`（stdin 逐行 MCP JSON-RPC → POST `/mcp` → stdout 逐行响应，`Mcp-Session-Id` 自动捕获/404 自动清除/EOF DELETE 拆会话，不链 libfalcon-core 纯转发，CURL 缺席不构建）；③ 增量 3 SSE 进度订阅——`GET /mcp` 通知流
 - **增量 3 SSE 数据面**：JsonRpcServer::handle_connection 拦截 GET /mcp → `McpServer::validate_sse_request` 准入（check_auth 提取共用：未配 secret 403 / Bearer 失败 401 + `WWW-Authenticate` / 会话缺失或过期 404）→ 200 `text/event-stream` + `Cache-Control: no-cache` 无 Content-Length，初始注释行 `: falcon mcp stream` → 注册进 `sse_clients_` 台账（与 ws_clients_ 同形状）→ 阻塞等对端断开/停机；通知扇出复用既有 `broadcast_notification`——同一 JSON-RPC 信封 WS 走 TEXT 帧、SSE 走 `data: <信封>\n\n` 行，引擎事件经 RpcEventBridge 天然双路；stop() 对两张表统一 shutdown 唤醒；注销纪律与 WS 一致（广播失败只 shutdown，注销由会话线程自身完成）；成功路径不关连接，准入仅发生在开流时刻（SSE 单向只写流无请求面）
 - **测试**：`mcp_server_test.cpp` 22 → 31 用例（SSE 准入三态/会话三态/扇出真到达/断开释放槽位/CORS 回显 9 用例，`falcon_daemon_rpc_tests` 65 → 74）+ daemon 全套件 482/482；真实二进制 curl 冒烟——`curl -N` 挂流 + 引擎加任务后 `data:` 行内收到 aria2.onDownloadStart/falcon.onProgress 信封、timeout 124 证流保持打开；代替 MCP inspector（本机无该环境）
 - **覆盖率定性**：SSE 区域全部覆盖，唯一 miss = 流式响应头 send_all 失败早退行（accept→write 微秒竞速窗，与 WS 侧 send-fail 行同族不可锚），已写进设计文档 §8 阶段 2 对账
 - **文档对账**：设计文档状态行改「阶段 2 已实现」+ §8 新增阶段 2 对账（流形态/通知扇出/可测性边界/冒烟形态）；daemon CLAUDE.md changelog/模块职责/对外接口（SSE 通知流小节）/测试表同步；README 双语 Advanced Features 更新为阶段 2 已落地。已知遗留（非本批范围）：serverInfo.version 报 FALCON_VERSION_STRING "0.1.0"（daemon project VERSION 已是 0.2.0），单一事实源接线另行收口
 
 ### 2026-10-07 - MCP server 阶段 1（daemon `/mcp` 端点 + 10 工具翻译层 + Bearer 鉴权/会话管理）
-- **形态**（设计文档 `docs/design/mcp_server_design.md` 阶段 1 落地，FlowDown 调研反向定位——falcon 做 MCP **server** 把自身暴露为工具，不做 host/客户端）：daemon 同端口新增 `POST /mcp` Streamable HTTP 路由；`mcp.enabled`（默认 false）或 `--enable-mcp`（隐含启用 RPC）开启；AI host（Claude Desktop/Cursor 等）经 10 个下载工具用自然语言驱动下载，tools/call 翻译到既有 aria2 RPC，**零新增业务逻辑**
+- **形态**（设计文档 `docs/developer/mcp-server.md` 阶段 1 落地，FlowDown 调研反向定位——falcon 做 MCP **server** 把自身暴露为工具，不做 host/客户端）：daemon 同端口新增 `POST /mcp` Streamable HTTP 路由；`mcp.enabled`（默认 false）或 `--enable-mcp`（隐含启用 RPC）开启；AI host（Claude Desktop/Cursor 等）经 10 个下载工具用自然语言驱动下载，tools/call 翻译到既有 aria2 RPC，**零新增业务逻辑**
 - **新文件** `mcp_server.{hpp,cpp}`（挂 `falcon_daemon_core`）：`initialize` 握手（忽略客户端会话头恒新建 32-hex 会话，`Mcp-Session-Id` 响应头；内存表上限 64 满逐最旧）+ 版本协商（`2025-06-18` 默认 + `2025-03-26`，更高回退默认）+ `tools/list` 静态 schema（10 工具全 `additionalProperties:false` + `title` + annotations：`falcon_remove_task`/`falcon_pause_all` 带 `destructiveHint:true`）+ `tools/call` 翻译层（`falcon_add_download` 的 output_dir/filename→dir/out 与 options 白名单 / `falcon_list_tasks` 的 status 聚合——all = tellActive 全量 + tellWaiting/tellStopped(0,100000) 合并统一切片，其余 8 工具直映射）+ `ping`→`{}`
 - **鉴权（与 `/jsonrpc` 的语义差）**：未配 `rpc.secret` 时 `/mcp` **整体 403**（/jsonrpc 未配是跳过校验——MCP 面向 AI host 无凭据不放行）；配了 secret 走 `Authorization: Bearer`，失败 401 + `WWW-Authenticate: Bearer`；鉴权先于方法路由（无凭据 GET 得 401 非 405）
 - **帧语义**：通知（id null）202 / DELETE 204 / GET 405 + `Allow: POST, DELETE`（SSE 响应流属阶段 2）/ 解析失败 400 + -32700 / 数组 batch 400 + -32600（2025-06-18 已移除 batch）/ 非 object 标量 200 + -32600 信封 / 未知方法 -32601；错误三层——协议层 -32602 → JSON-RPC error、业务错误 → `isError:true` + `content[0].text`、dispatch 抛异常 → -32603（json_rpc_server `/mcp` 路由 lambda 异常边界防 terminate）
@@ -281,13 +281,13 @@
 
 
 ### 2026-09-27 - falcon-swarmd 服务更名 Rendezvous Service（用户拍板术语统一，零行为变化）
-- **术语定案**：swarmd 里协助节点互相发现的服务统一称 **Rendezvous Service**（会合/发现服务，首次出现括注 tracker）；设计文档 `docs/p2sp_network_design.md` 全文 65 处 standalone "server" 收敛（标题/图表框/方向记号），残余 token 恰为受保护标识符五枚
+- **术语定案**：swarmd 里协助节点互相发现的服务统一称 **Rendezvous Service**（会合/发现服务，首次出现括注 tracker）；设计文档 `docs/developer/p2sp-network.md` 全文 65 处 standalone "server" 收敛（标题/图表框/方向记号），残余 token 恰为受保护标识符五枚
 - **代码改名清单**（git mv + 符号替换，行为零变化）：CMake target `falcon_swarm_server` → `falcon_swarm_rdv`；目录 `src/server/` → `src/rdv/`；类 `SwarmServerState→SwarmRendezvousState`、`SwarmServerOptions→SwarmRendezvousOptions`、`SwarmServerHarness→SwarmRendezvousHarness`、`SwarmRpcServer→SwarmRendezvousServer`；文件 `swarm_server_state.*→swarm_rdv_state.*`、`swarm_server_harness.hpp→swarm_rdv_harness.hpp`、`swarm_server_loopback_test.cpp→swarm_rdv_loopback_test.cpp`；注入点（libfalcon-core injection.hpp）`SwarmServerSocket/Listen→SwarmRdvSocket/Listen`；banner 与启动日志（"Falcon Swarm Rendezvous Service" / "Failed to start rendezvous service"）
 - **保留项（技术事实/线协议契约，不为改而改）**：`server_token`（config 键 + CLI `--server-token` + SwarmClientConfig 字段）、`kFieldServerTime`/"server_time" 线字段、`server_fingerprint`（设计文档配置名）、`swarm_rpc_server.{hpp,cpp}` 文件名（传输层命名，沿 daemon `json_rpc_server` 形制）、`SwarmRendezvousServer` 类名含 Server（HTTP/WS 服务器角色）、协议注释里 server/client 技术角色词与中文"服务器"角色词
 - **验证**：build-cov 全量重建 + FULL ctest 全绿（2499 passed 基线口径不变）；根 CMake `FALCON_BUILD_SWARMD` 描述同步（"Build swarm rendezvous service"）；包 CLAUDE.md current-state 更新 + 历史 changelog 不改写（4c351a9 等提交真实创建过 `falcon_swarm_server`）
 
 ### 2026-09-27 - 文档站主题重设计「warm console」（taste-skill）+ logo 方向全站核对（全部朝左，零改动）
-- **logo 方向核对结论（用户报「鸟头向左」疑虑，实况全部已朝左）**：assets/falcon.svg / docs/src/public/logo.svg / favicon.svg 三处字节级一致（15e8245 已加 `translate(1024,0) scale(-1,1)` 镜像 + fill #ffa07a）；assets/falcon.png 像素分析头部朝左（左缘突出 69 点 vs 右缘 28）；线上 https://cuihairu.github.io/falcon/ 部署 commit == 本地 origin/main（15e8245），浏览器截图 + 像素分析 hero logo（亮 65L/36R、暗 85L/36R）与导航 logo（(2,0)/(2,1)）均朝左；全库无 og:image/meta 图；README 无内嵌位图 logo。**用户所见朝右页面最可能是浏览器缓存**，零代码改动
+- **logo 方向核对结论（用户报「鸟头向左」疑虑，实况全部已朝左）**：assets/falcon.svg / docs/public/logo.svg / favicon.svg 三处字节级一致（15e8245 已加 `translate(1024,0) scale(-1,1)` 镜像 + fill #ffa07a）；assets/falcon.png 像素分析头部朝左（左缘突出 69 点 vs 右缘 28）；线上 https://cuihairu.github.io/falcon/ 部署 commit == 本地 origin/main（15e8245），浏览器截图 + 像素分析 hero logo（亮 65L/36R、暗 85L/36R）与导航 logo（(2,0)/(2,1)）均朝左；全库无 og:image/meta 图；README 无内嵌位图 logo。**用户所见朝右页面最可能是浏览器缓存**，零代码改动
 - **主题重设计（taste-skill 代行——提示词点名的 `popular-web-designs` skill 不在本环境可用清单，报告如实披露替换）**：方向「warm developer console」，三拨盘 VARIANCE 5 / MOTION 3 / DENSITY 4；Redesign-Preserve 协议（IA/slug/导航文案/内容结构零变化，fence 修复不回退）
   - 色板：暖石色中性底（亮 #fcfbf9 / 暗 #161311，全站无纯 #000/#fff），falcon 橙单强调色（亮 #c2410c 链接 5.0:1 / 暗 #ffa07a 9.3:1），**CTA 双主题统一鲑橙 #ffa07a 底 + 深咖啡 #27140a 字（9.1:1）**——与旧版 Mintlify 皮（#f97316+白药丸）明显区分；全配对 WCAG AA 校验，文案零 em-dash
   - 字体：自托管 @fontsource-variable/geist + geist-mono（'Geist Variable'/'Geist Mono Variable'，CJK 系统回退栈），零外部字体请求
@@ -305,7 +305,7 @@
 - **铁账（build-cov 单树新鲜数据）**：分母 17724 → **19580**（+1856 = swarmd 新包 + 拆库重组），行 miss **491 → 890**（批 3 后实测 984，批 4 补矿净收 94 行 + 分支命中净收 120 点），行 **97.23% → 95.5%** / 函数 98.8% → 98.5% / 分支 56.70% → 55.0%（分母 34826 → 38890）。−1.7 点定性 = **全新网络栈包的增量稀释**（与 NAT 批次 97.66→97.33、metalink 批次 97.34→97.23 同性质，幅度大因新包体量 ~2000 行）；可确定性测的面已收口（config 14 用例），剩余 swarmd miss 沿批 3 定性：传输层防御（RPC server HTTP 解析/socket/WS 会话错误分支）、main.cpp CLI parse 助手（匿名命名空间，行为面 e2e 已覆盖）、client/subscriber 网络循环时序窗口、EVP 防御链残面（六注入点已收主干）
 
 ### 2026-09-25 - P2SP 阶段 0 落地：falcon-swarmd 包（swarm 目录服务器 + SwarmClient）+ daemon 拆库
-- **范围**（设计文档 `docs/p2sp_network_design.md` §12 阶段 0，用户点名实施）：`falcon-swarmd` 单二进制（两步注册挑战/心跳/查询/WS 通知 + register/query 双限频器 + Bearer 准入 + 群组令牌 + 黑名单）+ 节点侧 `SwarmClient`（注册两步状态机/心跳线程 -32003 自愈重注册/查询/退订）；**阶段 0 无 announce 面**（用户裁决「空表往返」——资源表无写入路径恒空，query 合法 session → sha256 回显 + 空 sources，`SwarmResource` 结构与读取逻辑在位，阶段 1 加 upsert 即通）
+- **范围**（设计文档 `docs/developer/p2sp-network.md` §12 阶段 0，用户点名实施）：`falcon-swarmd` 单二进制（两步注册挑战/心跳/查询/WS 通知 + register/query 双限频器 + Bearer 准入 + 群组令牌 + 黑名单）+ 节点侧 `SwarmClient`（注册两步状态机/心跳线程 -32003 自愈重注册/查询/退订）；**阶段 0 无 announce 面**（用户裁决「空表往返」——资源表无写入路径恒空，query 合法 session → sha256 回显 + 空 sources，`SwarmResource` 结构与读取逻辑在位，阶段 1 加 upsert 即通）
 - **三批提交**：① 8d5e366 基建拆库（daemon 包拆 `falcon_ws_protocol`（websocket_frame 消除两处重复编译债，swarmd 成第三消费方）+ `falcon_daemon_core`（daemon.cpp 拆出，源零改动）+ swarmd 包骨架 + 注入点 6 个）；② 4c351a9 swarmd server（SwarmServerState 单锁 + 通知锁外 + now 全入参零时钟依赖 / RpcHandlers 纯逻辑 / RateLimiter per-key 时间戳窗口 / RpcServer 传输层沿 json_rpc_server 形态换命名空间 + swarmd_config + main）；③ 50b42bd SwarmClient（SwarmHttpClient curl + Bearer / SwarmWsSubscriber 收订专用 WS（握手带 Authorization 头，~200 行）/ SwarmKeyStore PEM 0600 / SwarmClient）+ 真 二进制 e2e（fork+execv，POSIX-only）
 - **线协议**（JSON-RPC 2.0）：`falcon.swarm.register`（两步：身份 params → 同 params + challenge_sig；step1 快照 canonical_json，step2 要求去 challenge_sig 后逐字节一致——nonce/node_id 绑定 + 防参数偷换）/ heartbeat / query / unsubscribe；通知 params 为 **object**（与 daemon 数组式不同）：`falcon.swarm.onPeerJoined`（首次出现才广播）/ `onPeerLeft`（心跳超时 sweep 摘除）；错误码 -32001 Bearer（401）/ -32002 限频（429 同发）/ -32003 未知/过期 session / -32004 群组令牌 / -32005 签名/指纹/黑名单
 - **编码定案**：pubkey = DER(SPKI) 小写 hex 88 字符；签名 hex 128；nonce hex 16；challenge/session = RAND_bytes(16)→hex 32（session `s-` 前缀）；node_id 指纹 = sha256_hex(DER) 前 32 字符；签名 payload = `method\n + nonce\n + sha256_hex(params_json)`，Ed25519 一步式 EVP（md=NULL）；私钥 PEM 落盘 0600、解析失败报错绝不静默覆盖（私钥即节点身份）
@@ -3881,12 +3881,12 @@ falcon/                              # 项目根目录
 ├── third_party/                     # 第三方依赖（如使用 submodule）
 │   └── README.md                    # 依赖说明（或使用 vcpkg）
 │
-├── docs/                            # 文档
-│   ├── api/                         # API 文档（Doxygen 生成）
-│   ├── user_guide.md                # 用户指南
-│   ├── developer_guide.md           # 开发者指南
-│   └── decisions/                   # 架构决策记录 (ADR)
-│       └── ADR-001-async-model.md
+├── docs/                            # VitePress 文档（源在根目录，无 src/ 子目录）
+│   ├── .vitepress/                  # VitePress 配置与主题
+│   ├── guide/                       # 用户指南
+│   ├── developer/                   # 开发者文档（架构 / P2SP / MCP / 打包）
+│   ├── ui/                          # UI 设计（规范 / 重设计 / 原型）
+│   └── design/ui-next/              # 24 屏交互原型
 │
 ├── examples/                        # 使用示例
 │   ├── simple_download.cpp          # 基础下载示例

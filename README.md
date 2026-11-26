@@ -15,13 +15,17 @@
   planes; the event-driven V2 engine and the aria2-compatible CLI/RPC surface
   follow aria2's architecture.
 
-  [中文](README.zh.md) | [English](README.md) 
+  [中文](README.zh.md) | [English](README.md)
 </div>
 
-Screenshots and design prototypes are showcased on the
-[docs site](https://cuihairu.github.io/falcon/); the full gallery (144 shots:
-24 screens × three accent themes × light/dark) lives in
-[docs/src/public/design/ui-next/screens/](docs/src/public/design/ui-next/screens/).
+## Documentation & design
+
+- [Documentation site](https://cuihairu.github.io/falcon/) · [中文文档站](https://cuihairu.github.io/falcon/zh/)
+- Repository notes: [English](docs/README.md) · [简体中文](docs/zh/README.md)
+- [UI design specification](docs/ui/design-spec.md) · [Interactive UI prototype](docs/design/ui-next/index.html)
+- [Contributing](CONTRIBUTING.md) · [License](LICENSE)
+
+Screenshots and design prototypes are showcased on the [docs site](https://cuihairu.github.io/falcon/); the full gallery (144 shots: 24 screens × three accent themes × light/dark) lives in [docs/public/design/ui-next/screens/](docs/public/design/ui-next/screens/).
 
 ## Features
 
@@ -308,7 +312,7 @@ Host-side configuration (Streamable HTTP):
 
 Stage 2 is complete (stdio wrapper `falcon-mcp`, SSE progress subscription via
 `GET /mcp`, global-option and seeding tools); see
-`docs/design/mcp_server_design.md` for the full contract.
+[docs/developer/mcp-server.md](docs/developer/mcp-server.md) for the full contract.
 
 ## User Interface
 
@@ -318,14 +322,16 @@ light / dark / system modes and table & card task views. The screenshots below
 are exported from that prototype:
 
 <p align="center">
-  <img src="docs/src/public/design/ui-next/screens/warm-dark/023-download-table.png" alt="Downloads · table view (warm dark)" width="49%"/>
-  <img src="docs/src/public/design/ui-next/screens/warm-light/001-download-table.png" alt="Downloads · table view (warm light)" width="49%"/>
+  <img src="docs/public/design/ui-next/screens/warm-dark/023-download-table.png" alt="Downloads · table view (warm dark)" width="49%"/>
+  <img src="docs/public/design/ui-next/screens/warm-light/001-download-table.png" alt="Downloads · table view (warm light)" width="49%"/>
 </p>
 
 The full gallery (24 screens × three themes × light/dark, 144 shots) lives in
-[`docs/src/public/design/ui-next/screens/`](docs/src/public/design/ui-next/screens/) and on the
-[docs site](https://cuihairu.github.io/falcon/); the design brief and decisions
-are in [ui-next README](docs/design/ui-next/README.zh.md).
+[`docs/public/design/ui-next/screens/`](docs/public/design/ui-next/screens/) and on the
+[docs site](https://cuihairu.github.io/falcon/). The published
+[UI Design Specification](https://cuihairu.github.io/falcon/ui/design-spec)
+covers the decisions; the authoring notes are in
+[docs/design/ui-next/README.zh.md](docs/design/ui-next/README.zh.md).
 
 ## Architecture
 

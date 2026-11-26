@@ -33,7 +33,7 @@ struct McpStdioConfig {
 };
 
 /// MCP stdio ↔ daemon /mcp 桥（阶段 2 薄壳，设计文档 docs/design/
-/// mcp_server_design.md §2.1/§4）。
+/// developer/mcp-server.md §2.1/§4）。
 ///
 /// 职责仅三件：① 逐行读 stdin 的 JSON-RPC 消息转发 daemon /mcp；
 /// ② 维护 Mcp-Session-Id（initialize 响应捕获、后续请求附带、404 清除、

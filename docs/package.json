@@ -1,13 +1,13 @@
 {
   "name": "falcon-docs",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "Falcon 下载器文档",
   "packageManager": "pnpm@10.22.0",
   "scripts": {
-    "docs:dev": "vitepress dev src",
-    "docs:build": "vitepress build src",
-    "docs:preview": "vitepress preview src",
-    "docs:clean": "node -e \"const fs=require('fs'); for (const path of ['src/.vitepress/dist','src/.vitepress/cache','src/.vitepress/.temp']) fs.rmSync(path,{recursive:true,force:true})\""
+    "docs:dev": "vitepress dev .",
+    "docs:build": "vitepress build .",
+    "docs:preview": "vitepress preview .",
+    "docs:clean": "node -e \"const fs=require('fs'); for (const path of ['.vitepress/dist','.vitepress/cache','.vitepress/.temp']) fs.rmSync(path,{recursive:true,force:true})\""
   },
   "keywords": [
     "falcon",

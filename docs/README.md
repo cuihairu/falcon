@@ -1,104 +1,93 @@
-[中文](README.zh.md) | **English**
+[中文](zh/README.md) | **English**
 
 # Falcon Documentation
 
-This directory builds the project documentation with **VitePress**; the source lives in `docs/src`.
+`docs/` **is** the VitePress project root: documentation sources live directly here, with `.vitepress/` at the root. There is no intermediate `src/` directory. The Chinese maintenance notes live at [`zh/README.md`](zh/README.md); the language homepage is [`zh/index.md`](zh/index.md). `README.md` and `zh/README.md` are repository notes and are excluded from the site build.
 
-> [!WARNING]
-> `docs/src/` is the actively maintained source of truth for documentation.
-> Most files at the root of `docs/*.md` are historical design drafts, migration notes, or archived material. They should no longer be treated as authoritative references for the current API, CLI, or build process.
+> The docs are split into two top-level modules:
+> - **Core** — `guide/`, `protocols/`, `api/`, `developer/`, `faq.md`: how the code actually works.
+> - **UI Design** — `ui/`: how the desktop interface should look and behave.
+>
+> Older drafts and point-in-time snapshots have been merged where still useful and otherwise removed; see the git history for their previous content.
 
-See `docs/ARCHIVE.md` for an index of archived documents.
+## Documentation map
+
+| Area | Repository source | Published site |
+|------|-------------------|----------------|
+| User guide | [`guide/`](guide/) | [Guide](https://cuihairu.github.io/falcon/guide/) |
+| Protocols | [`protocols/`](protocols/) | [Protocols](https://cuihairu.github.io/falcon/protocols/) |
+| API reference | [`api/`](api/) | [API](https://cuihairu.github.io/falcon/api/) |
+| Developer docs | [`developer/`](developer/) | [Developer](https://cuihairu.github.io/falcon/developer/) |
+| UI design | [`ui/`](ui/) | [UI Design](https://cuihairu.github.io/falcon/ui/) |
+| UI spec | [`ui/design-spec.md`](ui/design-spec.md) | [Design Specification](https://cuihairu.github.io/falcon/ui/design-spec) |
+| Interactive prototype | [`design/ui-next/index.html`](design/ui-next/index.html) | — (open the HTML file locally) |
+| Chinese docs | [`zh/`](zh/) | [中文文档](https://cuihairu.github.io/falcon/zh/) |
+| Chinese notes | [`zh/README.md`](zh/README.md) | — (excluded from build) |
+
+Published URLs use the `/falcon/` base when deployed to GitHub Pages; relative links in this file are for browsing the repository on GitHub.
 
 ## Quick Start
 
-### Install Dependencies
+### Install dependencies
 
 ```bash
 cd docs
 pnpm install
 ```
 
-### Development Mode
+### Development mode
 
 ```bash
 pnpm docs:dev
 ```
 
-Open the local address printed in the terminal to view the docs.
+Open the local address printed in the terminal.
 
-### Build the Docs
+### Build the docs
 
 ```bash
 pnpm docs:build
 ```
 
-The build output is written to `docs/src/.vitepress/dist/`.
+The build output is written to `docs/.vitepress/dist/`.
 
 ## Current design
 
-The only maintained desktop design is `design/ui-next/`: a static interactive
-prototype with 24 screens. Exported screenshots live in
-`src/public/design/ui-next/screens/` — 3 accent themes × light/dark × 22
-screens = 144 PNGs, and all design images in the docs reference this folder.
+The only maintained desktop design is [`design/ui-next/`](design/ui-next/): a static interactive prototype with 24 screens. Exported screenshots live in [`public/design/ui-next/screens/`](public/design/ui-next/screens/) — 3 accent themes × light/dark × 24 screens = 144 PNGs; all design images in the docs reference this folder.
 
-![Falcon downloading · table view (warm, default)](src/public/design/ui-next/screens/warm-light/001-download-table.png)
+![Falcon downloading · table view (warm, default)](public/design/ui-next/screens/warm-light/001-download-table.png)
 
-The design brief and decisions (account & sharing, air transfer, LocalSend /
-AirDrop / DHT, Windows tray) are in `design/ui-next/README.zh.md`.
+The full brief is published as [UI Design Specification](ui/design-spec.md), including account & sharing, air transfer, LocalSend / AirDrop / DHT decisions, and the Windows tray. Prototype authoring notes are in [`design/ui-next/README.zh.md`](design/ui-next/README.zh.md).
 
 ## Documentation Structure
 
 ```
 docs/
-├── package.json              # pnpm / Node config
-├── README.md / README.zh.md    # Docs-site notes (bilingual index)
-├── ARCHIVE.md                # Index of historical docs at the root
-├── design/                   # Current design
-│   └── ui-next/              # 22-screen interactive prototype + brief
-├── src/                      # VitePress source files
-│   ├── public/               # Static assets
-│   │   └── design/ui-next/screens/  # 132 exported design images
-│   ├── index.md              # Home page
-│   ├── .vitepress/           # VitePress configuration
-│   │   └── config.mts        # Main config
-│   ├── guide/                # User guide
-│   │   ├── index.md          # Project introduction
-│   │   ├── getting-started.md # Quick start
-│   │   ├── installation.md    # Installation
-│   │   └── usage.md          # Usage guide
-│   ├── protocols/            # Protocol docs
-│   │   ├── index.md          # Protocol overview
-│   │   ├── http.md           # HTTP/HTTPS
-│   │   ├── ftp.md            # FTP
-│   │   ├── bittorrent.md     # BitTorrent
-│   │   ├── private.md        # Private protocols
-│   │   └── streaming.md      # HLS/DASH
-│   ├── developer/            # Developer docs
-│   │   ├── index.md          # Developer guide
-│   │   ├── architecture.md   # Architecture
-│   │   ├── coding-standards.md # Coding standards
-│   │   ├── testing.md        # Testing guide
-│   │   ├── plugins.md        # Plugin development
-│   │   ├── desktop-redesign.md  # Desktop redesign
-│   │   ├── design-prototypes.md # UI design prototypes
-│   │   ├── debugging.md      # Debugging tips
-│   │   └── release.md        # Release process
-│   ├── api/                  # API reference
-│   │   ├── index.md          # API overview
-│   │   ├── core.md           # Core API
-│   │   ├── plugins.md        # Plugin API
-│   │   └── events.md         # Event API
-│   └── faq.md                # FAQ
-└── [Legacy docs retained at the root]
-    ├── api_guide.md
-    ├── developer_guide.md
-    ├── protocols_guide.md
-    └── ...
+├── .vitepress/               # VitePress configuration
+│   ├── config.mts            # Main config (nav, sidebar, locales, base)
+│   └── theme/                # Custom theme and carousel
+├── public/                   # Static assets
+│   ├── logo.svg / favicon.svg
+│   └── design/ui-next/screens/  # 144 exported design images
+├── index.md                  # English home page
+├── faq.md                    # English FAQ
+├── guide/                    # Core · user guide
+├── protocols/                # Core · protocol docs
+├── api/                      # Core · API reference (incl. low-level utilities)
+├── developer/                # Core · architecture, P2SP, MCP, packaging, testing
+├── ui/                       # UI Design · spec, redesign, prototypes
+├── design/ui-next/           # Interactive UI prototype (24 screens)
+├── README.md                 # English repository notes (not published)
+└── zh/                       # 简体中文（镜像上述结构）
+    ├── index.md              # Chinese home page
+    ├── README.md             # Chinese repository notes (not published)
+    ├── guide/ protocols/ api/ developer/ ui/
+    └── faq.md
+├── package.json / pnpm-lock.yaml
+└── pnpm-workspace.yaml
 ```
 
-Content pages are split by language: `name.md` is English, `name.zh.md` is Chinese.
-
+Content pages are split by language: `name.md` is English, `zh/name.md` is the Chinese counterpart.
 
 ## VitePress Components
 
@@ -118,16 +107,7 @@ This is a danger callout.
 :::
 ```
 
-### Code Blocks
-
-```cpp
-#include <iostream>
-int main() {
-    std::cout << "Hello, World!" << std::endl;
-}
-```
-
-### Custom Containers
+### Custom containers
 
 ```md
 ::: details Click to view details
@@ -140,11 +120,8 @@ Hidden content
 ### GitHub Pages (manual fallback — production deploys via `.github/workflows/docs-deploy.yml`)
 
 ```bash
-# Build
 pnpm docs:build
-
-# Push to the gh-pages branch (fallback)
-cd src/.vitepress/dist
+cd .vitepress/dist
 git init
 git add .
 git commit -m "Deploy docs"
@@ -153,35 +130,18 @@ git push -f git@github.com:cuihairu/falcon.git main:gh-pages
 
 ### Vercel/Netlify
 
-Connect the GitHub repository directly and set the build command to:
-
 ```bash
 cd docs && pnpm install --frozen-lockfile && pnpm docs:build
 ```
 
-Set the publish directory to `docs/src/.vitepress/dist`.
+Set the publish directory to `docs/.vitepress/dist`.
 
 ### GitHub Actions
 
-The repository already includes a GitHub Pages deployment workflow; use it directly:
+- Repository-root `.github/workflows/docs-deploy.yml` — builds and deploys on push to `main`
+- Repository-root `.github/workflows/docs-check.yml` — independent build validation on PR / push
 
-```bash
-.github/workflows/docs-deploy.yml
-```
-
-Documentation validation workflow:
-
-```bash
-.github/workflows/docs-check.yml
-```
-
-Default behavior:
-
-- Builds and deploys automatically on push to `main`
-- Installs dependencies with `pnpm`
-- Uploads `docs/src/.vitepress/dist` to GitHub Pages
-- Sets the VitePress `base` automatically based on the repository name
-- Runs documentation build validation independently on PR / push
+Both install with `pnpm` and upload `docs/.vitepress/dist`; `base` is derived from the repository name.
 
 ## Learn More
 

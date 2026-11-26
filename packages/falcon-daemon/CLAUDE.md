@@ -197,7 +197,7 @@
 - 阶段 2 剩余：进度订阅（SSE/notifications）
 
 ### 2026-10-08 - MCP server 阶段 2 增量 1（全局选项与做种工具，10 → 13）
-- **3 新工具**（设计文档 `docs/design/mcp_server_design.md` §3 阶段 2 追加表）：
+- **3 新工具**（设计文档 `docs/developer/mcp-server.md` §3 阶段 2 追加表）：
   `falcon_get_global_option` → `aria2.getGlobalOption`（无参，返回全量选项表
   max-overall-download-limit/max-concurrent-downloads/dir，aria2 字符串值形态）；
   `falcon_set_global_option` → `aria2.changeGlobalOption`（必填 `options` 对象；
@@ -258,7 +258,7 @@
 - **修复（本批唯一产品缺陷，冒烟+测试钉出）**：`new_session_id()` 初版循环
   4 次产出 64 hex（256 bit），与自身注释「32 hex（128 bit）」及设计契约矛盾
   ——改 ×2 后 32 hex，测试按设计契约钉死
-- 设计文档 `docs/design/mcp_server_design.md` 状态行改「阶段 1 已实现」+ §8
+- 设计文档 `docs/developer/mcp-server.md` 状态行改「阶段 1 已实现」+ §8
   实现对账（响应无 SSE/GET 405、list all 聚合形态、鉴权基线差异等逐条披露）
 
 ### 2026-10-01 - 任务进度持久化两处精度缺陷修复（98d1cf5）
@@ -724,7 +724,7 @@ falcon-mcp [OPTIONS]
 | 1 | 任务忙/操作失败（如移除活动任务） |
 | 2 | gid 不存在 |
 
-### P2SP 数据服务与查询源（阶段 2，设计文档 `docs/p2sp_network_design.md` §10/§11）
+### P2SP 数据服务与查询源（阶段 2，设计文档 `docs/developer/p2sp-network.md` §10/§11）
 
 - **入站只读数据服务**（`p2sp.share.enabled=true` 时随公告链启动）：`GET|HEAD /by-sha256/<64hex>`——公告完成 → SHA256 → 公告同一时点把文件注册进 `ISwarmDataRegistry`；支持 `Range: bytes=a-b`（断点续传/分段消费），不可解析 416；未知哈希 404、非 hex 400、错路径 404、非 GET/HEAD 405；`Connection: close`（一连接一请求）；bind 地址从 `p2sp.advertise_addr` 派生（未配置则 0.0.0.0 随机端口），绑定失败仅告警不阻断 daemon；删除/关闭/换内容自动撤注册
 - **查询源接缝**（`falcon/protocols/mirror_source.hpp`，daemon 侧 `swarm_source_provider`）：metalink 多源桥接在文档镜像池不足（<2）时经接缝查询 swarm（`falcon.swarm.query`），node 源转 `http://<addr>/by-sha256/<sha>`、url 源仅 http/https 透传、NAT 标记 `direct:false` 被过滤、去重并排除自身；失败退避 30s×2^n（cap 300s）。查询面独立于 share.enabled——做种关闭时仍可查询消费（惰性共享 SwarmClient）；坏源数据由整文件哈希校验拦截（桥接回落串行）
@@ -755,7 +755,7 @@ falcon-mcp [OPTIONS]
 - 对接示例（AriaNg：WebSocket 服务地址填同一 `host:port`、路径 `/jsonrpc`）；
   停机时服务器主动关闭全部订阅连接
 
-### MCP 工具端点（AI host 接入，设计文档 `docs/design/mcp_server_design.md`）
+### MCP 工具端点（AI host 接入，设计文档 `docs/developer/mcp-server.md`）
 
 - 端点：`http://<host>:<port>/mcp`（与 RPC 同端口），Streamable HTTP，
   仅 POST/DELETE；`mcp.enabled`（默认 **false**）或 `--enable-mcp` 开启

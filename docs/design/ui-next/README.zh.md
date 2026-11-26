@@ -103,7 +103,7 @@
 
 ## 设计图导出
 
-`src/public/design/ui-next/screens/` 下是原型导出的静态图：
+`../../public/design/ui-next/screens/` 下是原型导出的静态图（从本目录出发的相对路径；从仓库根看是 `docs/public/design/ui-next/screens/`）：
 
 - 3 主题色 × 亮/暗 × 24 屏 = **144 张 PNG**；目录名如 `warm-light`、`cold-dark`。新增两屏在各目录末尾顺延编号（如 warm-light 的 `023-task-context-menu.png`、`024-task-detail.png`）。
 - 文件名序号为导出批次号，界面名称见文件名后半段；README 与文档站引用这些图片。
@@ -111,7 +111,7 @@
 
 ## 与文档的关系
 
-- `src/public/design/ui-next/screens/` 是权威设计图；文档与 README 中的设计图引用均指向这里。
+- `../../public/design/ui-next/screens/`（仓库根：`docs/public/design/ui-next/screens/`）是权威设计图；文档与 README 中的设计图引用均指向这里。
 - 旧的中间态界面文件已删除，只保留本目录与功能 / 协议文档。
 
 ## 待审查确认

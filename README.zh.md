@@ -13,11 +13,17 @@
   开源组件:libcurl、OpenSSL、libtorrent、libssh2 承载各协议数据面;
   事件驱动的 V2 引擎与 aria2 兼容参数/RPC 参照 aria2 的架构与语义实现。
 
-  [English](README.md) | [中文](README.zh.md) 
+  [English](README.md) | [中文](README.zh.md)
 </div>
 
-界面截图与设计原型统一在[文档站](https://cuihairu.github.io/falcon/zh/)首页展示；
-完整图库（144 张：24 屏 × 三主题色 × 亮暗）见 [docs/src/public/design/ui-next/screens/](docs/src/public/design/ui-next/screens/)。
+## 文档与设计
+
+- [文档站](https://cuihairu.github.io/falcon/zh/) · [English docs](https://cuihairu.github.io/falcon/)
+- 仓库维护说明：[简体中文](docs/zh/README.md) · [English](docs/README.md)
+- [UI 设计规范](docs/ui/design-spec.md) · [交互原型](docs/design/ui-next/index.html)
+- [贡献指南](CONTRIBUTING_CN.md) · [许可证](LICENSE)
+
+界面截图与设计原型统一在[文档站](https://cuihairu.github.io/falcon/zh/)首页展示；完整图库（144 张：24 屏 × 三主题色 × 亮暗）见 [docs/public/design/ui-next/screens/](docs/public/design/ui-next/screens/)。
 
 ## 特性
 
@@ -223,7 +229,7 @@ falcon-cli -d /tmp/downloads -o custom_name.zip https://example.com/file.zip
 | WebDAV | 已启用 | `dav://` / `davs://`，libcurl 数据面，Basic/Digest 认证 + 断点续传 |
 | BitTorrent | 已启用 | libtorrent 数据面（缺库时回落内置纯 C++ 模式） |
 | 迅雷 | 可选插件 | 仓库内已实现，默认构建关闭 |
-| 腾讯旋风 | 可选插件 | 仓库内已实现，默认构建关闭 |
+| QQ 旋风 | 可选插件 | 仓库内已实现，默认构建关闭 |
 | 快车 | 可选插件 | 仓库内已实现，默认构建关闭 |
 | 电驴 | 可选插件 | 仓库内已实现，默认构建关闭 |
 | HLS/DASH | 可选插件 | 仓库内已实现，默认构建关闭 |
@@ -277,7 +283,7 @@ daemon 在 `POST /mcp` 暴露 MCP（Model Context Protocol）端点（Streamable
 ```
 
 阶段 2 已落地（stdio 薄壳 `falcon-mcp`、`GET /mcp` SSE 进度订阅、全局选项
-与做种工具）；完整契约见 `docs/design/mcp_server_design.md`。
+与做种工具）；完整契约见 [docs/developer/mcp-server.md](docs/developer/mcp-server.md)。
 
 ## 界面
 
@@ -285,14 +291,15 @@ daemon 在 `POST /mcp` 暴露 MCP（Model Context Protocol）端点（Streamable
 支持亮色 / 深色 / 跟随系统；表格 / 卡片双任务视图。以下为原型导出的设计图：
 
 <p align="center">
-  <img src="docs/src/public/design/ui-next/screens/warm-dark/023-download-table.png" alt="下载视图 · 表格（暖橙暗色）" width="49%"/>
-  <img src="docs/src/public/design/ui-next/screens/warm-light/001-download-table.png" alt="下载视图 · 表格（暖橙亮色）" width="49%"/>
+  <img src="docs/public/design/ui-next/screens/warm-dark/023-download-table.png" alt="下载视图 · 表格（暖橙暗色）" width="49%"/>
+  <img src="docs/public/design/ui-next/screens/warm-light/001-download-table.png" alt="下载视图 · 表格（暖橙亮色）" width="49%"/>
 </p>
 
 完整图库（24 屏 × 三主题色 × 亮暗，共 144 张）见
-[`docs/src/public/design/ui-next/screens/`](docs/src/public/design/ui-next/screens/) 与
-[文档站](https://cuihairu.github.io/falcon/zh/)；设计说明与讨论结论见
-[ui-next README](docs/design/ui-next/README.zh.md)。
+[`docs/public/design/ui-next/screens/`](docs/public/design/ui-next/screens/) 与
+[文档站](https://cuihairu.github.io/falcon/zh/)；正式说明见
+[UI 设计规范](https://cuihairu.github.io/falcon/zh/ui/design-spec)，评审记录见
+[docs/design/ui-next/README.zh.md](docs/design/ui-next/README.zh.md)。
 
 ## 架构设计
 

@@ -46,7 +46,7 @@ struct DownloadConfig {
 };
 
 /// P2SP 共享与 Rendezvous 接入配置（daemon.json 的 "p2sp" 节，设计
-/// 文档 docs/p2sp_network_design.md §16.5）。默认整体缺省 = share
+/// 文档 docs/developer/p2sp-network.md §16.5）。默认整体缺省 = share
 /// 关闭（行为零变化）。`share.*` 全部可 SIGHUP 热更；`rendezvous.*`
 /// 变化需重启（告警 restart required）。
 struct P2spConfig {
