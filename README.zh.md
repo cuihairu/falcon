@@ -4,7 +4,7 @@
 
   # Falcon
 
-<p align="center"><a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License"></a> <a href="https://cuihairu.github.io/falcon/"><img src="https://img.shields.io/badge/docs-online-blue" alt="Docs"></a> <a href="https://github.com/cuihairu/falcon/actions/workflows/cmake-multi-platform.yml"><img src="https://github.com/cuihairu/falcon/actions/workflows/cmake-multi-platform.yml/badge.svg" alt="Build Status"></a> <a href="https://codecov.io/gh/cuihairu/falcon"><img src="https://codecov.io/gh/cuihairu/falcon/branch/main/graph/badge.svg" alt="codecov"></a> <a href="https://github.com/cuihairu/falcon/actions/workflows/nightly-build.yml"><img src="https://github.com/cuihairu/falcon/actions/workflows/nightly-build.yml/badge.svg" alt="Nightly"></a> <a href="https://github.com/cuihairu/falcon"><img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg" alt="Platform"></a> <a href="https://github.com/cuihairu/falcon/releases"><img src="https://img.shields.io/badge/version-0.1.0-green.svg" alt="Version"></a></p>
+<p align="center"><a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License"></a> <a href="https://cuihairu.github.io/falcon/"><img src="https://img.shields.io/badge/docs-online-blue" alt="Docs"></a> <a href="https://github.com/cuihairu/falcon/actions/workflows/cmake-multi-platform.yml"><img src="https://github.com/cuihairu/falcon/actions/workflows/cmake-multi-platform.yml/badge.svg" alt="Build Status"></a> <a href="https://codecov.io/gh/cuihairu/falcon"><img src="https://codecov.io/gh/cuihairu/falcon/branch/main/graph/badge.svg" alt="codecov"></a> <a href="https://github.com/cuihairu/falcon/actions/workflows/nightly-build.yml"><img src="https://github.com/cuihairu/falcon/actions/workflows/nightly-build.yml/badge.svg" alt="Nightly"></a> <a href="https://github.com/cuihairu/falcon"><img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg" alt="Platform"></a> <a href="https://github.com/cuihairu/falcon/releases"><img src="https://img.shields.io/badge/status-in%20development-orange.svg" alt="状态：开发中"></a></p>
 
   **统一资源传输引擎（Universal Resource Transfer Engine）**
 
@@ -23,7 +23,21 @@
 - [UI 设计规范](docs/ui/design-spec.md) · [交互原型](docs/design/ui-next/index.html)
 - [贡献指南](CONTRIBUTING_CN.md) · [许可证](LICENSE)
 
-界面截图与设计原型统一在[文档站](https://cuihairu.github.io/falcon/zh/)首页展示；完整图库（144 张：24 屏 × 三主题色 × 亮暗）见 [docs/public/design/ui-next/screens/](docs/public/design/ui-next/screens/)。
+## 界面
+
+桌面端当前设计是 ui-next 交互原型：暖橙为默认主题色，冷蓝 / 石墨绿可切换，
+支持亮色 / 深色 / 跟随系统；表格 / 卡片双任务视图。以下为原型导出的设计图：
+
+<p align="center">
+  <img src="docs/public/design/ui-next/screens/warm-dark/023-download-table.png" alt="下载视图 · 表格（暖橙暗色）" width="49%"/>
+  <img src="docs/public/design/ui-next/screens/warm-light/001-download-table.png" alt="下载视图 · 表格（暖橙亮色）" width="49%"/>
+</p>
+
+完整图库（24 屏 × 三主题色 × 亮暗，共 144 张）见
+[`docs/public/design/ui-next/screens/`](docs/public/design/ui-next/screens/) 与
+[文档站](https://cuihairu.github.io/falcon/zh/)；正式说明见
+[UI 设计规范](https://cuihairu.github.io/falcon/zh/ui/design-spec)，评审记录见
+[docs/design/ui-next/README.zh.md](docs/design/ui-next/README.zh.md)。
 
 ## 特性
 
@@ -284,22 +298,6 @@ daemon 在 `POST /mcp` 暴露 MCP（Model Context Protocol）端点（Streamable
 
 阶段 2 已落地（stdio 薄壳 `falcon-mcp`、`GET /mcp` SSE 进度订阅、全局选项
 与做种工具）；完整契约见 [docs/developer/mcp-server.md](docs/developer/mcp-server.md)。
-
-## 界面
-
-桌面端当前设计是 ui-next 交互原型：暖橙为默认主题色，冷蓝 / 石墨绿可切换，
-支持亮色 / 深色 / 跟随系统；表格 / 卡片双任务视图。以下为原型导出的设计图：
-
-<p align="center">
-  <img src="docs/public/design/ui-next/screens/warm-dark/023-download-table.png" alt="下载视图 · 表格（暖橙暗色）" width="49%"/>
-  <img src="docs/public/design/ui-next/screens/warm-light/001-download-table.png" alt="下载视图 · 表格（暖橙亮色）" width="49%"/>
-</p>
-
-完整图库（24 屏 × 三主题色 × 亮暗，共 144 张）见
-[`docs/public/design/ui-next/screens/`](docs/public/design/ui-next/screens/) 与
-[文档站](https://cuihairu.github.io/falcon/zh/)；正式说明见
-[UI 设计规范](https://cuihairu.github.io/falcon/zh/ui/design-spec)，评审记录见
-[docs/design/ui-next/README.zh.md](docs/design/ui-next/README.zh.md)。
 
 ## 架构设计
 

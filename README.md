@@ -4,7 +4,7 @@
 
   # Falcon
 
-<p align="center"><a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License"></a> <a href="https://cuihairu.github.io/falcon/"><img src="https://img.shields.io/badge/docs-online-blue" alt="Docs"></a> <a href="https://github.com/cuihairu/falcon/actions/workflows/cmake-multi-platform.yml"><img src="https://github.com/cuihairu/falcon/actions/workflows/cmake-multi-platform.yml/badge.svg" alt="Build Status"></a> <a href="https://codecov.io/gh/cuihairu/falcon"><img src="https://codecov.io/gh/cuihairu/falcon/branch/main/graph/badge.svg" alt="codecov"></a> <a href="https://github.com/cuihairu/falcon/actions/workflows/nightly-build.yml"><img src="https://github.com/cuihairu/falcon/actions/workflows/nightly-build.yml/badge.svg" alt="Nightly"></a> <a href="https://github.com/cuihairu/falcon"><img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg" alt="Platform"></a> <a href="https://github.com/cuihairu/falcon/releases"><img src="https://img.shields.io/badge/version-0.1.0-green.svg" alt="Version"></a></p>
+<p align="center"><a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License"></a> <a href="https://cuihairu.github.io/falcon/"><img src="https://img.shields.io/badge/docs-online-blue" alt="Docs"></a> <a href="https://github.com/cuihairu/falcon/actions/workflows/cmake-multi-platform.yml"><img src="https://github.com/cuihairu/falcon/actions/workflows/cmake-multi-platform.yml/badge.svg" alt="Build Status"></a> <a href="https://codecov.io/gh/cuihairu/falcon"><img src="https://codecov.io/gh/cuihairu/falcon/branch/main/graph/badge.svg" alt="codecov"></a> <a href="https://github.com/cuihairu/falcon/actions/workflows/nightly-build.yml"><img src="https://github.com/cuihairu/falcon/actions/workflows/nightly-build.yml/badge.svg" alt="Nightly"></a> <a href="https://github.com/cuihairu/falcon"><img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg" alt="Platform"></a> <a href="https://github.com/cuihairu/falcon/releases"><img src="https://img.shields.io/badge/status-in%20development-orange.svg" alt="Status: in development"></a></p>
 
   **The Universal Resource Transfer Engine**
 
@@ -25,7 +25,24 @@
 - [UI design specification](docs/ui/design-spec.md) · [Interactive UI prototype](docs/design/ui-next/index.html)
 - [Contributing](CONTRIBUTING.md) · [License](LICENSE)
 
-Screenshots and design prototypes are showcased on the [docs site](https://cuihairu.github.io/falcon/); the full gallery (144 shots: 24 screens × three accent themes × light/dark) lives in [docs/public/design/ui-next/screens/](docs/public/design/ui-next/screens/).
+## User Interface
+
+The current desktop design is the ui-next interactive prototype: warm orange
+is the default accent, with cold blue and graphite green switchable, plus
+light / dark / system modes and table & card task views. The screenshots below
+are exported from that prototype:
+
+<p align="center">
+  <img src="docs/public/design/ui-next/screens/warm-dark/023-download-table.png" alt="Downloads · table view (warm dark)" width="49%"/>
+  <img src="docs/public/design/ui-next/screens/warm-light/001-download-table.png" alt="Downloads · table view (warm light)" width="49%"/>
+</p>
+
+The full gallery (24 screens × three themes × light/dark, 144 shots) lives in
+[`docs/public/design/ui-next/screens/`](docs/public/design/ui-next/screens/) and on the
+[docs site](https://cuihairu.github.io/falcon/). The published
+[UI Design Specification](https://cuihairu.github.io/falcon/ui/design-spec)
+covers the decisions; the authoring notes are in
+[docs/design/ui-next/README.zh.md](docs/design/ui-next/README.zh.md).
 
 ## Features
 
@@ -313,25 +330,6 @@ Host-side configuration (Streamable HTTP):
 Stage 2 is complete (stdio wrapper `falcon-mcp`, SSE progress subscription via
 `GET /mcp`, global-option and seeding tools); see
 [docs/developer/mcp-server.md](docs/developer/mcp-server.md) for the full contract.
-
-## User Interface
-
-The current desktop design is the ui-next interactive prototype: warm orange
-is the default accent, with cold blue and graphite green switchable, plus
-light / dark / system modes and table & card task views. The screenshots below
-are exported from that prototype:
-
-<p align="center">
-  <img src="docs/public/design/ui-next/screens/warm-dark/023-download-table.png" alt="Downloads · table view (warm dark)" width="49%"/>
-  <img src="docs/public/design/ui-next/screens/warm-light/001-download-table.png" alt="Downloads · table view (warm light)" width="49%"/>
-</p>
-
-The full gallery (24 screens × three themes × light/dark, 144 shots) lives in
-[`docs/public/design/ui-next/screens/`](docs/public/design/ui-next/screens/) and on the
-[docs site](https://cuihairu.github.io/falcon/). The published
-[UI Design Specification](https://cuihairu.github.io/falcon/ui/design-spec)
-covers the decisions; the authoring notes are in
-[docs/design/ui-next/README.zh.md](docs/design/ui-next/README.zh.md).
 
 ## Architecture
 
