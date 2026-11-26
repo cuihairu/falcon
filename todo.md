@@ -196,6 +196,14 @@ libs/
     新套件 DownloadEngineV2HttpsProxy 6/6 + 关联回归 218 过 +
     falcon_protocols_tests 全量 1047 过（4 skip 设计内）；适配层与
     metalink 门禁的 proxy 回退项同步摘除（剩余回退仅 cookie 引擎）。
+    ④ 401 同连接重发残体排空 `ed691cc`（Windows CI 慢调度下服务器
+    头/体分两次 recv 到达，重发请求先于 401 残体读净——残体拼入新
+    响应首行触发 invalid stoi argument；begin_auth_resend 按
+    Content-Length 计算未收残体、execute 循环先排空再重发，chunked
+    挑战体无法定界则干净失败；parse_status_line 增数字前置校验；
+    scripted_http_server 新 defer_body_ms 旋钮受控复现，新用例
+    AuthEndToEnd.Deferred401BodyDrainedBeforeResend NAIL-VERIFY 双向
+    实证；本机 ASan 894 / 非插桩 1048 全过）。
   - 注：Referer 已于 2026-10-11 原生化收编（V2 引擎发该头，适配层与
     metalink 门禁同步摘除）。
 - [ ] 日志库可选增强：FMT 风格调用点迁移到 spdlog 原生 fmt 语法、
