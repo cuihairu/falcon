@@ -203,7 +203,10 @@ inline std::string to_lower_copy(const std::string& s) {
     return out;
 }
 
-inline std::string trim_copy(const std::string& s) {
+/// 独立命名：sftp_handler.hpp 已在同名 falcon::protocols::detail 发布
+/// 强符号 trim_copy（非 inline）——inline 同名实体与其同链接时 MSVC
+/// 报 LNK2005（Linux weak-vs-strong 静默放行会掩盖，Windows 必红）
+inline std::string trim_ws(const std::string& s) {
     const auto begin = s.find_first_not_of(" \t");
     if (begin == std::string::npos) return {};
     const auto end = s.find_last_not_of(" \t");
@@ -226,10 +229,10 @@ inline AuthChallenge parse_www_authenticate(const std::string& value) {
     AuthChallenge challenge;
     const auto sp = value.find_first_of(" \t");
     if (sp == std::string::npos) {
-        challenge.scheme = to_lower_copy(trim_copy(value));
+        challenge.scheme = to_lower_copy(trim_ws(value));
         return challenge;
     }
-    challenge.scheme = to_lower_copy(trim_copy(value.substr(0, sp)));
+    challenge.scheme = to_lower_copy(trim_ws(value.substr(0, sp)));
 
     // 逐字符扫描参数区（从 scheme 之后起扫——否则首个参数键会被
     // 拼成 "digest realm" 这类带 scheme 前缀的怪物）
@@ -260,12 +263,12 @@ inline AuthChallenge parse_www_authenticate(const std::string& value) {
     segments.push_back(current);
 
     for (const auto& seg : segments) {
-        const std::string piece = trim_copy(seg);
+        const std::string piece = trim_ws(seg);
         if (piece.empty()) continue;
         const auto eq = piece.find('=');
         if (eq == std::string::npos) continue;
-        const std::string name = to_lower_copy(trim_copy(piece.substr(0, eq)));
-        std::string val = trim_copy(piece.substr(eq + 1));
+        const std::string name = to_lower_copy(trim_ws(piece.substr(0, eq)));
+        std::string val = trim_ws(piece.substr(eq + 1));
         if (val.size() >= 2 && val.front() == '"' && val.back() == '"') {
             val = val.substr(1, val.size() - 2);
             std::string unescaped;
@@ -403,7 +406,7 @@ inline std::string build_digest_authorization(const AuthChallenge& challenge,
         std::size_t start = 0;
         while (start <= qop_it->second.size()) {
             const auto comma = qop_it->second.find(',', start);
-            const std::string token = trim_copy(
+            const std::string token = trim_ws(
                 qop_it->second.substr(start, comma == std::string::npos
                                                 ? std::string::npos
                                                 : comma - start));
