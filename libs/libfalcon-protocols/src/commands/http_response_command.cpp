@@ -198,6 +198,19 @@ bool HttpResponseCommand::execute(DownloadEngineV2* engine) {
     // 第二个 401 即凭据错误的确定性收口。WAIT_FOR_SOCKET 重入从
     // execute 顶部重来，进行中的重发状态由 auth_send_data_ 承载
     for (;;) {
+        // 401 残体排空进行中：先读净残留字节再重发请求（排空必须
+        // 先于发送，保证内核缓冲里只剩新响应）
+        if (auth_drain_remaining_ > 0) {
+            auto res = continue_auth_drain(engine);
+            if (res == ExecutionResult::WAIT_FOR_SOCKET) {
+                return handle_result(ExecutionResult::WAIT_FOR_SOCKET);
+            }
+            if (res != ExecutionResult::OK) {
+                return fail("Failed to drain 401 response body",
+                            /*retryable=*/true);
+            }
+        }
+
         // 同连接重发进行中（begin_auth_resend 已构造完整请求）：
         // 优先续推发送
         if (!auth_send_data_.empty()) {
@@ -477,6 +490,21 @@ AbstractCommand::ExecutionResult HttpResponseCommand::begin_auth_resend(
         return ExecutionResult::ERROR_OCCURRED;
     }
 
+    // 401 响应体可能尚未收完（服务器分开发送头/体，慢调度下头先到
+    // 即触发重发）；残留字节留在内核缓冲里，若直接重发请求，下一轮
+    // recv 读到的就是「残体 + 新响应头」——首行被污染导致状态行
+    // 解析失败（Windows CI 实测 invalid stoi argument）。有
+    // Content-Length 时精确排空已知长度；chunked/无长度无法定界，
+    // 明确失败而不冒险复用连接
+    if (is_chunked_response_) {
+        auth_error_ = "HTTP 401: chunked challenge body cannot be drained";
+        return ExecutionResult::ERROR_OCCURRED;
+    }
+    if (content_length_ >= initial_body_.size()) {
+        auth_drain_remaining_ =
+            content_length_ - static_cast<std::uint64_t>(initial_body_.size());
+    }
+
     http_request_->set_header("Authorization", authorization);
     FALCON_LOG_INFO_STREAM("HTTP 401 认证: " << scheme_desc << " (task "
                             << get_task_id() << ")，同连接重发请求");
@@ -498,7 +526,71 @@ AbstractCommand::ExecutionResult HttpResponseCommand::begin_auth_resend(
     content_encoding_.clear();
     http_response_.reset();
 
+    // 有残留需排空：先由 execute 循环的排空步读净（在重发请求之前，
+    // 保证内核缓冲只剩新响应），排空完成再走 auth_send_data_ 发送
+    if (auth_drain_remaining_ > 0) {
+        return ExecutionResult::OK;
+    }
     return continue_auth_send(engine);
+}
+
+AbstractCommand::ExecutionResult HttpResponseCommand::continue_auth_drain(
+    DownloadEngineV2* engine) {
+    char buffer[4096];
+    while (auth_drain_remaining_ > 0) {
+        const std::size_t want = static_cast<std::size_t>(
+            std::min<std::uint64_t>(auth_drain_remaining_, sizeof(buffer)));
+        ssize_t n = 0;
+#ifdef FALCON_ENABLE_OPENSSL
+        if (tls_session_) {
+            n = SSL_read(tls_session_.get(), buffer, static_cast<int>(want));
+            if (n <= 0) {
+                const int err = SSL_get_error(tls_session_.get(),
+                                              static_cast<int>(n));
+                if (err == SSL_ERROR_WANT_READ ||
+                    err == SSL_ERROR_WANT_WRITE) {
+                    if (engine && !engine->register_socket_event(
+                                      socket_fd_,
+                                      static_cast<int>(
+                                          err == SSL_ERROR_WANT_WRITE
+                                              ? net::IOEvent::WRITE
+                                              : net::IOEvent::READ),
+                                      id())) {
+                        return ExecutionResult::ERROR_OCCURRED;
+                    }
+                    return ExecutionResult::WAIT_FOR_SOCKET;
+                }
+                FALCON_LOG_ERROR_STREAM("排空 401 响应体 SSL_read() 失败: "
+                                        << err);
+                return ExecutionResult::ERROR_OCCURRED;
+            }
+        } else {
+#endif
+            n = recv(socket_fd_, buffer, static_cast<int>(want), 0);
+            if (n < 0) {
+                if (sock_would_block(sock_errno())) {
+                    if (engine && !engine->register_socket_event(
+                                      socket_fd_,
+                                      static_cast<int>(net::IOEvent::READ),
+                                      id())) {
+                        return ExecutionResult::ERROR_OCCURRED;
+                    }
+                    return ExecutionResult::WAIT_FOR_SOCKET;
+                }
+                FALCON_LOG_ERROR_STREAM("排空 401 响应体 recv() 失败: "
+                                        << sock_err_str(sock_errno()));
+                return ExecutionResult::ERROR_OCCURRED;
+            }
+            if (n == 0) {
+                FALCON_LOG_ERROR_STREAM("排空 401 响应体时连接关闭");
+                return ExecutionResult::ERROR_OCCURRED;
+            }
+#ifdef FALCON_ENABLE_OPENSSL
+        }
+#endif
+        auth_drain_remaining_ -= static_cast<std::uint64_t>(n);
+    }
+    return ExecutionResult::OK;
 }
 
 AbstractCommand::ExecutionResult HttpResponseCommand::receive_response_headers(DownloadEngineV2* engine) {
@@ -611,6 +703,16 @@ bool HttpResponseCommand::parse_status_line(const std::string& line) {
     std::string version = line.substr(0, pos1);
     std::string status_str = line.substr(pos1 + 1, pos2 - pos1 - 1);
 
+    // 数字校验：任何被前序字节污染的首行（残体拼入等）都会在此以
+    // 干净失败收口，而非让 std::stoi 抛异常逃出命令（Windows CI
+    // 实测 invalid stoi argument 的根因防线）
+    if (status_str.empty() || !std::all_of(status_str.begin(), status_str.end(),
+                                            [](unsigned char c) {
+                                                return std::isdigit(c);
+                                            })) {
+        FALCON_LOG_ERROR_STREAM("HTTP 状态行非法: " << line);
+        return false;
+    }
     status_code_ = std::stoi(status_str);
     FALCON_LOG_INFO_STREAM("HTTP 状态: " << status_code_);
 

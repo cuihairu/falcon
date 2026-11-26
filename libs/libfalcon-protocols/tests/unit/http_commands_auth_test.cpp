@@ -109,7 +109,7 @@ std::string read_file_content(const std::string& path) {
                        std::istreambuf_iterator<char>());
 }
 
-// FakeResponse 12 成员全量 positional init（-Wmissing-field-initializers 防线）
+// FakeResponse 13 成员全量 positional init（-Wmissing-field-initializers 防线）
 testscripts::FakeResponse make_response(
     int status, const char* status_text,
     std::vector<std::pair<std::string, std::string>> headers,
@@ -125,7 +125,8 @@ testscripts::FakeResponse make_response(
                                      false,
                                      false,
                                      0,
-                                     {}};
+                                     {},
+                                     0};
 }
 
 // ---- RFC 2617 §3.5 官方示例常量（期望值全部独立重导） ----
@@ -510,6 +511,54 @@ TEST(AuthEndToEnd, BasicChallengeResendsWithMufasaCredentials) {
                            {{"WWW-Authenticate", "Basic realm=\"falcon\""}},
                            "auth required"),
                        make_response(200, "OK", {}, body)});
+
+    EngineConfigV2 config;
+    config.poll_timeout_ms = 10;
+    DownloadEngineV2 engine(config);
+
+    DownloadOptions options = base_options(out_path);
+    options.http_username = kUser;
+    options.http_password = kPass;
+    const TaskId task_id = engine.add_download(server.url(path), options);
+    ASSERT_GT(task_id, 0u);
+    auto* group = engine.request_group_man()->find_group(task_id);
+    ASSERT_NE(group, nullptr);
+
+    AuthEngineRunner runner(engine);
+    ASSERT_TRUE(wait_group_terminal(engine, group, 30000));
+    runner.shutdown_and_join();
+
+    ASSERT_EQ(group->status(), RequestGroupStatus::COMPLETED)
+        << group->error_message();
+    EXPECT_EQ(server.count_requests(path, "GET"), 2u);
+    EXPECT_EQ(server.connections(), 1);
+    EXPECT_EQ(read_file_content(out_path), body);
+
+    const auto requests = server.requests();
+    const auto auth_it = requests[1].headers.find("authorization");
+    ASSERT_NE(auth_it, requests[1].headers.end());
+    EXPECT_EQ(auth_it->second, std::string("Basic ") + kBasicB64);
+}
+
+// 401 响应体延迟到达（头/体分离发送）：客户端解析完头即触发重发时，
+// 13 字节残体仍在内核缓冲/发送途中——重发前必须先排空，否则残体
+// 拼入新响应首行（"auth requiredHTTP/1.1 200 OK"）令状态行解析
+// 失败。Windows CI 慢调度下头/体拆到两次 recv 是常态（实测 invalid
+// stoi argument），本地 Linux 快回环恒不分裂，defer_body_ms 受控复现
+TEST(AuthEndToEnd, Deferred401BodyDrainedBeforeResend) {
+    testscripts::TempDir dir;
+    const std::string out_path = (dir.path() / "defer.bin").string();
+    const std::string body = make_body(2048);
+
+    testscripts::ScriptedHttpServer server;
+    server.start();
+    const std::string path = "/auth/defer.bin";
+    auto challenge = make_response(
+        401, "Unauthorized",
+        {{"WWW-Authenticate", "Basic realm=\"falcon\""}},
+        "auth required");
+    challenge.defer_body_ms = 200;  // 头先到、体 200ms 后到
+    server.set_script(path, {challenge, make_response(200, "OK", {}, body)});
 
     EngineConfigV2 config;
     config.poll_timeout_ms = 10;

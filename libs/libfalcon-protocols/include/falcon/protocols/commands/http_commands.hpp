@@ -20,6 +20,7 @@
 #include <string>
 #include <map>
 #include <vector>
+#include <cstdint>
 #include <fstream>
 
 #ifdef FALCON_ENABLE_OPENSSL
@@ -656,9 +657,12 @@ private:
     /// 连接重发请求（auth_send_data_ 非空时 execute 优先续推发送，
     /// 支持 WAIT_FOR_SOCKET 分段重入）；auth_error_ 携带不可重试的
     /// 认证失败原因（挑战不受支持等）；auth_retried_ 一次性门禁由
-    /// execute 的 401 分支前置检查
+    /// execute 的 401 分支前置检查。重发前若 401 响应体尚未收完
+    /// （auth_drain_remaining_ > 0），先续读丢弃残留字节再发送——
+    /// 否则残体拼入新响应首行令状态行解析错乱
     ExecutionResult begin_auth_resend(DownloadEngineV2* engine);
     ExecutionResult continue_auth_send(DownloadEngineV2* engine);
+    ExecutionResult continue_auth_drain(DownloadEngineV2* engine);
 
     int socket_fd_;
     std::shared_ptr<HttpRequest> http_request_;
@@ -723,6 +727,9 @@ private:
     std::string auth_error_;             ///< 不可重试的认证失败原因
     std::string auth_send_data_;         ///< 待重发的完整请求（非空 = 发送进行中）
     std::size_t auth_send_offset_ = 0;   ///< 重发请求已发出字节数
+    /// 重发前需丢弃的 401 响应体残留字节（Content-Length − 已收初体；
+    /// chunked/未知长度时无法安全复用连接，begin_auth_resend 直接报错）
+    std::uint64_t auth_drain_remaining_ = 0;
 };
 
 /**
