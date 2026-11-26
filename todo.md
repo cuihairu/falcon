@@ -184,8 +184,18 @@ packages/
   - 证据：2026-09-13 至 2026-09-30 逐项 commit（见 CLAUDE.md 变更
     记录）；SFTP（#2）2026-10-01 落地（libssh2 真实实现 +
     known_hosts 验证 + 真实 sshd 走查 4 项）。
-- [ ] aria2 V2-原生化：HTTP Digest（V1 CURLAUTH_ANY 已含，V2 经适配层
+- [x] aria2 V2-原生化：HTTP Digest（V1 CURLAUTH_ANY 已含，V2 经适配层
   401 回退 V1 兜底）、socks/HTTPS 代理（V2 判 Unsupported 回退 V1）。
+  - 证据（三阶段全绿后推 main）：① HTTP Basic/Digest 原生 401 应答链
+    `fcfdce3`（V2 引擎内 digest nonce/cnonce/response 计算，回退表摘除
+    401 项）；② socks5 原生 `38f1cad`（greeting/auth/CONNECT 三步握手
+    + 用户名密码认证，回退表摘除 socks 项）；③ HTTPS 代理（TLS-over-TLS
+    隧道）`fa98a9e`（代理 TLS 握手 → CONNECT 隧道 → 隧道内 origin TLS
+    双层泵 pump_tls_in_tls + Basic 仅交代理 + 证书校验；TLS-in-TLS 停机
+    30s 挂死根修 kIdle motor + EOF-after-data 按已交付数据判推进）；
+    新套件 DownloadEngineV2HttpsProxy 6/6 + 关联回归 218 过 +
+    falcon_protocols_tests 全量 1047 过（4 skip 设计内）；适配层与
+    metalink 门禁的 proxy 回退项同步摘除（剩余回退仅 cookie 引擎）。
   - 注：Referer 已于 2026-10-11 原生化收编（V2 引擎发该头，适配层与
     metalink 门禁同步摘除）。
 - [ ] 日志库可选增强：FMT 风格调用点迁移到 spdlog 原生 fmt 语法、
