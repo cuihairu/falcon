@@ -46,6 +46,9 @@ set(SOURCES
     src/widgets/task_table_widget.cpp
     src/navigation/sidebar.cpp
     src/pages/download_page.cpp
+    src/pages/download_page_table.cpp
+    src/pages/download_page_grid.cpp
+    src/pages/download_page_formatting.cpp
     src/pages/cloud_page.cpp
     src/pages/discovery_page.cpp
     src/pages/trash_page.cpp
