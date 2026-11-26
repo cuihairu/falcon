@@ -37,8 +37,8 @@ features:
 
 <ShowcaseCarousel />
 
-> 更多界面截图（52 张：13 视图 × 亮暗 × 两种窗口宽度）见仓库
-> [docs/design/ui-sandbox/](https://github.com/cuihairu/falcon/tree/main/docs/design/ui-sandbox)。
+> 更多界面截图（132 张：22 屏 × 三主题色 × 亮暗）见仓库
+> [docs/src/public/design/ui-next/screens/](https://github.com/cuihairu/falcon/tree/main/docs/src/public/design/ui-next/screens)。
 
 ## 快速预览
 

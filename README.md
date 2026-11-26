@@ -19,8 +19,9 @@
 </div>
 
 Screenshots and design prototypes are showcased on the
-[docs site](https://cuihairu.github.io/falcon/); the full gallery (52 shots)
-lives in [docs/design/ui-sandbox/](docs/design/ui-sandbox/README.md).
+[docs site](https://cuihairu.github.io/falcon/); the full gallery (132 shots:
+22 screens × three accent themes × light/dark) lives in
+[docs/src/public/design/ui-next/screens/](docs/src/public/design/ui-next/screens/).
 
 ## Features
 
@@ -311,21 +312,20 @@ Stage 2 is complete (stdio wrapper `falcon-mcp`, SSE progress subscription via
 
 ## User Interface
 
-The redesigned desktop UI ships the "warm console" theme with light/dark modes
-(Fluent design, table & grid task views). The screenshots below are rendered
-from the real Qt widget tree (offscreen ui-sandbox, styles identical to
-production):
+The current desktop design is the ui-next interactive prototype: warm orange
+is the default accent, with cold blue and graphite green switchable, plus
+light / dark / system modes and table & card task views. The screenshots below
+are exported from that prototype:
 
 <p align="center">
-  <img src="docs/design/ui-sandbox/download_table_dark_1200.png" alt="Downloads · table view (dark)" width="49%"/>
-  <img src="docs/design/ui-sandbox/download_table_light_1200.png" alt="Downloads · table view (light)" width="49%"/>
+  <img src="docs/src/public/design/ui-next/screens/warm-dark/023-download-table.png" alt="Downloads · table view (warm dark)" width="49%"/>
+  <img src="docs/src/public/design/ui-next/screens/warm-light/001-download-table.png" alt="Downloads · table view (warm light)" width="49%"/>
 </p>
 
-The full gallery (13 views × light/dark × 1200/960, 52 shots) lives in
-[`docs/design/ui-sandbox/`](docs/design/ui-sandbox/README.md) and on the
-[docs site](https://cuihairu.github.io/falcon/); the design-variant history
-(warm console vs cold utility) is on the
-[design-prototypes page](https://cuihairu.github.io/falcon/developer/design-prototypes).
+The full gallery (22 screens × three themes × light/dark, 132 shots) lives in
+[`docs/src/public/design/ui-next/screens/`](docs/src/public/design/ui-next/screens/) and on the
+[docs site](https://cuihairu.github.io/falcon/); the design brief and decisions
+are in [ui-next README](docs/design/ui-next/README.zh.md).
 
 ## Architecture
 

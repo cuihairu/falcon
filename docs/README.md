@@ -35,6 +35,18 @@ pnpm docs:build
 
 The build output is written to `docs/src/.vitepress/dist/`.
 
+## Current design
+
+The only maintained desktop design is `design/ui-next/`: a static interactive
+prototype with 22 screens. Exported screenshots live in
+`src/public/design/ui-next/screens/` — 3 accent themes × light/dark × 22
+screens = 132 PNGs, and all design images in the docs reference this folder.
+
+![Falcon downloading · table view (warm, default)](src/public/design/ui-next/screens/warm-light/001-download-table.png)
+
+The design brief and decisions (account & sharing, air transfer, LocalSend /
+AirDrop / DHT, Windows tray) are in `design/ui-next/README.zh.md`.
+
 ## Documentation Structure
 
 ```
@@ -42,7 +54,11 @@ docs/
 ├── package.json              # pnpm / Node config
 ├── README.md / README.zh.md    # Docs-site notes (bilingual index)
 ├── ARCHIVE.md                # Index of historical docs at the root
+├── design/                   # Current design
+│   └── ui-next/              # 22-screen interactive prototype + brief
 ├── src/                      # VitePress source files
+│   ├── public/               # Static assets
+│   │   └── design/ui-next/screens/  # 132 exported design images
 │   ├── index.md              # Home page
 │   ├── .vitepress/           # VitePress configuration
 │   │   └── config.mts        # Main config

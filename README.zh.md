@@ -17,7 +17,7 @@
 </div>
 
 界面截图与设计原型统一在[文档站](https://cuihairu.github.io/falcon/zh/)首页展示；
-完整图库（52 张）见 [docs/design/ui-sandbox/](docs/design/ui-sandbox/README.md)。
+完整图库（132 张：22 屏 × 三主题色 × 亮暗）见 [docs/src/public/design/ui-next/screens/](docs/src/public/design/ui-next/screens/)。
 
 ## 特性
 
@@ -281,18 +281,18 @@ daemon 在 `POST /mcp` 暴露 MCP（Model Context Protocol）端点（Streamable
 
 ## 界面
 
-桌面端界面已完成「warm console」重设计，亮/暗双主题（Fluent 风格、表格/网格
-双任务视图）。以下截图由真实 Qt 组件树离屏渲染（ui-sandbox，样式与生产一致）：
+桌面端当前设计是 ui-next 交互原型：暖橙为默认主题色，冷蓝 / 石墨绿可切换，
+支持亮色 / 深色 / 跟随系统；表格 / 卡片双任务视图。以下为原型导出的设计图：
 
 <p align="center">
-  <img src="docs/design/ui-sandbox/download_table_dark_1200.png" alt="下载视图 · 表格（暗色）" width="49%"/>
-  <img src="docs/design/ui-sandbox/download_table_light_1200.png" alt="下载视图 · 表格（亮色）" width="49%"/>
+  <img src="docs/src/public/design/ui-next/screens/warm-dark/023-download-table.png" alt="下载视图 · 表格（暖橙暗色）" width="49%"/>
+  <img src="docs/src/public/design/ui-next/screens/warm-light/001-download-table.png" alt="下载视图 · 表格（暖橙亮色）" width="49%"/>
 </p>
 
-完整图库（13 视图 × 亮/暗 × 1200/960，共 52 张）见
-[`docs/design/ui-sandbox/`](docs/design/ui-sandbox/README.zh.md) 与
-[文档站](https://cuihairu.github.io/falcon/zh/)；设计变体沿革
-（warm console vs cold utility）见[设计原型页](https://cuihairu.github.io/falcon/zh/developer/design-prototypes)。
+完整图库（22 屏 × 三主题色 × 亮暗，共 132 张）见
+[`docs/src/public/design/ui-next/screens/`](docs/src/public/design/ui-next/screens/) 与
+[文档站](https://cuihairu.github.io/falcon/zh/)；设计说明与讨论结论见
+[ui-next README](docs/design/ui-next/README.zh.md)。
 
 ## 架构设计
 

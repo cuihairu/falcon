@@ -2,56 +2,53 @@
 
 [English](/developer/design-prototypes) | **简体中文**
 
-桌面端主视图的两版设计候选——先出原型过目，再动生产代码。两图均为
-ui_sandbox 离屏渲染（真实 Qt 组件树 + demo 任务数据：2 下载中 / 1 暂停 /
-1 完成 / 1 失败 / 2 做种），「下载中·表格」视图（应用落地第一屏），顶栏 /
-侧栏 / hero 摘要卡 / 七列任务表 / 状态栏全要素，暗色主题 1200×800。
+当前桌面端设计是 `docs/design/ui-next/`：一个纯静态、无依赖的可交互原型。
+下面两图从该原型导出，均为默认进入的「下载中 · 列表视图」，分别使用暖橙与
+冷蓝主题；布局、组件、交互完全一致，仅 accent token 不同。
 
-![变体 A · warm console（现行生产主题）](/prototypes/warm-console-dark.png)
-![变体 B · cold utility（变体候选）](/prototypes/cold-utility-dark.png)
+![暖橙主题（默认）](/design/ui-next/screens/warm-dark/023-download-table.png)
+![冷蓝主题（可切换）](/design/ui-next/screens/cold-dark/067-download-table.png)
 
-<div class="prototype-caption">左：变体 A（warm console，现行生产主题）｜右：变体 B（cold utility，变体候选）</div>
+<div class="prototype-caption">左：暖橙（默认）｜右：冷蓝（可切换主题）</div>
 
-## 两版对比
+## 主题 token
 
-| | 变体 A · warm console | 变体 B · cold utility |
+| | 暖橙（默认） | 冷蓝 |
 |---|---|---|
-| 方向 | 现行生产主题现状：暖黑中性底 + falcon 鲑橙单强调，与本文档站同源 | 冷峻工具感变体（对标 Motrix）：更深的中性底、高对比文字、更克制的蓝色 accent |
-| window | `#1b1714` | `#131519` |
-| card | `#262019` | `#1b1e24` |
-| text | `#f2ede8` | `#f5f7fa` |
+| 方向 | 暖色中性底 + 鲑橙强调，延续现行品牌 | 冷峻工具感底 + 克制蓝色强调 |
+| window | `#16120f` | `#131519` |
+| card | `#221c16` | `#1b1e24` |
+| text | `#f7f2ec` | `#f5f7fa` |
 | accent | `#ffa07a`（accent 上文字 `#27140a`） | `#5b9df5`（accent 上文字 `#0d1a2b`） |
 
-对比度（WCAG AA，Python 实算）：
+三主题 × 亮暗两模式均按 WCAG AA 校验过对比度。顶栏 falcon logo 的鲑橙
+`#ffa07a` 是刻意保留的品牌锚点，不随主题变化。
 
-- 变体 A：text 于 window 15.3:1，accent 于 window 9.0:1，accent 上文字 9.1:1。
-- 变体 B：text 于 window 17.0:1（「高对比文字」目标达成），accent 于
-  window 6.6:1，accent 上文字 6.3:1，secondary 6.9:1。
+## 原型覆盖范围
 
-## 已知边界
+原型共 22 屏：现有下载 / 资源发现 / 云盘 / 回收站 / 偏好设置，以及规划中的
+跨设备、账号与分享、NAS 与 Windows 托盘。关键结论：
 
-- 顶栏 falcon logo 的鲑橙 `#ffa07a` 烧在品牌 SVG 资产里、不走 token 系统——
-  冷版里 logo 保留品牌色（152 px），属有意保留的品牌锚点，非替换遗漏。
-- 图标着色经 `icon_utils` 的 `tokens_for()` 取生产值；Text 角色图标暖白 vs
-  冷白在 16px 下不可辨，Accent 角色图标仅云盘连接钮一处（主视图不出现）——
-  对比不受影响。
-- 变体 B 的 accent 色相选了克制的蓝（Motrix 方向）；若想「冷中性底 +
-  falcon 橙」组合，改 `kColdHexMap` 的 accent 三行即可重出图。
+- **跨设备 ↔ 账号与分享**：设备属「物」，账号属「人」，分享组连接两者。
+- **隔空传送**与跨设备共用同一套 syncbond 6 位匹配码；扫码只是同一串码的
+  更快输入方式。
+- **LocalSend** 可作为局域网发现通道兼容；AirDrop 只走系统分享入口（AWDL
+  为私有协议）；DHT 是下载结果的 peer 发现层，不是资源站。
+- **Windows 托盘**为常驻图标 + 右键菜单 + 悬浮速度窗；macOS 是另一套菜单栏
+  实现。
 
-## 原型资产与再生成
+完整设计说明见仓库中的 `docs/design/ui-next/README.zh.md`。
 
-源文件入库于 `docs/design/prototypes/`（两图 + README，含变体 B 的实现
-边界与 token 映射全集）。重新生成：
+## 设计图导出
 
-```bash
-cmake --build build-desktop --target falcon-ui-sandbox
-build-desktop/bin/falcon-ui-sandbox --prototype docs/design/prototypes
+设计图位于 `src/public/design/ui-next/screens/<主题>-<模式>/`。导出模式由 URL
+参数控制，例如：
+
+```text
+index.html?clean=1&theme=warm&mode=dark&screen=download-table
 ```
 
-（需要 `FALCON_BUILD_UI_SANDBOX=ON` 的 build-desktop 树；离屏渲染，
-无需显示环境。）
-
-另见 [桌面端重设计](/zh/developer/desktop-redesign) 的整体重设计 brief。
+`clean=1` 会隐藏评审工具条并关闭入场动画，保证截图是稳定帧。
 
 <style scoped>
 img {

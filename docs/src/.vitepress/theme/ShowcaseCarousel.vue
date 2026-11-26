@@ -6,66 +6,57 @@
  * 宽度自适应、亮暗双主题清晰（配色全部走主题 token）。
  *
  * 实现要点：
- *  - 图片经 Vite 静态导入产出带 base 的地址（部署在 /falcon/ 子路径下
- *    也能正确解析），不依赖 markdown 层的相对路径重写。
+ *  - 图片来自 ui-next 原型导出的设计图，放在 src/public/design/ui-next/screens/；
+ *    用 import.meta.env.BASE_URL 生成带 base 的地址，部署在 /falcon/ 子路径下也能解析。
  *  - SSG 安全：定时器/事件监听全部在 onMounted 挂载、onUnmounted 拆除，
  *    setup 期间不触碰 window/document。
  *  - prefers-reduced-motion 下禁用自动播放（与全站动效纪律一致）。
  */
 import { onMounted, onUnmounted, ref, computed } from "vue";
-import warmConsole from "../../screenshots/warm-console-dark.png";
-import coldUtility from "../../screenshots/cold-utility-dark.png";
-import downloadTable from "../../screenshots/download_table_dark_1200.png";
-import completedGrid from "../../screenshots/download_completed_grid_dark_1200.png";
-import addDialog from "../../screenshots/add_dialog_dark_1200.png";
-import cloudBrowser from "../../screenshots/cloud_dark_1200.png";
-import settingsPage from "../../screenshots/settings_dark_1200.png";
 
-// 图片经 Vite 静态导入（相对路径），构建期产出带 base 的确定地址；
-// 不要改成 "/screenshots/..." 公共路径——那要求文件放进 src/public/，
-// markdown 层引用与组件引用会走两套解析。
+const shot = (path) => `${import.meta.env.BASE_URL}design/ui-next/screens/${path}`;
 const slides = [
   {
-    src: warmConsole,
-    tag: "Design Prototype",
-    caption: "Main view prototype - warm console (current theme direction, warm-dark base + falcon orange accent)",
-    alt: "warm console main view design prototype (dark)",
+    src: shot("warm-dark/023-download-table.png"),
+    tag: "Design Theme",
+    caption: "Warm orange (default) - downloading table view, dark mode",
+    alt: "Falcon downloading table in warm orange theme",
   },
   {
-    src: coldUtility,
-    tag: "Design Prototype",
-    caption: "Main view prototype - cold utility (alternative variant, cool neutral base + restrained blue accent)",
-    alt: "cold utility main view design prototype (dark)",
+    src: shot("cold-dark/067-download-table.png"),
+    tag: "Design Theme",
+    caption: "Cold blue (switchable) - same screen and layout, different accent",
+    alt: "Falcon downloading table in cold blue theme",
   },
   {
-    src: downloadTable,
-    tag: "Live Screenshot",
-    caption: "Download management - task table view (dark theme)",
-    alt: "Desktop downloads page task table view screenshot",
+    src: shot("warm-light/001-download-table.png"),
+    tag: "UI Design",
+    caption: "Downloading - task table view (light theme)",
+    alt: "Falcon downloading page task table view",
   },
   {
-    src: completedGrid,
-    tag: "Live Screenshot",
-    caption: "Completed list - grid view (dark theme)",
-    alt: "Desktop completed tasks grid view screenshot",
+    src: shot("warm-dark/025-completed.png"),
+    tag: "UI Design",
+    caption: "Completed - finished tasks and seeding state",
+    alt: "Falcon completed tasks view",
   },
   {
-    src: addDialog,
-    tag: "Live Screenshot",
-    caption: "Add download dialog (Fluent style)",
-    alt: "Desktop add download dialog screenshot",
+    src: shot("warm-dark/039-show-code.png"),
+    tag: "UI Design",
+    caption: "Air transfer - QR code and one-time matching code",
+    alt: "Falcon air transfer matching code",
   },
   {
-    src: cloudBrowser,
-    tag: "Live Screenshot",
-    caption: "Cloud storage browsing (S3 / OSS / COS / Kodo / Upyun)",
-    alt: "Desktop cloud storage browser page screenshot",
+    src: shot("warm-dark/027-cloud.png"),
+    tag: "UI Design",
+    caption: "Cloud storage - S3 / COS and NAS connections",
+    alt: "Falcon cloud storage page",
   },
   {
-    src: settingsPage,
-    tag: "Live Screenshot",
-    caption: "Settings page (download options / appearance / connection)",
-    alt: "Desktop settings page screenshot",
+    src: shot("warm-dark/036-settings.png"),
+    tag: "UI Design",
+    caption: "Preferences - appearance, transfer, and download settings",
+    alt: "Falcon settings page",
   },
 ];
 
@@ -147,7 +138,7 @@ onUnmounted(() => {
                不在视口附近，浏览器不会预取，自动播放时会白一拍 -->
           <img :src="s.src" :alt="s.alt" draggable="false" />
           <figcaption>
-            <span class="tag" :class="s.tag === 'Design Prototype' ? 'proto' : 'shot'">{{ s.tag }}</span>
+            <span class="tag" :class="s.tag === 'Design Theme' ? 'proto' : 'shot'">{{ s.tag }}</span>
             <span class="caption-text">{{ s.caption }}</span>
           </figcaption>
         </figure>

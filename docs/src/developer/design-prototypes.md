@@ -2,65 +2,62 @@
 
 [简体中文](/zh/developer/design-prototypes) | **English**
 
-Two candidate designs for the desktop main view — prototypes are reviewed
-first, production code changes second. Both shots are offscreen ui_sandbox
-renders (real Qt widget tree + demo task data: 2 downloading / 1 paused /
-1 completed / 1 failed / 2 seeding), the "Downloading · table" view (the
-first screen the app lands on), with every element — top bar / sidebar /
-hero summary card / seven-column task table / status bar — dark theme
-1200×800.
+The current desktop design is `docs/design/ui-next/`: a static, dependency-free
+interactive prototype. The two screenshots below are exported from that
+prototype in the default **Downloading · table** view — the first screen the
+app lands on — under the warm and cold accent themes. Layout, components, and
+interactions are identical; only the accent tokens change.
 
-![Variant A · warm console (current production theme)](/prototypes/warm-console-dark.png)
-![Variant B · cold utility (variant candidate)](/prototypes/cold-utility-dark.png)
+![Warm orange theme (default)](/design/ui-next/screens/warm-dark/023-download-table.png)
+![Cold blue theme](/design/ui-next/screens/cold-dark/067-download-table.png)
 
-<div class="prototype-caption">Left: variant A (warm console, current production theme)｜Right: variant B (cold utility, candidate)</div>
+<div class="prototype-caption">Left: warm orange (default)｜Right: cold blue (switchable theme)</div>
 
-## Side-by-side comparison
+## Theme tokens
 
-| | Variant A · warm console | Variant B · cold utility |
+| | Warm orange (default) | Cold blue |
 |---|---|---|
-| Direction | Current production theme: warm charcoal-neutral base + a single falcon salmon-orange accent, same family as this docs site | Cool utility variant (benchmarked against Motrix): deeper neutral base, higher-contrast text, a more restrained blue accent |
-| window | `#1b1714` | `#131519` |
-| card | `#262019` | `#1b1e24` |
-| text | `#f2ede8` | `#f5f7fa` |
+| Direction | Warm neutral base, salmon-orange accent; the current brand | Cool utility base, restrained blue accent |
+| window | `#16120f` | `#131519` |
+| card | `#221c16` | `#1b1e24` |
+| text | `#f7f2ec` | `#f5f7fa` |
 | accent | `#ffa07a` (text on accent `#27140a`) | `#5b9df5` (text on accent `#0d1a2b`) |
 
-Contrast (WCAG AA, computed in Python):
+Contrast is verified against WCAG AA for all three themes in both light and
+dark modes. The salmon `#ffa07a` falcon logo in the top bar is a deliberate
+brand anchor: it stays the same in every theme.
 
-- Variant A: text on window 15.3:1, accent on window 9.0:1, text on accent 9.1:1.
-- Variant B: text on window 17.0:1 (the "high-contrast text" goal met), accent
-  on window 6.6:1, text on accent 6.3:1, secondary 6.9:1.
+## What the prototype covers
 
-## Known boundaries
+The prototype has 22 screens: the existing download / discovery / cloud /
+recycle / settings flows, plus the planned cross-device, account & sharing,
+NAS, and Windows tray flows. Key decisions documented there:
 
-- The salmon `#ffa07a` in the top-bar falcon logo is baked into the brand SVG
-  asset and does not go through the token system — in the cold variant the logo
-  keeps its brand color (152 px). That is a deliberate brand anchor, not a
-  missed replacement.
-- Icon tinting takes production values through `icon_utils`' `tokens_for()`;
-  the Text-role icons' warm white vs cool white are indistinguishable at 16px,
-  and Accent-role icons appear in exactly one place (the cloud-drive connect
-  button, not on the main view) — so contrast is unaffected.
-- Variant B's accent hue is a restrained blue (Motrix direction); for a
-  "cool neutral base + falcon orange" combination, change the three accent
-  rows of `kColdHexMap` and re-render.
+- **Cross-device ↔ account & sharing**: devices are "things", accounts are
+  "people"; sharing groups connect the two.
+- **Air transfer** uses the same syncbond 6-digit matching code as
+  cross-device pairing; scanning a QR code is just a faster way to enter the
+  same code.
+- **LocalSend** can be supported as a LAN discovery channel; AirDrop stays a
+  system share entry (AWDL is proprietary); DHT is a peer-discovery layer for
+  download results, not a resource site.
+- **Windows tray**: persistent icon, context menu, and floating speed window;
+  macOS uses a separate menu-bar implementation.
 
-## Prototype assets and regeneration
+See the full Chinese design brief in the repository:
+`docs/design/ui-next/README.zh.md`.
 
-Source files are checked in under `docs/design/prototypes/` (two shots + a
-README covering variant B's implementation boundaries and the full token
-mapping). To regenerate:
+## Exporting screenshots
 
-```bash
-cmake --build build-desktop --target falcon-ui-sandbox
-build-desktop/bin/falcon-ui-sandbox --prototype docs/design/prototypes
+Screenshots live under `src/public/design/ui-next/screens/<theme>-<mode>/`.
+The export mode is driven by URL parameters, for example:
+
+```text
+index.html?clean=1&theme=warm&mode=dark&screen=download-table
 ```
 
-(Requires a build-desktop tree with `FALCON_BUILD_UI_SANDBOX=ON`; offscreen
-rendering, no display server needed.)
-
-See also the [Desktop Redesign](/developer/desktop-redesign) brief for the
-overall redesign scope.
+`clean=1` hides the review toolbar and disables entry animations so the image
+captures a stable frame.
 
 <style scoped>
 img {

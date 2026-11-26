@@ -39,9 +39,9 @@ keys.
 
 <ShowcaseCarousel />
 
-> More UI screenshots (52 in total: 13 views × light/dark × two window
-> widths) are available in the repository at
-> [docs/design/ui-sandbox/](https://github.com/cuihairu/falcon/tree/main/docs/design/ui-sandbox).
+> More UI screenshots (132 in total: 22 screens × three accent themes ×
+> light/dark) are available in the repository at
+> [docs/design/ui-next/screens/](https://github.com/cuihairu/falcon/tree/main/docs/src/public/design/ui-next/screens).
 
 ## Quick Preview
 
