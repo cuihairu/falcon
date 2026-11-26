@@ -1,4 +1,4 @@
-[根目录](../../CLAUDE.md) > packages > **falcon-cli**
+[根目录](../../CLAUDE.md) > libs > **falcon-cli**
 
 ---
 
@@ -225,7 +225,7 @@ https://example.com/file2.tar.gz
 ## 相关文件清单
 
 ```
-packages/falcon-cli/
+libs/falcon-cli/
 ├── CMakeLists.txt
 ├── CLAUDE.md
 ├── src/

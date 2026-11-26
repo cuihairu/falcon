@@ -122,7 +122,7 @@ falcon-cli "https://example.com/playlist.m3u8" -o video.mp4
 
 ## CLI Options Available Today
 
-The CLI arguments in the repository are defined in `packages/falcon-cli/src/main.cpp`; the table below lists the commonly used options that are already implemented in the code.
+The CLI arguments in the repository are defined in `libs/falcon-cli/src/main.cpp`; the table below lists the commonly used options that are already implemented in the code.
 
 | Option | Description | Example |
 |--------|-------------|---------|

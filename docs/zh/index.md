@@ -98,7 +98,7 @@ int main() {
 
 ```
 falcon/
-├── packages/
+├── libs/
 │   ├── libfalcon-core/      # 核心下载引擎、任务模型、事件系统
 │   ├── libfalcon-protocols/ # 标准下载协议
 │   ├── libfalcon-storage/   # 对象存储与资源浏览

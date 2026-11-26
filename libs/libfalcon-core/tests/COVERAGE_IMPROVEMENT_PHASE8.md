@@ -268,7 +268,7 @@ make falcon_core_tests
 ### 增强的测试文件列表
 
 ```
-packages/libfalcon/tests/unit/
+libs/libfalcon/tests/unit/
 ├── ftp_handler_test.cpp              (增强, +405行, 75+ 测试)
 └── resource_browser_utils_test.cpp   (增强, +420行, 60+ 测试)
 ```

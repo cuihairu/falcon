@@ -165,10 +165,10 @@ set(FALCON_PACKAGE_NEEDS_NATPMP OFF CACHE INTERNAL "consumer needs libnatpmp" FO
 set(FALCON_PACKAGE_NEEDS_LIBSSH2 OFF CACHE INTERNAL "consumer needs libssh2" FORCE)
 set(FALCON_PACKAGE_NEEDS_LIBTORRENT OFF CACHE INTERNAL "consumer needs libtorrent" FORCE)
 set(FALCON_PACKAGE_NEEDS_SQLITE3 OFF CACHE INTERNAL "consumer needs sqlite3" FORCE)
-add_subdirectory(packages/libfalcon-core)
-add_subdirectory(packages/libfalcon-protocols)
-add_subdirectory(packages/libfalcon-storage)
-add_subdirectory(packages/libfalcon-drives)
+add_subdirectory(libs/libfalcon-core)
+add_subdirectory(libs/libfalcon-protocols)
+add_subdirectory(libs/libfalcon-storage)
+add_subdirectory(libs/libfalcon-drives)
 
 # 兼容性聚合 target
 # 保留给历史用法，内部应用和测试应优先按需链接各子库，
@@ -185,17 +185,17 @@ target_link_libraries(falcon
 
 # CLI 工具（可选）
 if(FALCON_BUILD_CLI)
-    add_subdirectory(packages/falcon-cli)
+    add_subdirectory(libs/falcon-cli)
 endif()
 
 # Daemon 服务（可选）
 if(FALCON_BUILD_DAEMON)
-    add_subdirectory(packages/falcon-daemon)
+    add_subdirectory(libs/falcon-daemon)
 endif()
 
 # Swarm 目录服务器（可选；依赖 daemon 包的 falcon_ws_protocol/falcon_daemon_core）
 if(FALCON_BUILD_DAEMON AND FALCON_BUILD_SWARMD)
-    add_subdirectory(packages/falcon-swarmd)
+    add_subdirectory(libs/falcon-swarmd)
 endif()
 
 # daemon P2SP 公告网关接线（falcon-daemon add_subdirectory 先于 swarmd，

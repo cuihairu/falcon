@@ -26,7 +26,7 @@ foreach(_pair
 endforeach()
 
 vcpkg_cmake_configure(
-    SOURCE_PATH "${SOURCE_PATH}/packages/libfalcon-storage"
+    SOURCE_PATH "${SOURCE_PATH}/libs/libfalcon-storage"
     OPTIONS
         ${FALCON_FEATURE_OPTIONS}
 )

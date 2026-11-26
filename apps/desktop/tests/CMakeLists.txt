@@ -244,7 +244,7 @@ target_include_directories(falcon_desktop_storage_tests
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/..
         ${CMAKE_CURRENT_SOURCE_DIR}/../src
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../../packages/libfalcon-storage/tests/unit
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../../libs/libfalcon-storage/tests/unit
 )
 
 target_compile_features(falcon_desktop_storage_tests PRIVATE cxx_std_17)

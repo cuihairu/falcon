@@ -101,7 +101,7 @@ File → Settings → Build, Execution, Deployment → CMake
 
 ```
 falcon/
-├── packages/
+├── libs/
 │   ├── libfalcon-core/        # 核心下载引擎
 │   ├── libfalcon-protocols/   # 标准下载协议
 │   ├── libfalcon-storage/     # 对象存储与资源浏览
@@ -257,7 +257,7 @@ cmake --build build-cov
 ctest --test-dir build-cov --output-on-failure
 
 # 用 gcovr 生成报告（需单独安装）
-gcovr -r . --filter 'packages/' build-cov
+gcovr -r . --filter 'libs/' build-cov
 ```
 
 ### 提交代码前检查

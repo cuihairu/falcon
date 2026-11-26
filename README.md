@@ -275,7 +275,7 @@ Run `falcon-cli --help` for the full parameter list.
 ## Cloud Storage Support
 
 Library-level browsing is implemented for Amazon S3, Alibaba Cloud OSS, Tencent COS,
-Qiniu Kodo, and Upyun (`packages/libfalcon-storage`): listing, tree views, object info,
+Qiniu Kodo, and Upyun (`libs/libfalcon-storage`): listing, tree views, object info,
 mkdir / rename / recursive delete, quota queries, and custom-endpoint (MinIO /
 RustFS / private-gateway) support with AWS Signature V4 request signing for
 S3-compatible services that require authentication. The desktop application ships a

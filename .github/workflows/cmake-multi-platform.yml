@@ -222,7 +222,7 @@ jobs:
         working-directory: ${{ github.workspace }}/build-coverage
         run: ctest --build-config Debug --output-on-failure --timeout 120
 
-      # 口径与本地铁账一致（gcovr 8.6 + merge flag + 只扫 packages/）：
+      # 口径与本地铁账一致（gcovr 8.6 + merge flag + 只扫 libs/）：
       # 缺 --merge-mode-functions 时 gcc 15 行归属差异会使合并直接抛异常，
       # 旧配置在 continue-on-error 掩护下产出残缺 coverage.xml（Codecov
       # 曾显示 89% 的虚假口径）。CLI/daemon 打开使口径覆盖全部包
@@ -232,7 +232,7 @@ jobs:
         working-directory: ${{ github.workspace }}/build-coverage
         run: |
           gcovr -r ${{ github.workspace }} \
-            --filter '../packages/' \
+            --filter '../libs/' \
             -e '.*/tests/.*' \
             --merge-mode-functions=merge-use-line-min \
             --gcov-ignore-parse-errors=negative_hits.warn_once_per_file \

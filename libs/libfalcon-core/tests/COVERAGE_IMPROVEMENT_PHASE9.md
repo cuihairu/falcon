@@ -280,7 +280,7 @@ make falcon_core_tests
 ### 增强的测试文件列表
 
 ```
-packages/libfalcon/tests/unit/
+libs/libfalcon/tests/unit/
 ├── resource_cloud_browsers_test.cpp   (增强, +528行, 90+ 测试)
 └── task_manager_persistence_test.cpp   (增强, +799行, 35+ 测试)
 ```

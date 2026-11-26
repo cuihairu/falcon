@@ -348,7 +348,7 @@ make falcon_core_tests
 ### 修改的测试文件列表
 
 ```
-packages/libfalcon/tests/unit/
+libs/libfalcon/tests/unit/
 ├── download_engine_test.cpp   (修复编译错误)
 └── thunder_plugin_test.cpp   (完全重写, +350行, 40+ 测试)
 ```

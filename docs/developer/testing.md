@@ -5,11 +5,11 @@ This document explains how tests are organized in the current repository and whi
 ## Test directories
 
 ```text
-packages/libfalcon-core/tests/
-packages/libfalcon-protocols/tests/
-packages/libfalcon-storage/tests/
-packages/libfalcon-drives/tests/
-packages/falcon-daemon/tests/
+libs/libfalcon-core/tests/
+libs/libfalcon-protocols/tests/
+libs/libfalcon-storage/tests/
+libs/libfalcon-drives/tests/
+libs/falcon-daemon/tests/
 ```
 
 These libraries currently contain:

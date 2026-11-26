@@ -309,7 +309,7 @@ make falcon_core_tests
 ### 增强的测试文件列表
 
 ```
-packages/libfalcon/tests/unit/
+libs/libfalcon/tests/unit/
 ├── socket_pool_test.cpp       (增强, +580行, 50+ 测试)
 ├── event_poll_test.cpp        (增强, +570行, 35+ 测试)
 └── request_group_test.cpp     (增强, +570行, 60+ 测试)

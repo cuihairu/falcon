@@ -122,7 +122,7 @@ falcon-cli "https://example.com/playlist.m3u8" -o video.mp4
 
 ## 当前可直接使用的 CLI 选项
 
-仓库中的 CLI 参数以 `packages/falcon-cli/src/main.cpp` 为准，下面列的是已经在代码里实现的常用项。
+仓库中的 CLI 参数以 `libs/falcon-cli/src/main.cpp` 为准，下面列的是已经在代码里实现的常用项。
 
 | 选项 | 说明 | 示例 |
 |------|------|------|

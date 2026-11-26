@@ -4,7 +4,7 @@
 
 公开 C++ API 以 `DownloadEngine` 和 `add_task()` 为中心（见[核心 API](/zh/api/core)）。早期指南还直接暴露了一些底层构件；它们仍在源码树中，这里供需要自建传输管线或协议处理器的调用方参考。普通使用者无需接触。
 
-> 头文件位于 `packages/libfalcon-protocols/include/falcon/`。除非在写协议处理器或集成测试，否则优先使用引擎 API。
+> 头文件位于 `libs/libfalcon-protocols/include/falcon/`。除非在写协议处理器或集成测试，否则优先使用引擎 API。
 
 ## 文件哈希
 

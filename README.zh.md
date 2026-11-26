@@ -250,7 +250,7 @@ falcon-cli -d /tmp/downloads -o custom_name.zip https://example.com/file.zip
 
 ## 云存储支持
 
-仓库已实现库层级的云存储浏览（`packages/libfalcon-storage`），覆盖亚马逊 S3、阿里云
+仓库已实现库层级的云存储浏览（`libs/libfalcon-storage`），覆盖亚马逊 S3、阿里云
 OSS、腾讯云 COS、七牛云 Kodo、又拍云：列举、树形视图、对象信息、建目录/改名/
 递归删除、配额查询，并支持自定义 endpoint（MinIO / RustFS / 私有化网关），对要求
 鉴权的 S3 兼容服务自动进行 AWS Signature V4 请求签名。桌面应用的云盘页

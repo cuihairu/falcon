@@ -320,7 +320,7 @@ make falcon_core_tests
 ### 增强的测试文件列表
 
 ```
-packages/libfalcon/tests/unit/
+libs/libfalcon/tests/unit/
 ├── command_test.cpp              (增强, +480行, 80+ 测试)
 ├── segment_downloader_test.cpp   (增强, +470行, 40+ 测试)
 └── file_hash_test.cpp            (增强, +580行, 60+ 测试)

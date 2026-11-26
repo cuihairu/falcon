@@ -5,11 +5,11 @@
 ## 测试目录
 
 ```text
-packages/libfalcon-core/tests/
-packages/libfalcon-protocols/tests/
-packages/libfalcon-storage/tests/
-packages/libfalcon-drives/tests/
-packages/falcon-daemon/tests/
+libs/libfalcon-core/tests/
+libs/libfalcon-protocols/tests/
+libs/libfalcon-storage/tests/
+libs/libfalcon-drives/tests/
+libs/falcon-daemon/tests/
 ```
 
 这些库下目前主要包含：

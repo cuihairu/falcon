@@ -249,7 +249,7 @@ make falcon_core_tests
 ### 增强的测试文件列表
 
 ```
-packages/libfalcon/tests/unit/
+libs/libfalcon/tests/unit/
 ├── version_test.cpp   (增强, +270行, 35+ 测试)
 └── url_utils_test.cpp (增强, +230行, 45+ 测试)
 ```

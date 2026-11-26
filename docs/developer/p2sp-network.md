@@ -105,7 +105,7 @@ Four candidates; routes A/B/C in the todo.md memo correspond to three of them. T
 - Determinism: a query gets an answer immediately, with no iterative convergence delay; in a private circle of fewer than 20 nodes, DHT's O(log N) scalability advantage does not exist — a single HTTPS request beats multi-hop UDP.
 - Manageability: authentication, rate limiting, quotas, and revocation all land in one place at the Rendezvous (§9); in a DHT you cannot "kick out a node".
 - Natural offline semantics: after a node goes offline, its announcements survive with a TTL; online notifications arrive instantly via WS push.
-- Same technical stack as daemon: daemon already has a self-implemented HTTP+WS JSON-RPC server (`packages/falcon-daemon/src/rpc/json_rpc_server.*`, including the WS frame protocol, token authentication, and the getsockname port-readback precedent); the Rendezvous directly reuses the same family of stack, **zero new dependencies**.
+- Same technical stack as daemon: daemon already has a self-implemented HTTP+WS JSON-RPC server (`libs/falcon-daemon/src/rpc/json_rpc_server.*`, including the WS frame protocol, token authentication, and the getsockname port-readback precedent); the Rendezvous directly reuses the same family of stack, **zero new dependencies**.
 
 **Disadvantages**:
 - Single point: if the Rendezvous goes down, the sharing plane fails (§12 degradation semantics: downloads are unaffected).
@@ -201,7 +201,7 @@ This model covers the two main roles in a home scenario: the NAS (usually port-m
 R1 resources use **SHA-256 hex** as the primary key. SHA-256 over SHA-1 because:
 
 - Consistent with the repository mainstream: metalink whole-file verification, incremental download, and S3 SigV4 payload hashing all use SHA-256 as primary;
-- `FileHasher::calculate_streaming(path, HashAlgorithm::SHA256)` (EVP chunked 256KB, `packages/libfalcon-protocols/src/file_hash.cpp:65`) is ready-made, streaming GB-scale files without reading everything into memory;
+- `FileHasher::calculate_streaming(path, HashAlgorithm::SHA256)` (EVP chunked 256KB, `libs/libfalcon-protocols/src/file_hash.cpp:65`) is ready-made, streaming GB-scale files without reading everything into memory;
 - SHA-1 is retained only for the BT infohash compatibility surface; no new SHA-1-dependent surface is introduced.
 
 Both the announce primary key and the query primary key are sha256; the filename is only a display and disk-naming suggestion (the same sha256 can have different names on different nodes).
@@ -681,7 +681,7 @@ Parameter integrity is bound by sha256(params) (anti-substitution — the same m
 
 ### 16.4 SwarmAnnouncer (New daemon Component)
 
-New files `packages/falcon-daemon/src/daemon/swarm_announcer.{hpp,cpp}`, **compiled into the falcon-daemon executable target** (it depends on falcon_swarm_client→CURL; falcon_daemon_core does not link CURL and must not take it). Lifecycle follows the existing listener-registration form in main.cpp (the `TaskStorageListener` + `ListenerDetacher` RAII pattern, main.cpp:374-389 precedent).
+New files `libs/falcon-daemon/src/daemon/swarm_announcer.{hpp,cpp}`, **compiled into the falcon-daemon executable target** (it depends on falcon_swarm_client→CURL; falcon_daemon_core does not link CURL and must not take it). Lifecycle follows the existing listener-registration form in main.cpp (the `TaskStorageListener` + `ListenerDetacher` RAII pattern, main.cpp:374-389 precedent).
 
 **Completion hook (D10)**: implements `IEventListener::on_completed(task_id, output_path, total)` → enqueues into the background hash queue; hashing (`FileHasher::calculate_streaming`, SHA-256) and networking all run on the announcer worker thread, **zero added latency on the completion callback path**. Optional `share.hash_delay_s` staggering.
 

@@ -39,7 +39,7 @@ Falcon 当前聚焦于可组合的协议能力：
 
 ```
 falcon/
-├── packages/
+├── libs/
 │   ├── libfalcon-core/      # 核心下载引擎、任务模型、事件系统
 │   ├── libfalcon-protocols/ # 标准下载协议
 │   ├── libfalcon-storage/   # 对象存储与远程资源浏览

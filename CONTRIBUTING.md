@@ -20,12 +20,12 @@ See `README.md` (Prerequisites) for required toolchains and libraries.
 
 Falcon is a CMake monorepo:
 
-- `packages/libfalcon-core` — download engine, task manager, event system
-- `packages/libfalcon-protocols` — HTTP/FTP/BT/Metalink/HLS protocol implementations
-- `packages/libfalcon-storage` — S3/OSS/COS/Kodo/Upyun object storage browsing
-- `packages/libfalcon-drives` — cloud drives, search, encrypted config manager
-- `packages/falcon-cli` — command-line downloader
-- `packages/falcon-daemon` — RPC service with aria2-compatible JSON-RPC API
+- `libs/libfalcon-core` — download engine, task manager, event system
+- `libs/libfalcon-protocols` — HTTP/FTP/BT/Metalink/HLS protocol implementations
+- `libs/libfalcon-storage` — S3/OSS/COS/Kodo/Upyun object storage browsing
+- `libs/libfalcon-drives` — cloud drives, search, encrypted config manager
+- `libs/falcon-cli` — command-line downloader
+- `libs/falcon-daemon` — RPC service with aria2-compatible JSON-RPC API
 - `apps/desktop` — Qt6 desktop application
 
 Dependency direction: `protocols/storage/drives → core`. Reverse dependencies are not allowed.

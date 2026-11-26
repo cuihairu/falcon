@@ -38,7 +38,7 @@
 - **目标**：外部工程可按包粒度 `find_package` 消费（阶段 2 overlay 端口的前置）；继 13433cf（core）/05e44fc（protocols）后，本批补齐 storage（75752e9）与 drives（6ea88ae）——§4.2 四包清单收口
 - **同构四件套**（每包 CMakeLists 头部 + 尾部，monorepo 树内全部跳过零行为变化）：① export 锚 `TARGET falcon_core`（根必然已建/端口树必然没有，不引入第二真值源）→ monorepo 沿用 FalconTargets / 独立 configure 出 `FalconStorageTargets`/`FalconDrivesTargets`；② `FALCON_ENABLE_*` 包头 `NOT DEFINED` 兜底（option 定义权留根目录）；③ 自足块 `find_package(FalconCore CONFIG REQUIRED)` + 目录级 `falcon_core` ALIAS 对齐既有裸链接点（目录级即可——消费方全在本目录子树内，不触 CMP0107 全局 imported ALIAS 限制）；④ `FALCON_FAILURE_INJECTION` 独立形态按根同款条件补定义，**必须先于本包一切 add_library**（库与测试 TU 内联布局分叉即 ODR 红线）
 - **闭包打标沿 target 存在性**（非 FOUND 布尔——构建侧要求 targets 齐备才链接，导出闭包只在链接时才引用它们）：storage 三枚 `FALCON_STORAGE_PACKAGE_NEEDS_{CURL,NLOHMANN_JSON,OPENSSL}`；drives 四枚 + SQLITE3 直接复用 config_manager 链接点的既有 `FALCON_PACKAGE_NEEDS_SQLITE3` CACHE INTERNAL 标记（§4.3 单一事实源收敛，不另起名）；storage 的 curl 查找门与链接点同条件（RESOURCE_BROWSER 是该包唯一 curl 消费方，与根 Dependencies.cmake 的全包并集门不同）
-- **独立 configure 验证（每包一树）**：`cmake -S packages/<pkg>` + `CMAKE_PREFIX_PATH=prefix-core;vcpkg_installed` → 构建 install 干净；drives 闭包投影 `if(ON)×4`（NLOHMANN_JSON+CURL+OPENSSL+SQLITE3）与 monorepo 闭包一致；storage 同构三枚
+- **独立 configure 验证（每包一树）**：`cmake -S libs/<pkg>` + `CMAKE_PREFIX_PATH=prefix-core;vcpkg_installed` → 构建 install 干净；drives 闭包投影 `if(ON)×4`（NLOHMANN_JSON+CURL+OPENSSL+SQLITE3）与 monorepo 闭包一致；storage 同构三枚
 - **验收（双消费路径端到端，§4.3 门禁）**：① 四包独立前缀 + 单一消费工程四 `find_package` → `engine ok version=1.2.3 protocols=11 presets=19`（Version round-trip / FileHasher sha256("") / describe_builtin_protocols=11 / storage_presets=19 + ResourceSearchManager 构造析构）；② 单体路径：全新非插桩树 install → `find_package(Falcon)` 同一消费工程同样绿
 - **消费侧链接序陷阱（安装形态的批次 F 重现，写进消费工程注释）**：只显式链顶层包（protocols/storage/drives），`Falcon::core` 经闭包殿后——若手写 core 在前，GNU ld 归档单次扫描下 core 的 weak 空 stub 先满足 `describe_builtin_protocols` 引用，protocols 归档内强实现成员不再拉入 → 运行时 0 handler。sha256 强符号拉入 + 链接序两措施缺一不可（单用 FileHasher 拉入实测仍 0，单调序也不够）；monorepo 同语义既有形态，非本批回归
 - **门禁**：build-cov 全量重建 + 全量 ctest **2849/2849 过零失败**（864s 串行，12 skip 设计内：Upnp 真实 IGD / 网络依赖集成 / disabled 各归其位）；单体路径消费树须非插桩——build-cov（--coverage Debug）的库链进无插桩消费方即 `__gcov_init` 未定义，/tmp 全新 libs-only 树承担该验收
@@ -46,7 +46,7 @@
 
 ### 2026-10-13 - 安装导出对外可消费收口（todo #12：FalconConfig 依赖闭包三缺口 + BT 插件公共头安装）
 - **目标**（todo.md 第五阶段 #12「完善安装导出」）：安装后的 Falcon 包能被外部工程 `find_package(Falcon)` 一手消费——此前 FalconConfig.cmake.in 只覆盖 spdlog/nlohmann/CURL/OpenSSL 四个依赖，protocols/drives 的 PRIVATE 静态依赖（libtorrent/libssh2/sqlite3/expat/miniupnpc/natpmp）在导出闭包里引用了消费方不存在的 imported target，`Falcon::protocols` 链接即红
-- **机制选型（FALCON_PACKAGE_NEEDS_\* CACHE INTERNAL 标志）**：imported target 目录作用域不可见于根目录，export 闭包引用哪些目标只能在**创建它的子包 CMakeLists** 里判定（protocols 判 libssh2/libtorrent、drives 判 sqlite3、bittorrent 插件判 libtorrent）——各子包在链接/查找点 `set(... ON CACHE INTERNAL ... FORCE)` 打标，根 CMakeLists 在 `add_subdirectory(packages/libfalcon-core)` 前重置五枚标志，install(EXPORT) 后按标志生成 FalconConfig 的 find_dependency 块（configure_package_config_file 把 `@VAR@` 替换为字面 `if(ON)/if(OFF)`，消费方所见即安装时形态）
+- **机制选型（FALCON_PACKAGE_NEEDS_\* CACHE INTERNAL 标志）**：imported target 目录作用域不可见于根目录，export 闭包引用哪些目标只能在**创建它的子包 CMakeLists** 里判定（protocols 判 libssh2/libtorrent、drives 判 sqlite3、bittorrent 插件判 libtorrent）——各子包在链接/查找点 `set(... ON CACHE INTERNAL ... FORCE)` 打标，根 CMakeLists 在 `add_subdirectory(libs/libfalcon-core)` 前重置五枚标志，install(EXPORT) 后按标志生成 FalconConfig 的 find_dependency 块（configure_package_config_file 把 `@VAR@` 替换为字面 `if(ON)/if(OFF)`，消费方所见即安装时形态）
 - **三缺口修复**：① libtorrent——bittorrent 插件 CMakeLists 链接点打标 + FalconConfig `find_dependency(LibtorrentRasterbar 2.0)`（pkg-config 兜底形态 PkgConfig::LIBTORRENT 为环境形态依赖，与 CURL 的 libcurl_static 同注记）；② sqlite3——根目录的 `SQLite3_FOUND` 在 drives 子目录不可见且根目录普通 `set` 遮蔽缓存，判定点移到 drives 链接 SQLite 的位置，根目录推导块删除；③ BT 插件公共头——include/ 下两枚 BT 转发 shim 用相对路径指回构建树源码，安装前缀下悬空，DIRECTORY 安装排除 `plugins/bittorrent` + `install(FILES)` 装 4 枚真实头（bittorrent_plugin/dht_node/pex_protocol/bencode）
 - **file(INSTALL) mtime 跳过教训**：最初方案「DIRECTORY 先装 shim、install(FILES) 后覆盖」结构性失效——`file(INSTALL)` 按 mtime 判 up-to-date **不比对内容**，git 检出让全部源文件 mtime 相同，已落盘 shim 携同款 mtime → 覆盖被静默跳过（`-- Up-to-date:` 日志 + 字节数核对才暴露）。唯一确定形态是排除法：shim 不进前缀，无覆盖次序依赖。REGEX 排除目录本身不能带尾斜杠（`/plugins/bittorrent/` 只排除目录下文件，仍创建空目录）
 - **同查找器同目标名原则**：消费方 find_dependency 跑构建时同一个 finder（SQLite3/miniupnpc 等）→ 目标名与导出闭包一致，无需 ALIAS 归一（CMP0107 OLD 在 min 3.15 下对非 GLOBAL imported target 建 ALIAS 直接报错）；vendored libmetalink 是全局非 imported target 根目录可见，expat 推导留根目录；natpmp 无 config 包，FalconConfig 按构建侧同款 find_path/find_library 手工派生
@@ -342,7 +342,7 @@
 
 ### 2026-09-23 - Metalink → libmetalink 替换落地（成熟开源库替换批次之三：vendoring + expat 预检 + 两段式解析）
 - **背景**（用户点名三处自研实现替换之三，动机「自研实现测试 bug 一堆很难稳定，优先用成熟库」）：手写 mini_xml_parser（~1300 行字节级严格 XML 解析器 + 35 用例）被 vendored libmetalink（aria2 同款，MIT）整体替换——格式层 expat 直用（XML_Parse 预检 well-formedness，错误带行列号，保 XmlParseError line()>0 契约）+ 语义层 `metalink_parse_memory`（`metalink_t*` + `metalink_delete` RAII 守卫），接缝 `MetalinkFileParser::parse` 签名与全部存量消费方零变化
-- **vendoring 结构**（third_party/libmetalink/）：src/ 原样 + include/metalink 五头（metalinkver.h 自写静态化 0.1.3）+ 独立 CMakeLists（`enable_language(C)` + CheckSymbolExists 探测 strptime（time.h→string.h 回落）/timegm、缺了编译随包附带的 strptime.c/timegm.c 补齐；target 级 `-w`/接口 `w` 关 vendored 代码告警）；根 CMakeLists 两个 C++ 专属警告标志（-Wnon-virtual-dtor/-Woverloaded-virtual）改 `$<$<COMPILE_LANGUAGE:CXX>:...>` 语言限定；protocols 侧 `$<BUILD_INTERFACE:Metalink::libmetalink>` PRIVATE 链接（不进 install(EXPORT) 依赖闭包）；expat 走 vcpkg（default-features 关，gcovr filter '.*/packages/.*' 使 third_party 不进覆盖率分母）
+- **vendoring 结构**（third_party/libmetalink/）：src/ 原样 + include/metalink 五头（metalinkver.h 自写静态化 0.1.3）+ 独立 CMakeLists（`enable_language(C)` + CheckSymbolExists 探测 strptime（time.h→string.h 回落）/timegm、缺了编译随包附带的 strptime.c/timegm.c 补齐；target 级 `-w`/接口 `w` 关 vendored 代码告警）；根 CMakeLists 两个 C++ 专属警告标志（-Wnon-virtual-dtor/-Woverloaded-virtual）改 `$<$<COMPILE_LANGUAGE:CXX>:...>` 语言限定；protocols 侧 `$<BUILD_INTERFACE:Metalink::libmetalink>` PRIVATE 链接（不进 install(EXPORT) 依赖闭包）；expat 走 vcpkg（default-features 关，gcovr filter '.*/libs/.*' 使 third_party 不进覆盖率分母）
 - **Metalink3 格式考古三条（红面逐层闭环，手写解析器宽松遍历从不暴露的库状态机门禁，已全部写进测试注释固化）**：① v3 的 `<file>` 必须包在 `<files>` 容器内（v4 直挂根下）；② v3 的 `<url>` 必须包在 `<resources>` 容器内；③ **v3 url 元素 type 属性必需**——缺 type 被库静默跳过（resources 为空非报错）。v3 用例三条不齐即落「不含 file 元素」/「无可用 HTTP/FTP 镜像」两类错误
 - **库行为差异面（测试按实际语义钉死）**：库 skip 语义——缺 name 或 check_safe_path 失败（`../` 前缀/裸 `..`/反斜杠/DOS 盘符）的 file 静默跳过非报错，唯一 file 被跳过时落「不含 file 元素」；**check_safe_path 放行嵌入 '/' 的 "sub/dir"**（只查最后一段）→ 由我方 is_safe_filename 二次检查拒绝（「路径穿越」消息，两类拒绝可区分）；**库 qsort 不稳定**——同 priority 组内顺序未定义，测试对同 rank 组集合断言；**strtol 垃圾前导容忍**——"12abc"→priority 12（与手写解析器全串拒绝语义不同）；**v4 的 type 属性库不解析**（mu.type 恒空）——type 过滤靠 scheme 兜底，v4 type="bittorrent" 的 http url 照常采用（与 v3 的 type 过滤形成双版本对照用例）；size 经库 strtoll 垃圾/溢出/负数→0
 - **错误码映射（throw_metalink_error）**：METALINK_ERR_BAD_ALLOC(901)→「metalink 解析内存分配失败」；MISSING_REQUIRED_ATTR(101)→「file 元素缺少 name 属性」；PARSER_ERROR(201)→XmlParseError（理论不可达——expat 预检先拦）；default→runtime_error + metalink_strerror
@@ -371,7 +371,7 @@
   - **GetUPNPUrls 分配的堆串必须 FreeUPNPUrls 配对**——ASan 实证 620 字节/20 处泄漏（4 用例 × ~5 个 controlURL 类堆串）；**带析构的类型禁 by-value 返回**——IgdAssembly 初版 by-value 返回，非强制省略复制场景移动后临时对象析构即误释放堆串，改 void + 引用出参；FreeUPNPUrls 对全零结构安全（各字段逐一判空），可放心对 `UPNPUrls{}` 调用
   - **miniupnpc 以 SOAP body 内 errorCode 判定失败而非 HTTP 状态码**——mock 必须构造 s:Fault envelope（500 状态码 + Fault body），仅回 500 无 body 判不出具体错误码
 - **铁账（build-cov 单树新鲜数据）**：行 miss 416 → 480（**净 +64 = NAT 新代码防御面**：port_mapper.cpp 单对象 miss 60 + hpp 3 + 自然抖动 1——UpnpBackend discover 段 52 行结构性不可测 + NAT-PMP 防御 8 行不可注入，可收 6 行本批收口），分母 17756 → 17987（+231 NAT 新行），行 **97.66% → 97.33%**（新代码增量稀释，同批次先例：A3 新增收口代码 miss 438→455）；分支 miss 15053 → 15189（+136），分母 35060 → 35316，分支 57.07% → 57.00%。可收矿点（SOAP 段全链 + NAT-PMP 线协议全链 + 门面回退全逻辑）至本批收尽，其余沿「SSDP 组播不经回环 + 真 IGD 外向副作用红线」定性
-- **gcovr 8.6 flag 变化**（memory 旧记录过时）：`--merge-mode-functions` 合法值含 merge-use-line-min（`min` 不存在）；`--ignore-parse-errors` 改名 `--gcov-ignore-parse-errors=negative_hits.warn`；**必须 `--filter '.*/packages/.*'`** 否则 vcpkg_installed 头文件扫入分母虚胖（实测 34864 vs 17987）
+- **gcovr 8.6 flag 变化**（memory 旧记录过时）：`--merge-mode-functions` 合法值含 merge-use-line-min（`min` 不存在）；`--ignore-parse-errors` 改名 `--gcov-ignore-parse-errors=negative_hits.warn`；**必须 `--filter '.*/libs/.*'`** 否则 vcpkg_installed 头文件扫入分母虚胖（实测 34864 vs 17987）
 - **验证**：build-ci + build-asan + build-cov 三树构建零告警；ASan NAT 套件 18 用例零泄漏零告警（含修复后复跑）；build-cov 全量 ctest 2448 清单 99% 过（1 失败为 BlackHoleServerTimesOutViaTaskTimeout 既有并行抖动惯犯串行复跑过 + protocols 全量重跑恢复 gcda）
 - 下一个替换批次：Metalink → libmetalink（调研已完成：vendoring + expat，换接缝 metalink_handler 保留 MiniXmlParser 对拍）
 
@@ -1603,7 +1603,7 @@
   host_permissions 时 fetch 豁免 CORS
 
 ### 2026-09-19 - 覆盖率批次 Z：故障注入框架（编译期零成本）+ 15 处泄漏式注入接线修复 + 全量 2309 绿
-- **故障注入框架**（packages/libfalcon-core/include/falcon/detail/
+- **故障注入框架**（libs/libfalcon-core/include/falcon/detail/
   injection.hpp，新增）：`inject_failure(InjectPoint)` + `ScopedInjection`
   RAII + `set_injection` 位图。生产构建 `FALCON_FAILURE_INJECTION` 未定义
   时为 `inline constexpr` 恒 false——零运行时成本、零分支；测试构建
@@ -2523,7 +2523,7 @@
 
 ### 2026-09-13 - 测试覆盖率专项（行 68.1% → 74.0%）+ S3 浏览器五缺陷修复 + PEX 重复回调
 - 覆盖率从基线 68.1%/77.0%/36.2%（行/函数/分支）提升到 **74.0%/
-  81.0%/39.4%**（gcovr，packages/ 范围排除 tests/），净增 1365 行
+  81.0%/39.4%**（gcovr，libs/ 范围排除 tests/），净增 1365 行
   覆盖；100% 行覆盖对本项目不可达（http_commands 平台分支与真实
   网络交互、cli main 入口、logger.hpp 为 gcc 15 行号漂移测量伪影
   、其余五个 browser 需各自 endpoint 改造），如实评估见 todo.md
@@ -3363,7 +3363,7 @@
 - 建立独立 CMake target 和 alias（`Falcon::core/protocols/storage/drives`）
 - Core 头文件收口：不再暴露 S3/OSS/COS/CloudStorage/ResourceBrowser 等概念
 - 测试文件按库归属迁移到对应包
-- 删除旧 `packages/libfalcon/` 单体目录
+- 删除旧 `libs/libfalcon/` 单体目录
 - 跨包 option 提升到顶层 CMakeLists.txt
 
 ### 2026-04-15 - 公共头文件路径重组（Phase 3）
@@ -3393,7 +3393,7 @@
 
 ### 2025-12-21 - 重构为 Monorepo 架构
 - 调整项目结构为 Monorepo 模式
-- 建立 packages/ 和 apps/ 目录分离
+- 建立 libs/ 和 apps/ 目录分离
 - 更新模块索引与构建系统说明
 - 完善跨平台构建配置
 
@@ -3470,7 +3470,7 @@
 └──────────────────────────┬──────────────────────────────┘
                            │
 ┌──────────────────────────▼──────────────────────────────┐
-│          工具层 (packages/)                              │
+│          工具层 (libs/)                              │
 │  ┌──────────────┐  ┌──────────────┐                     │
 │  │ falcon-cli   │  │falcon-daemon │                     │
 │  │  命令行工具   │  │  后台守护进程 │                     │
@@ -3515,7 +3515,7 @@ falcon_drives     →  falcon_core
 
 ```mermaid
 graph TD
-    A["(根) falcon"] --> B["packages/"];
+    A["(根) falcon"] --> B["libs/"];
     B --> C["libfalcon-core"];
     B --> D["libfalcon-protocols"];
     B --> E["libfalcon-storage"];
@@ -3537,13 +3537,13 @@ graph TD
     E -->|depends on| C
     F -->|depends on| C
 
-    click C "./packages/libfalcon-core/CLAUDE.md" "查看核心库文档"
-    click D "./packages/libfalcon-protocols/CLAUDE.md" "查看协议库文档"
-    click E "./packages/libfalcon-storage/CLAUDE.md" "查看存储库文档"
-    click F "./packages/libfalcon-drives/CLAUDE.md" "查看网盘库文档"
-    click G "./packages/falcon-cli/CLAUDE.md" "查看 CLI 文档"
-    click H "./packages/falcon-daemon/CLAUDE.md" "查看 Daemon 文档"
-    click P "./packages/falcon-swarmd/CLAUDE.md" "查看 swarmd 文档"
+    click C "./libs/libfalcon-core/CLAUDE.md" "查看核心库文档"
+    click D "./libs/libfalcon-protocols/CLAUDE.md" "查看协议库文档"
+    click E "./libs/libfalcon-storage/CLAUDE.md" "查看存储库文档"
+    click F "./libs/libfalcon-drives/CLAUDE.md" "查看网盘库文档"
+    click G "./libs/falcon-cli/CLAUDE.md" "查看 CLI 文档"
+    click H "./libs/falcon-daemon/CLAUDE.md" "查看 Daemon 文档"
+    click P "./libs/falcon-swarmd/CLAUDE.md" "查看 swarmd 文档"
 ```
 
 ---
@@ -3552,13 +3552,13 @@ graph TD
 
 | 模块路径 | 职责 | CMake Target | 状态 |
 |---------|------|-------------|------|
-| `packages/libfalcon-core` | 下载引擎/任务管理/事件系统 | `Falcon::core` | 开发中 |
-| `packages/libfalcon-protocols` | HTTP/FTP/BT/ED2K/HLS 等协议 | `Falcon::protocols` | 开发中 |
-| `packages/libfalcon-storage` | S3/OSS/COS/Kodo/Upyun 对象存储 | `Falcon::storage` | 开发中 |
-| `packages/libfalcon-drives` | 网盘/云存储/搜索/配置管理 | `Falcon::drives` | 开发中 |
-| `packages/falcon-cli` | 命令行下载工具 | `falcon-cli` | 开发中 |
-| `packages/falcon-daemon` | 后台守护进程 + RPC 服务 | `falcon-daemon` | 开发中 |
-| `packages/falcon-swarmd` | P2SP Rendezvous Service（发现/会合服务）+ 节点侧 SwarmClient | `falcon-swarmd` | 开发中（阶段 0） |
+| `libs/libfalcon-core` | 下载引擎/任务管理/事件系统 | `Falcon::core` | 开发中 |
+| `libs/libfalcon-protocols` | HTTP/FTP/BT/ED2K/HLS 等协议 | `Falcon::protocols` | 开发中 |
+| `libs/libfalcon-storage` | S3/OSS/COS/Kodo/Upyun 对象存储 | `Falcon::storage` | 开发中 |
+| `libs/libfalcon-drives` | 网盘/云存储/搜索/配置管理 | `Falcon::drives` | 开发中 |
+| `libs/falcon-cli` | 命令行下载工具 | `falcon-cli` | 开发中 |
+| `libs/falcon-daemon` | 后台守护进程 + RPC 服务 | `falcon-daemon` | 开发中 |
+| `libs/falcon-swarmd` | P2SP Rendezvous Service（发现/会合服务）+ 节点侧 SwarmClient | `falcon-swarmd` | 开发中（阶段 0） |
 | `apps/desktop` | GUI 桌面应用（Qt6） | `falcon-desktop` | 规划中 |
 | `apps/web` | Web 管理界面（预留） | — | 规划中 |
 
@@ -3658,15 +3658,15 @@ cmake --build build --target falcon-cli
 - CLI/Daemon：≥ 60%（UI 逻辑除外）
 
 ### 测试分类
-1. **单元测试** (`packages/*/tests/unit/`)
+1. **单元测试** (`libs/*/tests/unit/`)
    - 每个类/模块独立测试
    - 使用 mock 隔离外部依赖（如网络、文件系统）
 
-2. **集成测试** (`packages/*/tests/integration/`)
+2. **集成测试** (`libs/*/tests/integration/`)
    - 端到端流程测试（下载小文件、断点续传、多任务等）
    - 需本地测试服务器或公开测试资源
 
-3. **性能测试** (`packages/libfalcon/tests/benchmark/`)
+3. **性能测试** (`libs/libfalcon/tests/benchmark/`)
    - 使用 Google Benchmark
    - 测试下载速度、并发性能、内存占用
 
@@ -3689,10 +3689,10 @@ cmake --build build --target falcon-cli
 
 ### 代码组织
 - **头文件**：
-  - Core 公共 API 放在 `packages/libfalcon-core/include/falcon/`
-  - Protocols 公共 API 放在 `packages/libfalcon-protocols/include/falcon/`
-  - Storage 公共 API 放在 `packages/libfalcon-storage/include/falcon/`
-  - Drives 公共 API 放在 `packages/libfalcon-drives/include/falcon/`
+  - Core 公共 API 放在 `libs/libfalcon-core/include/falcon/`
+  - Protocols 公共 API 放在 `libs/libfalcon-protocols/include/falcon/`
+  - Storage 公共 API 放在 `libs/libfalcon-storage/include/falcon/`
+  - Drives 公共 API 放在 `libs/libfalcon-drives/include/falcon/`
   - 使用 `#pragma once` 或传统的 include guard
 
 - **源文件**：
@@ -3723,7 +3723,7 @@ DownloadTask* start_download(const std::string& url,
 ### 异常处理
 - 使用异常处理错误（非性能关键路径）
 - 自定义异常类继承自 `std::exception`
-- 关键异常定义在 `packages/libfalcon-core/include/falcon/exceptions.hpp`
+- 关键异常定义在 `libs/libfalcon-core/include/falcon/exceptions.hpp`
 
 ### 资源管理
 - 使用 **RAII** 原则
@@ -3769,11 +3769,11 @@ DownloadTask* start_download(const std::string& url,
 
 ### 插件开发指引
 新增协议插件时，请遵循以下步骤：
-1. 在 `packages/libfalcon-protocols/plugins/<protocol_name>/` 创建目录
-2. 实现 `IProtocolHandler` 接口（定义在 `packages/libfalcon-core/include/falcon/protocol_handler.hpp`）
+1. 在 `libs/libfalcon-protocols/plugins/<protocol_name>/` 创建目录
+2. 实现 `IProtocolHandler` 接口（定义在 `libs/libfalcon-core/include/falcon/protocol_handler.hpp`）
 3. 如需访问其他协议处理器（如包装协议委托下载），实现 `IProtocolHandlerExtension` 接口
 4. 在插件目录下创建 `CLAUDE.md` 记录协议特性、依赖库、测试方法
-5. 在 `packages/libfalcon-protocols/CMakeLists.txt` 中添加编译选项（可选编译该插件）
+5. 在 `libs/libfalcon-protocols/CMakeLists.txt` 中添加编译选项（可选编译该插件）
 
 **协议委托机制**：
 - 包装协议（thunder://、flashget://、qqlink://）应实现 `IProtocolHandlerExtension`
@@ -3796,7 +3796,7 @@ falcon/                              # 项目根目录
 ├── .github/
 │   └── workflows/                   # CI/CD 配置
 │
-├── packages/                        # C++ 包（4个独立库 + 2个工具）
+├── libs/                        # C++ 包（4个独立库 + 2个工具）
 │   ├── libfalcon-core/              # 核心下载引擎库
 │   │   ├── CMakeLists.txt           # Target: falcon_core / Falcon::core
 │   │   ├── CLAUDE.md
@@ -3922,7 +3922,7 @@ option(FALCON_USE_STATIC_LIBS "静态链接依赖库" OFF)
 ### 运行时配置
 CLI 程序支持配置文件（用户级 `~/.config/falcon/config.json` 与系统级
 `/etc/falcon/config.json`，命令行显式参数优先）。全部字段见
-`packages/falcon-cli/src/config_loader.cpp`，常用字段示例：
+`libs/falcon-cli/src/config_loader.cpp`，常用字段示例：
 ```json
 {
   "max_connections": 4,

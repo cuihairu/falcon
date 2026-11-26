@@ -180,12 +180,12 @@ done
 
 print_info "开始构建 Falcon 下载器..."
 
-ENABLE_BITTORRENT=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "packages/libfalcon-protocols/plugins/bittorrent/CMakeLists.txt")
-ENABLE_THUNDER=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "packages/libfalcon-protocols/plugins/thunder/thunder_plugin.cpp")
-ENABLE_QQDL=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "packages/libfalcon-protocols/plugins/qqdl/qqdl_plugin.cpp")
-ENABLE_FLASHGET=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "packages/libfalcon-protocols/plugins/flashget/flashget_plugin.cpp")
-ENABLE_ED2K=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "packages/libfalcon-protocols/plugins/ed2k/ed2k_plugin.cpp")
-ENABLE_HLS=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "packages/libfalcon-protocols/plugins/hls/hls_plugin.cpp")
+ENABLE_BITTORRENT=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "libs/libfalcon-protocols/plugins/bittorrent/CMakeLists.txt")
+ENABLE_THUNDER=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "libs/libfalcon-protocols/plugins/thunder/thunder_plugin.cpp")
+ENABLE_QQDL=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "libs/libfalcon-protocols/plugins/qqdl/qqdl_plugin.cpp")
+ENABLE_FLASHGET=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "libs/libfalcon-protocols/plugins/flashget/flashget_plugin.cpp")
+ENABLE_ED2K=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "libs/libfalcon-protocols/plugins/ed2k/ed2k_plugin.cpp")
+ENABLE_HLS=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "libs/libfalcon-protocols/plugins/hls/hls_plugin.cpp")
 
 if [ "$ENABLE_COVERAGE" = "ON" ] && [ -d "$BUILD_DIR" ]; then
     find "$BUILD_DIR" -name '*.gcda' -delete

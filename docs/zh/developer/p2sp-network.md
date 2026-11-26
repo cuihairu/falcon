@@ -106,7 +106,7 @@ Rendezvous 中继内容(TURN 式)会把自托管 Rendezvous 的带宽变成全�
 - 确定性:查询即应答,无迭代收敛延迟;节点数 <20 的私有圈子里,DHT 的 O(log N) 扩展性优势不存在,一个 HTTPS 请求直达优于多跳 UDP。
 - 可管理性:认证、限频、配额、吊销都在 Rendezvous 一处落地(§9);DHT 里做不到"踢掉一个节点"。
 - 离线语义自然:节点下线后公告可带 TTL 存活;上线通知经 WS 推送即时到达。
-- 与 daemon 技术栈同源:daemon 已有自实现 HTTP+WS JSON-RPC 服务器(`packages/falcon-daemon/src/rpc/json_rpc_server.*`,含 WS 帧协议、token 认证、getsockname 端口回读先例),Rendezvous 直接复用同一族栈,**零新依赖**。
+- 与 daemon 技术栈同源:daemon 已有自实现 HTTP+WS JSON-RPC 服务器(`libs/falcon-daemon/src/rpc/json_rpc_server.*`,含 WS 帧协议、token 认证、getsockname 端口回读先例),Rendezvous 直接复用同一族栈,**零新依赖**。
 
 **缺点**:
 - 单点:Rendezvous 挂了共享面失效(§12 降级语义:下载不受任何影响)。
@@ -202,7 +202,7 @@ Rendezvous 中继内容(TURN 式)会把自托管 Rendezvous 的带宽变成全�
 R1 资源以 **SHA-256 hex** 为主键。选 SHA-256 而非 SHA-1:
 
 - 与仓库主流一致:metalink 整文件校验、增量下载、S3 SigV4 载荷哈希均以 SHA-256 为主;
-- `FileHasher::calculate_streaming(path, HashAlgorithm::SHA256)`(EVP 分块 256KB,`packages/libfalcon-protocols/src/file_hash.cpp:65`)现成,GB 级文件流式不读全内存;
+- `FileHasher::calculate_streaming(path, HashAlgorithm::SHA256)`(EVP 分块 256KB,`libs/libfalcon-protocols/src/file_hash.cpp:65`)现成,GB 级文件流式不读全内存;
 - SHA-1 仅保留给 BT infohash 兼容面,不引入新的依赖 SHA-1 的面。
 
 公告主键与查询主键都是 sha256;文件名只是展示与落盘建议(同一 sha256 在不同节点可不同名)。
@@ -682,7 +682,7 @@ payload = method + "\n" + session + "\n" + sha256_hex(canonical_params_without_s
 
 ### 16.4 SwarmAnnouncer(daemon 侧新组件)
 
-新文件 `packages/falcon-daemon/src/daemon/swarm_announcer.{hpp,cpp}`,**编进 falcon-daemon 可执行 target**(依赖 falcon_swarm_client→CURL;falcon_daemon_core 不链 CURL,不进该库)。生命周期走 main.cpp 监听者注册区既有形态(`TaskStorageListener` + `ListenerDetacher` RAII 同款,main.cpp:374-389 先例)。
+新文件 `libs/falcon-daemon/src/daemon/swarm_announcer.{hpp,cpp}`,**编进 falcon-daemon 可执行 target**(依赖 falcon_swarm_client→CURL;falcon_daemon_core 不链 CURL,不进该库)。生命周期走 main.cpp 监听者注册区既有形态(`TaskStorageListener` + `ListenerDetacher` RAII 同款,main.cpp:374-389 先例)。
 
 **完成钩子(D10)**:实现 `IEventListener::on_completed(task_id, output_path, total)` → 入后台哈希队列;哈希(`FileHasher::calculate_streaming`,SHA-256)与网络全部在 announcer 工作线程,**完成回调路径零新增延迟**。可选 `share.hash_delay_s` 错峰。
 

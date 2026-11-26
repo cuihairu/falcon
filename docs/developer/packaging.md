@@ -151,8 +151,8 @@ Key points:
 Each package gains its own export set and config template:
 
 ```
-packages/libfalcon-core/cmake/FalconCoreConfig.cmake.in
-packages/libfalcon-protocols/cmake/FalconProtocolsConfig.cmake.in
+libs/libfalcon-core/cmake/FalconCoreConfig.cmake.in
+libs/libfalcon-protocols/cmake/FalconProtocolsConfig.cmake.in
 ...
 install(TARGETS falcon_protocols EXPORT FalconProtocolsTargets ...)
 install(EXPORT FalconProtocolsTargets FILE FalconProtocolsTargets.cmake
@@ -210,7 +210,7 @@ vcpkg_from_git(OUT_SOURCE_PATH SOURCE_PATH
     REF <锁定 commit>          # 手动随版本推进（见 5.3）
 )
 vcpkg_cmake_configure(
-    SOURCE_PATH "${SOURCE_PATH}/packages/libfalcon-protocols"
+    SOURCE_PATH "${SOURCE_PATH}/libs/libfalcon-protocols"
     OPTIONS
         -DFALCON_BUILD_TESTS=OFF
         ${FEATURE_OPTIONS}     # FALCON_ENABLE_* 按 feature 映射

@@ -101,7 +101,7 @@ File → Settings → Build, Execution, Deployment → CMake
 
 ```
 falcon/
-├── packages/
+├── libs/
 │   ├── libfalcon-core/        # Core download engine
 │   ├── libfalcon-protocols/   # Standard download protocols
 │   ├── libfalcon-storage/     # Object storage and resource browsing
@@ -257,7 +257,7 @@ cmake --build build-cov
 ctest --test-dir build-cov --output-on-failure
 
 # Generate a report with gcovr (installed separately)
-gcovr -r . --filter 'packages/' build-cov
+gcovr -r . --filter 'libs/' build-cov
 ```
 
 ### Pre-Submission Checks

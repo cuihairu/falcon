@@ -2,7 +2,7 @@
  * @file storage_service_test.cpp
  * @brief StorageService 单测（云存储桥接层，零测模块补缺）
  *
- * 网络红线纪律：成功路径全部经回环 MockHttpServer（packages/
+ * 网络红线纪律：成功路径全部经回环 MockHttpServer（libs/
  * libfalcon-storage 测试共享基建）；失败路径用 http://127.0.0.1:1
  * （回环连接拒绝，秒级失败，不出网）——与 storage 包 browser mock
  * 测试同口径。

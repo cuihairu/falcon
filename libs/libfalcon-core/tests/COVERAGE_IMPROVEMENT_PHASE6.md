@@ -248,7 +248,7 @@ make falcon_core_tests
 ### 增强的测试文件列表
 
 ```
-packages/libfalcon/tests/unit/
+libs/libfalcon/tests/unit/
 ├── password_manager_test.cpp   (增强, +440行, 45+ 测试)
 └── resource_browsers_test.cpp   (增强, +420行, 50+ 测试)
 ```

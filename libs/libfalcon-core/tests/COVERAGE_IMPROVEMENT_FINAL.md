@@ -595,7 +595,7 @@ open coverage_html/index.html  # macOS
 ### 测试文件列表
 
 ```
-packages/libfalcon/tests/unit/
+libs/libfalcon/tests/unit/
 ├── incremental_download_test.cpp      (新增, 550行)
 ├── download_engine_v2_test.cpp        (新增, 650行)
 ├── common_utils_test.cpp              (新增, 260行)
@@ -930,7 +930,7 @@ ctest --parallel 4
 ### 测试文件列表
 
 ```
-packages/libfalcon/tests/unit/
+libs/libfalcon/tests/unit/
 ├── incremental_download_test.cpp      (新增, 550行)
 ├── download_engine_v2_test.cpp        (新增, 650行)
 ├── common_utils_test.cpp              (新增, 260行)

@@ -20,12 +20,12 @@ ctest --test-dir build --output-on-failure
 
 Falcon 是 CMake Monorepo：
 
-- `packages/libfalcon-core` — 下载引擎、任务管理、事件系统
-- `packages/libfalcon-protocols` — HTTP/FTP/BT/Metalink/HLS 等协议实现
-- `packages/libfalcon-storage` — S3/OSS/COS/Kodo/又拍云对象存储浏览
-- `packages/libfalcon-drives` — 网盘、资源搜索、加密配置管理
-- `packages/falcon-cli` — 命令行下载工具
-- `packages/falcon-daemon` — RPC 服务（aria2 兼容 JSON-RPC）
+- `libs/libfalcon-core` — 下载引擎、任务管理、事件系统
+- `libs/libfalcon-protocols` — HTTP/FTP/BT/Metalink/HLS 等协议实现
+- `libs/libfalcon-storage` — S3/OSS/COS/Kodo/又拍云对象存储浏览
+- `libs/libfalcon-drives` — 网盘、资源搜索、加密配置管理
+- `libs/falcon-cli` — 命令行下载工具
+- `libs/falcon-daemon` — RPC 服务（aria2 兼容 JSON-RPC）
 - `apps/desktop` — Qt6 桌面应用
 
 依赖方向：`protocols/storage/drives → core`，禁止反向依赖。

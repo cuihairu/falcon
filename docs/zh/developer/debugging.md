@@ -129,7 +129,7 @@ engine.get_supported_protocols()
 
 如果要理解主流程，优先看这些实现：
 
-- `packages/libfalcon-core/src/download_engine.cpp`
-- `packages/libfalcon-core/src/task_manager.cpp`
-- `packages/libfalcon-core/src/protocol_registry.cpp`
-- `packages/libfalcon-core/src/event_dispatcher.cpp`
+- `libs/libfalcon-core/src/download_engine.cpp`
+- `libs/libfalcon-core/src/task_manager.cpp`
+- `libs/libfalcon-core/src/protocol_registry.cpp`
+- `libs/libfalcon-core/src/event_dispatcher.cpp`

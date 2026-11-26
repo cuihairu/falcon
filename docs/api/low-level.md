@@ -4,7 +4,7 @@
 
 The public C++ API is centred on `DownloadEngine` and `add_task()` (see [Core API](/api/core)). Some older guides also exposed lower-level building blocks directly. They are still present in the source tree and are documented here for callers who build custom transfer pipelines; ordinary users do not need them.
 
-> The headers live in `packages/libfalcon-protocols/include/falcon/`. Prefer the engine API unless you are writing a protocol handler or an integration test.
+> The headers live in `libs/libfalcon-protocols/include/falcon/`. Prefer the engine API unless you are writing a protocol handler or an integration test.
 
 ## File hashing
 

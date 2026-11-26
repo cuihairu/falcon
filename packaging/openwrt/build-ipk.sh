@@ -64,8 +64,8 @@ done
 
 # Version single source of truth = project(VERSION) in falcon-cli's
 # CMakeLists (same source the CLI binary reports).
-VERSION=$(sed -n 's/^    VERSION \(.*\)$/\1/p' "$REPO_DIR/packages/falcon-cli/CMakeLists.txt" | head -1)
-[ -n "$VERSION" ] || die "cannot read version from packages/falcon-cli/CMakeLists.txt"
+VERSION=$(sed -n 's/^    VERSION \(.*\)$/\1/p' "$REPO_DIR/libs/falcon-cli/CMakeLists.txt" | head -1)
+[ -n "$VERSION" ] || die "cannot read version from libs/falcon-cli/CMakeLists.txt"
 REL="${VERSION}-1"
 [ -n "$REL_OVERRIDE" ] && REL="${VERSION}-${REL_OVERRIDE}"
 

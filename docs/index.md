@@ -101,7 +101,7 @@ int main() {
 
 ```
 falcon/
-├── packages/
+├── libs/
 │   ├── libfalcon-core/      # Core download engine, task model, event system
 │   ├── libfalcon-protocols/ # Standard download protocols
 │   ├── libfalcon-storage/   # Object storage and resource browsing

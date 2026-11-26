@@ -1,4 +1,4 @@
-[根目录](../../CLAUDE.md) > packages > **falcon-daemon**
+[根目录](../../CLAUDE.md) > libs > **falcon-daemon**
 
 ---
 
@@ -506,7 +506,7 @@
 ## 源码结构
 
 ```
-packages/falcon-daemon/src/
+libs/falcon-daemon/src/
 ├── main.cpp                  # 入口：参数解析 → DaemonManager 组装与接线
 ├── daemon/
 │   ├── daemon.hpp/.cpp       # DaemonManager：生命周期、信号、pid 文件、停机排水
@@ -532,7 +532,7 @@ packages/falcon-daemon/src/
     ├── task_storage.hpp/.cpp         # SQLite 持久化（TaskRecord CRUD）
     └── task_storage_listener.hpp/.cpp # IEventListener → 实时落库
 
-packages/falcon-daemon/tools/          # MCP stdio 薄壳（falcon-mcp）
+libs/falcon-daemon/tools/          # MCP stdio 薄壳（falcon-mcp）
 ├── mcp_stdio.hpp/.cpp                 # McpStdioBridge：stdin 行 → POST /mcp
 │                                      #   → stdout 行；会话捕获/附带/404 清除/
 │                                      #   EOF DELETE 拆除；传输失败信封
