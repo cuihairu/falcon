@@ -19,8 +19,8 @@
 </div>
 
 Screenshots and design prototypes are showcased on the
-[docs site](https://cuihairu.github.io/falcon/); the full gallery (132 shots:
-22 screens × three accent themes × light/dark) lives in
+[docs site](https://cuihairu.github.io/falcon/); the full gallery (144 shots:
+24 screens × three accent themes × light/dark) lives in
 [docs/src/public/design/ui-next/screens/](docs/src/public/design/ui-next/screens/).
 
 ## Features
@@ -322,7 +322,7 @@ are exported from that prototype:
   <img src="docs/src/public/design/ui-next/screens/warm-light/001-download-table.png" alt="Downloads · table view (warm light)" width="49%"/>
 </p>
 
-The full gallery (22 screens × three themes × light/dark, 132 shots) lives in
+The full gallery (24 screens × three themes × light/dark, 144 shots) lives in
 [`docs/src/public/design/ui-next/screens/`](docs/src/public/design/ui-next/screens/) and on the
 [docs site](https://cuihairu.github.io/falcon/); the design brief and decisions
 are in [ui-next README](docs/design/ui-next/README.zh.md).

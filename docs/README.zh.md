@@ -37,7 +37,7 @@ pnpm docs:build
 
 ## 当前设计稿
 
-桌面端唯一在维护的设计是 `design/ui-next/`（纯静态交互原型，22 屏）。导出的设计图在 `src/public/design/ui-next/screens/`：3 主题色 × 亮暗 × 22 屏 = 132 张 PNG，文档中的设计图统一引用这里。
+桌面端唯一在维护的设计是 `design/ui-next/`（纯静态交互原型，24 屏）。导出的设计图在 `src/public/design/ui-next/screens/`：3 主题色 × 亮暗 × 24 屏 = 144 张 PNG，文档中的设计图统一引用这里。
 
 ![Falcon 下载中 · 列表视图（暖橙默认）](src/public/design/ui-next/screens/warm-light/001-download-table.png)
 
@@ -51,10 +51,10 @@ docs/
 ├── README.md / README.zh.md    # 文档站说明（双语索引）
 ├── ARCHIVE.md                # 根目录历史文档索引
 ├── design/                   # 当前设计
-│   └── ui-next/              # 22 屏交互原型 + 设计说明（唯一保留设计）
+│   └── ui-next/              # 24 屏交互原型 + 设计说明（唯一保留设计）
 ├── src/                      # VitePress 源文件
 │   ├── public/               # 静态资源
-│   │   └── design/ui-next/screens/  # 132 张设计图（文档引用源）
+│   │   └── design/ui-next/screens/  # 144 张设计图（文档引用源）
 │   ├── index.md              # 首页
 │   ├── .vitepress/           # VitePress 配置
 │   │   └── config.mts        # 主配置

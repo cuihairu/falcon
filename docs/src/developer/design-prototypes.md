@@ -29,7 +29,7 @@ brand anchor: it stays the same in every theme.
 
 ## What the prototype covers
 
-The prototype has 22 screens: the existing download / discovery / cloud /
+The prototype has 24 screens: the existing download / discovery / cloud /
 recycle / settings flows, plus the planned cross-device, account & sharing,
 NAS, and Windows tray flows. Key decisions documented there:
 
@@ -41,8 +41,12 @@ NAS, and Windows tray flows. Key decisions documented there:
 - **LocalSend** can be supported as a LAN discovery channel; AirDrop stays a
   system share entry (AWDL is proprietary); DHT is a peer-discovery layer for
   download results, not a resource site.
-- **Windows tray**: persistent icon, context menu, and floating speed window;
-  macOS uses a separate menu-bar implementation.
+- **Windows tray**: persistent icon, context menu, and a two-state floating
+  speed window (mini capsule by default, expandable detail card); macOS uses
+  a separate menu-bar implementation.
+- **Task context menu**: the 10-item Xunlei-shaped menu is Falcon-branded
+  (no membership promo), adds original-peer-count / remaining-time on rows,
+  and makes "File details" and "Add to cloud" navigable.
 
 See the full Chinese design brief in the repository:
 `docs/design/ui-next/README.zh.md`.

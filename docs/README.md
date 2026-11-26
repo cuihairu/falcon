@@ -38,9 +38,9 @@ The build output is written to `docs/src/.vitepress/dist/`.
 ## Current design
 
 The only maintained desktop design is `design/ui-next/`: a static interactive
-prototype with 22 screens. Exported screenshots live in
+prototype with 24 screens. Exported screenshots live in
 `src/public/design/ui-next/screens/` — 3 accent themes × light/dark × 22
-screens = 132 PNGs, and all design images in the docs reference this folder.
+screens = 144 PNGs, and all design images in the docs reference this folder.
 
 ![Falcon downloading · table view (warm, default)](src/public/design/ui-next/screens/warm-light/001-download-table.png)
 

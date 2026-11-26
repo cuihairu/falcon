@@ -17,7 +17,7 @@
 </div>
 
 界面截图与设计原型统一在[文档站](https://cuihairu.github.io/falcon/zh/)首页展示；
-完整图库（132 张：22 屏 × 三主题色 × 亮暗）见 [docs/src/public/design/ui-next/screens/](docs/src/public/design/ui-next/screens/)。
+完整图库（144 张：24 屏 × 三主题色 × 亮暗）见 [docs/src/public/design/ui-next/screens/](docs/src/public/design/ui-next/screens/)。
 
 ## 特性
 
@@ -289,7 +289,7 @@ daemon 在 `POST /mcp` 暴露 MCP（Model Context Protocol）端点（Streamable
   <img src="docs/src/public/design/ui-next/screens/warm-light/001-download-table.png" alt="下载视图 · 表格（暖橙亮色）" width="49%"/>
 </p>
 
-完整图库（22 屏 × 三主题色 × 亮暗，共 132 张）见
+完整图库（24 屏 × 三主题色 × 亮暗，共 144 张）见
 [`docs/src/public/design/ui-next/screens/`](docs/src/public/design/ui-next/screens/) 与
 [文档站](https://cuihairu.github.io/falcon/zh/)；设计说明与讨论结论见
 [ui-next README](docs/design/ui-next/README.zh.md)。

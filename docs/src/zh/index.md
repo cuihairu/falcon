@@ -37,7 +37,7 @@ features:
 
 <ShowcaseCarousel />
 
-> 更多界面截图（132 张：22 屏 × 三主题色 × 亮暗）见仓库
+> 更多界面截图（144 张：24 屏 × 三主题色 × 亮暗）见仓库
 > [docs/src/public/design/ui-next/screens/](https://github.com/cuihairu/falcon/tree/main/docs/src/public/design/ui-next/screens)。
 
 ## 快速预览

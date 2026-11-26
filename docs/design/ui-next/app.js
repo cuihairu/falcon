@@ -291,6 +291,17 @@
   drawQR();
   startTicker();
 
+  // 悬浮速度窗：迷你胶囊 ↔ 详细卡片，点击时标注当前态
+  document.querySelectorAll("[data-fs-toggle], [data-fs-collapse]").forEach(function (el) {
+    el.addEventListener("click", function () {
+      var demo = el.closest(".fs-demo");
+      if (!demo) return;
+      demo.querySelectorAll(".fs-state").forEach(function (s) { s.classList.remove("fs-active"); });
+      var target = el.classList.contains("fs-collapse") ? el.closest(".fs-state") : el.closest(".fs-state").nextElementSibling;
+      if (target) target.classList.add("fs-active");
+    });
+  });
+
   /* ---------- 键盘快捷键：← → 逐屏审查 ---------- */
   document.addEventListener("keydown", function (e) {
     if (e.target.matches("input, textarea")) return;

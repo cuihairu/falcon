@@ -39,7 +39,7 @@ keys.
 
 <ShowcaseCarousel />
 
-> More UI screenshots (132 in total: 22 screens × three accent themes ×
+> More UI screenshots (144 in total: 24 screens × three accent themes ×
 > light/dark) are available in the repository at
 > [docs/design/ui-next/screens/](https://github.com/cuihairu/falcon/tree/main/docs/src/public/design/ui-next/screens).
 
