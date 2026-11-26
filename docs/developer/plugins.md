@@ -120,8 +120,8 @@ engine.register_handler_factory(&create_myproto_handler);
 To include a plugin in the repository build, follow the existing plugin directory layout, for example:
 
 ```text
-libs/libfalcon-protocols/plugins/http/
-libs/libfalcon-protocols/plugins/ftp/
+libs/protocols/plugins/http/
+libs/protocols/plugins/ftp/
 ```
 
 Minimal example:

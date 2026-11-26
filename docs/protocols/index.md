@@ -6,7 +6,7 @@ Falcon organizes transfer capabilities in layers around one engine: core transfe
 
 | Layer | Protocol | Default | Notes |
 |------|------|------|------|
-| **1 · Core transfer** | HTTP/HTTPS | On | V1/libcurl and V2 event-driven engines, resume, segmented downloads, proxies |
+| **1 · Core transfer** | HTTP/HTTPS | On | V1/libcurl engine, resume, segmented downloads, proxies |
 | **1 · Core transfer** | FTP/FTPS | On | Active/passive modes, REST resume |
 | **1 · Core transfer** | SFTP | On (requires libssh2) | known_hosts verification, resume |
 | **1 · Core transfer** | WebDAV | On | `dav`/`davs`; the storage layer also provides a WebDAV browser |

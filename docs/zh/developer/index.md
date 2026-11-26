@@ -102,13 +102,14 @@ File → Settings → Build, Execution, Deployment → CMake
 ```
 falcon/
 ├── libs/
-│   ├── libfalcon-core/        # 核心下载引擎
-│   ├── libfalcon-protocols/   # 标准下载协议
-│   ├── libfalcon-storage/     # 对象存储与资源浏览
-│   ├── libfalcon-drives/      # 网盘与云存储
-│   ├── falcon-cli/            # 命令行工具
-│   └── falcon-daemon/         # 后台守护进程
+│   ├── core/                  # 核心下载引擎
+│   ├── protocols/             # 标准下载协议
+│   ├── storage/               # 对象存储与资源浏览
+│   └── drives/                # 网盘与云存储
 ├── apps/
+│   ├── cli/                   # 命令行工具
+│   ├── daemon/                # 后台守护进程
+│   ├── swarmd/                # P2SP 集会服务
 │   └── desktop/               # Qt6 桌面应用
 └── docs/                      # 文档
 ```

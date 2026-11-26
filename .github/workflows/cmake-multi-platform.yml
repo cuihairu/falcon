@@ -3,22 +3,48 @@ name: CMake Build
 on:
   push:
     branches: ["main", "develop"]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - 'LICENSE'
-      - '.gitignore'
-      - '*.svg'
-      - '.editorconfig'
+    # 白名单：仅在真正影响 C++ 编译的输入改动时才触发。
+    # 末尾 !**/*.md 排除所有文档（含 apps/、libs/ 内的 CLAUDE.md、README.md）；
+    # docs/**、assets/**、.claude/**、其它工作流不在白名单内，天然不触发。
+    # 注意：apps/desktop/resources/icons/*.svg 经 resources.qrc 编入二进制，
+    # 属于真实编译输入，故不能用 !*.svg 排除。
+    paths:
+      - 'CMakeLists.txt'
+      - 'CMakePresets.json'
+      - 'CMakeOptions.txt'
+      - 'vcpkg.json'
+      - 'vcpkg-configuration.json'
+      - 'libs/**'
+      - 'apps/**'
+      - 'plugins/**'
+      - 'cmake/**'
+      - 'third_party/**'
+      - 'ports/**'
+      - 'examples/**'
+      - '.github/workflows/cmake-multi-platform.yml'
+      - '!**/*.md'
   pull_request:
     branches: ["main"]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - 'LICENSE'
-      - '.gitignore'
-      - '*.svg'
-      - '.editorconfig'
+    # 白名单：仅在真正影响 C++ 编译的输入改动时才触发。
+    # 末尾 !**/*.md 排除所有文档（含 apps/、libs/ 内的 CLAUDE.md、README.md）；
+    # docs/**、assets/**、.claude/**、其它工作流不在白名单内，天然不触发。
+    # 注意：apps/desktop/resources/icons/*.svg 经 resources.qrc 编入二进制，
+    # 属于真实编译输入，故不能用 !*.svg 排除。
+    paths:
+      - 'CMakeLists.txt'
+      - 'CMakePresets.json'
+      - 'CMakeOptions.txt'
+      - 'vcpkg.json'
+      - 'vcpkg-configuration.json'
+      - 'libs/**'
+      - 'apps/**'
+      - 'plugins/**'
+      - 'cmake/**'
+      - 'third_party/**'
+      - 'ports/**'
+      - 'examples/**'
+      - '.github/workflows/cmake-multi-platform.yml'
+      - '!**/*.md'
 
 jobs:
   build:

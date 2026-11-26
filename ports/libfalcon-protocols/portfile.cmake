@@ -29,7 +29,7 @@ foreach(_pair
 endforeach()
 
 vcpkg_cmake_configure(
-    SOURCE_PATH "${SOURCE_PATH}/libs/libfalcon-protocols"
+    SOURCE_PATH "${SOURCE_PATH}/libs/protocols"
     OPTIONS
         ${FALCON_FEATURE_OPTIONS}
 )

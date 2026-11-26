@@ -4,7 +4,7 @@
 
   # Falcon
 
-<p align="center"><a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License"></a> <a href="https://cuihairu.github.io/falcon/"><img src="https://img.shields.io/badge/docs-online-blue" alt="Docs"></a> <a href="https://github.com/cuihairu/falcon/actions/workflows/cmake-multi-platform.yml"><img src="https://github.com/cuihairu/falcon/actions/workflows/cmake-multi-platform.yml/badge.svg" alt="Build Status"></a> <a href="https://codecov.io/gh/cuihairu/falcon"><img src="https://codecov.io/gh/cuihairu/falcon/branch/main/graph/badge.svg" alt="codecov"></a> <a href="https://github.com/cuihairu/falcon/actions/workflows/nightly-build.yml"><img src="https://github.com/cuihairu/falcon/actions/workflows/nightly-build.yml/badge.svg" alt="Nightly"></a> <a href="https://github.com/cuihairu/falcon"><img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg" alt="Platform"></a> <a href="https://github.com/cuihairu/falcon/releases"><img src="https://img.shields.io/badge/status-in%20development-orange.svg" alt="Status: in development"></a></p>
+<p align="center"><a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License"></a> <a href="https://cuihairu.github.io/falcon/"><img src="https://img.shields.io/badge/docs-online-blue" alt="Docs"></a> <a href="https://github.com/cuihairu/falcon/actions/workflows/cmake-multi-platform.yml"><img src="https://github.com/cuihairu/falcon/actions/workflows/cmake-multi-platform.yml/badge.svg" alt="Build Status"></a> <a href="https://codecov.io/gh/cuihairu/falcon"><img src="https://codecov.io/gh/cuihairu/falcon/branch/main/graph/badge.svg" alt="codecov"></a> <a href="https://github.com/cuihairu/falcon/actions/workflows/nightly-build.yml"><img src="https://github.com/cuihairu/falcon/actions/workflows/nightly-build.yml/badge.svg" alt="Nightly"></a> <a href="https://github.com/cuihairu/falcon"><img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg" alt="Platform"></a> <a href="https://isocpp.org/"><img src="https://img.shields.io/badge/C%2B%2B-17-00599C.svg" alt="C++17"></a> <a href="https://doc.qt.io/"><img src="https://img.shields.io/badge/Qt-6.2%2B-41CD52.svg" alt="Qt 6.2+"></a> <a href="https://github.com/cuihairu/falcon/releases"><img src="https://img.shields.io/badge/status-in%20development-orange.svg" alt="Status: in development"></a></p>
 
   **The Universal Resource Transfer Engine**
 
@@ -12,8 +12,8 @@
   HTTP, FTP, SFTP, WebDAV, object storage, and P2P networks — packaged as a
   CLI, a daemon, and a desktop app. The transfer stack is built on open-source
   components: libcurl, OpenSSL, libtorrent, and libssh2 carry the protocol data
-  planes; the event-driven V2 engine and the aria2-compatible CLI/RPC surface
-  follow aria2's architecture.
+  planes, with a single V1 libcurl-based download engine and an aria2-compatible
+  CLI/RPC surface.
 
   [中文](README.zh.md) | [English](README.md)
 </div>
@@ -22,7 +22,7 @@
 
 - [Documentation site](https://cuihairu.github.io/falcon/) · [中文文档站](https://cuihairu.github.io/falcon/zh/)
 - Repository notes: [English](docs/README.md) · [简体中文](docs/zh/README.md)
-- [UI design specification](docs/ui/design-spec.md) · [Interactive UI prototype](docs/design/ui-next/index.html)
+- [Interactive UI prototype](docs/design/ui-next/index.html) · [Prototype notes](docs/design/ui-next/README.zh.md)
 - [Contributing](CONTRIBUTING.md) · [License](LICENSE)
 
 ## User Interface
@@ -37,33 +37,28 @@ are exported from that prototype:
   <img src="docs/public/design/ui-next/screens/warm-light/001-download-table.png" alt="Downloads · table view (warm light)" width="49%"/>
 </p>
 
-The full gallery (24 screens × three themes × light/dark, 144 shots) lives in
+The full gallery (25 screens × three themes × light/dark, 150 shots) lives in
 [`docs/public/design/ui-next/screens/`](docs/public/design/ui-next/screens/) and on the
-[docs site](https://cuihairu.github.io/falcon/). The published
-[UI Design Specification](https://cuihairu.github.io/falcon/ui/design-spec)
-covers the decisions; the authoring notes are in
-[docs/design/ui-next/README.zh.md](docs/design/ui-next/README.zh.md).
+[docs site](https://cuihairu.github.io/falcon/). The design notes and decisions are
+in [docs/design/ui-next/README.zh.md](docs/design/ui-next/README.zh.md).
 
 ## Features
 
-- **Dual Download Engines**
-  - **V1 engine** (default): libcurl-based, multi-threaded segmented downloading, resume, per-task speed limits
-  - **V2 engine** (experimental, `--http-engine v2`): aria2-style event-driven rewrite —
-    non-blocking I/O over epoll/kqueue/poll/WSAPoll, command pattern with connection
-    reuse, persistent resume via `.falcon.ctrl` control files (If-Range protected),
-    multi-source segmented downloading (P2SP) across mirrors, global & per-task speed
-    limits, connection-level retries, task timeouts, chunked transfer encoding,
-    overwrite protection, and atomic temporary-file publishing
+- **Single Download Engine (V1)**
+  - libcurl-based, multi-threaded segmented downloading, resume, per-task and global
+    speed limits, retries, task timeouts, overwrite protection, and atomic
+    temporary-file publishing; no engine-version switch — all transfers use the
+    libcurl data plane
 - **Multi-Protocol Support** organized in tiers around a single transfer core:
 
   | Tier | Protocols | Role |
   |------|-----------|------|
   | **1 · Core transfer** (default on) | HTTP/HTTPS, FTP/FTPS, SFTP, WebDAV | File transfer: resume, segmented downloading, speed limits, proxies |
-  | **2 · P2P & multi-source** (default on) | BitTorrent/Magnet, Metalink | Piece-level P2P (libtorrent), mirror lists with multi-source segmented transfers (P2SP) |
+  | **2 · P2P & multi-source** (default on) | BitTorrent/Magnet, Metalink | Piece-level P2P (libtorrent), mirror lists with whole-file hash verification; multi-source segmented transfers (P2SP) are not enabled today |
   | **3 · Compatibility plugins** (opt-in) | Thunder, QQDL, FlashGet, ED2K, HLS/DASH | Legacy/private link formats and streaming manifests |
   | **Resource access** (default on) | S3, OSS, COS, Kodo, Upyun | Object storage with SigV4, remote browsing, resource search |
-- **Metalink**: RFC 5854 `.meta4` / Metalink3 `.metalink` mirror lists, multi-mirror
-  P2SP segmented download through the V2 engine, whole-file hash verification before publish
+- **Metalink**: RFC 5854 `.meta4` / Metalink3 `.metalink` mirror lists with whole-file
+  hash verification before publish; multi-source segmented downloading is not enabled today
 - **Daemon & RPC Service** (`falcon-daemon`): aria2-compatible JSON-RPC over HTTP +
   WebSocket on a single port (works with AriaNg), live event stream (download start /
   pause / complete / error / progress), SQLite task persistence with restart recovery,
@@ -72,8 +67,9 @@ covers the decisions; the authoring notes are in
   (Ed25519 challenge auth, Bearer + rate limiting, group tokens, blacklist), daemon
   `p2sp.share` announces swarm-enabled downloads to the rendezvous with TTL renewal and
   retract on completion, inbound read-only data service (`GET /by-sha256/<hex>` with
-  Range) for peers to pull verified files, metalink mirror pools augmented with swarm
-  sources (NAT-filtered, hash-verified, works even with sharing off), RPC
+  Range) for peers to pull verified files, swarm sources discovered/announced
+  (NAT-filtered, hash-verified, query plane works even with sharing off; multi-source
+  mirror pulling not enabled today), RPC
   `falcon.swarm.status`/`falcon.swarm.setShare`, CLI `--swarm-server` single-shot
   announce; default off
 - **Desktop Application** (Qt6): Fluent-design UI, light/dark themes, frameless window,
@@ -226,8 +222,6 @@ falcon-cli --proxy http://127.0.0.1:7890 \
   -H "Authorization: Bearer TOKEN" \
   https://example.com/file.bin
 
-# Try the experimental V2 engine
-falcon-cli --http-engine v2 https://example.com/file.zip
 ```
 
 ### aria2-Compatible Parameters
@@ -275,7 +269,7 @@ Run `falcon-cli --help` for the full parameter list.
 ## Cloud Storage Support
 
 Library-level browsing is implemented for Amazon S3, Alibaba Cloud OSS, Tencent COS,
-Qiniu Kodo, and Upyun (`libs/libfalcon-storage`): listing, tree views, object info,
+Qiniu Kodo, and Upyun (`libs/storage`): listing, tree views, object info,
 mkdir / rename / recursive delete, quota queries, and custom-endpoint (MinIO /
 RustFS / private-gateway) support with AWS Signature V4 request signing for
 S3-compatible services that require authentication. The desktop application ships a
@@ -291,6 +285,8 @@ cloud storage page backed by these modules.
 `libfalcon-drives` provides an encrypted configuration manager (SQLite-backed,
 AES-256-GCM credential encryption protected by a master password). The desktop
 application uses it in its settings page. CLI management commands are not exposed yet.
+The implementation ships as a runtime plugin (`plugins/drives/config_storage`);
+the `falcon_drives` facade itself links no third-party libraries.
 
 ## Advanced Features
 
@@ -333,12 +329,12 @@ Stage 2 is complete (stdio wrapper `falcon-mcp`, SSE progress subscription via
 
 ## Architecture
 
-Falcon follows a modular architecture with aria2-inspired event-driven design:
+Falcon follows a modular architecture around a single V1 download engine:
 
 ```mermaid
 graph TD
     APP["<b>Applications</b><br/>falcon-cli · falcon-daemon · desktop (Qt6)"]
-    CORE["<b>Falcon Core</b> (aria2-style)<br/>DownloadEngineV2 event loop · command queue<br/>request groups · socket reuse · task manager"]
+    CORE["<b>Falcon Core</b><br/>V1 DownloadEngine · TaskManager<br/>ProtocolRegistry · EventDispatcher"]
     PROTO["<b>libfalcon-protocols</b><br/>HTTP · FTP · BitTorrent · Metalink · HLS · private protocols"]
     STOR["<b>libfalcon-storage</b><br/>S3 · OSS · COS · Kodo · Upyun resource browsing"]
     DRV["<b>libfalcon-drives</b><br/>cloud drives · resource search · encrypted config"]
@@ -351,14 +347,17 @@ graph TD
     CORE --> INFRA
 ```
 
-### Event-Driven Architecture
+### Engine and Event Model
 
-Falcon uses an event-driven command pattern inspired by aria2:
+Falcon uses a single V1 download engine built around `DownloadEngine`, `TaskManager`,
+and `ProtocolRegistry`:
 
-1. **Command Execution**: All download operations are encapsulated as command objects
-2. **I/O Multiplexing**: Uses epoll (Linux), kqueue (macOS/BSD), or poll (fallback)
-3. **Connection Pooling**: Reuses HTTP/HTTPS connections for better performance
-4. **Non-Blocking I/O**: All sockets are non-blocking, driven by events
+1. **Task Execution**: `TaskManager` queues tasks and runs them through protocol handlers
+2. **Protocol Routing**: `ProtocolRegistry` dispatches each URL to the matching handler
+3. **Segmented Transfers**: the libcurl-based HTTP/FTP handler performs multi-threaded
+   segmented downloads with resume
+4. **Event Reporting**: `EventDispatcher` delivers status, progress, and completion
+   callbacks to listeners
 
 ## Development
 
@@ -427,12 +426,12 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 ## Roadmap
 
 ### Completed
-- [x] Core download engines (V1 libcurl + experimental event-driven V2 engine)
+- [x] Single V1 download engine (libcurl data plane)
 - [x] HTTP/HTTPS, FTP/FTPS plugins
-- [x] Metalink downloads (multi-mirror P2SP segmentation + whole-file hash verification)
+- [x] Metalink downloads (mirror lists + whole-file hash verification; multi-source segmented pulling not enabled today)
 - [x] CLI (60+ aria2-compatible options)
 - [x] Daemon: aria2-compatible JSON-RPC (HTTP + WebSocket event stream), SQLite persistence, SIGHUP hot reload, MCP tool endpoint (13 tools)
-- [x] P2SP phase 1+2: falcon-swarmd rendezvous service, daemon announce/retract with TTL renewal, RPC falcon.swarm.status/setShare, CLI --swarm-server, inbound /by-sha256 data service, swarm sources in metalink mirror pools (NAT-filtered, hash-verified)
+- [x] P2SP phase 1+2: falcon-swarmd rendezvous service, daemon announce/retract with TTL renewal, RPC falcon.swarm.status/setShare, CLI --swarm-server, inbound /by-sha256 data service, swarm source discovery/announce (NAT-filtered, hash-verified; multi-source mirror pulling not enabled today)
 - [x] Desktop application (Qt6, Fluent design, light/dark themes, cloud drive browsing)
 - [x] Private protocol support (Thunder, QQDL, FlashGet, ED2K)
 - [x] SFTP, WebDAV protocols (libssh2 / libcurl data planes)

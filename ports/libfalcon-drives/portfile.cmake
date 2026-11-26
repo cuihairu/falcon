@@ -10,7 +10,7 @@ vcpkg_from_github(
 
 # drives 首版零 feature（候选网盘未实现，设计裁定不给虚假承诺）
 vcpkg_cmake_configure(
-    SOURCE_PATH "${SOURCE_PATH}/libs/libfalcon-drives"
+    SOURCE_PATH "${SOURCE_PATH}/libs/drives"
     OPTIONS
         -DFALCON_BUILD_TESTS=OFF
 )

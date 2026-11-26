@@ -102,13 +102,14 @@ File → Settings → Build, Execution, Deployment → CMake
 ```
 falcon/
 ├── libs/
-│   ├── libfalcon-core/        # Core download engine
-│   ├── libfalcon-protocols/   # Standard download protocols
-│   ├── libfalcon-storage/     # Object storage and resource browsing
-│   ├── libfalcon-drives/      # Cloud drives and cloud storage
-│   ├── falcon-cli/            # Command-line tool
-│   └── falcon-daemon/         # Background daemon
+│   ├── core/                  # Core download engine
+│   ├── protocols/             # Standard download protocols
+│   ├── storage/               # Object storage and resource browsing
+│   └── drives/                # Cloud drives and cloud storage
 ├── apps/
+│   ├── cli/                   # Command-line tool
+│   ├── daemon/                # Background daemon
+│   ├── swarmd/                # P2SP rendezvous service
 │   └── desktop/               # Qt6 desktop application
 └── docs/                      # Documentation
 ```

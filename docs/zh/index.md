@@ -37,7 +37,7 @@ features:
 
 <ShowcaseCarousel />
 
-> 更多界面截图（144 张：24 屏 × 三主题色 × 亮暗）见仓库
+> 更多界面截图（150 张：25 屏 × 三主题色 × 亮暗）见仓库
 > [docs/public/design/ui-next/screens/](https://github.com/cuihairu/falcon/tree/main/docs/public/design/ui-next/screens)。
 
 ## 快速预览
@@ -99,15 +99,16 @@ int main() {
 ```
 falcon/
 ├── libs/
-│   ├── libfalcon-core/      # 核心下载引擎、任务模型、事件系统
-│   ├── libfalcon-protocols/ # 标准下载协议
-│   ├── libfalcon-storage/   # 对象存储与资源浏览
-│   ├── libfalcon-drives/    # 网盘与分享链能力
-│   ├── falcon-cli/          # 命令行工具
-│   └── falcon-daemon/       # 后台守护进程
+│   ├── core/                # 核心下载引擎、任务模型、事件系统
+│   ├── protocols/           # 标准下载协议
+│   ├── storage/             # 对象存储与资源浏览
+│   └── drives/              # 网盘与分享链能力
 ├── apps/
 │   ├── desktop/             # 桌面应用
-│   └── browser_extension/   # 浏览器扩展
+│   ├── browser_extension/   # 浏览器扩展
+│   ├── cli/                 # 命令行工具
+│   ├── daemon/              # 后台守护进程
+│   └── swarmd/              # P2SP 集会服务
 └── docs/                    # 项目文档
 ```
 

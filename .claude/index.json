@@ -7,7 +7,7 @@
   "modules": [
     {
       "name": "libfalcon",
-      "path": "libs/libfalcon-core",
+      "path": "libs/core",
       "type": "library",
       "language": "C++17",
       "status": "skeleton_created",
@@ -25,7 +25,7 @@
     },
     {
       "name": "falcon-cli",
-      "path": "libs/falcon-cli",
+      "path": "apps/cli",
       "type": "executable",
       "language": "C++17",
       "status": "skeleton_created",
@@ -42,7 +42,7 @@
     },
     {
       "name": "falcon-daemon",
-      "path": "libs/falcon-daemon",
+      "path": "apps/daemon",
       "type": "executable",
       "language": "C++17",
       "status": "skeleton_created",

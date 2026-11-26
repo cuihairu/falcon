@@ -1,171 +1,96 @@
 /**
  * @file aria2_style_download.cpp
- * @brief aria2 风格下载示例
+ * @brief aria2 风格下载示例（单一 V1 引擎）
  * @author Falcon Team
  * @date 2025-12-25
  *
- * 展示如何使用 DownloadEngineV2 进行 aria2 风格的下载
+ * 展示如何用 falcon::DownloadEngine 配置多连接、限速与多个任务。
  */
 
-#include <falcon/protocols/download_engine_v2.hpp>
-#include <falcon/protocols/file_hash.hpp>
+#include <falcon/download_engine.hpp>
+#include <falcon/download_options.hpp>
+#include <falcon/event_listener.hpp>
 #include <falcon/logger.hpp>
 
-#include <iostream>
 #include <chrono>
-#include <thread>
+#include <iomanip>
+#include <iostream>
 
 using namespace falcon;
 
-/**
- * @brief 简单的进度监听器
- */
-class SimpleProgressListener {
+namespace {
+
+class ProgressListener : public IEventListener {
 public:
-    void on_update(const RequestGroup::Progress& progress) {
-        // 每 5% 更新一次显示
-        if (progress.progress - last_progress_ >= 0.05 || progress.progress >= 1.0) {
-            last_progress_ = progress.progress;
-
-            std::cout << "\r[";
-            int bar_width = 30;
-            int filled = static_cast<int>(progress.progress * bar_width);
-            for (int i = 0; i < bar_width; ++i) {
-                std::cout << (i < filled ? "=" : " ");
-            }
-            std::cout << "] ";
-
-            std::cout << static_cast<int>(progress.progress * 100) << "% ";
-            std::cout << "(" << progress.downloaded / 1024 / 1024 << "MB";
-
-            if (progress.total > 0) {
-                std::cout << " / " << progress.total / 1024 / 1024 << "MB";
-            }
-
-            if (progress.speed > 0) {
-                std::cout << " @ " << progress.speed / 1024 / 1024 << "MB/s";
-            }
-
-            std::cout << std::flush;
-        }
+    void on_status_changed(TaskId task_id, TaskStatus old_status,
+                           TaskStatus new_status) override {
+        std::cout << "\n[Task " << task_id << "] " << to_string(old_status)
+                  << " -> " << to_string(new_status) << "\n";
     }
 
-    void on_complete() {
-        std::cout << "\n✓ 下载完成\n";
+    void on_progress(const ProgressInfo& info) override {
+        std::cout << "\r[Task " << info.task_id << "] " << std::fixed
+                  << std::setprecision(1) << (info.progress * 100) << "% ("
+                  << info.downloaded_bytes << " / " << info.total_bytes
+                  << " bytes) Speed: " << info.speed << " B/s"
+                  << std::flush;
     }
 
-private:
-    double last_progress_ = 0.0;
+    void on_completed(TaskId task_id, const std::string& output_path) override {
+        std::cout << "\n[Task " << task_id << "] Completed: " << output_path
+                  << "\n";
+    }
+
+    void on_error(TaskId task_id, const std::string& error_message) override {
+        std::cout << "\n[Task " << task_id << "] Error: " << error_message
+                  << "\n";
+    }
 };
 
-/**
- * @brief 主函数
- */
+} // namespace
+
 int main(int argc, char* argv[]) {
     if (argc < 2) {
-        std::cout << "用法: " << argv[0] << " <URL> [输出路径]\n";
-        std::cout << "\n示例:\n";
-        std::cout << "  " << argv[0] << " https://example.com/file.zip\n";
-        std::cout << "  " << argv[0] << " https://example.com/file.zip /tmp/file.zip\n";
+        std::cout << "用法: " << argv[0] << " <URL> [输出目录]\n";
         return 1;
     }
 
-    std::string url = argv[1];
-    std::string output_path = (argc >= 3) ? argv[2] : "";
+    EngineConfig config;
+    config.max_concurrent_tasks = 5;
+    DownloadEngine engine(config);
 
-    // 配置下载引擎
-    EngineConfigV2 config;
-    config.max_concurrent_tasks = 5;     // 最多同时下载 5 个任务
-    config.poll_timeout_ms = 100;        // 事件轮询超时
-    config.global_speed_limit = 0;       // 不限速
+    ProgressListener listener;
+    engine.add_listener(&listener);
 
-    // 创建下载引擎
-    DownloadEngineV2 engine(config);
-
-    // 配置下载选项
     DownloadOptions options;
-    options.max_connections = 8;         // 8 个并发连接
+    options.max_connections = 8;
     options.timeout_seconds = 30;
     options.max_retries = 3;
+    options.resume_enabled = true;
+    if (argc >= 3) options.output_directory = argv[2];
 
-    if (!output_path.empty()) {
-        options.output_filename = output_path;
-    }
-
-    std::cout << "Falcon aria2 风格下载器\n";
-    std::cout << "URL: " << url << "\n";
+    std::cout << "Falcon aria2 风格下载器（V1 引擎）\n";
+    std::cout << "URL: " << argv[1] << "\n";
     std::cout << "并发连接: " << options.max_connections << "\n\n";
 
-    // 添加下载任务
-    TaskId task_id = engine.add_download(url, options);
-    std::cout << "任务 ID: " << task_id << "\n";
-
-    // 创建进度监听器
-    SimpleProgressListener listener;
-
-    // 在另一个线程中运行下载引擎
-    std::thread engine_thread([&engine, &listener, task_id]() {
-        engine.run();
-
-        // 下载完成后
-        auto* group_man = engine.request_group_man();
-        auto* group = group_man->find_group(task_id);
-        if (group && group->is_completed()) {
-            listener.on_complete();
-        }
-    });
-
-    // 监控进度
-    auto* group_man = engine.request_group_man();
-
-    while (engine_thread.joinable()) {
-        auto* group = group_man->find_group(task_id);
-        if (group) {
-            auto progress = group->get_progress();
-            listener.on_update(progress);
-
-            if (group->is_completed() || group->status() == RequestGroupStatus::FAILED) {
-                break;
-            }
-        }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    auto task = engine.add_task(argv[1], options);
+    if (!task) {
+        std::cerr << "URL is not supported\n";
+        return 1;
+    }
+    if (!engine.start_task(task->id())) {
+        std::cerr << "Failed to start download task\n";
+        return 1;
     }
 
-    // 等待引擎完成
-    if (engine_thread.joinable()) {
-        engine_thread.join();
-    }
+    task->wait();
+    const auto progress = task->get_progress_info();
+    std::cout << "\n任务 " << task->id() << " 最终状态: "
+              << to_string(task->status()) << "\n";
+    std::cout << "已下载: " << progress.downloaded_bytes << " bytes"
+              << "，耗时: "
+              << std::chrono::duration_cast<std::chrono::seconds>(progress.elapsed).count()
+              << " 秒\n";
 
-    // 获取统计信息
-    auto stats = engine.get_statistics();
-    std::cout << "\n统计信息:\n";
-    std::cout << "  活动任务: " << stats.active_tasks << "\n";
-    std::cout << "  等待任务: " << stats.waiting_tasks << "\n";
-    std::cout << "  完成任务: " << stats.completed_tasks << "\n";
-    std::cout << "  总下载: " << stats.total_downloaded / 1024 / 1024 << "MB\n";
-
-    // 文件校验（如果指定了哈希值）
-    if (argc >= 5) {
-        std::string expected_hash = argv[3];
-        std::string hash_type = (argc >= 5) ? argv[4] : "sha256";
-
-        HashAlgorithm algo = HashAlgorithm::SHA256;
-        if (hash_type == "md5") {
-            algo = HashAlgorithm::MD5;
-        } else if (hash_type == "sha1") {
-            algo = HashAlgorithm::SHA1;
-        }
-
-        std::cout << "\n校验文件完整性...\n";
-        HashVerifyCommand verifier(output_path, expected_hash, algo);
-        if (verifier.execute()) {
-            std::cout << "✓ 文件校验通过\n";
-        } else {
-            std::cout << "✗ 文件校验失败\n";
-            return 1;
-        }
-    }
-
-    return 0;
+    return task->status() == TaskStatus::Completed ? 0 : 1;
 }

@@ -180,12 +180,12 @@ done
 
 print_info "开始构建 Falcon 下载器..."
 
-ENABLE_BITTORRENT=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "libs/libfalcon-protocols/plugins/bittorrent/CMakeLists.txt")
-ENABLE_THUNDER=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "libs/libfalcon-protocols/plugins/thunder/thunder_plugin.cpp")
-ENABLE_QQDL=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "libs/libfalcon-protocols/plugins/qqdl/qqdl_plugin.cpp")
-ENABLE_FLASHGET=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "libs/libfalcon-protocols/plugins/flashget/flashget_plugin.cpp")
-ENABLE_ED2K=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "libs/libfalcon-protocols/plugins/ed2k/ed2k_plugin.cpp")
-ENABLE_HLS=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "libs/libfalcon-protocols/plugins/hls/hls_plugin.cpp")
+ENABLE_BITTORRENT=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "libs/protocols/plugins/bittorrent/CMakeLists.txt")
+ENABLE_THUNDER=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "libs/protocols/plugins/thunder/thunder_plugin.cpp")
+ENABLE_QQDL=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "libs/protocols/plugins/qqdl/qqdl_plugin.cpp")
+ENABLE_FLASHGET=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "libs/protocols/plugins/flashget/flashget_plugin.cpp")
+ENABLE_ED2K=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "libs/protocols/plugins/ed2k/ed2k_plugin.cpp")
+ENABLE_HLS=$(resolve_plugin_flag "$ENABLE_ALL_PROTOCOLS" "libs/protocols/plugins/hls/hls_plugin.cpp")
 
 if [ "$ENABLE_COVERAGE" = "ON" ] && [ -d "$BUILD_DIR" ]; then
     find "$BUILD_DIR" -name '*.gcda' -delete
@@ -300,8 +300,7 @@ if [ "$ENABLE_COVERAGE" = "ON" ] && command -v gcov >/dev/null 2>&1; then
         find "$BUILD_DIR" -type f \
             \( -name 'download_engine.cpp.gcno' \
             -o -name 'task_manager.cpp.gcno' \
-            -o -name 'download_task.cpp.gcno' \
-            -o -name 'download_engine_v2.cpp.gcno' \)
+            -o -name 'download_task.cpp.gcno' \)
     )
 
     if [ ${#GCNO_FILES[@]} -gt 0 ]; then

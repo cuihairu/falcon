@@ -44,12 +44,17 @@
 
 ```text
 libs/
-├── libfalcon-core/       target: falcon_core        alias: Falcon::core
-├── libfalcon-protocols/  target: falcon_protocols   alias: Falcon::protocols
-├── libfalcon-storage/    target: falcon_storage     alias: Falcon::storage
-├── libfalcon-drives/     target: falcon_drives      alias: Falcon::drives
-├── falcon-cli/
-└── falcon-daemon/
+├── core/       target: falcon_core        alias: Falcon::core
+├── protocols/  target: falcon_protocols   alias: Falcon::protocols
+├── storage/    target: falcon_storage     alias: Falcon::storage
+└── drives/     target: falcon_drives      alias: Falcon::drives
+
+apps/
+├── cli/
+├── daemon/
+├── swarmd/
+├── desktop/
+└── browser_extension/
 ```
 
 依赖方向（禁止反向）：`falcon_protocols -> falcon_core`、
@@ -287,37 +292,37 @@ libs/
 
 ### 抽象层清单（7 层）
 
-- L1 引擎领域与调度：任务/队列/并发/事件/协议路由，进程内存态（`libs/libfalcon-core/src/download_engine.cpp:372`、`libs/libfalcon-core/include/falcon/download_engine.hpp:16`）。
-- L2 协议与传输数据面：V1 契约 + V2 命令引擎宿主，传输与分段工件，CMake 选择（`libs/libfalcon-protocols/src/builtin_protocol_handlers.cpp:39`、`libs/libfalcon-protocols/include/falcon/protocols/v2_engine_host.hpp:1`）。
-- L3 远端资源与云访问：对象存储/远端浏览、网盘分享解析、选择器搜索、可选加密 SQLite 配置（`libs/libfalcon-storage/include/falcon/storage/resource_browser.hpp:81`、`libs/libfalcon-drives/include/falcon/drives/cloud_storage_plugin.hpp:89`、`libs/libfalcon-drives/src/config_manager.cpp:210`）。
+- L1 引擎领域与调度：任务/队列/并发/事件/协议路由，进程内存态（`libs/core/src/download_engine.cpp:372`、`libs/core/include/falcon/download_engine.hpp:16`）。
+- L2 协议与传输数据面：V1 契约 + V2 命令引擎宿主，传输与分段工件，CMake 选择（`libs/protocols/src/builtin_protocol_handlers.cpp:39`、`libs/protocols/include/falcon/protocols/v2_engine_host.hpp:1`）。
+- L3 远端资源与云访问：对象存储/远端浏览、网盘分享解析、选择器搜索、可选加密 SQLite 配置（`libs/storage/include/falcon/storage/resource_browser.hpp:81`、`libs/drives/include/falcon/drives/cloud_storage_plugin.hpp:89`、`libs/drives/src/config_manager.cpp:210`）。
 - L4 呈现层与本地应用状态：Qt 页面/后端选择、QSettings、trash.json、engines.json（`apps/desktop/src/services/download_backend.hpp:33`、`apps/desktop/src/main_window.cpp:281`、`apps/desktop/src/services/trash_store.cpp:117`）。
-- L5 服务装配与进程生命周期：CLI 前台单次运行与 daemon 长生命周期、任务恢复、P2SP 接线、排水（`libs/falcon-cli/src/main.cpp:864`、`libs/falcon-daemon/src/main.cpp:300`、`libs/falcon-daemon/src/main.cpp:340`）。
-- L6 控制面协议与持久化：HTTP/WS/JSON-RPC/MCP 复用方法分发器，WAL SQLite 任务库与事件监听器（`libs/falcon-daemon/src/rpc/json_rpc_server.cpp:575`、`libs/falcon-daemon/src/rpc/mcp_server.cpp:473`、`libs/falcon-daemon/src/storage/task_storage.cpp:25`）。
-- L7 P2SP 集会与数据面：内存集会状态、独立 HTTP/WS 权威、PEM 身份、daemon 公告与 Range 数据服务（`libs/falcon-swarmd/src/rdv/swarm_rdv_state.hpp:3`、`libs/falcon-swarmd/src/common/swarm_protocol.hpp:30`、`libs/falcon-daemon/src/daemon/swarm_data_service.cpp:193`）。
+- L5 服务装配与进程生命周期：CLI 前台单次运行与 daemon 长生命周期、任务恢复、P2SP 接线、排水（`apps/cli/src/main.cpp:864`、`apps/daemon/src/main.cpp:300`、`apps/daemon/src/main.cpp:340`）。
+- L6 控制面协议与持久化：HTTP/WS/JSON-RPC/MCP 复用方法分发器，WAL SQLite 任务库与事件监听器（`apps/daemon/src/rpc/json_rpc_server.cpp:575`、`apps/daemon/src/rpc/mcp_server.cpp:473`、`apps/daemon/src/storage/task_storage.cpp:25`）。
+- L7 P2SP 集会与数据面：内存集会状态、独立 HTTP/WS 权威、PEM 身份、daemon 公告与 Range 数据服务（`apps/swarmd/src/rdv/swarm_rdv_state.hpp:3`、`apps/swarmd/src/common/swarm_protocol.hpp:30`、`apps/daemon/src/daemon/swarm_data_service.cpp:193`）。
 
 ### 超大文件候选（>1000 行）
 
-- [x] LAY-001 [P1] 拆分 `libs/libfalcon-protocols/src/commands/http_commands.cpp`（3640 行）——HTTP 多连接分段、TLS/代理、文件分配与 V2 重试命令混合在单 TU（`libs/libfalcon-protocols/src/commands/http_commands.cpp:61`）（commit `c7c23ae`）。
-- [x] LAY-002 [P1] 拆分 `libs/falcon-daemon/src/rpc/json_rpc_server.cpp`（1979 行 → 967 行）——aria2 方法分发 `dispatch_rpc` 拆到独立 TU，共享内部辅助（序列化/鉴权/分页）落 `json_rpc_server_detail.hpp`（commit `bfbabba`；build-desktop 全量 ctest 3219/3219）。
+- [x] LAY-001 [P1] 拆分 `libs/protocols/src/commands/http_commands.cpp`（3640 行）——HTTP 多连接分段、TLS/代理、文件分配与 V2 重试命令混合在单 TU（`libs/protocols/src/commands/http_commands.cpp:61`）（commit `c7c23ae`）。
+- [x] LAY-002 [P1] 拆分 `apps/daemon/src/rpc/json_rpc_server.cpp`（1979 行 → 967 行）——aria2 方法分发 `dispatch_rpc` 拆到独立 TU，共享内部辅助（序列化/鉴权/分页）落 `json_rpc_server_detail.hpp`（commit `bfbabba`；build-desktop 全量 ctest 3219/3219）。
 - [ ] LAY-003 [P1] 拆分 `apps/desktop/src/pages/download_page.cpp`（1666 行）——任务表格/网格视图、筛选、操作菜单与 QSettings 记忆集中（`apps/desktop/src/pages/download_page.cpp:81`、`apps/desktop/src/pages/download_page.cpp:847`）。
 - [ ] LAY-004 [P1] 拆分 `apps/desktop/src/main_window.cpp`（1372 行）——窗口装配、侧栏/页面创建、托盘、IPC、设置与 40+ 信号槽共存（`apps/desktop/src/main_window.cpp:187`、`apps/desktop/src/main_window.cpp:935`）。
 - [ ] LAY-005 [P1] 拆分 `apps/desktop/src/pages/settings_page.cpp`（1346 行）——设置项 UI 与 engines.json 编辑/校验/持久化混合同页（`apps/desktop/src/pages/settings_page.cpp:791`、`apps/desktop/src/pages/settings_page.cpp:910`）。
-- [ ] LAY-006 [P1] 拆分 `libs/libfalcon-protocols/src/incremental_download.cpp`（1246 行）——增量差分/全量回退/哈希校验与流控同文件（`libs/libfalcon-protocols/src/incremental_download.cpp:1055`）。
-- [ ] LAY-007 [P1] 拆分 `libs/libfalcon-protocols/plugins/http/http_handler.cpp`（1182 行）——HTTP 头探测、分段入口、V1/V2 分流与 curl 适配同文件（`libs/libfalcon-protocols/plugins/http/http_handler.cpp:1`）。
+- [ ] LAY-006 [P1] 拆分 `libs/protocols/src/incremental_download.cpp`（1246 行）——增量差分/全量回退/哈希校验与流控同文件（`libs/protocols/src/incremental_download.cpp:1055`）。
+- [ ] LAY-007 [P1] 拆分 `libs/protocols/plugins/http/http_handler.cpp`（1182 行）——HTTP 头探测、分段入口、V1/V2 分流与 curl 适配同文件（`libs/protocols/plugins/http/http_handler.cpp:1`）。
 - [ ] LAY-008 [P1] 拆分 `apps/desktop/src/pages/cloud_page.cpp`（1178 行）——云连接表单、配置持久化与目录浏览 UI 共存（`apps/desktop/src/pages/cloud_page.cpp:24`、`apps/desktop/src/pages/cloud_page.cpp:911`）。
-- [ ] LAY-009 [P1] 拆分 `libs/libfalcon-core/src/task_manager.cpp`（1140 行）——队列/调度/恢复/清理/做种与统计集中在单实现（`libs/libfalcon-core/src/task_manager.cpp:191`）。
-- [ ] LAY-010 [P1] 拆分 `libs/libfalcon-drives/src/cloud_storage_plugin.cpp`（1132 行）——12+ 厂商插件与 HTTP 抓取/解析混居（`libs/libfalcon-drives/src/cloud_storage_plugin.cpp:320`）。
-- [ ] LAY-011 [P1] 拆分 `libs/libfalcon-protocols/src/download_engine_v2.cpp`（1079 行）——命令执行、socket 事件、节流窗口、任务状态与清理同引擎（`libs/libfalcon-protocols/src/download_engine_v2.cpp:458`）。
-- [ ] LAY-012 [P1] 拆分 `libs/falcon-cli/src/main.cpp`（1075 行）——参数装配、交互控制、进度显示与 P2SP 公告在单 TU（`libs/falcon-cli/src/main.cpp:864`、`libs/falcon-cli/src/main.cpp:1047`）。
-- [ ] LAY-013 [P1] 拆分 `libs/libfalcon-protocols/plugins/metalink/metalink_handler.cpp`（1013 行）——Metalink 解析/镜像选择/下载流程同文件（`libs/libfalcon-protocols/plugins/metalink/metalink_handler.cpp:1`）。
-- [ ] LAY-014 [P1] 拆分 `libs/libfalcon-protocols/plugins/bittorrent/dht_node.cpp`（1008 行）——DHT 节点路由/令牌/桶刷新与 UDP 网络态共文件（`libs/libfalcon-protocols/plugins/bittorrent/dht_node.cpp:1`）。
+- [ ] LAY-009 [P1] 拆分 `libs/core/src/task_manager.cpp`（1140 行）——队列/调度/恢复/清理/做种与统计集中在单实现（`libs/core/src/task_manager.cpp:191`）。
+- [ ] LAY-010 [P1] 拆分 `libs/drives/src/cloud_storage_plugin.cpp`（1132 行）——12+ 厂商插件与 HTTP 抓取/解析混居（`libs/drives/src/cloud_storage_plugin.cpp:320`）。
+- [ ] LAY-011 [P1] 拆分 `libs/protocols/src/download_engine_v2.cpp`（1079 行）——命令执行、socket 事件、节流窗口、任务状态与清理同引擎（`libs/protocols/src/download_engine_v2.cpp:458`）。
+- [ ] LAY-012 [P1] 拆分 `apps/cli/src/main.cpp`（1075 行）——参数装配、交互控制、进度显示与 P2SP 公告在单 TU（`apps/cli/src/main.cpp:864`、`apps/cli/src/main.cpp:1047`）。
+- [ ] LAY-013 [P1] 拆分 `libs/protocols/plugins/metalink/metalink_handler.cpp`（1013 行）——Metalink 解析/镜像选择/下载流程同文件（`libs/protocols/plugins/metalink/metalink_handler.cpp:1`）。
+- [ ] LAY-014 [P1] 拆分 `libs/protocols/plugins/bittorrent/dht_node.cpp`（1008 行）——DHT 节点路由/令牌/桶刷新与 UDP 网络态共文件（`libs/protocols/plugins/bittorrent/dht_node.cpp:1`）。
 
 ### 目录/分类不合理处
 
-- `libs/libfalcon-drives/include/falcon/{cloud_storage_plugin.hpp,config_manager.hpp,resource_search.hpp}` 与 `libs/libfalcon-drives/include/falcon/drives/` 双份同名公共头并存（根 `falcon/` 兼容转发 + `falcon/drives/` 实际定义，见 `libs/libfalcon-drives/include/falcon/drives/config_manager.hpp:38`）。历史兼容转发可保留，但新增公共 API 应只落 `falcon/drives/`，避免两个真值源。
-- `libs/libfalcon-protocols/src/commands/http_commands.cpp`（3640 行）是 V2 命令面，却按「commands」目录名放在 protocols/src 下，而其配套头在 `include/falcon/protocols/commands/http_commands.hpp`（979 行），公共接口与私有实现目录语义不一致；且 `incremental_download.cpp`/`download_engine_v2.cpp` 等 V2 传输实现未归入 `commands/`，命令目录并未覆盖全部 V2 文件。
-- `docs/` 已完成整理：历史设计稿已合并（仍有价值的进入 `developer/` 与 `api/`）或删除，`ARCHIVE.md` 已移除；VitePress 源直接位于 `docs/` 根目录，核心文档与 `ui/` 设计文档分模块维护。
-- `libs/libfalcon-protocols/plugins/*` 中每个插件既有 `*_plugin.cpp` 又有 `*_handler.cpp`（如 `http/http_plugin.cpp` 与 `http/http_handler.cpp`、`sftp/sftp_plugin.cpp` 与 `sftp/sftp_handler.cpp`），目录名按插件聚合，文件级再按 plugin/handler 命名，两层粒度并存；建议统一为目录内文件职责命名，避免同一插件两种命名习惯。
+- `libs/drives/include/falcon/{cloud_storage_plugin.hpp,config_manager.hpp,resource_search.hpp}` 与 `libs/drives/include/falcon/drives/` 双份同名公共头并存（根 `falcon/` 兼容转发 + `falcon/drives/` 实际定义，见 `libs/drives/include/falcon/drives/config_manager.hpp:38`）。历史兼容转发可保留，但新增公共 API 应只落 `falcon/drives/`，避免两个真值源。
+- `libs/protocols/src/commands/http_commands.cpp`（3640 行）是 V2 命令面，却按「commands」目录名放在 protocols/src 下，而其配套头在 `include/falcon/protocols/commands/http_commands.hpp`（979 行），公共接口与私有实现目录语义不一致；且 `incremental_download.cpp`/`download_engine_v2.cpp` 等 V2 传输实现未归入 `commands/`，命令目录并未覆盖全部 V2 文件。
+- `docs/` 已完成整理：历史设计稿已合并（仍有价值的进入 `developer/` 与 `api/`）或删除，`ARCHIVE.md` 已移除；VitePress 源直接位于 `docs/` 根目录，只保留核心文档模块；UI 设计以静态原型 `design/ui-next/` 与导出图维护，不再是文档模块。
+- `libs/protocols/plugins/*` 中每个插件既有 `*_plugin.cpp` 又有 `*_handler.cpp`（如 `http/http_plugin.cpp` 与 `http/http_handler.cpp`、`sftp/sftp_plugin.cpp` 与 `sftp/sftp_handler.cpp`），目录名按插件聚合，文件级再按 plugin/handler 命名，两层粒度并存；建议统一为目录内文件职责命名，避免同一插件两种命名习惯。
 
 ## Codex 深审发现（2026-11-13，luna profile 近5 commit 审核，0C/1M/2m，待修）
 

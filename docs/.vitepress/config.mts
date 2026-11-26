@@ -13,7 +13,6 @@ const englishNav = [
   { text: "Protocols", link: "/protocols/", activeMatch: "/protocols/" },
   { text: "API Reference", link: "/api/", activeMatch: "/api/" },
   { text: "Developer", link: "/developer/", activeMatch: "/developer/" },
-  { text: "UI Design", link: "/ui/", activeMatch: "/ui/" },
   { text: "FAQ", link: "/faq", activeMatch: "^/faq" },
 ];
 
@@ -22,7 +21,6 @@ const chineseNav = [
   { text: "协议", link: "/zh/protocols/", activeMatch: "/zh/protocols/" },
   { text: "API 参考", link: "/zh/api/", activeMatch: "/zh/api/" },
   { text: "开发者", link: "/zh/developer/", activeMatch: "/zh/developer/" },
-  { text: "UI 设计", link: "/zh/ui/", activeMatch: "/zh/ui/" },
   { text: "常见问题", link: "/zh/faq", activeMatch: "^/zh/faq" },
 ];
 
@@ -78,17 +76,6 @@ const englishSidebar = {
         { text: "Low-Level Utilities", link: "/api/low-level" },
         { text: "Plugin API", link: "/api/plugins" },
         { text: "Events API", link: "/api/events" },
-      ],
-    },
-  ],
-  "/ui/": [
-    {
-      text: "UI Design",
-      items: [
-        { text: "Overview", link: "/ui/" },
-        { text: "Design Specification", link: "/ui/design-spec" },
-        { text: "Desktop Redesign", link: "/ui/desktop-redesign" },
-        { text: "Design Prototypes", link: "/ui/design-prototypes" },
       ],
     },
   ],
@@ -149,18 +136,65 @@ const chineseSidebar = {
       ],
     },
   ],
-  "/zh/ui/": [
-    {
-      text: "UI 设计",
-      items: [
-        { text: "概览", link: "/zh/ui/" },
-        { text: "设计规范", link: "/zh/ui/design-spec" },
-        { text: "桌面端重设计", link: "/zh/ui/desktop-redesign" },
-        { text: "UI 设计原型", link: "/zh/ui/design-prototypes" },
-      ],
-    },
-  ],
 };
+
+// Locale boot script: prefer a stored manual choice; otherwise infer from the
+// browser language. Injected in <head> so the redirect happens before paint.
+const localeScript = `
+(function () {
+  var KEY = 'falcon-docs-locale';
+  var BASE = ${JSON.stringify(base)};
+
+  function stripBase(p) {
+    if (BASE !== '/' && p.indexOf(BASE) === 0) return p.slice(BASE.length - 1);
+    return p;
+  }
+  function localeOf(p) {
+    p = stripBase(p);
+    return (p === '/zh' || p.indexOf('/zh/') === 0) ? 'zh' : 'en';
+  }
+  function relOf(p) {
+    p = stripBase(p);
+    if (p === '/zh') return '/';
+    if (p.indexOf('/zh/') === 0) return p.slice(3);
+    return p;
+  }
+  function getChoice() {
+    try { return window.localStorage.getItem(KEY); } catch (e) { return null; }
+  }
+  function setChoice(v) {
+    try { window.localStorage.setItem(KEY, v); } catch (e) {}
+  }
+
+  // 1) No manual choice yet -> infer from the browser language.
+  if (!getChoice()) {
+    var langs = (navigator.languages && navigator.languages.length)
+      ? navigator.languages
+      : [navigator.language || ''];
+    var wantZh = false;
+    for (var i = 0; i < langs.length; i++) {
+      if (/^zh(?:[-_]|$)/i.test(langs[i])) { wantZh = true; break; }
+    }
+    if (wantZh && localeOf(location.pathname) === 'en') {
+      var rel = relOf(location.pathname);
+      var root = BASE === '/' ? '/zh' : BASE.replace(/\\/$/, '') + '/zh';
+      location.replace(root + (rel === '/' ? '/' : rel) + location.search + location.hash);
+      return;
+    }
+  }
+
+  // 2) Remember an explicit language switch made through the locale menu.
+  document.addEventListener('click', function (e) {
+    var a = e.target && e.target.closest ? e.target.closest('a') : null;
+    if (!a) return;
+    var href = a.getAttribute('href') || '';
+    if (href.charAt(0) !== '/' || href.indexOf('//') === 0) return;
+    var current = localeOf(location.pathname);
+    var target = localeOf(href);
+    if (target !== current) setChoice(target);
+  }, false);
+})();
+`;
 
 export default defineConfig({
   title: "Falcon Downloader",
@@ -226,6 +260,7 @@ export default defineConfig({
     },
   },
   head: [
+    ["script", {}, localeScript],
     ["link", { rel: "icon", type: "image/svg+xml", href: `${base}favicon.svg` }],
     ["meta", { name: "theme-color", content: "#f97316" }],
     ["meta", { property: "og:type", content: "website" }],

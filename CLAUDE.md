@@ -46,7 +46,7 @@
 
 ### 2026-10-13 - 安装导出对外可消费收口（todo #12：FalconConfig 依赖闭包三缺口 + BT 插件公共头安装）
 - **目标**（todo.md 第五阶段 #12「完善安装导出」）：安装后的 Falcon 包能被外部工程 `find_package(Falcon)` 一手消费——此前 FalconConfig.cmake.in 只覆盖 spdlog/nlohmann/CURL/OpenSSL 四个依赖，protocols/drives 的 PRIVATE 静态依赖（libtorrent/libssh2/sqlite3/expat/miniupnpc/natpmp）在导出闭包里引用了消费方不存在的 imported target，`Falcon::protocols` 链接即红
-- **机制选型（FALCON_PACKAGE_NEEDS_\* CACHE INTERNAL 标志）**：imported target 目录作用域不可见于根目录，export 闭包引用哪些目标只能在**创建它的子包 CMakeLists** 里判定（protocols 判 libssh2/libtorrent、drives 判 sqlite3、bittorrent 插件判 libtorrent）——各子包在链接/查找点 `set(... ON CACHE INTERNAL ... FORCE)` 打标，根 CMakeLists 在 `add_subdirectory(libs/libfalcon-core)` 前重置五枚标志，install(EXPORT) 后按标志生成 FalconConfig 的 find_dependency 块（configure_package_config_file 把 `@VAR@` 替换为字面 `if(ON)/if(OFF)`，消费方所见即安装时形态）
+- **机制选型（FALCON_PACKAGE_NEEDS_\* CACHE INTERNAL 标志）**：imported target 目录作用域不可见于根目录，export 闭包引用哪些目标只能在**创建它的子包 CMakeLists** 里判定（protocols 判 libssh2/libtorrent、drives 判 sqlite3、bittorrent 插件判 libtorrent）——各子包在链接/查找点 `set(... ON CACHE INTERNAL ... FORCE)` 打标，根 CMakeLists 在 `add_subdirectory(libs/core)` 前重置五枚标志，install(EXPORT) 后按标志生成 FalconConfig 的 find_dependency 块（configure_package_config_file 把 `@VAR@` 替换为字面 `if(ON)/if(OFF)`，消费方所见即安装时形态）
 - **三缺口修复**：① libtorrent——bittorrent 插件 CMakeLists 链接点打标 + FalconConfig `find_dependency(LibtorrentRasterbar 2.0)`（pkg-config 兜底形态 PkgConfig::LIBTORRENT 为环境形态依赖，与 CURL 的 libcurl_static 同注记）；② sqlite3——根目录的 `SQLite3_FOUND` 在 drives 子目录不可见且根目录普通 `set` 遮蔽缓存，判定点移到 drives 链接 SQLite 的位置，根目录推导块删除；③ BT 插件公共头——include/ 下两枚 BT 转发 shim 用相对路径指回构建树源码，安装前缀下悬空，DIRECTORY 安装排除 `plugins/bittorrent` + `install(FILES)` 装 4 枚真实头（bittorrent_plugin/dht_node/pex_protocol/bencode）
 - **file(INSTALL) mtime 跳过教训**：最初方案「DIRECTORY 先装 shim、install(FILES) 后覆盖」结构性失效——`file(INSTALL)` 按 mtime 判 up-to-date **不比对内容**，git 检出让全部源文件 mtime 相同，已落盘 shim 携同款 mtime → 覆盖被静默跳过（`-- Up-to-date:` 日志 + 字节数核对才暴露）。唯一确定形态是排除法：shim 不进前缀，无覆盖次序依赖。REGEX 排除目录本身不能带尾斜杠（`/plugins/bittorrent/` 只排除目录下文件，仍创建空目录）
 - **同查找器同目标名原则**：消费方 find_dependency 跑构建时同一个 finder（SQLite3/miniupnpc 等）→ 目标名与导出闭包一致，无需 ALIAS 归一（CMP0107 OLD 在 min 3.15 下对非 GLOBAL imported target 建 ALIAS 直接报错）；vendored libmetalink 是全局非 imported target 根目录可见，expat 推导留根目录；natpmp 无 config 包，FalconConfig 按构建侧同款 find_path/find_library 手工派生
@@ -1603,7 +1603,7 @@
   host_permissions 时 fetch 豁免 CORS
 
 ### 2026-09-19 - 覆盖率批次 Z：故障注入框架（编译期零成本）+ 15 处泄漏式注入接线修复 + 全量 2309 绿
-- **故障注入框架**（libs/libfalcon-core/include/falcon/detail/
+- **故障注入框架**（libs/core/include/falcon/detail/
   injection.hpp，新增）：`inject_failure(InjectPoint)` + `ScopedInjection`
   RAII + `set_injection` 位图。生产构建 `FALCON_FAILURE_INJECTION` 未定义
   时为 `inline constexpr` 恒 false——零运行时成本、零分支；测试构建
@@ -3537,13 +3537,13 @@ graph TD
     E -->|depends on| C
     F -->|depends on| C
 
-    click C "./libs/libfalcon-core/CLAUDE.md" "查看核心库文档"
-    click D "./libs/libfalcon-protocols/CLAUDE.md" "查看协议库文档"
-    click E "./libs/libfalcon-storage/CLAUDE.md" "查看存储库文档"
-    click F "./libs/libfalcon-drives/CLAUDE.md" "查看网盘库文档"
-    click G "./libs/falcon-cli/CLAUDE.md" "查看 CLI 文档"
-    click H "./libs/falcon-daemon/CLAUDE.md" "查看 Daemon 文档"
-    click P "./libs/falcon-swarmd/CLAUDE.md" "查看 swarmd 文档"
+    click C "./libs/core/CLAUDE.md" "查看核心库文档"
+    click D "./libs/protocols/CLAUDE.md" "查看协议库文档"
+    click E "./libs/storage/CLAUDE.md" "查看存储库文档"
+    click F "./libs/drives/CLAUDE.md" "查看网盘库文档"
+    click G "./apps/cli/CLAUDE.md" "查看 CLI 文档"
+    click H "./apps/daemon/CLAUDE.md" "查看 Daemon 文档"
+    click P "./apps/swarmd/CLAUDE.md" "查看 swarmd 文档"
 ```
 
 ---
@@ -3552,13 +3552,13 @@ graph TD
 
 | 模块路径 | 职责 | CMake Target | 状态 |
 |---------|------|-------------|------|
-| `libs/libfalcon-core` | 下载引擎/任务管理/事件系统 | `Falcon::core` | 开发中 |
-| `libs/libfalcon-protocols` | HTTP/FTP/BT/ED2K/HLS 等协议 | `Falcon::protocols` | 开发中 |
-| `libs/libfalcon-storage` | S3/OSS/COS/Kodo/Upyun 对象存储 | `Falcon::storage` | 开发中 |
-| `libs/libfalcon-drives` | 网盘/云存储/搜索/配置管理 | `Falcon::drives` | 开发中 |
-| `libs/falcon-cli` | 命令行下载工具 | `falcon-cli` | 开发中 |
-| `libs/falcon-daemon` | 后台守护进程 + RPC 服务 | `falcon-daemon` | 开发中 |
-| `libs/falcon-swarmd` | P2SP Rendezvous Service（发现/会合服务）+ 节点侧 SwarmClient | `falcon-swarmd` | 开发中（阶段 0） |
+| `libs/core` | 下载引擎/任务管理/事件系统 | `Falcon::core` | 开发中 |
+| `libs/protocols` | HTTP/FTP/BT/ED2K/HLS 等协议 | `Falcon::protocols` | 开发中 |
+| `libs/storage` | S3/OSS/COS/Kodo/Upyun 对象存储 | `Falcon::storage` | 开发中 |
+| `libs/drives` | 网盘/云存储/搜索/配置管理 | `Falcon::drives` | 开发中 |
+| `apps/cli` | 命令行下载工具 | `falcon-cli` | 开发中 |
+| `apps/daemon` | 后台守护进程 + RPC 服务 | `falcon-daemon` | 开发中 |
+| `apps/swarmd` | P2SP Rendezvous Service（发现/会合服务）+ 节点侧 SwarmClient | `falcon-swarmd` | 开发中（阶段 0） |
 | `apps/desktop` | GUI 桌面应用（Qt6） | `falcon-desktop` | 规划中 |
 | `apps/web` | Web 管理界面（预留） | — | 规划中 |
 
@@ -3689,10 +3689,10 @@ cmake --build build --target falcon-cli
 
 ### 代码组织
 - **头文件**：
-  - Core 公共 API 放在 `libs/libfalcon-core/include/falcon/`
-  - Protocols 公共 API 放在 `libs/libfalcon-protocols/include/falcon/`
-  - Storage 公共 API 放在 `libs/libfalcon-storage/include/falcon/`
-  - Drives 公共 API 放在 `libs/libfalcon-drives/include/falcon/`
+  - Core 公共 API 放在 `libs/core/include/falcon/`
+  - Protocols 公共 API 放在 `libs/protocols/include/falcon/`
+  - Storage 公共 API 放在 `libs/storage/include/falcon/`
+  - Drives 公共 API 放在 `libs/drives/include/falcon/`
   - 使用 `#pragma once` 或传统的 include guard
 
 - **源文件**：
@@ -3723,7 +3723,7 @@ DownloadTask* start_download(const std::string& url,
 ### 异常处理
 - 使用异常处理错误（非性能关键路径）
 - 自定义异常类继承自 `std::exception`
-- 关键异常定义在 `libs/libfalcon-core/include/falcon/exceptions.hpp`
+- 关键异常定义在 `libs/core/include/falcon/exceptions.hpp`
 
 ### 资源管理
 - 使用 **RAII** 原则
@@ -3769,11 +3769,11 @@ DownloadTask* start_download(const std::string& url,
 
 ### 插件开发指引
 新增协议插件时，请遵循以下步骤：
-1. 在 `libs/libfalcon-protocols/plugins/<protocol_name>/` 创建目录
-2. 实现 `IProtocolHandler` 接口（定义在 `libs/libfalcon-core/include/falcon/protocol_handler.hpp`）
+1. 在 `libs/protocols/plugins/<protocol_name>/` 创建目录
+2. 实现 `IProtocolHandler` 接口（定义在 `libs/core/include/falcon/protocol_handler.hpp`）
 3. 如需访问其他协议处理器（如包装协议委托下载），实现 `IProtocolHandlerExtension` 接口
 4. 在插件目录下创建 `CLAUDE.md` 记录协议特性、依赖库、测试方法
-5. 在 `libs/libfalcon-protocols/CMakeLists.txt` 中添加编译选项（可选编译该插件）
+5. 在 `libs/protocols/CMakeLists.txt` 中添加编译选项（可选编译该插件）
 
 **协议委托机制**：
 - 包装协议（thunder://、flashget://、qqlink://）应实现 `IProtocolHandlerExtension`
@@ -3796,8 +3796,8 @@ falcon/                              # 项目根目录
 ├── .github/
 │   └── workflows/                   # CI/CD 配置
 │
-├── libs/                        # C++ 包（4个独立库 + 2个工具）
-│   ├── libfalcon-core/              # 核心下载引擎库
+├── libs/                            # 可独立构建/发布的 C++ 库（4 个；对应 ports/ 中的包名）
+│   ├── core/                        # 核心下载引擎库（包名 libfalcon-core）
 │   │   ├── CMakeLists.txt           # Target: falcon_core / Falcon::core
 │   │   ├── CLAUDE.md
 │   │   ├── include/falcon/          # 公共 API 头文件
@@ -3811,7 +3811,7 @@ falcon/                              # 项目根目录
 │   │   ├── src/                     # 核心库实现
 │   │   └── tests/                   # 核心库测试
 │   │
-│   ├── libfalcon-protocols/         # 协议实现库
+│   ├── protocols/                   # 协议实现库（包名 libfalcon-protocols）
 │   │   ├── CMakeLists.txt           # Target: falcon_protocols / Falcon::protocols
 │   │   ├── include/falcon/
 │   │   ├── src/                     # DownloadEngineV2, SegmentDownloader 等
@@ -3828,7 +3828,7 @@ falcon/                              # 项目根目录
 │   │   │   └── ...                  # 其他协议
 │   │   └── tests/
 │   │
-│   ├── libfalcon-storage/           # 对象存储库
+│   ├── storage/                     # 对象存储库（包名 libfalcon-storage）
 │   │   ├── CMakeLists.txt           # Target: falcon_storage / Falcon::storage
 │   │   ├── include/falcon/
 │   │   ├── src/                     # ResourceBrowser 等
@@ -3840,37 +3840,38 @@ falcon/                              # 项目根目录
 │   │   │   └── upyun/               # 又拍云
 │   │   └── tests/
 │   │
-│   ├── libfalcon-drives/            # 网盘与云存储库
+│   ├── drives/                      # 网盘与云存储库（包名 libfalcon-drives）
 │   │   ├── CMakeLists.txt           # Target: falcon_drives / Falcon::drives
 │   │   ├── include/falcon/
 │   │   ├── src/                     # CloudStoragePlugin, ConfigManager 等
 │   │   └── tests/
 │   │
-│   ├── falcon-cli/                  # CLI 命令行工具
+├── apps/                            # 可执行程序与 UI
+│   ├── cli/                         # CLI 命令行工具
+│   │   ├── CMakeLists.txt
+│   │   ├── CLAUDE.md
+│   │   ├── completion/              # bash/fish/zsh 补全脚本
+│   │   ├── src/
+│   │   └── tests/
+│   │
+│   ├── daemon/                      # 后台守护进程
 │   │   ├── CMakeLists.txt
 │   │   ├── CLAUDE.md
 │   │   ├── src/
 │   │   └── tests/
 │   │
-│   └── falcon-daemon/               # 后台守护进程
-│       ├── CMakeLists.txt
-│       ├── CLAUDE.md
-│       ├── src/
-│       └── tests/
-│
-│   └── falcon-swarmd/               # P2SP Rendezvous Service（阶段 0）
-│       ├── CMakeLists.txt
-│       ├── CLAUDE.md
-│       ├── src/                     # common(协议/密码学) + server + client + main
-│       └── tests/                   # unit/loopback/client/e2e 四 target
-│
-├── apps/                            # 应用层（GUI/Web）
-│   ├── desktop/                     # 桌面应用（预留）
+│   ├── swarmd/                      # P2SP Rendezvous Service（阶段 0）
+│   │   ├── CMakeLists.txt
 │   │   ├── CLAUDE.md
-│   │   └── README.md                # 技术选型说明（Qt/Tauri/Electron）
-│   └── web/                         # Web 管理界面（预留）
-│       ├── CLAUDE.md
-│       └── README.md                # 技术选型说明（React/Vue）
+│   │   ├── src/                     # common(协议/密码学) + rdv + client + main
+│   │   └── tests/                   # unit/loopback/client/e2e 四 target
+│   │
+│   ├── desktop/                     # Qt6 桌面应用
+│   │   ├── CMakeLists.txt
+│   │   ├── CLAUDE.md
+│   │   └── README.md
+│   │
+│   └── browser_extension/           # 浏览器扩展
 │
 ├── cmake/                           # CMake 辅助模块
 │   ├── FindLibcurl.cmake
@@ -3885,8 +3886,7 @@ falcon/                              # 项目根目录
 │   ├── .vitepress/                  # VitePress 配置与主题
 │   ├── guide/                       # 用户指南
 │   ├── developer/                   # 开发者文档（架构 / P2SP / MCP / 打包）
-│   ├── ui/                          # UI 设计（规范 / 重设计 / 原型）
-│   └── design/ui-next/              # 24 屏交互原型
+│   └── design/ui-next/              # 25 屏交互原型（含导出图，非文档模块）
 │
 ├── examples/                        # 使用示例
 │   ├── simple_download.cpp          # 基础下载示例
@@ -3922,7 +3922,7 @@ option(FALCON_USE_STATIC_LIBS "静态链接依赖库" OFF)
 ### 运行时配置
 CLI 程序支持配置文件（用户级 `~/.config/falcon/config.json` 与系统级
 `/etc/falcon/config.json`，命令行显式参数优先）。全部字段见
-`libs/falcon-cli/src/config_loader.cpp`，常用字段示例：
+`apps/cli/src/config_loader.cpp`，常用字段示例：
 ```json
 {
   "max_connections": 4,

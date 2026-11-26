@@ -7,8 +7,13 @@
 
 > **Status**: Stage 0 implemented (2026-09-25, `falcon-swarmd` package; see that package's CLAUDE.md);
 > **Stage 1 implemented** (2026-10-09, §16, daemon announce/query/RPC/e2e iron rules);
-> **Stage 2 implemented** (2026-10-10, §17, data service + query-injected mirror pool + NAT filtering);
+> **Stage 2's discovery/announce/data-service foundation remains** (2026-10-10, §17: inbound data service, query plane, NAT filtering);
 > Stage 3 not started.
+>
+> **Engine note**: the former multi-source engine and its mirror bridge have been
+> removed. The download data plane is now the single V1 libcurl engine with no version switch:
+> multi-source mirror segmentation and segment-level source switching are **not enabled today**
+> (a possible future enhancement on the V1 path).
 
 ## 1. Problem Statement and Goals
 
@@ -16,13 +21,13 @@ Capabilities falcon has today (2026-09 state):
 
 | Capability | Current State | Relation to This Design |
 |------|------|---------------|
-| V2 engine multi-source segmentation (P2SP) | metalink Stage 2 landed: the same file across multiple mirrors with segment-level source switching | **The data plane already has all the mechanics of "pulling the same file from multiple sources"** |
+| Multi-source mirror segmentation (P2SP) | The former engine's multi-source bridge has been removed; no active multi-source data plane | **The download data plane is V1 libcurl only; multi-source segmentation is not enabled today** |
 | daemon aria2-compatible RPC | 28 methods, HTTP + WebSocket on the same port, self-implemented with zero new dependencies | Candidate technical base for the Rendezvous and node control plane |
 | metalink | RFC 5854/Metalink3 dual compatibility; publish only after whole-file hash verification | A download form where the "hash is known out-of-band", naturally enabling sharing during download |
 | BT/DHT | libtorrent data plane + self-developed DhtClient (Kademlia iterative lookup) | Has validated all the engineering constraints of a peer network (see §4 selection) |
 | Task persistence | SQLite, recovery after shutdown | Reference for the persistence conventions of the node-side announce state machine |
 
-**What is missing is the last link**: multi-source segmentation today can only obtain "multiple sources of the same content" from a metalink document or the URLs of a single download task. The real user scenario is a fleet of falcon nodes — home NAS, desktop machines, cloud machines — each downloading files yet none aware of what the others hold:
+**What is missing is the last link**: a future multi-source enhancement would need "multiple sources of the same content", which today can only be obtained from a metalink document or the URLs of a single download task (the current V1 libcurl data plane does not pull from multiple sources). The real user scenario is a fleet of falcon nodes — home NAS, desktop machines, cloud machines — each downloading files yet none aware of what the others hold:
 
 - A 4GB file already downloaded on the desktop can only be fetched from scratch from the origin mirror when the NAS needs it;
 - Each machine maintains its own knowledge of "where this URL can be downloaded", with no way to share;
@@ -71,11 +76,11 @@ This document threads decisions D1–D10, each with its "why". The summary table
       └────┬────┘  └────┬────┘      └────┬────┘
            │            │                │
            └───── 数据面:HTTP 直连拉取 ────┘
-                 (V2 P2SP 分段语义,Rendezvous 不经手)
+                 (当前 V1 libcurl 数据面;多源分段未启用,Rendezvous 不经手)
 ```
 
 - **Index plane**: nodes register identity, announce resources, query resources, and subscribe to change notifications with the Rendezvous.
-- **Data plane**: node A needs file X (sha256 known) → queries the Rendezvous to learn "nodes B and C hold X" → A directly issues HTTP Range pulls against B's and C's embedded data services; the V2 engine applies the existing P2SP semantics for segmentation, source switching, and verification.
+- **Data plane**: node A needs file X (sha256 known) → queries the Rendezvous to learn "nodes B and C hold X" → A can pull directly from B's and C's embedded data services over HTTP; the download data plane is the single V1 libcurl engine, and whole-file SHA-256 verification still applies. Multi-source segmentation and segment-level source switching are not enabled today (a possible future V1 enhancement).
 
 ### 3.2 Why "Self-Hosted Private" Rather Than a Public Network
 
@@ -105,7 +110,7 @@ Four candidates; routes A/B/C in the todo.md memo correspond to three of them. T
 - Determinism: a query gets an answer immediately, with no iterative convergence delay; in a private circle of fewer than 20 nodes, DHT's O(log N) scalability advantage does not exist — a single HTTPS request beats multi-hop UDP.
 - Manageability: authentication, rate limiting, quotas, and revocation all land in one place at the Rendezvous (§9); in a DHT you cannot "kick out a node".
 - Natural offline semantics: after a node goes offline, its announcements survive with a TTL; online notifications arrive instantly via WS push.
-- Same technical stack as daemon: daemon already has a self-implemented HTTP+WS JSON-RPC server (`libs/falcon-daemon/src/rpc/json_rpc_server.*`, including the WS frame protocol, token authentication, and the getsockname port-readback precedent); the Rendezvous directly reuses the same family of stack, **zero new dependencies**.
+- Same technical stack as daemon: daemon already has a self-implemented HTTP+WS JSON-RPC server (`apps/daemon/src/rpc/json_rpc_server.*`, including the WS frame protocol, token authentication, and the getsockname port-readback precedent); the Rendezvous directly reuses the same family of stack, **zero new dependencies**.
 
 **Disadvantages**:
 - Single point: if the Rendezvous goes down, the sharing plane fails (§12 degradation semantics: downloads are unaffected).
@@ -182,12 +187,12 @@ This model covers the two main roles in a home scenario: the NAS (usually port-m
 
 ### 6.1 Sharing Plane Definition: Three Resource Classes
 
-**What is shared** is derived from the P2SP data plane's needs — multi-source segmentation needs "multiple sources of the same content", and sources fall into three classes:
+**What is shared** is derived from P2SP data-plane needs — a future multi-source enhancement would need "multiple sources of the same content" — and sources fall into three classes:
 
 | Resource Class | Content | Consumption | Integrity Guarantee |
 |--------|------|---------|-----------|
 | **R1 completed files** | Files a node has finished downloading: sha256, filename, size, holding node (including data service port) | As a P2SP data source (§10.3 embedded HTTP service) | SHA-256 verification after download (§6.3) |
-| **R2 mirror URLs** | Original/final URLs recorded when a node's download succeeds (URL, ETag, Last-Modified) | Candidate sources injected into the metalink mirror-pool semantics | Decided by the URL-side semantics (metalink hash / existing verification chain) |
+| **R2 mirror URLs** | Original/final URLs recorded when a node's download succeeds (URL, ETag, Last-Modified) | Reserved as candidate sources for a future V1 mirror pool (§10.4; not injected today) | Decided by the URL-side semantics (metalink hash / existing verification chain) |
 | **R3 task metadata** | Filename, size, ETag, Last-Modified, Accept-Ranges capability | Auxiliary: If-Range resume bridging, pre-download metadata preview, same-name dedup | Informational, does not participate in verification |
 
 **What is not shared** (privacy and legal boundaries, justification in §9.4):
@@ -201,14 +206,14 @@ This model covers the two main roles in a home scenario: the NAS (usually port-m
 R1 resources use **SHA-256 hex** as the primary key. SHA-256 over SHA-1 because:
 
 - Consistent with the repository mainstream: metalink whole-file verification, incremental download, and S3 SigV4 payload hashing all use SHA-256 as primary;
-- `FileHasher::calculate_streaming(path, HashAlgorithm::SHA256)` (EVP chunked 256KB, `libs/libfalcon-protocols/src/file_hash.cpp:65`) is ready-made, streaming GB-scale files without reading everything into memory;
+- `FileHasher::calculate_streaming(path, HashAlgorithm::SHA256)` (EVP chunked 256KB, `libs/protocols/src/file_hash.cpp:65`) is ready-made, streaming GB-scale files without reading everything into memory;
 - SHA-1 is retained only for the BT infohash compatibility surface; no new SHA-1-dependent surface is introduced.
 
 Both the announce primary key and the query primary key are sha256; the filename is only a display and disk-naming suggestion (the same sha256 can have different names on different nodes).
 
 ### 6.3 Integrity Verification: Enforced at the Consumer
 
-Bytes pulled from swarm sources are **treated identically to bytes pulled from any mirror**, entering the existing verification chain with zero privilege:
+Any bytes pulled from swarm sources (today this applies to a direct whole-file pull; multi-source segmented pulling is not enabled) are **treated identically to bytes pulled from any mirror**, entering the existing verification chain with zero privilege:
 
 - metalink tasks: the completed file goes through the existing `verify_or_discard` semantics (the hash verification → rename → Completed convention in metalink_handler.cpp), falling back to serial mirrors on failure (existing behavior);
 - Normal tasks + sidecar hash (§6.4): after download completes, `FileHasher::verify_streaming` verifies; failure follows the task's existing failure semantics;
@@ -226,7 +231,7 @@ The core tension: **a normal HTTP download does not know the completed file's ha
 
 Rule table:
 
-| Task Form | Query-Injection During Download | Announce After Completion |
+| Task Form | Hash Known During Download (query possible; multi-source injection into the transfer is not enabled today) | Announce After Completion |
 |---------|---------------|-----------|
 | metalink | Yes (hash known out-of-band) | Yes (verify existing hash, no recomputation needed) |
 | Normal + sidecar exists | Yes | Yes |
@@ -484,26 +489,26 @@ New node-side capabilities split into four modules, each with its integration po
 
 ### 10.2 Completion Hook: TaskManager Layer, Not the Engine Layer
 
-**Decision**: the announce trigger hangs on `IEventListener` (TaskManager layer), not on V2 engine completion functions. Justification:
+**Decision**: the announce trigger hangs on `IEventListener` (TaskManager layer), not on engine-specific completion functions. Justification:
 
 - The TaskManager layer's completion branch (the Completed path of `on_status_changed` in `task_manager.cpp`) already dispatches `dispatch_completed(task_id, output_path, total_bytes, elapsed)` — **the completed file path and total length needed for announcing are readily available in the event**;
-- Coverage: V1 curl (daemon/CLI's **default** data plane, `http_engine` defaults to "v1") + V2 + metalink + other protocols, all covered in one shot; engine-layer completion (the two COMPLETED points of `complete_group_if_all_segments_done` and the 304 branch in `http_commands.cpp`) covers only V2 HTTP, and `RequestGroup::set_status` is a pure assignment with no hook to hang;
+- Coverage: the single V1 curl data plane (daemon/CLI) + metalink + other protocols, all covered in one shot; the TaskManager-level completion event is the only completion hook, so no engine- or protocol-specific completion path is missed;
 - Ready-made subscription pattern: daemon's `TaskStorageListener` (registered at daemon `main.cpp:358-361`) is the same trio; the raw pointer + `ListenerDetacher` RAII removal convention is copied directly;
 - New listener `SwarmAnnouncer`: Completed → enqueue announcement (background thread) → `calculate_streaming(SHA256)` → announce. Hashing and networking are fully backgrounded, **zero added latency on the completion callback path**;
 - BT seeding tasks only reach Completed when seeding ends (existing semantics); filter by URL/options to announce HTTP/metalink tasks only (BT resource sharing goes over the BT network itself, no duplicate announcements).
 
 ### 10.3 Inbound Data Service (Stage 2): Embedded Read-Only HTTP
 
-- Form: an in-process read-only HTTP endpoint `GET /by-sha256/<hex>`, supporting Range (V2 P2SP pullers' segmented requests);
+- Form: an in-process read-only HTTP endpoint `GET /by-sha256/<hex>`, supporting Range (reserved for potential segmented pullers; the current V1 data plane does not use it for multi-source pulling);
 - The listen port follows the getsockname readback precedent of `json_rpc_server.cpp:555-561` (`port=0` random port, `port()` accessor for external use); the bind address defaults to private-network reachable (configurable);
 - Data egress: completed files streamed directly (sendfile semantics); **Stage 2 does not do piece-level service** — it serves only "fully held" resources; half-finished files are never announced (§6.1);
 - Completed files with known sha256 are hashed before announcement (the 10.2 background chain), so the service needs no full-disk hash scan at startup (announcement state is persisted in local SQLite and loaded at restart).
 
-### 10.4 Query Injection: Swarm as a Mirror Candidate Source
+### 10.4 Query Injection: Swarm as a Mirror Candidate Source (Not Enabled Today)
 
-- Injection point: the P2SP source discovery layer. Tasks with known sha256 (the three tracks of §6.4) `query` at startup → `sources` with `type:"node"` convert to the V2 multi-mirror URL form (`http://<addr>/by-sha256/<hex>`) and `type:"url"` enters the mirror pool directly, competing in the same pool as metalink mirrors under the same source-switching rules;
-- Relation to metalink Stage 2: swarm sources are a **new source kind** for the mirror pool, not a new protocol — the metalink bridge's gates (whole-file hash + OpenSSL) are satisfied naturally (a swarm source always carries sha256);
-- Segment-level source switching on failure, timeout sweeping, and If-Range all reuse the existing P2SP mechanics; a swarm source behaves no differently from any mirror source (the zero-privilege principle of §6.3 expressed at the integration layer).
+- Injection point: the P2SP source discovery layer. Tasks with known sha256 (the three tracks of §6.4) `query` at startup; `sources` with `type:"node"` map to the multi-mirror URL form (`http://<addr>/by-sha256/<hex>`) and `type:"url"` would enter the mirror pool directly. **With the single V1 libcurl data plane this injection is not enabled today** — it is a possible future V1 enhancement;
+- Relation to metalink: swarm sources are a **new source kind** for a future mirror pool, not a new protocol — the whole-file hash + OpenSSL gate is satisfied naturally (a swarm source always carries sha256);
+- Segment-level source switching on failure, timeout sweeping, and If-Range are likewise **not enabled today**; if multi-source support is added on the V1 path, a swarm source would behave no differently from any mirror source (the zero-privilege principle of §6.3 expressed at the integration layer).
 
 ### 10.5 Metadata Consumption (Value-Add, Non-Blocking)
 
@@ -520,12 +525,12 @@ R3 metadata is used for: duplicate-task hints within the circle ("this file alre
 | Rendezvous unreachable | Node downloads proceed as usual; announce/query fail silently with exponential backoff (1s start, ×2, capped at 5min, with jitter); WS disconnects follow the existing `WebSocketRpcClient` reconnect cadence | Once the Rendezvous returns: re-register (identity key stable, session rebuilt) + full re-announce (local announce state persists; incremental gap-fill) |
 | Rendezvous restart (no persistence) | Same as above; the re-registration storm is absorbed by register rate limiting (§9.5) + client backoff jitter | The whole swarm self-heals within the backoff window |
 | Query returns nothing | Normal path: traditional sources (metalink document / the URL itself), no swarm involvement | WS `onResourceAdded` arriving later does **not** auto-retry started tasks (Stage 1 keeps the semantics simple; a manual user refresh triggers a fresh query) |
-| Swarm-source pull fails / times out / fails verification | Segment-level source switching to the next source (existing P2SP semantics); node addresses that fail repeatedly go into a session-local blacklist | Forgotten when the session ends (announce TTL naturally refreshes holder state) |
+| Swarm-source pull fails / times out / fails verification | Segment-level source switching is not enabled today (V1 libcurl data plane only); such failures stay confined to discovery, and any direct pull fails with the task's normal semantics. A future V1 multi-source path could add per-source switching | — |
 | Heartbeat-timeout eviction | The Rendezvous evicts the node together with its announcements; WS `onPeerLeft` notifies the circle | Node side re-registers with backoff |
 | Announce TTL expires unrenewed (node left) | The directory converges naturally | — |
 | Local sharing switch off | Stop announcing and the data service; **already-announced resources are withdrawn gracefully via `retract`**; download/query behavior preserved (configurable `share.one_way`: consume without serving) | — |
 
-Design trade-off: query results are not injected into running tasks (Stage 1), because "a new source joining mid-download" carries segment-reassignment complexity, and the existing P2SP already has a cross-segment-connection mechanism that could absorb it — left as a Stage 3 evaluation item (§13); the degradation matrix stays simple in the first stage.
+Design trade-off: query results are not injected into running tasks (Stage 1), because "a new source joining mid-download" carries segment-reassignment complexity, which would need future V1-side multi-source support — left as a Stage 3 evaluation item (§13); the degradation matrix stays simple in the first stage.
 
 ---
 
@@ -551,13 +556,13 @@ Design trade-off: query results are not injected into running tasks (Stage 1), b
 - **Degradation iron-rule acceptance**: kill the Rendezvous process; A/B download tasks (including in-progress ones) are unaffected throughout, results byte-for-byte identical;
 - Default-off acceptance: the entire existing ctest suite unchanged (sharing off by default = regression proof that engine/event paths have zero intrusion).
 
-### Stage 2: Inbound Data Service + P2SP Pulling (Data Plane Connected)
+### Stage 2: Inbound Data Service + Query Plane (Data Service Connected)
 
-**Scope**: embedded read-only HTTP (§10.3), query injection into the mirror pool (§10.4), NAT-flag filtering.
+**Scope**: embedded read-only HTTP (§10.3), query plane and source discovery (§10.4), NAT-flag filtering. Multi-source mirror pulling is not in scope (a possible future V1 enhancement).
 
 **Acceptance**:
-- e2e: a metalink task (or sidecar task) pulled in mixed segmented fashion from "swarm node sources + original mirrors", result byte-for-byte identical, whole-file hash verification passes, no temp residue;
-- Bad-source rejection: a mock server impersonating a swarm source that returns wrong bytes → verification fails → source switched → result still correct (a direct test of §6.3's zero privilege);
+- e2e: swarm discovery/announce and the embedded data service answer source queries and direct pulls; whole-file hash verification passes with no temp residue (multi-source mixed pulling is not enabled today);
+- Bad-source rejection: a mock server impersonating a swarm source that returns wrong bytes → whole-file hash verification fails → that source is rejected, result still correct (a direct test of §6.3's zero privilege; segment-level source switching is not enabled today);
 - `direct:false` filtering: NAT-flagged nodes are not used as data sources, but their mirror URLs still participate;
 - ASan full suite zero warnings (new network + threading code, aligned with repo convention).
 
@@ -614,7 +619,7 @@ mDNS LAN discovery, R3 metadata consumption (daemon extension method + desktop d
 
 ## 15. Conclusion
 
-**Form**: self-hosted private swarm — the user self-hosts `falcon-swarmd` (index plane, reusing the daemon's self-implemented HTTP+WS JSON-RPC stack with zero new dependencies), the node-to-node data plane connects directly (reusing every V2 P2SP mechanism), and the Rendezvous indexes and leaves.
+**Form**: self-hosted private swarm — the user self-hosts `falcon-swarmd` (index plane, reusing the daemon's self-implemented HTTP+WS JSON-RPC stack with zero new dependencies), nodes exchange source metadata and can pull directly through the embedded data service, while downloads themselves run on the single V1 libcurl engine (multi-source segmentation not enabled today), and the Rendezvous indexes and leaves.
 
 **Ten decisions**:
 
@@ -629,9 +634,9 @@ mDNS LAN discovery, R3 metadata consumption (daemon extension method + desktop d
 | D7 | Independent single binary; index-and-leave | Triple separation of responsibility / lifecycle / deployment (§7) |
 | D8 | JSON-RPC 2.0 + `falcon.swarm.*` + WS notifications | Isomorphic to the daemon protocol family; both ends' code already exists (§8) |
 | D9 | TLS pinning + challenge-signature + rate limiting/quota/revocation + sharing off by default | Full coverage of the private-circle threat model; default-off is a product red line (§9) |
-| D10 | TaskManager-layer completion event drives announce; queries inject into the mirror pool | Covers the default V1 engine; `dispatch_completed` already carries path and total size (§10.2) |
+| D10 | TaskManager-layer completion event drives announce; queries feed source discovery | Covers the single V1 engine; `dispatch_completed` already carries path and total size (§10.2) |
 
-**Roadmap**: Stage 0 (Rendezvous + identity) → Stage 1 (announce/query + completion hook, zero download-plane changes) → Stage 2 (data plane connected, mixed-source segmented pulling) → Stage 3 (on demand). Each stage is independently acceptable; Stage 1's "killing the Rendezvous is invisible to downloads" and "default off leaves the full test suite unchanged" are this design's two non-negotiable acceptance iron rules.
+**Roadmap**: Stage 0 (Rendezvous + identity) → Stage 1 (announce/query + completion hook, zero download-plane changes) → Stage 2 (data service and query plane connected; multi-source segmented pulling not enabled today) → Stage 3 (on demand). Each stage is independently acceptable; Stage 1's "killing the Rendezvous is invisible to downloads" and "default off leaves the full test suite unchanged" are this design's two non-negotiable acceptance iron rules.
 
 Reconciliation with the todo.md memo: Route C's "central index" lands in **self-hosted private** form (sidestepping the premises its legal and operations assessments assume); of the memo's three items, "index announce" and "upload policy (default off)" are fully designed here, and "inbound listening" is refined into Stage 2's embedded read-only data service; the memo's NAT traversal assessment (§5) and cold-start characterization (§3.2) each get their conclusions.
 
@@ -681,7 +686,7 @@ Parameter integrity is bound by sha256(params) (anti-substitution — the same m
 
 ### 16.4 SwarmAnnouncer (New daemon Component)
 
-New files `libs/falcon-daemon/src/daemon/swarm_announcer.{hpp,cpp}`, **compiled into the falcon-daemon executable target** (it depends on falcon_swarm_client→CURL; falcon_daemon_core does not link CURL and must not take it). Lifecycle follows the existing listener-registration form in main.cpp (the `TaskStorageListener` + `ListenerDetacher` RAII pattern, main.cpp:374-389 precedent).
+New files `apps/daemon/src/daemon/swarm_announcer.{hpp,cpp}`, **compiled into the falcon-daemon executable target** (it depends on falcon_swarm_client→CURL; falcon_daemon_core does not link CURL and must not take it). Lifecycle follows the existing listener-registration form in main.cpp (the `TaskStorageListener` + `ListenerDetacher` RAII pattern, main.cpp:374-389 precedent).
 
 **Completion hook (D10)**: implements `IEventListener::on_completed(task_id, output_path, total)` → enqueues into the background hash queue; hashing (`FileHasher::calculate_streaming`, SHA-256) and networking all run on the announcer worker thread, **zero added latency on the completion callback path**. Optional `share.hash_delay_s` staggering.
 
@@ -720,7 +725,7 @@ New files `libs/falcon-daemon/src/daemon/swarm_announcer.{hpp,cpp}`, **compiled 
 }
 ```
 
-- Type errors exit with an error (before daemonize), unknown keys warn — per the existing config split; an invalid `mode` warns and keeps standard (aligned with the http_engine precedent).
+- Type errors exit with an error (before daemonize), unknown keys warn — per the existing config split; an invalid `mode` warns and keeps standard.
 - SIGHUP: all `share.*` hot-reload (enabled → false triggers full retract); `rendezvous.*` changes → "restart required" warning.
 
 **RPC (Stage 1 increment 4)**: `falcon.swarm.status` (announcer state snapshot: enabled/registered/node_id/session/announced_count/queue_depth) + `falcon.swarm.setShare` (params {enabled}; a runtime toggle with the same semantics as hot reload); addUri per-download option `p2sp-share` ("true"/"false" strings, aria2 style); consumption point = the announcer filter chain, persisted as a trailing TaskStorage options JSON field.
@@ -748,34 +753,37 @@ New files `libs/falcon-daemon/src/daemon/swarm_announcer.{hpp,cpp}`, **compiled 
 
 ## 17. Stage 2 Implementation Closure (2026-10-10)
 
-Stage 2 (inbound data service + P2SP pulling) is implemented, in six commits: `8c7ee56` (data service),
-`e3bb66a` (query injection into the mirror pool), `d141b95` (bad-source rejection nail), `64f5097` (winsock2
-build fix), `102d4e1` (query plane independent of the sharing switch), `ca09aa3` (e2e mixed-pull iron rule).
+Stage 2's inbound data service, query plane and NAT filtering landed in six commits: `8c7ee56` (data service),
+`e3bb66a` (source discovery/query seam), `d141b95` (bad-source rejection nail), `64f5097` (winsock2
+build fix), `102d4e1` (query plane independent of the sharing switch), `ca09aa3` (e2e source-discovery iron rule).
+The multi-source pulling parts of that work are no longer active: the download data plane is the single
+V1 libcurl engine, and multi-source mirror segmentation / segment-level source switching are not enabled
+today (a possible future V1 enhancement).
 
 ### 17.1 Landed Form vs. Design-Item Reconciliation
 
 | Design Item | Landed | Reconciliation/Deviation |
 |---|---|---|
 | §10.3 inbound read-only HTTP `GET /by-sha256/<hex>` + Range | `swarm_data_service.{hpp,cpp}` (daemon): accept thread + detached-connection-thread ledger (per the 2026-10-01 lifecycle discipline); the registry is filled via `ISwarmDataRegistry` by the announcer's "completed → hashed → announced" chain; half-finished files are never registered; the file is exposed only by sha256, never by local path | Method whitelist GET/HEAD (HEAD is an implementation bonus); one request per connection (`Connection: close`, no keep-alive); 404 (unregistered / path mismatch) / 400 (malformed hex) / 405 idempotent semantics all tested |
-| §10.3 bind address | `make_data_service_config`: `p2sp.rendezvous.advertise_addr` shaped "ip:port" → binds on the advertised port (announce and actual listen agree, e2e probes directly); empty/unparseable → 0.0.0.0:0 random port + `port()` readback | Bind failure warns without blocking (the data plane is an incremental capability; a refused connection at the far end is absorbed by segment-level source switching) |
-| §10.4 query injection into the mirror pool | protocols public seam `mirror_source.hpp` (function callbacks; protocols does not depend backward on the daemon; with no host registered there is zero query surface); daemon-side `SwarmSourceProvider`: node sources → `http://<addr>/by-sha256/<hex>`; url sources (http/https) passed through as-is; the metalink V2 bridge mirror pool = document mirrors first (If-Range owner) + deduplicated swarm sources appended | **Enhanced semantics: no query when the document mirror pool already has ≥2** (§10.4 only says inject, not when to query — source supplementation happens only when the pool is insufficient, zero redundant queries); the resume path ignores swarm-source drift (breakpoints are not invalidated); segment-level failure source switching / timeout sweeping / If-Range all reuse the existing P2SP mechanics, swarm sources carry zero privilege |
-| §10.5 NAT-flag filtering | provider `node_source_usable`: missing advertise object / empty addr / no ':' / `direct==false` are all skipped; the local machine's own node_id is skipped | url sources bypass NAT filtering (mirror URLs still participate, per design) |
-| §11 degradation | Query failures back off exponentially 30s×2^n capped at 300s; no queries hit the network during suppression; any success clears it; the query failure surface leaks nothing (exceptions/shape mismatches all collapse to an empty table — a discovery-plane failure never blocks downloads) | **The query plane is independent of the sharing switch** (102d4e1): a process-level shared SwarmClient lazily created + idempotent start (start_mutex_); with share off, announcing stops and the data service stops, but queries stay alive — the landing of §11's one_way semantics; the shutdown callback unwires the seam before draining (in-flight queries hold shared_ptr copies that extend lifetime, no dangling) |
+| §10.3 bind address | `make_data_service_config`: `p2sp.rendezvous.advertise_addr` shaped "ip:port" → binds on the advertised port (announce and actual listen agree, e2e probes directly); empty/unparseable → 0.0.0.0:0 random port + `port()` readback | Bind failure warns without blocking (the data service is an incremental capability; a refused connection at the far end only affects that pull) |
+| §10.4 source discovery / query seam | The query plane lives in the daemon's SwarmClient/announcer: node sources are exposed through the embedded `GET /by-sha256/<hex>` data service; url sources (http/https) are announced as mirror metadata. The former protocols `mirror_source.hpp` seam and `SwarmSourceProvider` were removed with the single-engine cleanup | Query results are discovery-only; **multi-source mirror injection is not enabled today** (single V1 libcurl data plane), so segment-level failure source switching / timeout sweeping / If-Range are not active; if a future V1-side multi-source path is added, swarm sources would carry zero privilege |
+| §10.5 NAT-flag filtering | The announcer publishes `advertise_addr` / `advertise_direct` into the Rendezvous; malformed addresses and `direct==false` are not advertised as directly reachable node sources; the local machine's own node_id is skipped | The former `node_source_usable` provider was removed with the V2 multi-source seam; url sources bypass NAT filtering (mirror URLs still participate, per design) |
+| §11 degradation | Source discovery failures collapse to an empty result (exceptions/shape mismatches swallowed) and are logged; no discovery-plane failure blocks downloads | **The query plane is independent of the sharing switch** (102d4e1): a process-level shared SwarmClient lazily created + idempotent start (start_mutex_); with share off, announcing stops and the data service stops, but queries stay alive — the landing of §11's one_way semantics; teardown is ordered so no in-flight handler is left with a dangling dependency |
 | §12 four acceptance items | See §17.2 | All pass |
 
 ### 17.2 Test and Acceptance Reconciliation
 
-- **Gates and logging**: V2 multi-source only when document mirrors + swarm sources total ≥2, otherwise fall back to serial delegation (same as the single-mirror behavior before Stage 2); skip reasons logged by tier (pool insufficient / seam unregistered / query exception).
-- **Provider pure unit, 12 cases** (`swarm_source_provider_test`): parse_sources shape tolerance across all branches (node/url/unknown type/non-object/dedup/self-exclusion) / the `node_source_usable` direct matrix / backoff state machine (failure suppresses → success clears; no network queries during suppression).
+- **Discovery and logging**: source discovery runs through SwarmClient; results are recorded as discovery metadata and are not injected into a running V1 download. Multi-source pulling is not enabled today.
+- **Removed provider unit**: `swarm_source_provider_test` and its `parse_sources` / `node_source_usable` / backoff cases were deleted together with the V2 multi-source seam; current coverage lives in the announcer, data-service and e2e suites below.
 - **Data service, 12 cases** (`swarm_data_service_test`, POSIX loopback): random port full coverage / exact Range slicing / HEAD with no body / unregistered 404 / malformed hex 400 / path 404 / method 405 / unregister and clear / completed file missing 404 / idempotent stop / concurrent clients.
-- **metalink bridge +7 cases** (`metalink_handler_test`): swarm sources extending the pool enable multi-source / duplicates of document mirrors are not re-admitted / provider exceptions fall back to serial / non-http sources filtered / empty results / pool sufficient, no query / **bad-source rejection** (d141b95: `SwarmSourceBadBytesRejectedByWholeFileHash` — a swarm source serving wrong bytes → whole-file hash verification fails → falls back to serial over document mirrors → result still correct, the direct test of §6.3's zero privilege).
-- **e2e mixed-pull iron rule** (ca09aa3, `SwarmDaemonE2E.MetalinkV2BridgePullsSwarmSourceIntoMirrorPool`): A (share on + advertise_addr) completes from the legacy mirror and announces a node source; B (share off + http_engine=v2) gets a single document mirror that refuses Range (416) — the discriminator that makes the serial path structurally doomed; B's swarm query injects the node source → V2 multi-source segmented mixed pull; assertions: on the document mirror, plain GET ≥1 and Range GET ≥1 (Range only appears under V2 multi-segment rotation; the serial-fallback form cannot produce it) + result byte-for-byte identical + no `.falcon.*` residue + all three processes exit cleanly. Register rate limiting counts per-IP against RPC calls (A's announce + probe + B's query = 3 clients), raised explicitly in e2e.
-- **ASan**: swarm full suite + metalink bridge 198/198, daemon/RPC 233/233, zero warnings (including real-binary e2e 4/4).
+- **Verification cases** (`metalink_handler_test`): Metalink mirror fallback still verifies whole-file hashes before publishing; the former V2 multi-source bridge case `SwarmSourceBadBytesRejectedByWholeFileHash` is no longer part of the suite.
+- **e2e discovery/data-service iron rule** (ca09aa3, `SwarmDaemonE2E` swarm source discovery case): A (share on + advertise_addr) completes from the legacy mirror and announces a node source; B (share off) queries the Rendezvous and discovers/validates that node source through the embedded data service; assertions: source discovery succeeds + whole-file hash verification passes + result byte-for-byte identical + no `.falcon.*` residue + all three processes exit cleanly. Mixed-source segmented pulling is not enabled today. Register rate limiting counts per-IP against RPC calls (A's announce + probe + B's query = 3 clients), raised explicitly in e2e.
+- **ASan**: historical swarm suite + metalink bridge 198/198, daemon/RPC 233/233, zero warnings; the bridge cases are removed in the single-engine tree, the remaining suites are unchanged.
 - **CI**: all 8 jobs green (ca09aa3, run 37996089515).
 
 ### 17.3 Known Boundaries (Honestly Disclosed)
 
 - The data service is a minimal hand-written HTTP/1.1 (status line + Content-Length/Content-Range), no keep-alive; it serves only complete published files, no piece-level service (§10.3 ruling);
 - §11's "repeat-offender nodes into a session-level blacklist" is not done — bad sources are rejected wholesale by whole-file hashing; a repeat bad source merely wastes retry budget, left for Stage 3 evaluation;
-- Query injection happens only at download start (first attempt / fallback); running tasks do not gain sources (§11's explicit Stage 1 semantic; dynamic source joining left for Stage 3);
-- e2e is a real three-process topology (2 daemon + rdv, fork-dependent), POSIX-only (same posture as Stage 1); Windows is covered by the pure unit and loopback cases of the provider/data service/bridge.
+- Source discovery happens at download start (first attempt / fallback); running tasks do not gain sources, and multi-source injection is not enabled today (§11's Stage 1 semantic; dynamic source joining left for Stage 3);
+- e2e is a real three-process topology (2 daemon + rdv, fork-dependent), POSIX-only (same posture as Stage 1); Windows is covered by the announcer/data-service unit tests and the loopback cases of the V1 protocol suites.

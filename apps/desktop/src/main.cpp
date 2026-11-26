@@ -15,6 +15,8 @@
 #include <cstdio>
 
 #include <falcon/protocol_registry.hpp>
+#include <falcon/drives/plugin_loader.hpp>
+#include <falcon/protocols/host_api.hpp>
 
 #include "main_window.hpp"
 
@@ -45,6 +47,10 @@ int main(int argc, char* argv[])
     }
 
     QApplication app(argc, argv);
+
+    // 在加载任何 Drives 插件之前注入宿主服务表（含协议层 HTTP 能力），
+    // 第三方插件经 falcon_plugin_set_host 收到后即可调用内核协议。
+    falcon::drives::PluginLoader::set_host_api(falcon::protocols::host_api());
 
     app.setApplicationName("Falcon");
     app.setApplicationVersion("0.1.0");

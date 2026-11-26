@@ -25,6 +25,9 @@
   <g id="i-refresh" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></g>
   <g id="i-grid" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></g>
   <g id="i-list" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></g>
+  <g id="i-star" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9L12 3z"/></g>
+  <g id="i-edit" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16v4zM14 6l4 4"/></g>
+  <g id="i-flag" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V4m0 0h11l-2 4 2 4H5"/></g>
   <g id="i-pause" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></g>
   <g id="i-play" fill="currentColor"><path d="M7 4l13 8-13 8z"/></g>
   <g id="i-link" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007 .5l3-3a5 5 0 00-7-7l-1.5 1.5M14 11a5 5 0 00-7-.5l-3 3a5 5 0 007 7l1.5-1.5"/></g>
@@ -111,6 +114,7 @@
         <div class="nav-item active" data-screen="download-table"><svg class="ico"><use href="#i-download"/></svg>下载中<span class="badge">4</span></div>
         <div class="nav-item" data-screen="task-context-menu"><svg class="ico"><use href="#i-list"/></svg>任务右键菜单</div>
         <div class="nav-item" data-screen="completed"><svg class="ico"><use href="#i-check"/></svg>已完成</div>
+        <div class="nav-item" data-screen="completed-context-menu"><svg class="ico"><use href="#i-list"/></svg>已完成右键菜单</div>
       </div>
       <div class="nav-group">
         <div class="g-title">发现与空间</div>
@@ -299,7 +303,7 @@
       <section class="screen" data-screen="completed">
         <div class="page-head">
           <div><h1>已完成</h1><p>已下载完成的任务，可继续做种或移到回收站。</p></div>
-          <div class="spacer"></div><button class="btn sm">批量操作</button>
+          <div class="spacer"></div><button class="btn sm" data-go="completed-context-menu">右键菜单</button><button class="btn sm">批量操作</button>
         </div>
         <div class="table-wrap">
           <table class="tbl">
@@ -872,6 +876,69 @@
               <div class="muted tiny" style="margin-top:10px">两态共用同一窗口：默认收起为胶囊，点击展开为详细卡片并记住位置；始终置顶、可拖动。</div>
             </div>
             <div class="notice"><span class="ni"><svg class="ico" style="width:16px;height:16px"><use href="#i-info"/></svg></span><div>macOS 不走 Windows 托盘：改为菜单栏图标 + 下拉菜单，遵循 macOS 状态栏规范；此版本只标注差异，不出 macOS 图。</div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== 已完成右键菜单 ===== -->
+      <section class="screen" data-screen="completed-context-menu">
+        <div class="page-head">
+          <div><h1>已完成右键菜单</h1><p>在「已完成」任务上右键：打开成品 / 重新下载 / 重命名 / 举报；与下载中菜单共用「添加云盘、移动、复制链接」等能力。</p></div>
+          <div class="spacer"></div><span class="tag gray">上下文菜单</span>
+        </div>
+
+        <div class="notice"><span class="ni"><svg class="ico" style="width:16px;height:16px"><use href="#i-info"/></svg></span><div>按迅雷「已完成」右键形态 Falcon 化：13 项、6 组分隔线、保留快捷键；不含会员文案。「彻底删除」在完成态可直接执行，回收站任务另提供还原。</div></div>
+
+        <div class="ctx-stage">
+          <div class="ctx-row-head"><span>标题</span><span>大小</span><span>完成时间</span><span>做种</span><span>状态</span></div>
+          <div class="ctx-row selected">
+            <div class="ctx-name"><span class="ext-badge">VSIX</span><div><b>kode-0.2.0-win32-x64(4).vsix</b><div class="muted tiny">共 1 项 · 已保存至 /Downloads</div></div></div>
+            <span>13.3 MB</span><span>2026-11-26 19:50</span><span class="muted">—</span><span class="tag ok">已完成</span>
+          </div>
+          <div class="ctx-row">
+            <div class="ctx-name"><span class="ext-badge">EXE</span><div><b>UGitSetup(1).exe</b><div class="muted tiny">共 1 项 · 已保存至 /Downloads</div></div></div>
+            <span>380.9 MB</span><span>2026-11-26 14:51</span><span class="muted">—</span><span class="tag ok">已完成</span>
+          </div>
+          <div class="ctx-row">
+            <div class="ctx-name"><span class="ext-badge">EXE</span><div><b>falcon-desktop-setup-nightly.exe</b><div class="muted tiny">共 1 项 · 已保存至 /Downloads</div></div></div>
+            <span>15.4 MB</span><span>2026-11-26 10:09</span><span class="muted">—</span><span class="tag ok">已完成</span>
+          </div>
+          <div class="ctx-row">
+            <div class="ctx-name"><span class="ext-badge">VSIX</span><div><b>kode-0.2.0-win32-x64(3).vsix</b><div class="muted tiny">共 1 项 · 已保存至 /Downloads</div></div></div>
+            <span>13.3 MB</span><span>2026-11-26 09:37</span><span class="muted">—</span><span class="tag ok">已完成</span>
+          </div>
+
+          <div class="ctx-menu compact" style="top:8px;left:42%">
+            <div class="ctx-item"><svg class="ico"><use href="#i-play"/></svg>打开文件<kbd>Ent</kbd></div>
+            <div class="ctx-item"><svg class="ico"><use href="#i-folder"/></svg>打开文件夹<kbd>Ctrl E</kbd></div>
+            <div class="ctx-item"><svg class="ico"><use href="#i-star"/></svg>收藏至链接库</div>
+            <div class="ctx-item" data-go="task-detail"><svg class="ico"><use href="#i-info"/></svg>文件详情<kbd>Ctrl I</kbd></div>
+            <div class="ctx-sep"></div>
+            <div class="ctx-item" data-go="cloud"><svg class="ico"><use href="#i-cloud"/></svg>添加到云盘<kbd>Ctrl Y</kbd></div>
+            <div class="ctx-sep"></div>
+            <div class="ctx-item danger"><svg class="ico"><use href="#i-trash"/></svg>删除<kbd>Del</kbd></div>
+            <div class="ctx-item danger"><svg class="ico"><use href="#i-trash"/></svg>彻底删除<kbd>Shift Del</kbd></div>
+            <div class="ctx-sep"></div>
+            <div class="ctx-item"><svg class="ico"><use href="#i-edit"/></svg>重命名<kbd>F2</kbd></div>
+            <div class="ctx-item"><svg class="ico"><use href="#i-refresh"/></svg>重新下载</div>
+            <div class="ctx-sep"></div>
+            <div class="ctx-item has-sub"><svg class="ico"><use href="#i-folder"/></svg>移动文件到<svg class="ico sub-arrow"><use href="#i-chevron-right"/></svg></div>
+            <div class="ctx-item"><svg class="ico"><use href="#i-link"/></svg>复制下载链接<kbd>Ctrl C</kbd></div>
+            <div class="ctx-sep"></div>
+            <div class="ctx-item"><svg class="ico"><use href="#i-check"/></svg>全选<kbd>Ctrl A</kbd></div>
+            <div class="ctx-sep"></div>
+            <div class="ctx-item"><svg class="ico"><use href="#i-flag"/></svg>举报</div>
+          </div>
+        </div>
+
+        <div class="tray-layout" style="margin-top:14px">
+          <div class="section-card">
+            <h3>与下载中菜单的差异</h3>
+            <div class="muted tiny" style="margin-top:10px;line-height:1.8">「暂停下载」换成「打开文件 / 重新下载」；「取消全选」换成「全选」；新增「重命名」与「举报」。「文件详情」复用屏 21 的弹层结构，完成态数据后续替换。</div>
+          </div>
+          <div class="section-card">
+            <h3>安全边界</h3>
+            <div class="muted tiny" style="margin-top:10px;line-height:1.8">「彻底删除」需要二次确认；「重新下载」沿用原链接与保存目录，不自动覆盖未确认的同名文件。</div>
           </div>
         </div>
       </section>

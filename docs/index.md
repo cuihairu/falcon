@@ -39,7 +39,7 @@ keys.
 
 <ShowcaseCarousel />
 
-> More UI screenshots (144 in total: 24 screens × three accent themes ×
+> More UI screenshots (150 in total: 25 screens × three accent themes ×
 > light/dark) are available in the repository at
 > [docs/design/ui-next/screens/](https://github.com/cuihairu/falcon/tree/main/docs/public/design/ui-next/screens).
 
@@ -102,15 +102,16 @@ int main() {
 ```
 falcon/
 ├── libs/
-│   ├── libfalcon-core/      # Core download engine, task model, event system
-│   ├── libfalcon-protocols/ # Standard download protocols
-│   ├── libfalcon-storage/   # Object storage and resource browsing
-│   ├── libfalcon-drives/    # Cloud drive and share-link capabilities
-│   ├── falcon-cli/          # Command-line tool
-│   └── falcon-daemon/       # Background daemon
+│   ├── core/                # Core download engine, task model, event system
+│   ├── protocols/           # Standard download protocols
+│   ├── storage/             # Object storage and resource browsing
+│   └── drives/              # Cloud drive and share-link capabilities
 ├── apps/
 │   ├── desktop/             # Desktop application
-│   └── browser_extension/   # Browser extension
+│   ├── browser_extension/   # Browser extension
+│   ├── cli/                 # Command-line tool
+│   ├── daemon/              # Background daemon
+│   └── swarmd/              # P2SP rendezvous service
 └── docs/                    # Project documentation
 ```
 

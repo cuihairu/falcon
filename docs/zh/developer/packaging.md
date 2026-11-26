@@ -38,7 +38,14 @@ vcpkg install --overlay-ports=<repo>/ports "libfalcon-storage[s3,oss]"
 | core | Threads（必需）；spdlog / nlohmann-json / OpenSSL（可选，QUIET 缺失降级） | ws2_32（Windows） |
 | protocols | falcon_core | curl（HTTP/FTP/WebDAV 插件）；OpenSSL（TLS/metalink 哈希）；libssh2（SFTP）；libtorrent（BT 插件）；expat + vendored libmetalink（metalink）；miniupnpc + libnatpmp（NAT 门面） |
 | storage | falcon_core；curl + nlohmann-json（resource browser）；OpenSSL（签名/哈希） | — |
-| drives | falcon_core；nlohmann-json；curl（搜索 crawler）；SQLite3（config_manager）；OpenSSL（加解密） | — |
+| drives（门面） | 仅 falcon_core | — |
+| plugins/drives（MODULE，运行时加载） | — | cloud_storage：nlohmann-json；resource_search：nlohmann-json；config_storage：SQLite3 + OpenSSL + nlohmann-json。网络 I/O 走 `falcon_protocols` 提供的宿主 HTTP API（curl），插件自身不直接链接 curl |
+
+Drives 插件是 `MODULE` 目标，不进入任何链接闭包。构建产物在 `<build>/falcon/plugins/`；
+`cmake --install` 安装到 `${libdir}/falcon/plugins`。门面按 `FALCON_PLUGIN_DIR`、
+`<exe 目录>/falcon/plugins` 或编译期安装路径发现它们。Windows 安装包暂存整棵安装树
+（`recursesubdirs`），因此插件自动随包分发；OpenWrt ipk 脚本在构建树存在 `*.so` 时
+复制插件（静态构建自然跳过）。CI 编译白名单已包含 `plugins/**`。
 
 ### 2.2 独立 configure 的三处根上下文依赖
 
@@ -123,8 +130,8 @@ endif()
 每包新增自己的 export set 与 config 模板：
 
 ```
-libs/libfalcon-core/cmake/FalconCoreConfig.cmake.in
-libs/libfalcon-protocols/cmake/FalconProtocolsConfig.cmake.in
+libs/core/cmake/FalconCoreConfig.cmake.in
+libs/protocols/cmake/FalconProtocolsConfig.cmake.in
 ...
 install(TARGETS falcon_protocols EXPORT FalconProtocolsTargets ...)
 install(EXPORT FalconProtocolsTargets FILE FalconProtocolsTargets.cmake
@@ -176,7 +183,7 @@ vcpkg_from_git(OUT_SOURCE_PATH SOURCE_PATH
     REF <锁定 commit>          # 手动随版本推进（见 5.3）
 )
 vcpkg_cmake_configure(
-    SOURCE_PATH "${SOURCE_PATH}/libs/libfalcon-protocols"
+    SOURCE_PATH "${SOURCE_PATH}/libs/protocols"
     OPTIONS
         -DFALCON_BUILD_TESTS=OFF
         ${FEATURE_OPTIONS}     # FALCON_ENABLE_* 按 feature 映射

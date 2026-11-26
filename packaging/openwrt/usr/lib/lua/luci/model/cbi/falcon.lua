@@ -55,11 +55,6 @@ o.datatype = "uinteger"
 o.default = "0"
 o.description = translate("0 = 不限速。")
 
-o = s:option(ListValue, "http_engine", translate("HTTP 引擎"))
-o:value("v1", "v1 (libcurl)")
-o:value("v2", "v2 (内置引擎)")
-o.default = "v1"
-
 o = s:option(Flag, "mcp_enabled", translate("启用 MCP 端点"))
 o.description = translate("AI 宿主（Claude Desktop 等）可通过 /mcp 端点驱动下载。")
 

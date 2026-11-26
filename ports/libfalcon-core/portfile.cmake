@@ -12,7 +12,7 @@ vcpkg_from_github(
 
 # core 自足块（阶段 1）在独立 configure 下自行完成依赖查找，无需注入项
 vcpkg_cmake_configure(
-    SOURCE_PATH "${SOURCE_PATH}/libs/libfalcon-core"
+    SOURCE_PATH "${SOURCE_PATH}/libs/core"
 )
 
 vcpkg_cmake_install()

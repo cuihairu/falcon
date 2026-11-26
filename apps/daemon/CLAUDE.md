@@ -1,0 +1,936 @@
+[根目录](../../CLAUDE.md) > apps > **falcon-daemon**
+
+---
+
+# falcon-daemon - 后台守护进程
+
+## 变更记录 (Changelog)
+
+### 2026-10-11 - addUri min-split-size 映射 + check-certificate 解析硬化（共享核心严格尺寸解析器）
+- **`min-split-size` 补齐真实映射**（此前白名单外静默丢弃）：addUri 请求字符串尺寸（K/M/G/T 后缀二进制幂，大小写不敏感；aria2 风格——尺寸必带后缀才有字符串形态，非字符串形状直接 -32602，有意不做数值双形态）→ 共享核心 `falcon::parse_size_with_suffix` 严格解析 → `options.min_segment_size`；解析失败（垃圾/裸后缀/前缀解析如 "12abc"/溢出）回 -32602 "Invalid value for option: min-split-size"；`getOption` 以 aria2 字符串形态回显（`std::to_string`）
+- **`check-certificate` 解析硬化**：旧实现任意非 "false" 字符串一概置 true（"yes"/垃圾文本静默变 true）→ 改既有 `parse_bool_option`（JSON bool / "true"/"false" 双形态），非法值 -32602；`verify_ssl` 本就随 options_json 持久化，零存储改动
+- **核心共享解析器 `parse_size_with_suffix`**（`download_options.hpp` inline，永不抛）：CLI `parse_size_bytes` 与 daemon addUri 两消费方单一事实源——CLI 侧 nullopt → `std::invalid_argument` usage error（旧 stoull 前缀解析 "12abc"→12、"+5" 符号放行的宽松语义收紧为拒绝），daemon 侧 nullopt → -32602。溢出防护两段：十进制累加 `value > (max - digit)/10` + 尾乘后缀 `value > max/multiplier`
+- **MCP 同步**：`falcon_add_download` options 白名单与 docstring 加 `min-split-size`（与 addUri 键集对齐）；`falcon_get_task_options` 零改动（逐键透传 daemon 回显）
+- **测试**：`AddUriMinSplitSizeAndCheckCertificateOptions`（coverage 93 → 94）——5 组合法值 addUri→getOption 往返（"1M"→"1048576"/"524288"/"2g"→"2147483648"/check-certificate bool true/"false" 字符串）+ 8 组非法形态 -32602（min-split-size 整数形状/"abc"/"12abc"/"M"/"1.5M"/溢出 "999…999G"；check-certificate "yes"/整数 1）；核心新文件 `download_options_test.cpp` 4 用例（CLI 侧 `ParseSizeBytes.GarbageThrows` 6 形态钉严格化）
+- 验证：build-plugins（CI 等价树）`JsonRpc|TaskStorage|StorageListener|Main` 252/252 绿 + falcon_core_tests 446/446 + falcon_cli_tests 105/105（含三新 filter 单跑绿）
+
+### 2026-10-11 - addUri 同族选项补齐（file-allocation / conditional-get 映射 + 持久化补列）
+- **同族缺陷收口**：addUri 对两个同样有真实引擎消费方的 aria2 per-download 键长期静默忽略——`file-allocation`（V2 request_group 预分配门禁）与 `conditional-get`（条件下载门禁）补齐真实映射；MCP 白名单与 `falcon_add_download` docstring 同步加键（此前白名单未列、属键集现收口）
+- **形态与 stance**：`file-allocation` 与 CLI 同 stance 裸字符串透传（非法值由引擎侧 `parse_file_allocation` 按 none 处理——稀疏不打扰），addUri 侧只拒绝非字符串形状；`conditional-get` 走既有 `parse_bool_option`（JSON bool / "true"/"false" 双形态）。`getOption` 回显：`file-allocation` 原样字符串、`conditional-get` 字符串布尔——与既有 aria2 字符串值形态一致
+- **持久化补列（取代 2026-10-11 上条「conditional_get/file_allocation 不落列」立场）**：addUri 映射即真实置位点（与上条 `auto_file_renaming` 同逻辑）——`task_storage.cpp` options_json 增两键往返，重启恢复生效；上条「无置位点故不落列」的前提至此消失
+- **测试**：`AddUriFileAllocationConditionalGetOptions`（coverage 92 → 93）——4 组双形态值 addUri→getOption 往返断言 + 3 组非法形态 -32602；`OptionsSerialization` 扩展钉 `overwrite_existing`/`auto_file_renaming`/`conditional_get`/`file_allocation` 四字段持久化往返（此前仅钉 4 字段）；既有单测零改动（无整对象 getOption 断言，逐字段断言不受新增 echo 键影响）
+- 验证：build-plugins（CI 等价树）四套件 `JsonRpc|TaskStorage|StorageListener|Main` 227/227 绿（含新用例单跑绿；`id1` unused-variable warning 为既有、stash 对照实证）
+
+### 2026-10-11 - addUri per-download 选项映射收口（白名单广告-零映射缺陷 + 解析硬化 + 持久化补列）
+- **契约缺陷收口**：MCP `falcon_add_download` 白名单与 docstring 广告的 `split`/`continue`/`allow-overwrite`/`auto-file-renaming` 此前在 `aria2.addUri` 零映射（静默丢弃）——addUri 补齐 4 键真实映射（`split`→`max_connections`、`continue`→`resume_enabled` 有 V1 消费方；`allow-overwrite`→`overwrite_existing`、`auto-file-renaming`→`auto_file_renaming` 为 V2 门禁消费，与 CLI 旗标同语义），`getOption` 以 aria2 字符串值形态回显
+- **`index-out` 白名单移除**：aria2 的 per-URI 输出名（多文件任务）在 Falcon 无对应语义，白名单放行等于广告静默无效键——现显式拒绝（"Unsupported option: index-out"）比静默吞掉更诚实
+- **解析硬化（错误码语义修正）**：`parse_numeric_option`/`parse_bool_option` 永不抛——键存在但无法解析时 addUri 回 **-32602**（"Invalid value for option: <key>"），替代裸 `std::stoull` 抛 invalid_argument 被 dispatch 兜底成 -32603 Internal error 的错位语义；数值键拒绝负整数/布尔/垃圾文本（字符串前缀解析 "12abc"→12 与既有 seed 系键一致），布尔键仅接受 JSON bool 与 "true"/"false"（trim+小写），数值键接受字符串/整数双形态（aria2 惯例）
+- **持久化补列**：`task_storage.cpp` options_json 增 `auto_file_renaming` 往返（daemon 此前无置位点故未持久化，本批 addUri 映射即真实置位点，重启恢复需要）；`overwrite_existing` 已有。`conditional_get`/`file_allocation` 维持不落列（daemon 无置位点——后续 addUri 映射落地后补齐，见下条）
+- **测试**：`AddUriSplitContinueOverwriteRenamingOptions`（coverage 91 → 92）——8 组双形态值经 addUri→getOption 往返断言 + 7 组非法形态 -32602 + 5 个既有数值键垃圾值回归钉子（旧路径 -32603）；mcp_server_test 零改动（无白名单枚举断言，仅 bogus-key 通用拒绝路径）
+- 验证：build-plugins（CI 等价树）三套件 `JsonRpc|TaskStorage|StorageListener` 189/189 绿 + 新用例单跑绿
+
+### 2026-10-10 - P2SP 阶段 2 收口：入站数据服务 + 查询注入镜像池 + NAT 过滤（§17）
+- **增量 1 入站只读数据服务**（`swarm_data_service.{hpp,cpp}`，8c7ee56）：`GET|HEAD /by-sha256/<64hex>` 回环语义（404 未知/400 非 hex/405 非 GET·HEAD/404 路径）+ `Range: bytes=a-b`（416 不可解析、越界截断）+ `Connection: close` 一连接一请求；`ISwarmDataRegistry` 由公告链填充（完成→SHA256→公告同一时点 register，删除/关闭/换内容 unregister/swap），注册的文件本体缺失 404；bind 地址从 `p2sp.advertise_addr` 派生（`make_data_service_config`，bind 失败仅告警不阻断 daemon）；accept 线程 + detached 连接线程台账（2026-10-01 纪律）+ stop 先 join accept 再 shutdown 存量 fd
+- **增量 2 查询注入 V2 镜像池**（e3bb66a/d141b95/102d4e1/ca09aa3）：`mirror_source.hpp` 公共接缝（`SwarmMirrorSourceFn`，protocols 不反向依赖 daemon，未注册 = 零查询面）；daemon 侧 provider（parse：node → `http://<addr>/by-sha256/<hex>`、url 仅 http/https 透传、去重、排除自身 node_id；NAT 过滤 `node_source_usable`：advertise 在位 + addr 含 ':' + direct==true；退避 30s×2^n cap 300s，抑制期不触网）；metalink 桥接仅 doc 镜像池 <2 才查询，swarm URL 去重后追加，总池 <2 回落串行；resume 忽略 swarm 漂移（不二次查询），坏源数据被整文件哈希拦截（d141b95 钉子）；查询面独立于 share.enabled（102d4e1：惰性共享 SwarmClient + start_mutex_ 幂等启动，做种关仍可查询消费）；停机摘缝先于引擎排水（在途查询持 shared_ptr 拷贝无悬垂）
+- **验收**：data service 12 用例 + provider 12 用例（fake QueryFn 零触网）+ 公告 registry-sync 8 用例 + 桥接 +7（含坏源拒绝）+ 真二进制 e2e Test D（doc 镜像拒 Range 416 → 串行结构性不可胜，断言 plain GET ≥1 + Range GET ≥1 即 swarm 源真实参与分段）；ASan 全套件零告警（教训：e2e 会 spawn 的**全部二进制**都要重建——只重建测试 target 留了 Oct 2 旧 falcon-swarmd，announce 恒 -32601 假红）；CI run 37996089515 8/8 绿
+- **文档对账**：设计文档状态行 + §17 实现收口；本文件测试表/对外接口同步
+
+### 2026-10-09 - P2SP e2e 撤回链红面收口（query 轮询烧穿 rdv 限频预算——测试面缺陷，零产品改动）
+- **红面**：`SwarmDaemonE2E.AnnounceQueryThenDeleteRetracts` 30.4s 恒红（3/3 复现）"retract after delete never propagated"——announcer 状态机单测绿、rdv retract 语义绿，真实链路 retract 实际早已成功
+- **根因（测试轮询违反限频契约）**：rdv 默认 query 限频 120/min（per-key 1min 滑窗，§9.1）；测试 `wait_until` 固定 20ms 轮询 = 3000/min，qnode ~2.4s 烧穿预算，此后持续轮询使窗口永久饱和 → 每 query 恒 `-32002` → `query_empty` 的 `err.ok()` 永假。query_hit/元数据单查赶在预算耗尽前（~2.4s 内）通过掩盖了烧穿；滑窗老化放行呈「每 60s ~2.4s 突发」节奏，30s 断言窗内恒无 ok 响应 → 确定性红
+- **修法（纯测试面）**：`wait_until` 增 `poll_ms` 参数（默认 20 保持既有形态）；四处 query 轮询站点改 600ms（≤100/min < 120/min）；query 失败消息补 `last query err`（code+message）——未来红面直接可读不必再猜
+- **验证**：修后单跑 3.8s 绿（原 30.4s 红）+ 10/10 压测 + e2e 全二进制 3/3 + build-cov 全量 ctest 2740 过 0 失败（2753 清单，13 skip 设计内）
+
+### 2026-10-09 - P2SP 阶段 1 增量 4（RPC status/setShare + addUri p2sp-share + 真二进制 e2e，§16 收口）
+- **RPC 两新方法**（均入 `system.listMethods`，28 → 30 个）：`falcon.swarm.status`（params `[]` → announcer 快照 `{enabled, registered, node_id, session, announced_count, queue_depth}`；`registered = !session.empty()`，node_id/session 取网关现值而非 worker 私有副本）与 `falcon.swarm.setShare`（params `{enabled:bool}` → 运行时开关，语义同 SIGHUP `share.enabled` 热更：翻关全量 retract + announcer 存活、翻开现场构建启动注册）；未启 announcer（配置 off）时 status 回 `enabled:false` 快照、setShare 走 SIGHUP 同款热启用路径
+- **SwarmAnnouncer 增量**：`SwarmAnnouncerStatus` 快照结构 + `status()`；`set_share_enabled(bool)`（翻关 = 请求全量 retract + 清待处理队列，announcer 保持存活——与 `disable()` 的 retract+停机语义区分）；gateway 接缝新增 `node_id()` 虚方法
+- **main.cpp 并发纪律**：`swarm_guard` 互斥量守护 announcer 指针（SIGHUP 主线程与 `falcon.swarm.*` RPC worker 线程共享访问）；`hot_enable_announcer` lambda 统一构建路径（build + start + 引擎注册 + 指针交换，失败清理）供 SIGHUP 与 setShare 两路复用
+- **addUri per-download 选项 `p2sp-share`**：仅接受字符串 `"true"`/`"false"`（aria2 风格；json bool / `1` / `"yes"` / `"TRUE"` → -32602 严格拒绝）；消费点 = announcer 过滤链三态（`""` 跟随全局 / 显式覆写 / `"false"` 跳过公告）；持久化随 TaskStorage options JSON 尾字段——缺省空串**不落列**（旧档零变化），回读缺键回落空串
+- **e2e 真二进制验收**（新 target `falcon_daemon_swarm_e2e_tests`，POSIX-only，fork+execv 起 falcon-swarmd + 两 falcon-daemon + 内嵌 HttpMirror 回环源；每用例独立 HOME 隔离 `swarm_key.pem`/`tasks.db`）：§16.6 三铁律 + skip 占位 4 用例——(a) A 完成 → B query 命中（元数据一致）→ A 删文件 → retract → B 落空；(b) 下载中途 SIGKILL Rendezvous，A/B 下载无感完成且成品逐字节一致（rdv 被杀进程 gcda 豁免——SIGKILL 不冲刷，daemon/测试进程正常退出）；(c) 默认 off：status.enabled=false + query sources 恒空；(d) 宏缺席构建单 skip 占位（CURL/swarmd 缺席优雅降级）。**验收**：3/3 + 10/10 压测全绿
+- **构建接线（事后补链第三例）**：daemon tests 子目录先于 swarmd 处理——e2e target 在 daemon tests CMakeLists 无条件注册（POSIX），根 CMakeLists 在 swarmd 之后补链 `falcon_swarm_client` + 注入 `FALCON_SWARMD_BIN`/`FALCON_DAEMON_BIN`/`FALCON_SWARM_E2E_ENABLED`（与 `FALCON_HAS_SWARM` 同款形态；CLI 单发公告 `--swarm-server` 同批接入 `FALCON_HAS_SWARM`，缺 CURL 时 `#else` WARN 形态）
+- **测试**：rpc_tests +2（SwarmStatusSetShareHandlers 往返 / SwarmHandlersUnsetFailsCleanly 未启 announcer 干净失败）/ rpc_coverage +1（AddUriP2spShareStrictValues 严格字符串值矩阵）/ swarm_announcer +2（StatusSnapshotTracksRuntime / SetShareEnabledRuntimeToggle，19 → 21）/ storage +1（P2spShareOptionRoundTripAndLegacyRows 往返 + 旧档缺列回落）；CLI arg_parser/config_loader 解析用例随 3257029
+
+### 2026-10-09 - P2SP 阶段 1 增量 3（SwarmAnnouncer 完成后公告 + TTL 续租，§16.4）
+- **新文件 `src/daemon/swarm_announcer.{hpp,cpp}`**（挂 falcon-daemon
+  可执行，不进 falcon_daemon_core——保持 core 零 CURL 依赖）：
+  `SwarmAnnouncer : IEventListener` 挂引擎 `on_completed`（事件线程只做
+  过滤链 + 入队，零哈希零网络）→ 自有工作线程哈希（sha256）+ 公告。
+  活跃公告表由工作线程独占驱动：TTL 续租（`min(5min, ttl/3)`）/ 文件
+  消失 retract / 内容变化重哈希重公告（先公告新 hash 再 retract 旧）/
+  session 变化全表补差 / announce 失败指数退避（base<<shift 封顶 5min
+  + 0..25% 抖动）。**与 SwarmClient 的边界经 `SwarmAnnouncerGateway`
+  接缝隔离**：真实网关（`#ifdef FALCON_HAS_SWARM`，根 CMakeLists 在
+  daemon 与 swarmd 两子目录之后补链 `falcon_swarm_client` + 定义宏）
+  与测试 fake 共用同一状态机；CURL/swarmd 缺席时工厂返回 nullptr 优雅
+  降级（告警 "swarm client support not built"）
+- **隐私过滤（§16.1）**：mirror URL 仅 http/https 且无 `?`/`#`（凭据
+  泄漏防线）；magnet 前缀跳过（大小写不敏感）；`hash_only` 模式省略
+  name/size；任务级 `p2sp_share` 三态（`DownloadOptions` 新字段，
+  `""` 跟随全局 / `"true"`/`"false"` 显式覆写，引擎与其他 handler
+  零消费）——`"false"` 任务跳过公告
+- **竞速纪律**：`store_back_after_announce` 回写前锁内复核
+  `retract_all_pending_ || !accepting_`，取消的回写丢弃且对刚成功的
+  公告补 retract 回滚（announce 是 upsert——迟到回写会复活刚撤下的
+  条目）；`on_completed` 锁内复核 accepting（与 apply_share 翻关竞速）；
+  apply_share 翻关清待处理队列 + 全量 retract
+- **停机语义**：`stop()` 不 retract（停机 ≠ 删文件，重注册后全量重公告
+  补差，泄漏的公告由 TTL 上界 7d 自愈）；`disable()`（share 翻关或
+  停机+删文件语义）全量 retract 后停（阻塞至 retract 完成）；
+  gateway stop 只在 worker 退出收尾（worker 不跑则网关不活）
+- **配置面（daemon.json `p2sp` 节 + config.{hpp,cpp} `P2spConfig`）**：
+  `share{enabled 默认 false, mode=standard|hash_only, one_way, ttl_s
+  默认 86400, hash_delay_s, announce_mirrors 默认 true}` +
+  `rendezvous{host 默认 127.0.0.1, port 默认 7800, server_token,
+  group_token, advertise_addr, advertise_direct}`；mode 非法值告警保持
+  standard（沿 download.http_engine 先例）；SIGHUP：share.* 六字段全
+  热更（翻关全量 retract / 未启动而翻开现场构建），rendezvous.* 变化
+  告警 "restart required"（SwarmClient 连接在工厂构造期装配）
+- **main.cpp 接线**：启动时 `share.enabled` → 工厂 + `start()` 成功
+  注册引擎监听（RAII 摘除器持 unique_ptr 引用而非注册时刻裸指针——
+  SIGHUP 热启用替换 announcer 后快照指针漏摘/悬垂）
+- **测试**：新 target `falcon_daemon_swarm_announcer_tests`（19 用例，
+  编 `#else` 工厂分支，FakeGateway 经接缝注入）：公告内容 8（R1+R2
+  字段逐项 / hash_only 省略 / 任务 opt-out / magnet / URL 含 ?、#、
+  非 http scheme、announce_mirrors=false）/ 哈希失败不重试与延迟窗口 /
+  状态机 5（续租同内容无 retract / 文件消失 retract / 变更先新后旧 /
+  session 补差 / 失败退避后恢复）/ 停机禁用 4（stop 无 retract /
+  disable retract / 翻关拒新完成 / start 失败传播）+ config 9 用例
+  （31 → 40）。**构建期修复**：① `uniform_int_distribution` 声明为
+  const 后 `operator()`（非 const 成员）不可调用——去 const；②
+  disable 退出路径对未持锁的 unique_lock 调 `unlock()` 抛 EPERM
+  （retract 分支 unlock 后 break）——按 `owns_lock()` 收口
+- 验证：daemon 门禁全套件（见工作汇报）；覆盖定性：真实网关
+  （FALCON_HAS_SWARM）与 e2e 链路不在本机测试面（CI swarmd job 收口）
+
+### 2026-10-08 - serverInfo.version 单一事实源收口（构建期注入 FALCON_DAEMON_VERSION）
+- **漂移面消除**：`mcp_server.cpp` initialize 的 `serverInfo.version` 从
+  `FALCON_VERSION_STRING`（core 头文件硬编码 "0.1.0"）改接
+  `mcp_server_version()` 访问器——返回构建期注入宏
+  `FALCON_DAEMON_VERSION`（`falcon_daemon_rpc` target_compile_definitions，
+  源 = 本包 `project(VERSION)` 0.2.0）；core 的 `falcon/version.hpp`
+  include 一并移除。**机制选型**：构建期注入而非生成头文件——同款机制
+  仓内已有两处先例（falcon-cli `FALCON_CLI_VERSION`、falcon-mcp
+  `FALCON_MCP_VERSION`），免新增 configure_file 模板与生成目录 include
+  路径；宏缺失即编译错误，版本上报不允许回落到任何硬编码字面量
+- **测试钉子（双保险）**：`InitializeHandshakeRoundTrip` 断言
+  `serverInfo.version == mcp_server_version()`（防回改任何硬编码字面量）
+  + `== "0.2.0"`（字面钉死，沿 cli_main_integration_test "v0.2.0" 先例
+  ——升版本必须同步改测试，漂移必红）。**为什么经访问器而非测试侧同款
+  注入**：tests/CMakeLists.txt 有自己的 `project(falcon_daemon_tests
+  VERSION 0.1.0)`，子目录 `${PROJECT_VERSION}` 解析为 0.1.0——测试 TU
+  注入会注入错值；访问器让两侧共享同一编译单元的宏
+- **验证**：daemon 门禁全套件 482/482；gcov 对象级核对新行全命中
+  （mcp_server.cpp:447 调用点 96 hits / :702 访问器 97 hits）；
+  **测量级教训**：改生产源码后只重建测试 target 不够——共享该 TU 的
+  全部二进制（falcon-daemon exe、rpc_storage/rpc_client/config/coverage
+  测试）都持旧 stamp 对象，旧 gcda 合流即 "stamp mismatch with notes
+  file"（gcov 报 0.00%）；必须全量重建 + 清 gcda + 全套件重跑
+
+### 2026-10-08 - MCP server 阶段 2 增量 3（GET /mcp SSE 进度订阅通知流，阶段 2 收口）
+- **GET /mcp 从 405 占位改为 SSE 通知流**：鉴权与会话准入与 POST/DELETE 同语义
+  （未配 secret 403 / Bearer 失败 401 + `WWW-Authenticate` / 会话缺失或过期
+  404——`McpServer::check_auth` 提取为共享入口，`validate_sse_request` 复用）；
+  通过后 JsonRpcServer 连接线程直写流式响应头（200 `text/event-stream` +
+  `Cache-Control: no-cache`，无 Content-Length；初始注释行 `: falcon mcp
+  stream` 供客户端确认流开通），注册进 `sse_clients_`（与 ws_clients_ 同形状
+  shared_ptr 台账）阻塞等断开/停机。成功路径不关连接；通知扇出复用
+  `broadcast_notification`——同一 JSON-RPC 信封两种帧装（WS TEXT 帧 / SSE
+  `data: <信封>\n\n` 行），引擎事件经既有 RpcEventBridge 直达。注销纪律与
+  WS 一致（连接 fd 的注销统一由本线程完成，广播失败只 shutdown 唤醒，避免
+  跨线程 close 的 fd 复用竞争）；`stop()` shutdown 两张订阅表。PUT 等未知
+  方法 405 保留（`Allow: POST, DELETE`）
+- **测试**：`mcp_server_test.cpp` 22 → 31 用例（`falcon_daemon_rpc_tests`
+  65 → 74）：SSE 准入三态（未配 secret 403 / 缺 Bearer 与错 Bearer 401 /
+  无会话与非法会话与 DELETE 后重开流 404）+ 主链路（裸 socket 开流 → 注释
+  行 → 广播扇出 data 行逐字段断言 → stop() EOF 收尾）/ 客户端断开自注销 /
+  CORS 回显（allow_origin_all=true）；405 用例 GET→PUT 换形（GET 语义归
+  SSE）；测试基建 `set_recv_timeout`（Winsock DWORD ms / POSIX timeval）+
+  `recv_until`（分隔符读取，跨调用累积残段）+ `wait_for` 谓词轮询
+- **验证**：daemon 门禁全套件 482/482；真实二进制冒烟（curl `-N` 200 +
+  event-stream 头 + 注释行 + `timeout 3` 退出码 124 证明流不自关；e2e
+  addUri → onDownloadStart/onDownloadError data 行到达）——代替 MCP
+  inspector（本机无该环境，与阶段 1 同姿态）
+- 覆盖率定性：SSE 流式响应头 send 失败早退分支不可锚（accept→写头微秒竞速
+  窗，与 WS 侧同类）；其余新代码（准入/流开通/注册/扇出/停机唤醒/断开注销/
+  CORS）全部覆盖
+- **阶段 2 收口**：三增量（全局选项与做种工具 / stdio 薄壳 / 进度订阅）全部
+  落地；已知遗留：serverInfo.version 上报 FALCON_VERSION_STRING "0.1.0"
+  （未对齐本包 project VERSION 0.2.0，非本阶段范围）——已于 2026-10-08
+  收口：`mcp_server_version()` 接构建期注入 `FALCON_DAEMON_VERSION`
+  （见顶部 changelog）
+
+### 2026-10-08 - MCP server 阶段 2 增量 2（stdio 薄壳 falcon-mcp）
+- **新目录 `tools/` 三件**（设计文档 §4 薄壳原则）：
+  - `tools/mcp_stdio.{hpp,cpp}`（`falcon_daemon_mcp_stdio` 静态库）：
+    `McpStdioBridge`——stdin 逐行读 MCP JSON-RPC 消息 → POST daemon
+    `/mcp` → stdout 逐行回写响应体；会话生命周期（任一响应的
+    `Mcp-Session-Id` 头捕获 → 后续请求附带 → 404 清除 → EOF 时 DELETE
+    拆除，best-effort）；通知（202 或 200 空体）静默不写 stdout；传输
+    失败（status 0）仅对带 id 的消息合成 -32603 信封（id 判定用
+    `json::parse(..., allow_exceptions=false)`，非 JSON 行照常转发不
+    合成——薄壳不预校验消息体，daemon 校验请求形状）；Accept 头恒带
+    `application/json, text/event-stream`（spec 要求集，SSE 响应流属
+    进度订阅增量）
+  - `tools/mcp_curl_post.{hpp,cpp}`：`HttpPostFn` 传输注入点的 curl
+    实现（逐请求 easy handle——S3 批次 handle 复用残留教训；DELETE 走
+    `CURLOPT_CUSTOMREQUEST` 不带 POSTFIELDS；`CURLOPT_NOSIGNAL`；
+    `curl_global_init` call_once 进程生命周期不清理——WSAStartup 先例）
+  - `tools/falcon-mcp.cpp`：主程序（`--rpc-url`/`--secret`/`--help`/
+    `--version`；缺值与未知参数 stderr + usage exit 2）
+- **不链 libfalcon-core**（设计文档 §4：避免第二个进程内引擎形态）：
+  桥库仅 nlohmann_json + CURL；CURL 缺席时 `falcon_daemon_mcp_stdio`
+  与 `falcon-mcp` 目标整体不构建
+- **版本单一事实源**：daemon 包 `project(falcon-daemon VERSION 0.2.0)`
+  ——falcon-mcp 注入 `${PROJECT_VERSION}`（沿 falcon-cli 先例：自报
+  版本取所属包 project VERSION，根 project 仍 0.1.0）
+- **测试**：新文件 `tests/mcp_stdio_test.cpp` 9 用例入
+  `falcon_daemon_rpc_tests`（56 → 65；仅 CURL 可用时编入）——fake
+  `HttpPostFn` 8 用例钉桥逻辑（转发与会话捕获 + EOF DELETE/Bearer 与
+  静态头/通知 202 静默/404 清会话且错误体透传/传输失败信封
+  request≠notification/DELETE 拆除一次性与无会话 no-op/空行与行尾 CR
+  容错/非 JSON 行转发不合成）+ 真 curl 回环 e2e 1 用例（initialize →
+  tools/list（恰 13 工具）→ ping 三往返 + DELETE 拆除的服务器侧证据
+  ——拆除后再请求得 404 "re-initialize" 透传）；daemon 门禁全套件
+  473/473；真实二进制冒烟（真 daemon :16899 + 真 falcon-mcp 管道：
+  initialize/tools/list 13 工具逐名核对/--help/--version 0.2.0/未知
+  参数 exit 2）
+- 阶段 2 剩余：进度订阅（SSE/notifications）
+
+### 2026-10-08 - MCP server 阶段 2 增量 1（全局选项与做种工具，10 → 13）
+- **3 新工具**（设计文档 `docs/developer/mcp-server.md` §3 阶段 2 追加表）：
+  `falcon_get_global_option` → `aria2.getGlobalOption`（无参，返回全量选项表
+  max-overall-download-limit/max-concurrent-downloads/dir，aria2 字符串值形态）；
+  `falcon_set_global_option` → `aria2.changeGlobalOption`（必填 `options` 对象；
+  **键位白名单不在 MCP 层重复**——daemon 侧对未知键/非法值自带业务错误
+  "Option not supported"/"Invalid option value" code 1，经 wrap_tool_result 映射
+  isError，薄适配原则）；`falcon_stop_seeding` → `falcon.stopSeeding`
+  （必填 gid；code 1 非做种/code 2 任务不存在 → isError，参数形状违规 → -32602）
+- **测试**：`mcp_server_test.cpp` 20 → 22 用例（`falcon_daemon_rpc_tests`
+  54 → 56：manifest schema 13 工具断言；get/set 全局选项 HTTP 往返——整数与
+  "none" 合法值、`dir` 不可设业务错误、非法值业务错误、缺 options -32602；
+  做种停止三错误路径——非做种 code 1/不存在 gid code 2/缺 gid -32602）；
+  daemon 全套件绿（rpc 56/config 31/lifecycle 27/main 33/rpc_client 62/
+  rpc_coverage 90/rpc_storage 20/storage 50）
+- 阶段 2 剩余：stdio 薄壳、进度订阅（SSE/notifications）
+
+### 2026-10-07 - MCP server 阶段 1（/mcp 端点 + 10 工具翻译层 + Bearer 鉴权/会话管理）
+- **新文件 `src/rpc/mcp_server.{hpp,cpp}`**：MCP（Model Context Protocol）
+  Streamable HTTP 端点，与 `/jsonrpc` 同端口复用既有监听/token 配置——
+  `initialize` 握手（协议版本协商 2025-06-18 默认 / 2025-03-26，更高版本回退
+  默认；`capabilities.tools`；`serverInfo{falcon, version}`；忽略客户端会话头
+  恒新建 32-hex 会话回 `Mcp-Session-Id`）、会话表（进程内存，上限 64 满逐最旧，
+  无效/过期会话 404）、`tools/list`（10 工具静态 schema，`additionalProperties:
+  false`，annotations 与设计一致——`falcon_remove_task`/`falcon_pause_all` 标
+  `destructiveHint`）、`tools/call` 翻译层（工具名 → 既有 aria2 RPC 方法参数
+  翻译，零新增业务逻辑）、通知（无 id）202 / DELETE 204 / GET 405 +
+  `Allow: POST, DELETE`、解析失败 400+-32700、batch 数组 400+-32600（2025-06-18
+  已移除 batch）、非 object 标量 200+-32600
+- **鉴权**：`Authorization: Bearer <rpc.secret>`；**未配 secret 时 `/mcp` 整体
+  403**（比 `/jsonrpc` 未配 secret 跳过校验更严——MCP 是 AI host 驱动的工具面，
+  匿名暴露直接拒绝）；鉴权先于方法路由（无凭据 GET 得 401 而非 405）
+- **错误三层**：协议层 -32602（缺 name/urls/未知工具/参数形状）→ JSON-RPC error
+  形状；业务错误 dispatch 返回 `{error:{code,message}}` → `isError:true` +
+  `content[0].text="Error(<code>): <message>"`（不下发 structuredContent）；
+  dispatch 抛异常 → `/mcp` 路由的 lambda catch → -32603 "Internal error"
+  （异常边界，防 terminate 整个 daemon）
+- **翻译层语义**：`falcon_add_download`（`urls` 非空字符串数组 + `output_dir`/
+  `filename` → options `dir`/`out`，与 options 内同名键冲突或白名单外键 →
+  业务错误）经 `aria2.addUri`；`falcon_list_tasks`（status 白名单
+  active|waiting|stopped|all 默认 all，offset 默认 0 / limit 默认 50，
+  非 Negative；waiting/stopped 走 aria2 原生 `(offset,limit)` 分页，all =
+  `tellActive` 全量 + `tellWaiting(0,100000)` + `tellStopped(0,100000)` 三队列
+  合并后统一切片，任一队列 error 透传）；`falcon_get_task`/`pause_task`/
+  `resume_task`/`remove_task`（force → forceRemove）/`pause_all`/`resume_all`/
+  `get_global_stats`/`get_task_files` 直映射对应 aria2 方法
+- **配置接线**：daemon.json 新增 `"mcp":{"enabled":true}` 节（默认 false；
+  未知键告警、类型错误报错，与其余节一致）；CLI `--enable-mcp[=true|false]`
+  （启用时隐含启用 RPC）；SIGHUP 重载对 mcp 变化告警 "restart required"
+  （端点在服务器构造期装配，不热更）
+- **测试**：`mcp_server_test.cpp` 20 用例入 `falcon_daemon_rpc_tests`（54/54：
+  握手往返/会话忽略与新建/版本协商矩阵/过期会话 404/鉴权 401/未配 secret 403/
+  通知 202/DELETE 204/405/batch 拒绝/标量 body/未知方法/10 工具清单 schema 逐项
+  校验（additionalProperties/required/annotations）/翻译层参数往返与冲突/错误
+  三层/工具面最小化断言）；config_tests 3 用例（mcp 节 enabled 解析/未知键告警/
+  类型错误，31/31）；daemon 全套件 ctest 304/304；真实二进制 curl 冒烟 9 项
+  全过（initialize 200 + 32-hex 会话 + serverInfo、tools/list 恰 10 工具、
+  get_global_stats/list_tasks structuredContent 往返、通知 202、DELETE 204、
+  过期会话 404、无凭据 401、无凭据 GET 鉴权先行 401、带凭据 GET 405+Allow）
+- **修复（本批唯一产品缺陷，冒烟+测试钉出）**：`new_session_id()` 初版循环
+  4 次产出 64 hex（256 bit），与自身注释「32 hex（128 bit）」及设计契约矛盾
+  ——改 ×2 后 32 hex，测试按设计契约钉死
+- 设计文档 `docs/developer/mcp-server.md` 状态行改「阶段 1 已实现」+ §8
+  实现对账（响应无 SSE/GET 405、list all 聚合形态、鉴权基线差异等逐条披露）
+
+### 2026-10-01 - 任务进度持久化两处精度缺陷修复（98d1cf5）
+- **终态字节回退**：TaskStorageListener 落库进度按 1s 节流，任务在两次节流窗之间完成时库里最后一条记录缺最终字节——完成路径补终态字节写入（downloaded/total 以引擎终态值为准）
+- **totalLength 恒 0**：tellStatus/落库的 totalLength 字段在未知总长（chunked 等）路径恒 0——区分「未知」与「零」语义，落库改存引擎实际值
+- 测试：task_storage_test 3 处扩展（终态字节落库断言 + totalLength 语义）
+
+### 2026-09-28 - 做种计量 RPC 面（tellStatus 扩展字段 + falcon.stopSeeding + addUri seed 选项）
+- **tellStatus Falcon 扩展字段**：`seedUploadedBytes/seedDownloadedBytes/seedTotalSize`（aria2 字符串风格）+ `seededSeconds`（数值）+ `seedingActive`（布尔）——读 `DownloadTask::get_seed_info()`（core 新 SeedInfo 快照），非 BT 任务恒零值；`TaskSnapshot`（daemon 包）增同名五字段 + `seed_ratio()` 访问器（分母 = max(downloaded, total_size)，分母 0 返 0，与 seed_policy 同式）
+- **新方法 `falcon.stopSeeding`**（p=[gid]）：置粘性标志 `request_stop_seeding()`，BT 监控循环下一 tick 与策略达标同一收口路径；错误码 1 = 任务非做种态（get_seed_info().seeding_active == false）/ 2 = gid 不存在；成功回 gid；已注册进 system.listMethods
+- **addUri 选项 `seed-ratio`/`seed-time`**：字符串（aria2 风格，stod 解析失败回落负值）与数值双形态；负值钳 0（std::max(0.0, x)，与 CLI --seed-ratio/--seed-time 同语义）；getOptions 回传两键
+- 测试：桌面 download_backend_test 4 新用例经真实 JsonRpcServer 回环覆盖全链（快照往返/错误码/哨兵默认/钳 0）
+
+### 2026-09-25 - P2SP 阶段 0 批 1：拆库（falcon_ws_protocol + falcon_daemon_core，源零改动）
+- **`falcon_ws_protocol`**（新静态库）：`src/rpc/websocket_frame.{hpp,cpp}`
+  移入——消除 CMakeLists 自认的两处重复编译债（同一源文件既编进
+  rpc_server 库又编进 rpc_client 库），swarmd 包成为第三消费方而非
+  第四份拷贝。**nlohmann 守卫之外**（零外部依赖不应连坐——守卫
+  return() 时该库照常构建）
+- **`falcon_daemon_core`**（新静态库）：`src/daemon.cpp` 拆出（此前
+  既编进 daemon 可执行又编进 rpc_server 测试辅助），main.cpp 与 rpc
+  库共享；RpcEventBridge / RpcServer 构造面不改（main 复用
+  DaemonManager 语义零变化）
+- 全部改动为构建图级：源文件零改动、rpc 两库的对外 target 名
+  （falcon_daemon_rpc / falcon_daemon_rpc_client）与导出头零变化，
+  测试目标 link 关系相应追加 ws_protocol/core
+- 验证：daemon 全部 rpc 测试目标零失败、清单数不减；下游
+  falcon-swarmd 包（同批 add_subdirectory）编译绿
+
+### 2026-09-14 - 覆盖率批次 I：websocket_rpc_client.cpp 99 → 9 miss + 原始 WS 测试服务器
+- `websocket_rpc_client_test.cpp` 增量 18 用例（29 → 47，挂
+  `falcon_daemon_rpc_client_tests`），新增 `RawWsServer` 可编程原
+  始 WS 服务器基建：握手剧本（正确 101 / 半截头 EOF / 非 101 /
+  错 Accept）、`on_connected` 会话钩子注入服务器帧（ping/close/
+  binary）、`on_request` 请求应答脚本、客户端帧记录与等待辅助——
+  与 JsonRpcServer 回环互补，帧级行为完全由测试控制
+- 收口：便捷方法全簇 14 转发方法（params 归一形状服务器侧逐项断
+  言 + as_gid/expect_ok 解包防御 -32600 变体）、call 失败路径（非
+  数组 params 归一 / 应答超时 -32000 / 无 result 无 error -32600
+  / 请求在途中断连 fail_pending -32000 "connection closed" 唤
+  醒）、控制帧（ping→pong 回帧 payload 断言、close 回应后会话收
+  尾、binary/pong 忽略且连接仍可用）、握手容错簇、set_url 运行期
+  重定向（旧服务器下线后 call 仍成功 ⇒ 必连新端点）、parse_url
+  （IPv6 字面量 / 裸主机默认 / 自定义 path 请求行）
+- 剩余 9 miss 定性：238-239/494-499 时序窗口不可测（无注入点）、
+  520 不可达（response 两条赋值路径均保证 object）
+- **daemon 套件首次进 ASan**：build-asan `FALCON_BUILD_DAEMON`
+  OFF→ON，rpc_client_tests 47 用例 ASan+UBSan 零告警；全量 ctest
+  1884 零失败
+
+### 2026-09-12 - 下载参数配置化（daemon.json "download" 节）
+- `daemon.json` 新增 `download` 节：`max_concurrent_tasks`（全局并发
+  任务数）、`max_overall_speed_limit`（全局总限速，字节/秒，0=不限），
+  与 `aria2.changeGlobalOption`/`getGlobalOption` 已支持的键对齐
+- `DownloadConfig` 用 `std::optional` 表达"文件出现才覆盖"：未出现的
+  键不动引擎默认；类型错误报错、未知键告警，与既有节一致
+- 启动时引擎构造后应用；SIGHUP 重载视为可热更项（引擎 setter 运行时
+  可调），节值变化即重新应用
+- 加固 WS 测试基建：`connect()` 返回只代表客户端收到 101，服务端会话
+  线程可能尚未注册——新增 `wait_registered` 轮询辅助，修复 3 处
+  即时断言/广播的注册窗口竞争（负载下偶发：BroadcastFanout 广播漏
+  连接、count 断言落空）
+- 测试：config 新增 4 用例（全量/optional 语义/节缺失/类型错误）+
+  main 集成 1 用例（配置 → getGlobalOption 反映 → SIGHUP 热更生效）；
+  daemon 全量 229 用例通过
+
+### 2026-09-12 - SIGHUP 配置重载（daemon.json 热更新）
+- `DaemonManager` 新增 `request_reload()`（仅置原子标志，
+  async-signal-safe）/ `reload_pending()`；`run()` 主循环消费标志后
+  在普通线程上下文执行重载回调——修复此前 `unix_signal_handler` 直接
+  在信号处理器里调回调（打日志/读文件均非 signal-safe）的缺陷
+- `reload()`（编程触发）保留同步语义不变
+- main.cpp 重载回调：重读 `active_conf_path`（启动时实际生效的配置
+  文件，`--no-conf`/默认路径未命中则跳过重载）；重载失败（文件缺失/
+  JSON 非法）保持现有配置继续运行（区别于启动时硬失败），并告警
+- 热更分级：`rpc.secret`/`rpc.allow_origin_all` 经
+  `JsonRpcServer::update_auth` 立即生效（带锁读写，已建 WebSocket
+  会话不受影响）；监听地址/端口、task_db_path、daemon 节各项变化
+  告警"restart required"
+- 测试：lifecycle 信号探针改断言 `reload_pending()`、run 循环消费
+  路径用例；main 集成新增 2 用例（SIGHUP 换 secret 生效 + 旧 secret
+  被拒、坏配置文件重载不死机保持旧 secret）；daemon 全量 225 用例通过
+
+### 2026-09-12 - daemon.json 配置文件加载
+- 新增 `daemon/config.{hpp,cpp}`：`apply_config_file` 解析 JSON 配置文件
+  并应用到配置结构；三节 schema——`rpc`（enabled/host/port/secret/
+  allow_origin_all）、`daemon`（run_as_daemon/pid_file/working_dir/
+  log_file）、`storage`（task_db_path）
+- 优先级：命令行显式参数 > 配置文件 > 内置默认值（实现：先加载配置
+  文件，再走既有 argv 解析——CLI 分支只在参数显式给出时写入，天然覆盖）
+- 新增参数 `--conf-path <file>`（显式指定必须存在）与 `--no-conf`
+  （短路一切加载）；未指定时默认尝试 `~/.config/falcon/daemon.json`，
+  存在才加载（aria2 语义）
+- 容错：文件不存在/JSON 非法/类型错误 → 报错退出（在 daemonize 之前，
+  错误可见）；未知节与未知键 → stderr 告警不失败（向前兼容，拼错键名
+  不静默）；路径值支持 `~/` 前缀展开
+- 测试：`falcon_daemon_config_tests`（12 用例：全量/部分键/错误/告警/
+  展开）+ `main_integration_test` 新增 8 用例（真实二进制验证文件启动、
+  CLI 覆盖、secret 生效、默认路径自动加载、--no-conf）；全量 1444 用例通过
+
+### 2026-09-12 - WebSocket 事件流客户端（桌面端对接）
+- 新增 `websocket_rpc_client.{hpp,cpp}`：`WebSocketRpcClient`——与 daemon
+  维持一条 WebSocket 长连接，请求/响应同连接按 id 匹配，服务器通知经
+  notification handler 推送（与 `JsonRpcClient`（HTTP）平行；桌面
+  `DaemonRpcBackend` 已切换至此客户端，500ms 轮询升级为事件驱动）
+  - `call()` 语义与 `JsonRpcClient::call` 完全一致（token 自动前置、
+    错误码约定相同）；便捷方法（addUri/tell*/pause/...）平行复刻
+  - 断线自愈：`call()` 发现未连接自动重连握手；发送失败 shutdown 加速
+    读线程收尾；服务器/网络断开时挂起请求统一以 -32000 唤醒返回
+  - 线程安全：`call()` 可并发（pending 表按 id 匹配 + 写帧互斥）；
+    通知 handler 在读线程调用、与 `set_notification_handler` 互斥
+    （setter 返回后保证无在途调用，调用方析构时序安全；handler 内可
+    调 call()、不可 disconnect()）
+  - 端点解析 `ws://`/`http://` 同义（与 HTTP JSON-RPC 同端点），支持
+    主机名（getaddrinfo）、IPv6 字面量、可选端口（缺省 6800）；TLS 不支持
+  - `set_url()` 运行期重定向端点（断开旧连接，下个 call 按新端点重连）
+- `websocket_frame` 新增 `ws_encode_client_frame`（客户端掩码帧，
+  thread_local mt19937_64 掩码 key）与 `ws_base64_encode`（握手 key 用）
+- CMake：`falcon_daemon_rpc_client` 与 `falcon_daemon_rpc` 均纳入
+  websocket_frame + websocket_rpc_client 源（重复编译同源文件既有模式）
+- 测试：新增 `tests/websocket_rpc_client_test.cpp`（10 用例入
+  `falcon_daemon_rpc_client_tests`）：WS 上 RPC 往返/认证/通知接收/
+  断线重连/服务器停机返回/并发 id 匹配、客户端掩码帧解析回环与扩展
+  长度、握手 key base64
+
+### 2026-09-12 - WebSocket 事件流订阅（aria2 兼容通知）
+- 新增 `websocket_frame.{hpp,cpp}`：RFC 6455 协议层（无 socket 依赖、无
+  OpenSSL 依赖——SHA1/base64 自实现）：
+  - `ws_compute_accept_key`（Sec-WebSocket-Accept）、`ws_encode_frame`
+    （服务端帧，不掩码）、`WsFrameParser`（增量解析客户端帧：掩码、
+    126/127 扩展长度、text 分片聚合、ping/pong/close 透传；1 MiB 消息
+    上限防内存滥用，协议违规进入 error 状态）
+- `JsonRpcServer` 同端口支持 WebSocket 升级（`ws://host:6800/jsonrpc`，
+  aria2 真实行为，AriaNg 实时模式可直接对接）：
+  - `handle_connection` 按 `Upgrade: websocket + Sec-WebSocket-Key` 分流，
+    握手后进入会话循环：text 帧走与 HTTP 相同的 `handle_jsonrpc` 分发
+    （含 token 认证），ping→pong，close→回应后断开
+  - 删除死代码原型 `websocket_server.{hpp,cpp}`（从未接入构建，
+    POSIX-only、依赖不存在的 `base64.h`，与 xml_rpc_server 同例）
+- 事件流：新增内部类 `RpcEventBridge`（IEventListener，start/stop 时挂接/
+  摘除引擎），引擎事件 → JSON-RPC 通知广播到全部 WebSocket 订阅者：
+  - aria2 兼容：`onDownloadStart`（含 Paused 恢复）/`onDownloadPause`/
+    `onDownloadComplete`/`onDownloadError`/`onDownloadStop`
+  - params[0] 为 gid + Falcon 扩展进度快照（status/totalLength/
+    completedLength/downloadSpeed），严格 aria2 客户端忽略未知字段
+  - Falcon 扩展 `falcon.onProgress`：进度推送，每任务节流（默认 1 秒，
+    `JsonRpcServerConfig::progress_push_interval` 可配）
+  - `broadcast_notification` 公开（快照后逐连接发送，写互斥 per-connection；
+    发送失败 shutdown 唤醒会话线程，由其统一注销，避免跨线程 close 的
+    fd 复用竞争）
+- 认证：WS 握手不鉴权（对齐 aria2）；WS 上的 JSON-RPC 请求逐条校验
+  `token:<secret>`；通知广播不受 secret 限制
+- 停机安全：`stop()` 先摘事件桥，再 shutdown 全部 WS 会话 fd 唤醒阻塞在
+  recv 的会话线程——有活动订阅者时 `forceShutdown` 不再挂死
+- 新增 `tests/websocket_test.cpp`（15 用例入 `falcon_daemon_rpc_tests`）：
+  RFC 6455 向量、帧解析（掩码/分片/控制帧/坏操作码/超长帧/孤立
+  continuation）、回环握手、WS 上的 JSON-RPC 与认证、真实引擎事件链的
+  状态/进度通知与节流、广播 fan-out、关闭帧清理、活动订阅者下的停机
+
+### 2026-09-11 - RPC 客户端库与快照转换层（桌面应用支撑）
+- 新增 `aria2_snapshots.{hpp,cpp}`：纯 C++ 把 aria2 `tell*`/`getGlobalStat`
+  JSON 应答转换为 `TaskSnapshot`/`GlobalStats`（容错解析：字节字段接受
+  字符串/数值/缺失，坏数组条目跳过；gid 支持 16 位 hex 及可选 `0x` 前缀）
+- 新增 `json_rpc_client.{hpp,cpp}`：JSON-RPC 2.0 客户端（libcurl 传输、
+  `token:<secret>` 认证、超时/错误传播），封装 `addUri`/`changePriority`/
+  `tell*`/`pause`/`unpause`/`remove`/`purgeDownloadResult`/
+  `changeGlobalOption`/`getGlobalStat` 等桌面所需方法
+- tellStatus 应答新增 Falcon 扩展字段 `priority`，供桌面恢复每任务优先级
+  （storage 回落记录暂报 Normal，优先级尚未持久化）
+- CMake 拆分：`falcon_daemon_rpc_client` 静态库（client + snapshots，
+  链接 Falcon::core + nlohmann_json + CURL），供 apps/desktop 独立链接
+  （桌面不需要 RPC 服务器）；`falcon_daemon_rpc`（daemon 本体，含服务器）
+  保持原源文件列表，两组重复编译同源文件，无二进制同时链接两者
+- 测试：`json_rpc_client_test`（内嵌服务器回环）与 `aria2_snapshots_test`
+  纳入 `falcon_daemon_rpc_tests`
+
+### 2026-09-11 - aria2 兼容 RPC 全面完善
+- RPC 方法扩至 26 个（`aria2.*` 全套核心 + `system.*`），查询与删除同时覆盖
+  引擎内存态与 TaskStorage 历史记录（引擎优先、storage 回落，`tellWaiting`
+  按 engine id 去重）
+- 新增方法：`getFiles`/`getUris`/`getOption`/`getGlobalOption`/
+  `changeGlobalOption`/`getSessionInfo`/`saveSession`/`purgeDownloadResult`/
+  `removeDownloadResult`/`pauseAll`/`unpauseAll`/`forceShutdown`/
+  `system.multicall` 等
+- `forceShutdown`/`shutdown` 通过 `set_shutdown_handler` 触发正常停机流程
+  （排水 + 落库），main.cpp 接线到 `DaemonManager::request_stop()`
+- 会话标识：`getSessionInfo` 返回启动时生成的 `sessionId`
+- `pauseAll`/`unpauseAll` 显式落库受影响任务的状态（aria2 语义）
+- `TaskStorage::create_task` 支持显式插入 record.id（RPC addUri 写库时
+  storage id 与引擎 id 保持一致；此前自增覆盖导致删除/重启后错位）
+- JSON-RPC 错误码分层：请求体非 JSON → -32700；dispatch 内部运行时失败
+  → -32603；业务错误沿用 aria2 码（1/2），协议错误 -32600/-32601/-32602
+- 删除死代码 `xml_rpc_server.{hpp,cpp}`（从未接入 CMakeLists）
+- 新增测试目标 `falcon_daemon_rpc_storage_tests`（JSON-RPC × TaskStorage
+  集成，15 个用例）与 `falcon_daemon_rpc_coverage_tests`（HTTP 层 +
+  全方法覆盖）
+- Core 新增只读查询：`DownloadEngine::get_global_speed_limit()` /
+  `get_max_concurrent_tasks()`（供 getGlobalOption 回显）
+
+### 2026-09-11 - 任务持久化闭环完成
+- 新增 `TaskStorageListener`（`src/storage/`）：实现 `IEventListener`，注册到引擎
+  - 状态变更实时落库：`Completed`/`Failed` 走 `mark_completed`/`mark_failed`（记录终态时间戳与错误消息）
+  - 进度按任务 1 秒节流落库（`update_progress`）
+  - `on_error` 的错误消息按任务缓存，任务进入 `Failed` 时随 `mark_failed` 一次性消费
+  - `shutdown()` 保证停机时监听器先于 `TaskStorage` 停止访问数据库
+- 停机语义修正：停止信号改为 `pause_all()` + 排水等待（原先 `cancel_all()` 会把未完成任务落库为 Cancelled，重启后无法恢复）
+- 恢复逻辑：从 `list_tasks()` 全量恢复（跳过终态；Paused 任务恢复但不自动启动）；恢复时还原 `output_path`
+- 任务 id 冲突修复：启动时用 `TaskStorage::get_max_task_id()` 推进引擎计数器（`DownloadEngine::set_next_task_id`），避免重启后新任务 id 与历史记录冲突导致写错库
+- `TaskRecord` 字段补默认初始化，防止垃圾值入库
+- vcpkg.json 与 CI 增加 SQLite3 依赖，`falcon_daemon_storage_tests` 纳入 CI
+
+### 2025-12-21 - 初始化模块架构
+- 创建 Daemon 项目结构
+- RPC 选型定为 aria2 兼容 JSON-RPC（HTTP），gRPC/REST 蓝图废弃
+- 规划任务持久化方案
+
+---
+
+## 模块职责
+
+`falcon-daemon` 是 Falcon 下载器的后台守护进程，提供以下能力：
+
+1. **常驻后台**：作为系统服务持续运行（`--daemon` 模式、PID 文件、信号处理）
+2. **aria2 兼容 RPC**：HTTP + JSON-RPC 2.0，`token:<secret>` 认证，
+   aria2 客户端/前端（如 AriaNg）可直接对接
+3. **事件流订阅**：同端口 WebSocket 升级，推送 aria2 兼容状态通知与
+   Falcon 扩展进度通知
+4. **任务持久化**：SQLite 状态/进度实时落库，停机保存、重启恢复
+5. **多客户端支持**：无状态 HTTP 请求，天然支持多客户端并发
+6. **MCP 工具面**：同端口 `/mcp` 端点（Model Context Protocol，Streamable
+   HTTP，默认关），13 个下载工具暴露给 AI host（Claude Desktop/Code、Cursor
+   等），Bearer 鉴权 + 会话管理，`tools/call` 翻译到既有 aria2 RPC；
+   另附 stdio 薄壳 `falcon-mcp`（stdin/stdout 行协议转发 `/mcp`，供假设
+   stdio 传输的 AI 编码工具接入）；`GET /mcp` SSE 通知流推送任务状态/进度
+   （阶段 2 增量 3，见「对外接口」小节）
+
+### 包内静态库（2026-09-25 拆库，源零改动）
+
+| Target | 内容 | 消费方 |
+|---|---|---|
+| `falcon_ws_protocol` | RFC 6455 帧编解码（websocket_frame，零外部依赖） | daemon rpc 两库 + `falcon-swarmd` 包 |
+| `falcon_daemon_core` | DaemonManager 生命周期/信号/停机排水（daemon.cpp） | main.cpp + swarmd main 形态参照 |
+| `falcon_daemon_mcp_stdio` | MCP stdio 桥层（mcp_stdio 行协议 + mcp_curl_post 传输；仅 nlohmann_json + CURL，不链 core） | `falcon-mcp` 可执行 + rpc_tests |
+
+## 源码结构
+
+```
+apps/daemon/src/
+├── main.cpp                  # 入口：参数解析 → DaemonManager 组装与接线
+├── daemon/
+│   ├── daemon.hpp/.cpp       # DaemonManager：生命周期、信号、pid 文件、停机排水
+│   ├── config.hpp/.cpp       # daemon.json 配置文件加载（JSON → 配置结构，
+│   │                         #   优先级 CLI > 文件 > 默认值；~ 路径展开）
+│   └── (daemonize POSIX 细节)
+├── rpc/
+│   ├── json_rpc_server.hpp/.cpp  # aria2 兼容 JSON-RPC 2.0 服务器（30 个方法）
+│   │                             #   + WebSocket 升级与通知广播（RpcEventBridge）
+│   │                             #   + /mcp 路由（McpServer 委托 + 异常边界）
+│   ├── mcp_server.hpp/.cpp       # MCP Streamable HTTP 端点（initialize 握手/
+│   │                             #   会话表/tools/list 静态 schema/tools/call
+│   │                             #   翻译层；与 /jsonrpc 同端口同鉴权事实源）
+│   ├── websocket_frame.hpp/.cpp  # RFC 6455 帧编解码（握手应答/掩码/分片，
+│   │                             #   自实现 SHA1+base64，无 OpenSSL 依赖）
+│   ├── websocket_rpc_client.hpp/.cpp # WebSocket JSON-RPC 客户端（单连接
+│   │                             #   承载请求/响应与通知；随
+│   │                             #   falcon_daemon_rpc_client 库供桌面链接）
+│   ├── json_rpc_client.hpp/.cpp  # JSON-RPC 2.0 客户端（libcurl；随
+│   │                             #   falcon_daemon_rpc_client 库供桌面链接）
+│   └── aria2_snapshots.hpp/.cpp  # aria2 JSON → TaskSnapshot/GlobalStats 转换
+└── storage/
+    ├── task_storage.hpp/.cpp         # SQLite 持久化（TaskRecord CRUD）
+    └── task_storage_listener.hpp/.cpp # IEventListener → 实时落库
+
+apps/daemon/tools/          # MCP stdio 薄壳（falcon-mcp）
+├── mcp_stdio.hpp/.cpp                 # McpStdioBridge：stdin 行 → POST /mcp
+│                                      #   → stdout 行；会话捕获/附带/404 清除/
+│                                      #   EOF DELETE 拆除；传输失败信封
+├── mcp_curl_post.hpp/.cpp             # HttpPostFn 的 curl 实现（逐请求句柄）
+└── falcon-mcp.cpp                     # 主程序（--rpc-url/--secret/--version）
+```
+
+---
+
+## 入口与启动
+
+### 编译与运行
+
+```bash
+# 编译
+cmake -B build -DFALCON_BUILD_DAEMON=ON
+cmake --build build --target falcon-daemon
+
+# 前台运行（调试用）
+./build/bin/falcon-daemon --enable-rpc --rpc-listen-port 6800
+
+# 经配置文件运行
+./build/bin/falcon-daemon --conf-path /etc/falcon/daemon.json
+
+# 后台运行（守护进程模式）
+./build/bin/falcon-daemon --daemon --enable-rpc --pid-file /var/run/falcon-daemon.pid
+```
+
+### 命令行参数
+
+```bash
+falcon-daemon [OPTIONS]
+
+Global Options:
+  -h, --help                  显示帮助
+  --conf-path <file>          配置文件（JSON）；默认尝试
+                              ~/.config/falcon/daemon.json（存在才加载）
+  --no-conf                   不加载任何配置文件（显式 --conf-path 也忽略）
+
+RPC Options:
+  --enable-rpc[=true|false]   启用 JSON-RPC 服务器（默认 false）
+  --rpc-listen-port <port>    监听端口（默认 6800）
+  --rpc-secret <token>        要求 params 首位为 token:<token>（缺省不鉴权）
+  --rpc-allow-origin-all      附加 CORS 头（Access-Control-Allow-Origin: *）
+  --rpc-listen-host <ip>      绑定地址（默认 127.0.0.1）
+
+MCP Options:
+  --enable-mcp[=true|false]   启用 MCP 端点 /mcp（默认 false；启用时隐含启用 RPC；
+                              未配 rpc.secret 时端点整体 403 拒绝）
+
+Daemon Options:
+  -d, --daemon                后台守护进程模式（POSIX）
+  --pid-file <path>           PID 文件路径
+  --working-dir <dir>         工作目录
+  --log-file <path>           日志文件（重定向 stdout/stderr）
+  --task-db <path>            任务数据库路径（默认 ~/.config/falcon/tasks.db）
+
+Windows Service Options（仅 Windows）:
+  --install-service           安装为 Windows 服务
+  --uninstall-service         卸载 Windows 服务
+  --service-name <name>       服务名（默认 falcon-daemon）
+```
+
+### MCP stdio 薄壳（falcon-mcp，独立二进制）
+
+```bash
+falcon-mcp [OPTIONS]
+
+  --rpc-url URL   daemon 基址（默认 http://127.0.0.1:6800）
+  --secret TOKEN  Bearer 凭据（daemon rpc.secret；未配则不发 Authorization）
+  -h, --help      显示帮助
+  --version       显示版本（取本包 project VERSION）
+
+# MCP host（如 Claude Code）的 mcpServers 配置示例：
+#   {"command": "/usr/local/bin/falcon-mcp",
+#    "args": ["--rpc-url", "http://127.0.0.1:6800", "--secret", "YOUR_TOKEN"]}
+```
+
+### 配置文件（daemon.json）
+
+加载时机与优先级：**命令行显式参数 > 配置文件 > 内置默认值**。
+配置文件在 daemonize 之前加载（pid_file/working_dir/log_file 影响守护化
+行为）；显式 `--conf-path` 指定的文件必须存在且合法，否则进程报错退出；
+默认路径存在才加载、不存在静默跳过。
+
+```json
+{
+  "rpc": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 6800,
+    "secret": "YOUR_TOKEN",
+    "allow_origin_all": false
+  },
+  "mcp": {
+    "enabled": true
+  },
+  "daemon": {
+    "run_as_daemon": false,
+    "pid_file": "/var/run/falcon-daemon.pid",
+    "working_dir": "/var/lib/falcon",
+    "log_file": "/var/log/falcon/daemon.log"
+  },
+  "storage": {
+    "task_db_path": "~/.config/falcon/tasks.db"
+  },
+  "download": {
+    "max_concurrent_tasks": 5,
+    "max_overall_speed_limit": 0
+  },
+  "p2sp": {
+    "share": {
+      "enabled": false,
+      "mode": "standard",
+      "one_way": false,
+      "ttl_s": 86400,
+      "hash_delay_s": 0,
+      "announce_mirrors": true
+    },
+    "rendezvous": {
+      "host": "127.0.0.1",
+      "port": 7800,
+      "server_token": "",
+      "group_token": "",
+      "advertise_addr": "",
+      "advertise_direct": true
+    }
+  }
+}
+```
+
+- `p2sp.share.enabled` 开启后，下载完成的任务经 SwarmAnnouncer 向
+  Rendezvous Service 公告（R1 文件哈希 + R2 镜像 URL），并做 TTL 续租/
+  文件消失撤下/内容变化重公告；`mode=standard` 上送 name/size，
+  `hash_only` 仅哈希；`one_way` = 只下载不共享（等同 enabled=false）；
+  `announce_mirrors=false` 仅公告文件不公告镜像 URL
+- `p2sp.rendezvous` 为 SwarmClient 接入参数，**改动需重启**（SIGHUP 仅
+  告警 "restart required"）；`p2sp.share.*` 全部热更（SIGHUP 立即生效）
+- 阶段 2 起，查询面（metalink 镜像池补源）**独立于 `share.enabled`**：
+  做种关闭仍会按需向 rendezvous 查询 swarm 源；数据服务（他人拉取）
+  才随 `share.enabled` 启停
+
+- 只覆盖文件中出现的键，未出现的键保持下层值
+- 路径值支持 `~/` 前缀展开（HOME / USERPROFILE）
+- 配置文件给出 `pid_file` 时与 `--pid-file` 行为一致（隐含创建 PID 文件）
+- 未知节/未知键打印告警到 stderr 但不失败；类型错误报错退出
+
+**SIGHUP 热重载**：向运行中的 daemon 发送 SIGHUP（或 systemd
+`ExecReload=/bin/kill -HUP $MAINPID`）会重读启动时实际生效的配置
+文件。可热更项立即生效：`rpc.secret`/`rpc.allow_origin_all`（已建立
+的连接不受影响）与 `download` 节（引擎 setter 运行时可调）；监听
+地址/端口、`mcp.enabled`、`storage.task_db_path`、`daemon` 节各项
+变化仅告警"restart required"。重载失败（文件缺失/JSON 非法）保持
+现有配置继续运行。`--no-conf` 启动时无文件可重载，SIGHUP 记日志
+跳过。
+
+---
+
+## 对外接口
+
+### aria2 兼容 JSON-RPC
+
+- 端点：`http://<host>:<port>/jsonrpc`（`/` 同义），仅 POST
+- 认证：params 首位 `token:<secret>`；未配置 secret 时跳过校验
+- CORS：`--rpc-allow-origin-all` 时回显 `Access-Control-Allow-*`
+- 批量调用：`system.multicall`（结果包装为 `[result]`）
+
+方法清单（30 个，`system.listMethods` 列出 29 个，`shutdown` 为别名）：
+
+| 分组 | 方法 |
+|------|------|
+| 任务控制 | `addUri` `pause` `forcePause` `unpause` `unpauseAll` `pauseAll` `remove` `forceRemove` `changePriority`（Falcon 扩展） |
+| 查询 | `tellStatus`（含 Falcon 扩展字段 `priority`） `tellActive` `tellWaiting` `tellStopped` `getFiles` `getUris` `getOption` `getGlobalStat` |
+| 选项 | `getGlobalOption` `changeGlobalOption`（支持 `max-overall-download-limit`、`max-concurrent-downloads`；`"none"`/`"0"` 取消限制） |
+| 会话与清理 | `getSessionInfo` `saveSession` `purgeDownloadResult` `removeDownloadResult` `forceShutdown` `shutdown`（= forceShutdown 别名） |
+| P2SP | `falcon.swarm.status`（announcer 快照） `falcon.swarm.setShare`（运行时共享开关，语义同 SIGHUP 热更） |
+| 系统 | `system.listMethods` `system.multicall` |
+
+错误码约定（对齐 aria2）：
+
+| 码 | 含义 |
+|----|------|
+| -32700 | 请求体不是合法 JSON |
+| -32600 | 无效请求（缺 method/params 形状错误） |
+| -32601 | 方法不存在 |
+| -32602 | 参数错误 |
+| -32603 | 服务端内部错误（dispatch 抛异常） |
+| -32001 | 认证失败 |
+| 1 | 任务忙/操作失败（如移除活动任务） |
+| 2 | gid 不存在 |
+
+### P2SP 数据服务与查询源（阶段 2，设计文档 `docs/developer/p2sp-network.md` §10/§11）
+
+- **入站只读数据服务**（`p2sp.share.enabled=true` 时随公告链启动）：`GET|HEAD /by-sha256/<64hex>`——公告完成 → SHA256 → 公告同一时点把文件注册进 `ISwarmDataRegistry`；支持 `Range: bytes=a-b`（断点续传/分段消费），不可解析 416；未知哈希 404、非 hex 400、错路径 404、非 GET/HEAD 405；`Connection: close`（一连接一请求）；bind 地址从 `p2sp.advertise_addr` 派生（未配置则 0.0.0.0 随机端口），绑定失败仅告警不阻断 daemon；删除/关闭/换内容自动撤注册
+- **查询源接缝**（`falcon/protocols/mirror_source.hpp`，daemon 侧 `swarm_source_provider`）：metalink 多源桥接在文档镜像池不足（<2）时经接缝查询 swarm（`falcon.swarm.query`），node 源转 `http://<addr>/by-sha256/<sha>`、url 源仅 http/https 透传、NAT 标记 `direct:false` 被过滤、去重并排除自身；失败退避 30s×2^n（cap 300s）。查询面独立于 share.enabled——做种关闭时仍可查询消费（惰性共享 SwarmClient）；坏源数据由整文件哈希校验拦截（桥接回落串行）
+- **停机纪律**：`set_swarm_mirror_source_provider(nullptr)` 先于引擎排水（在途查询持 shared_ptr 拷贝，无悬垂），随后数据服务 stop
+
+### WebSocket 事件流订阅
+
+- 端点：`ws://<host>:<port>/jsonrpc`（`/` 同义）——与 HTTP JSON-RPC 同端口，
+  GET + `Upgrade: websocket` + `Sec-WebSocket-Key` 完成升级
+- 会话内双向 JSON-RPC：text 帧即请求，与 HTTP 走同一分发（token 认证、
+  全部 30 个方法可用）；ping/pong、close 按 RFC 6455 处理
+- 通知推送（服务端 → 客户端，JSON-RPC 通知格式，无 id）：
+
+| 通知 | 触发 |
+|------|------|
+| `aria2.onDownloadStart` | 任务进入 Downloading（含 Paused 恢复） |
+| `aria2.onDownloadPause` | 任务暂停 |
+| `aria2.onDownloadComplete` | 下载成功 |
+| `aria2.onDownloadError` | 下载失败 |
+| `aria2.onDownloadStop` | 任务取消 |
+| `falcon.onProgress` | 下载中进度更新（Falcon 扩展，每任务默认 1 秒节流） |
+
+- params[0] 均为 `gid` + Falcon 扩展快照（`status`/`totalLength`/
+  `completedLength`/`downloadSpeed`；`falcon.onProgress` 另含数值型
+  `progress` 0~1），aria2 严格客户端只读 gid 不受影响
+- 认证：握手不鉴权（对齐 aria2），会话内每条请求需 `token:<secret>`；
+  通知广播不受 secret 限制
+- 对接示例（AriaNg：WebSocket 服务地址填同一 `host:port`、路径 `/jsonrpc`）；
+  停机时服务器主动关闭全部订阅连接
+
+### MCP 工具端点（AI host 接入，设计文档 `docs/developer/mcp-server.md`）
+
+- 端点：`http://<host>:<port>/mcp`（与 RPC 同端口），Streamable HTTP，
+  仅 POST/DELETE；`mcp.enabled`（默认 **false**）或 `--enable-mcp` 开启
+  （开启时隐含启用 RPC）
+- 鉴权：`Authorization: Bearer <rpc.secret>`；**未配置 secret 时端点整体
+  403**（与 `/jsonrpc` 未配 secret 跳过校验的语义不同——MCP 面向 AI host，
+  无凭据不放行）；凭据错误 401 + `WWW-Authenticate: Bearer`；鉴权先于
+  方法路由（无凭据 GET 得 401 而非 405）
+- 会话：`initialize` 忽略客户端会话头，恒新建 32-hex 会话经
+  `Mcp-Session-Id` 响应头返回；后续请求校验，无效/过期会话 404；内存表
+  上限 64（满逐最旧）；`DELETE /mcp` 释放会话回 204
+- 版本协商：支持 `2025-06-18`（默认）与 `2025-03-26`；客户端声明的更高
+  版本回退默认
+- 帧语义：通知（id null）回 202；`GET /mcp` 为 SSE 通知流（见下小节）；
+  PUT 等未知方法 405 + `Allow: POST, DELETE`；解析失败 400 + -32700；数组
+  batch 400 + -32600（2025-06-18 已移除 batch）；非 object 标量 body
+  200 + -32600 信封；未知方法 -32601；`ping` → `{}`
+- 错误三层：协议层参数形状 → JSON-RPC error（-32602）；业务错误（gid
+  不存在等）→ `isError: true` + `content[0].text = "Error(<code>):
+  <message>"`；翻译层/分发抛异常 → -32603（异常边界防 terminate）
+- 工具清单（`tools/list` 静态 schema，全部 `additionalProperties:false` +
+  `title` + annotations；`tools/call` 翻译到既有 aria2 RPC，零新增业务
+  逻辑；成功结果 `structuredContent` 携带与 text 一致的结构体）：
+
+| 工具 | 映射 | annotations 要点 |
+|------|------|------------------|
+| `falcon_add_download` | `aria2.addUri`（`output_dir`/`filename`→`dir`/`out`；`options` 白名单外键报 Unsupported option；同名键冲突报 Conflicting arguments） | `readOnlyHint:false` |
+| `falcon_list_tasks` | `tellActive`+`tellWaiting`+`tellStopped` 聚合（`status` 默认 all：三队列合并后按 offset/limit 切片） | `readOnlyHint:true` |
+| `falcon_get_task` | `aria2.tellStatus`（含 BT 做种扩展字段） | `readOnlyHint:true` |
+| `falcon_pause_task` / `falcon_resume_task` | `aria2.pause` / `aria2.unpause` | — |
+| `falcon_remove_task` | `aria2.remove` / `forceRemove`（`force:true`） | `destructiveHint:true` |
+| `falcon_pause_all` / `falcon_resume_all` | `aria2.pauseAll` / `unpauseAll` | `pause_all` 带 `destructiveHint:true` |
+| `falcon_get_global_stats` | `aria2.getGlobalStat` | `readOnlyHint:true` |
+| `falcon_get_task_files` | `aria2.getFiles` | `readOnlyHint:true` |
+| `falcon_get_global_option` | `aria2.getGlobalOption`（全量选项表，aria2 字符串值） | `readOnlyHint:true` |
+| `falcon_set_global_option` | `aria2.changeGlobalOption`（`options` 对象透传；未知键/非法值由 daemon 侧业务错误 code 1 → isError） | — |
+| `falcon_stop_seeding` | `falcon.stopSeeding`（code 1 非做种/code 2 不存在 → isError） | — |
+
+- **stdio 薄壳 `falcon-mcp`**（阶段 2 增量 2，2026-10-08 落地）：独立小
+  二进制，stdin 逐行 MCP JSON-RPC → POST `/mcp` → stdout 逐行响应；
+  `Mcp-Session-Id` 自动捕获/附带、404 自动清除（host 重新 initialize 即
+  恢复）、EOF 时 DELETE 拆除会话；Bearer 与 `--secret` 绑定；传输失败
+  （daemon 不可达）对带 id 消息回 -32603 信封、通知静默。不链
+  libfalcon-core——纯转发进程，零引擎形态；CURL 缺席时不构建
+
+### MCP SSE 通知流（阶段 2 增量 3，2026-10-08 落地）
+
+- 端点：`GET http://<host>:<port>/mcp`，头带 `Authorization: Bearer
+  <rpc.secret>` + `Mcp-Session-Id`（先 initialize 取会话）；准入语义与
+  POST/DELETE 一致（未配 secret 403 / 凭据失败 401 / 会话缺失或过期
+  404，错误形状照常回发）
+- 响应：200 `text/event-stream` + `Cache-Control: no-cache`，无
+  Content-Length；初始注释行 `: falcon mcp stream` 后挂起——成功路径
+  不关连接（断开感知靠客户端 recv：对端 EOF / 服务器停机 shutdown）
+- 通知：与 WS 订阅同源（同一 `broadcast_notification`，引擎事件经
+  RpcEventBridge），每条通知一行 `data: <JSON-RPC 通知信封>\n\n`；
+  通知清单同 WS 表（`aria2.onDownload*` 五种 + `falcon.onProgress`）
+- 断开与重连：客户端断开或服务器停机时流拆除；host 侧重连 = 重新 GET
+  （会话仍有效时无需重新 initialize；准入仅发生在开流时刻）
+- 阶段 2 三增量全部落地（2026-10-08 收口）：全局选项与做种工具（13 工具）、
+  stdio 薄壳（`falcon-mcp`）、SSE 进度订阅（本节）
+
+### 查询的存储回落
+
+引擎内存态优先；`gid → TaskId` 在引擎查不到时回落 TaskStorage
+（重启后终态历史只在数据库里）。`tellWaiting`/`tellStopped`/
+`getGlobalStat` 对引擎与 storage 的并集按 engine id 去重。
+
+### 停机
+
+`aria2.forceShutdown`/`shutdown` 调用 `set_shutdown_handler` 注册的回调
+（main.cpp 接线 `DaemonManager::request_stop()`），走正常停机流程：
+暂停全部任务 → 排水等待 → 状态落库（未完成任务以 Paused 入库，重启可恢复）。
+
+---
+
+## 关键依赖与配置
+
+| 依赖库 | 用途 | 备注 |
+|--------|------|------|
+| Falcon::core / Falcon::protocols | 下载引擎与协议 | 必选 |
+| nlohmann/json | JSON-RPC 编解码 | 必选 |
+| SQLite3 | 任务持久化 | 可选；无 SQLite 时 daemon 可运行但不持久化 |
+| libcurl | falcon-mcp stdio 薄壳转发 / json_rpc_client | 可选；CURL 缺席时 falcon-mcp 与 rpc_client 目标不构建 |
+
+SQLite 可用时 `falcon_daemon_storage` 定义 `FALCON_HAS_SQLITE3`，
+RPC 服务器的 storage 回落分支在该宏内。
+
+---
+
+## 数据模型
+
+### 表：`tasks`（SQLite）
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | INTEGER PRIMARY KEY | 任务 ID（= 引擎 TaskId；create_task 支持显式插入） |
+| url | TEXT | 下载 URL |
+| output_path | TEXT | 输出路径（恢复时还原） |
+| status | INTEGER | TaskStatus 枚举值 |
+| progress | REAL | 进度（0.0 ~ 1.0） |
+| total_bytes / downloaded_bytes / speed | INTEGER | 字节统计 |
+| error_message | TEXT | 失败原因 |
+| options_json | TEXT | DownloadOptions 序列化（getOption 回显数据源） |
+| created_at / updated_at / completed_at | INTEGER | 毫秒时间戳 |
+
+写入路径：`TaskStorageListener` 监听引擎事件实时落库（进度 1 秒节流）；
+RPC 的 `pauseAll`/`unpauseAll`/`removeDownloadResult`/`purgeDownloadResult`
+显式联动 storage。
+
+---
+
+## 测试与质量
+
+| 测试目标 | 文件 | 覆盖 |
+|----------|------|------|
+| `falcon_daemon_rpc_tests` | `json_rpc_server_test.cpp` `websocket_test.cpp` `mcp_server_test.cpp` `mcp_stdio_test.cpp` | RPC 基础；WebSocket 帧协议/握手/通知/节流/停机；MCP 握手/会话/鉴权/版本协商/帧语义/工具翻译层；MCP stdio 薄壳桥逻辑（fake 传输 8 用例）+ 真 curl 回环 e2e；MCP SSE 通知流（准入三态/扇出/停机/断开/CORS） |
+| `falcon_daemon_rpc_client_tests` | `json_rpc_client_test.cpp` `aria2_snapshots_test.cpp` `websocket_rpc_client_test.cpp` | 客户端 × 真实服务器回环 + 快照转换 + WS 客户端事件流 |
+| `falcon_daemon_rpc_coverage_tests` | `json_rpc_server_coverage_test.cpp` | HTTP 层 + 全方法 |
+| `falcon_daemon_rpc_storage_tests` | `json_rpc_storage_test.cpp` | RPC × storage 集成（回落/删除联动/批量落库/停机回调） |
+| `falcon_daemon_storage_tests` | `task_storage_test.cpp` `task_storage_listener_test.cpp` | 持久化与监听器 |
+| `falcon_daemon_lifecycle_tests` | `daemon_lifecycle_test.cpp` | 守护进程生命周期（POSIX） |
+| `falcon_daemon_config_tests` | `config_test.cpp` | daemon.json 解析/优先级/容错/~ 展开；`p2sp` 节（share/rendezvous 全字段往返/非法 mode 告警/类型错误/节非 object/未知键告警） |
+| `falcon_daemon_swarm_announcer_tests` | `swarm_announcer_test.cpp` | SwarmAnnouncer 状态机（FakeGateway 接缝注入）：公告内容与隐私过滤/TTL 续租/文件消失与内容变化/session 补差/失败退避/停机禁用语义/状态快照/运行时翻关/数据服务 registry 同步（成功注册先于公告、哈希失败不注册、文件消失 unregister、换内容 swap、关闭/翻关清表、stop 保留表） |
+| `falcon_daemon_swarm_data_service_tests` | `swarm_data_service_test.cpp` | 入站数据服务（§10.3）：随机端口起服/Range 精确切片/HEAD 无体/未知哈希 404/非 hex 400/错路径 404/非 GET·HEAD 405/unregister·clear 撤服/注册文件缺失 404/stop 幂等/并发客户端；Windows 占位 skip（POSIX-only） |
+| `falcon_daemon_swarm_source_provider_tests` | `swarm_source_provider_test.cpp` | 查询源 provider（§10.4/§10.5/§11，fake QueryFn 零触网）：node→数据 URL 构造/NAT 矩阵过滤/畸形 node 跳过/自身 node_id 排除/url 仅 http·https/未知类型容错/去重/畸形结果容错/成功解析且 sha 传参/失败退避抑制期跳过查询/缺 QueryFn 空表无状态 |
+| `falcon_daemon_swarm_e2e_tests` | `swarm_daemon_e2e_test.cpp` | P2SP 真二进制 e2e（POSIX；fork+execv 起 falcon-swarmd + 两 falcon-daemon + 回环源，HOME 隔离）：§16.6 三铁律 + §17 Test D——announce→query 命中→删文件 retract 落空 / Rendezvous SIGKILL 中途下载无感且成品逐字节一致 / 默认 off 零公告 / **做种关 + doc 镜像拒 Range（416）→ 串行结构性不可胜，断言 plain GET ≥1 + Range GET ≥1 且成品逐字节一致（swarm 源真实参与分段）**；宏缺席单 skip 占位 |
+| `falcon_daemon_main_tests` | `main_integration_test.cpp` | 真实二进制参数/退出码/配置文件加载（POSIX） |
+
+```bash
+ctest --test-dir build -R "JsonRpc|TaskStorage|StorageListener|DaemonLifecycle|MainIntegration"
+```
+
+---
+
+## 常见问题 (FAQ)
+
+### Q1：如何部署为 systemd 服务？
+
+创建服务文件 `/etc/systemd/system/falcon-daemon.service`：
+
+```ini
+[Unit]
+Description=Falcon Download Daemon
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/falcon-daemon --enable-rpc --rpc-listen-host 127.0.0.1 --rpc-listen-port 6800 --rpc-secret YOUR_TOKEN --task-db /var/lib/falcon/tasks.db
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Q2：如何用 aria2 客户端对接？
+
+任意 aria2 JSON-RPC 客户端均可，例如 curl：
+
+```bash
+curl http://127.0.0.1:6800/jsonrpc -d '
+  {"jsonrpc":"2.0","id":"1","method":"aria2.addUri",
+   "params":["token:YOUR_TOKEN",["https://example.com/file.bin"]]}'
+```
+
+### Q3：如何监控 Daemon 状态？
+
+- 通过 RPC 调用 `aria2.getGlobalStat` / `aria2.tellActive`
+- `aria2.getSessionInfo` 获取本次会话 id
+
+---
+
+## 下一步开发计划
+
+（当前无排期项；已完成：daemon.json 配置加载、SIGHUP 热重载、下载参数配置化）
+
+---
+
+**文档维护**：每次修改 RPC 接口、数据库模式、配置格式时，请更新本文档并在"变更记录"中添加条目。

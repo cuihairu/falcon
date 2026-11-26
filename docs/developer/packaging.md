@@ -45,7 +45,16 @@ vcpkg install --overlay-ports=<repo>/ports "libfalcon-storage[s3,oss]"
 | core | Threads (required); spdlog / nlohmann-json / OpenSSL (optional, QUIET degradation when missing) | ws2_32 (Windows) |
 | protocols | falcon_core | curl (HTTP/FTP/WebDAV plugins); OpenSSL (TLS/metalink hashing); libssh2 (SFTP); libtorrent (BT plugin); expat + vendored libmetalink (metalink); miniupnpc + libnatpmp (NAT facade) |
 | storage | falcon_core; curl + nlohmann-json (resource browser); OpenSSL (signing/hashing) | — |
-| drives | falcon_core; nlohmann-json; curl (search crawler); SQLite3 (config_manager); OpenSSL (encryption/decryption) | — |
+| drives (facade) | falcon_core only | — |
+| plugins/drives (MODULE, runtime-loaded) | — | cloud_storage: nlohmann-json; resource_search: nlohmann-json; config_storage: SQLite3 + OpenSSL + nlohmann-json. Network I/O uses the host HTTP API from `falcon_protocols` (curl), no direct curl link. |
+
+Drives plugins are `MODULE` targets, not part of any link closure. Build output lands in
+`<build>/falcon/plugins/`; `cmake --install` places them in
+`${libdir}/falcon/plugins`. The facade discovers them via `FALCON_PLUGIN_DIR`,
+`<exe dir>/falcon/plugins`, or the compiled-in install path. Windows setup stages the
+whole install tree (`recursesubdirs`), so plugins ship automatically; the OpenWrt ipk
+script copies `*.so` from the build tree when present (static builds simply skip it).
+The CI compile whitelist includes `plugins/**`.
 
 ### 2.2 Three Root-Context Dependencies for Standalone Configure
 
@@ -151,8 +160,8 @@ Key points:
 Each package gains its own export set and config template:
 
 ```
-libs/libfalcon-core/cmake/FalconCoreConfig.cmake.in
-libs/libfalcon-protocols/cmake/FalconProtocolsConfig.cmake.in
+libs/core/cmake/FalconCoreConfig.cmake.in
+libs/protocols/cmake/FalconProtocolsConfig.cmake.in
 ...
 install(TARGETS falcon_protocols EXPORT FalconProtocolsTargets ...)
 install(EXPORT FalconProtocolsTargets FILE FalconProtocolsTargets.cmake
@@ -210,7 +219,7 @@ vcpkg_from_git(OUT_SOURCE_PATH SOURCE_PATH
     REF <锁定 commit>          # 手动随版本推进（见 5.3）
 )
 vcpkg_cmake_configure(
-    SOURCE_PATH "${SOURCE_PATH}/libs/libfalcon-protocols"
+    SOURCE_PATH "${SOURCE_PATH}/libs/protocols"
     OPTIONS
         -DFALCON_BUILD_TESTS=OFF
         ${FEATURE_OPTIONS}     # FALCON_ENABLE_* 按 feature 映射

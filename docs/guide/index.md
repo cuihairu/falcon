@@ -40,15 +40,16 @@ Falcon currently focuses on composable protocol capabilities:
 ```
 falcon/
 ├── libs/
-│   ├── libfalcon-core/      # Core download engine, task model, event system
-│   ├── libfalcon-protocols/ # Standard download protocols
-│   ├── libfalcon-storage/   # Object storage and remote resource browsing
-│   ├── libfalcon-drives/    # Cloud drive and share-link capabilities
-│   ├── falcon-cli/          # Command-line tool
-│   └── falcon-daemon/       # Background daemon
+│   ├── core/                # Core download engine, task model, event system
+│   ├── protocols/           # Standard download protocols
+│   ├── storage/             # Object storage and remote resource browsing
+│   └── drives/              # Cloud drive and share-link capabilities
 ├── apps/
 │   ├── desktop/             # Desktop application
-│   └── browser_extension/   # Browser extension
+│   ├── browser_extension/   # Browser extension
+│   ├── cli/                 # Command-line tool
+│   ├── daemon/              # Background daemon
+│   └── swarmd/              # P2SP rendezvous service
 └── docs/                    # Project documentation
 ```
 

@@ -34,7 +34,6 @@ render_config() {
 	config_get db falcon task_db_path /etc/falcon/tasks.db
 	config_get maxconc falcon max_concurrent 5
 	config_get speed falcon speed_limit 0
-	config_get engine falcon http_engine v1
 	config_get_bool mcp falcon mcp_enabled 0
 	config_get logf falcon log_file ""
 
@@ -50,7 +49,7 @@ render_config() {
 {
   "rpc": {"enabled": true, "host": "$(json_escape "$host")", "port": $port$secret_json, "allow_origin_all": $(json_bool "$allow_origin")},
   "storage": {"task_db_path": "$(json_escape "$db")"},
-  "download": {"max_concurrent_tasks": $maxconc, "max_overall_speed_limit": $speed, "http_engine": "$(json_escape "$engine")"},
+  "download": {"max_concurrent_tasks": $maxconc, "max_overall_speed_limit": $speed},
   "mcp": {"enabled": $(json_bool "$mcp")},
   "daemon": {"run_as_daemon": false$log_json}
 }

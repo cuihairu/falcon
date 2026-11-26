@@ -64,8 +64,8 @@ done
 
 # Version single source of truth = project(VERSION) in falcon-cli's
 # CMakeLists (same source the CLI binary reports).
-VERSION=$(sed -n 's/^    VERSION \(.*\)$/\1/p' "$REPO_DIR/libs/falcon-cli/CMakeLists.txt" | head -1)
-[ -n "$VERSION" ] || die "cannot read version from libs/falcon-cli/CMakeLists.txt"
+VERSION=$(sed -n 's/^    VERSION \(.*\)$/\1/p' "$REPO_DIR/apps/cli/CMakeLists.txt" | head -1)
+[ -n "$VERSION" ] || die "cannot read version from apps/cli/CMakeLists.txt"
 REL="${VERSION}-1"
 [ -n "$REL_OVERRIDE" ] && REL="${VERSION}-${REL_OVERRIDE}"
 
@@ -94,6 +94,14 @@ cp "$SRC/etc/init.d/falcon" "$R/data/etc/init.d/"
 cp "$SRC/etc/config/falcon" "$R/data/etc/config/"
 cp "$BINDIR/falcon-daemon" "$BINDIR/falcon-cli" "$R/data/usr/bin/"
 chmod 755 "$R/data/etc/init.d/falcon" "$R/data/usr/bin/falcon-daemon" "$R/data/usr/bin/falcon-cli"
+
+# Drives SPI 插件：构建树 build/falcon/plugins 下的 MODULE so 一并入包；
+# 静态构建（build-static.sh）没有这些产物时静默跳过。
+PLUGIN_SRC="$BINDIR/../falcon/plugins"
+if [ -d "$PLUGIN_SRC" ]; then
+    mkdir -p "$R/data/usr/lib/falcon/plugins"
+    cp "$PLUGIN_SRC"/*.so "$R/data/usr/lib/falcon/plugins/" 2>/dev/null || true
+fi
 
 cat > "$R/CONTROL/conffiles" <<'EOF'
 /etc/config/falcon

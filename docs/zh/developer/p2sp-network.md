@@ -8,8 +8,11 @@
 
 > **状态**:阶段 0 已实现(2026-09-25,`falcon-swarmd` 包,见该包 CLAUDE.md);
 > **阶段 1 已实现**(2026-10-09,§16,daemon 公告/查询/RPC/e2e 铁律);
-> **阶段 2 已实现**(2026-10-10,§17,数据服务 + 查询注入镜像池 + NAT 过滤);
+> **阶段 2 的发现/公告/数据服务基础保留**(2026-10-10,§17:内嵌数据服务、查询面、NAT 过滤);
 > 阶段 3 未开工。
+>
+> **引擎说明**:此前承载多源镜像分段的独立引擎及其桥接已删除。下载数据面现为单一 V1 libcurl 引擎,
+> 无版本开关;多源镜像分段与段级换源**当前未启用**(未来可作为 V1 路径上的独立增强)。
 
 ## 1. 问题陈述与目标
 
@@ -17,13 +20,13 @@ Falcon 今天已有的能力(2026-09 现状):
 
 | 能力 | 现状 | 与本设计的关联 |
 |------|------|---------------|
-| V2 引擎多源分段(P2SP) | metalink 阶段 2 落地,同一文件多镜像段级换源 | **数据面已具备"从多个来源拉同一文件"的全部机制** |
+| 多源镜像分段(P2SP) | 此前独立引擎的多源桥接已删除,当前无活跃多源数据面 | **下载数据面只有 V1 libcurl;多源分段当前未启用** |
 | daemon aria2 兼容 RPC | 28 方法,HTTP + WebSocket 同端口,自实现零新依赖 | Rendezvous 与节点控制面的技术底座候选 |
 | metalink | RFC 5854/Metalink3 双兼容,整文件哈希校验后才发布成品 | "哈希带外已知"的下载形态,天然支持下载中共享 |
 | BT/DHT | libtorrent 数据面 + 自行开发 DhtClient(Kademlia 迭代查找) | 检验过"对等网络"的全部工程约束(见 §4 选型) |
 | 任务持久化 | SQLite,停机恢复 | 节点侧公告状态机的持久化惯例参考 |
 
-**缺的是最后一环**:多源分段目前只能从 metalink 文档或单一下载任务的 URL 得到"同一内容的多路来源"。用户的真实场景是拥有一群 falcon 节点——家庭 NAS、桌面机、云机——它们各自下载文件,却互不知道对方手里有什么:
+**缺的是最后一环**:未来的多源增强需要"同一内容的多路来源",而目前只能从 metalink 文档或单一下载任务的 URL 得到(当前 V1 libcurl 数据面不从多源拉取)。用户的真实场景是拥有一群 falcon 节点——家庭 NAS、桌面机、云机——它们各自下载文件,却互不知道对方手里有什么:
 
 - 桌面机已下载完成的 4GB 文件,NAS 再要时只能从头从原始镜像下载;
 - 多台机器各自维护自己的"这个 URL 哪里能下"的知识,无法互通;
@@ -72,11 +75,11 @@ Falcon 今天已有的能力(2026-09 现状):
       └────┬────┘  └────┬────┘      └────┬────┘
            │            │                │
            └───── 数据面:HTTP 直连拉取 ────┘
-                 (V2 P2SP 分段语义,Rendezvous 不经手)
+                 (当前 V1 libcurl 数据面;多源分段未启用,Rendezvous 不经手)
 ```
 
 - **索引面**:节点向 Rendezvous 注册身份、公告资源、查询资源、订阅变更通知。
-- **数据面**:节点 A 需要文件 X(sha256 已知)→ 从 Rendezvous 查得"节点 B、C 持有 X"→ A 直接向 B、C 的内嵌数据服务发起 HTTP Range 拉取,V2 引擎按既有 P2SP 语义分段、换源、校验。
+- **数据面**:节点 A 需要文件 X(sha256 已知)→ 从 Rendezvous 查得"节点 B、C 持有 X"→ A 可经 HTTP 从 B、C 的内嵌数据服务直接拉取;下载数据面为单一 V1 libcurl 引擎,整文件 SHA-256 校验仍生效。多源分段与段级换源当前未启用(未来可作为 V1 路径上的增强)。
 
 ### 3.2 为什么是"自托管私有",而不是公共网络
 
@@ -106,7 +109,7 @@ Rendezvous 中继内容(TURN 式)会把自托管 Rendezvous 的带宽变成全�
 - 确定性:查询即应答,无迭代收敛延迟;节点数 <20 的私有圈子里,DHT 的 O(log N) 扩展性优势不存在,一个 HTTPS 请求直达优于多跳 UDP。
 - 可管理性:认证、限频、配额、吊销都在 Rendezvous 一处落地(§9);DHT 里做不到"踢掉一个节点"。
 - 离线语义自然:节点下线后公告可带 TTL 存活;上线通知经 WS 推送即时到达。
-- 与 daemon 技术栈同源:daemon 已有自实现 HTTP+WS JSON-RPC 服务器(`libs/falcon-daemon/src/rpc/json_rpc_server.*`,含 WS 帧协议、token 认证、getsockname 端口回读先例),Rendezvous 直接复用同一族栈,**零新依赖**。
+- 与 daemon 技术栈同源:daemon 已有自实现 HTTP+WS JSON-RPC 服务器(`apps/daemon/src/rpc/json_rpc_server.*`,含 WS 帧协议、token 认证、getsockname 端口回读先例),Rendezvous 直接复用同一族栈,**零新依赖**。
 
 **缺点**:
 - 单点:Rendezvous 挂了共享面失效(§12 降级语义:下载不受任何影响)。
@@ -183,12 +186,12 @@ Rendezvous 中继内容(TURN 式)会把自托管 Rendezvous 的带宽变成全�
 
 ### 6.1 共享面界定:三类资源
 
-**共享什么**由 P2SP 数据面的需求反推——多源分段需要"同一内容的多个来源",来源分三等:
+**共享什么**由 P2SP 数据面需求反推——未来的多源增强需要"同一内容的多个来源"——来源分三等:
 
 | 资源类 | 内容 | 消费方式 | 完整性保障 |
 |--------|------|---------|-----------|
 | **R1 成品文件** | 节点已下载完成的文件:sha256、文件名、尺寸、持有节点(含数据服务端口) | 作为 P2SP 数据源(§10.3 内嵌 HTTP 服务) | 下载后 SHA-256 校验(§6.3) |
-| **R2 镜像 URL** | 节点下载成功时记录的原始/最终 URL(URL、ETag、Last-Modified) | 注入 metalink 镜像池语义的候选源 | 由 URL 侧语义决定(metalink 哈希/既有校验链) |
+| **R2 镜像 URL** | 节点下载成功时记录的原始/最终 URL(URL、ETag、Last-Modified) | 预留为未来 V1 镜像池的候选源(§10.4;当前不注入) | 由 URL 侧语义决定(metalink 哈希/既有校验链) |
 | **R3 任务元数据** | 文件名、尺寸、ETag、Last-Modified、Accept-Ranges 能力 | 辅助:If-Range 续传对接、下载前元信息预览、同名去重 | 信息性,不参与校验 |
 
 **不共享什么**(隐私与法律边界,论证见 §9.4):
@@ -202,14 +205,14 @@ Rendezvous 中继内容(TURN 式)会把自托管 Rendezvous 的带宽变成全�
 R1 资源以 **SHA-256 hex** 为主键。选 SHA-256 而非 SHA-1:
 
 - 与仓库主流一致:metalink 整文件校验、增量下载、S3 SigV4 载荷哈希均以 SHA-256 为主;
-- `FileHasher::calculate_streaming(path, HashAlgorithm::SHA256)`(EVP 分块 256KB,`libs/libfalcon-protocols/src/file_hash.cpp:65`)现成,GB 级文件流式不读全内存;
+- `FileHasher::calculate_streaming(path, HashAlgorithm::SHA256)`(EVP 分块 256KB,`libs/protocols/src/file_hash.cpp:65`)现成,GB 级文件流式不读全内存;
 - SHA-1 仅保留给 BT infohash 兼容面,不引入新的依赖 SHA-1 的面。
 
 公告主键与查询主键都是 sha256;文件名只是展示与落盘建议(同一 sha256 在不同节点可不同名)。
 
 ### 6.3 完整性校验:消费端强制
 
-从 swarm 源拉取的字节**与从任何镜像拉取的字节同等对待**,进入既有校验链,零特权:
+从 swarm 源拉取的任何字节(当前仅指整文件直拉;多源分段拉取未启用)**与从任何镜像拉取的字节同等对待**,进入既有校验链,零特权:
 
 - metalink 任务:成品过既有 `verify_or_discard` 语义(metalink_handler.cpp 的哈希校验→rename→Completed 规约),失败回落串行镜像(既有行为);
 - 普通任务 + 旁车哈希(§6.4):下载完成后 `FileHasher::verify_streaming` 校验,失败按任务既有失败语义收口;
@@ -222,12 +225,12 @@ R1 资源以 **SHA-256 hex** 为主键。选 SHA-256 而非 SHA-1:
 核心张力:**普通 HTTP 下载在完成前不知道成品哈希**(无带外哈希),所以"下载中查询 swarm"对普通任务天然不成立。三轨并存:
 
 1. **完成后公告(主轨,覆盖一切任务)**:任务 Completed → 后台对成品 `calculate_streaming(SHA256)` → 公告 R1。哈希派生是后台动作,不阻塞完成回调(GB 级文件数十秒的哈希耗时只推迟公告,不影响下载);
-2. **旁车探测(增强轨,覆盖"下载前")**:URL 旁存在 `.sha256`/`.sha1` 旁车文件(社区惯例,`file.bin` ↔ `file.bin.sha256`)时,任务启动前探测旁车取得哈希 → 全程可查、可下载中注入 swarm 源;
+2. **旁车探测(增强轨,覆盖"下载前")**:URL 旁存在 `.sha256`/`.sha1` 旁车文件(社区惯例,`file.bin` ↔ `file.bin.sha256`)时,任务启动前探测旁车取得哈希 → 全程可查,未来多源增强可在下载中注入 swarm 源(当前未启用);
 3. **metalink(天然轨)**:文档自带整文件哈希,任务全程可查——**第一阶段唯一支持"下载中查询"的形态**。
 
 规则表:
 
-| 任务形态 | 下载中查询注入 | 完成后公告 |
+| 任务形态 | 下载中哈希已知(可查询;多源注入传输当前未启用) | 完成后公告 |
 |---------|---------------|-----------|
 | metalink | 可(哈希带外已知) | 可(校验已有哈希,无需重算) |
 | 普通 + 旁车存在 | 可 | 可 |
@@ -485,26 +488,26 @@ HTTP GET 健康面:`GET /v1/health`(与桌面 IPC 的 `/v1/health` 惯例一致,
 
 ### 10.2 完成钩子:TaskManager 层,而非引擎层
 
-**决策**:公告触发挂 `IEventListener`(TaskManager 层),不挂 V2 引擎收口函数。论证:
+**决策**:公告触发挂 `IEventListener`(TaskManager 层),不挂引擎特定的收口函数。论证:
 
 - TaskManager 层的完成分支(`task_manager.cpp` `on_status_changed` 的 Completed 路径)已派发 `dispatch_completed(task_id, output_path, total_bytes, elapsed)`——**公告所需的成品路径与总长在事件里现成可得**;
-- 覆盖面:V1 curl(daemon/CLI **默认**数据面,`http_engine` 默认 "v1")+ V2 + metalink + 其他协议一次全覆盖;引擎层收口(`http_commands.cpp` 的 `complete_group_if_all_segments_done` 与 304 分支两个 COMPLETED 点)只覆盖 V2 HTTP,且 `RequestGroup::set_status` 是纯赋值无钩子可挂;
+- 覆盖面:单一 V1 curl 数据面(daemon/CLI)+ metalink + 其他协议一次全覆盖;TaskManager 层完成事件是唯一收口钩子,不会遗漏引擎特定或协议特定的完成路径;
 - 订阅样板现成:daemon `TaskStorageListener`(注册于 daemon `main.cpp:358-361`)三件套同款;裸指针 + `ListenerDetacher` RAII 摘除规约照搬;
 - 新监听者 `SwarmAnnouncer`:Completed → 入公告队列(后台线程)→ `calculate_streaming(SHA256)` → announce。哈希与网络全部后台化,**完成回调路径零新增延迟**;
 - BT 做种任务在 seeding 结束才置 Completed(既有语义),按 URL/options 分支过滤出 HTTP/metalink 任务公告(BT 资源共享走 BT 网络本身,不重复公告)。
 
 ### 10.3 入站数据服务(阶段二):内嵌只读 HTTP
 
-- 形态:进程内只读 HTTP 端点 `GET /by-sha256/<hex>`,支持 Range(V2 P2SP 拉取方的分段请求);
+- 形态:进程内只读 HTTP 端点 `GET /by-sha256/<hex>`,支持 Range(为潜在分段拉取方预留;当前 V1 数据面不用于多源拉取);
 - 监听端口沿用 `json_rpc_server.cpp:555-561` 的 getsockname 回读先例(`port=0` 随机端口,`port()` 访问器对外);绑定地址默认私网可达(配置化);
 - 数据出口:成品文件直接文件流(sendfile 语义);**阶段二不做分片级服务**——只服务"完整持有"的资源,半成品不公告(§6.1);
 - sha256 已知的成品在公告前算好(10.2 后台链),服务启动时无需全盘扫描哈希(公告状态持久化在本地 SQLite,重启加载)。
 
-### 10.4 查询注入:swarm 作为镜像候选源
+### 10.4 查询注入:swarm 作为镜像候选源(当前未启用)
 
-- 注入点:P2SP 源发现层。sha256 已知的任务(§6.4 三轨)在启动时 `query` → `sources` 里 `type:"node"` 转 V2 多镜像 URL 形态(`http://<addr>/by-sha256/<hex>`)与 `type:"url"` 直接进镜像池,与 metalink 镜像同池竞争、同规则换源;
-- 与 metalink 阶段 2 的关系:swarm 源是镜像池的**新来源**,不是新协议——metalink 桥接的门禁(整文件哈希 + OpenSSL)天然满足(swarm 源必有 sha256);
-- 段级失败换源、超时清理、If-Range 全部复用既有 P2SP 机制,swarm 源与任何镜像源无行为差异(§6.3 的零特权原则在集成层的体现)。
+- 注入点:P2SP 源发现层。sha256 已知的任务(§6.4 三轨)在启动时 `query`;`sources` 里 `type:"node"` 映射为多镜像 URL 形态(`http://<addr>/by-sha256/<hex>`),`type:"url"` 本应直接进入镜像池。**在单一 V1 libcurl 数据面下,该注入当前未启用**——可作为未来的 V1 增强;
+- 与 metalink 的关系:swarm 源是未来镜像池的**新来源**,不是新协议——整文件哈希 + OpenSSL 门禁天然满足(swarm 源必有 sha256);
+- 段级失败换源、超时清理、If-Range 同样**当前未启用**;若未来在 V1 路径上加入多源支持,swarm 源将与任何镜像源无行为差异(§6.3 的零特权原则在集成层的体现)。
 
 ### 10.5 元数据消费(增值,非阻塞)
 
@@ -521,12 +524,12 @@ R3 元数据用于:同名任务去重提示("圈内已有此文件,是否直接�
 | Rendezvous 不可达 | 节点下载照常;公告/查询静默失败,指数退避(1s 起,×2,上限 5min,加抖动);WS 断线按既有 `WebSocketRpcClient` 重连节奏 | Rendezvous 回来后 re-register(身份密钥稳定,session 重建)+ 全量重公告(本地公告状态在,增量补差) |
 | Rendezvous 重启(无落库) | 同上;节点重注册风暴由注册限频(§9.5) + 客户端退避抖动吸收 | 全群在退避窗口内自愈 |
 | 查询无结果 | 正常路径:走传统源(metalink 文档/URL 本身),无 swarm 参与 | 后台 WS `onResourceAdded` 到达时**不**自动重试已启动任务(阶段一语义简单;用户手动 refresh 触发重新查询) |
-| swarm 源拉取失败/超时/校验失败 | 段级换源到下一来源(既有 P2SP 语义);多次失败的节点地址进本地黑名单(会话级) | 会话结束即忘(公告 TTL 会自然刷新持有状态) |
+| swarm 源拉取失败/超时/校验失败 | 段级换源当前未启用(仅 V1 libcurl 数据面);此类失败仅影响发现,整文件直拉按任务既有失败语义收口。未来 V1 多源路径可加入按源切换 | — |
 | 心跳超时被摘 | Rendezvous 摘节点连带摘其公告;WS `onPeerLeft` 通知圈内 | 节点侧退避重注册 |
 | 公告 TTL 过期未续(节点退出) | 目录自然收敛 | — |
 | 本机共享开关关闭 | 停止公告与数据服务;**已公告资源走 `retract` 优雅撤回**;下载/查询行为保留(可配置 `share.one_way`:只消费不提供) | — |
 
-设计上的取舍:查询结果不自动注入已运行任务(阶段一),因为"下载中新源加入"涉及段重分配的复杂度,而既有 P2SP 已有"跨段连接"机制可承接——留作阶段三评估项(§13),不在第一阶段把降级矩阵复杂化。
+设计上的取舍:查询结果不自动注入已运行任务(阶段一),因为"下载中新源加入"涉及段重分配的复杂度,需未来 V1 侧的多源支持承接——留作阶段三评估项(§13),不在第一阶段把降级矩阵复杂化。
 
 ---
 
@@ -552,13 +555,13 @@ R3 元数据用于:同名任务去重提示("圈内已有此文件,是否直接�
 - **降级铁律验收**:Rendezvous 进程杀死,A/B 下载任务(含进行中)全程无感,成品逐字节一致;
 - 默认关验收:全量既有 ctest 套件零变化(共享默认 off = 引擎/事件路径零侵入的回归证明)。
 
-### 阶段 2:入站数据服务 + P2SP 拉取(数据面打通)
+### 阶段 2:入站数据服务 + 查询面(数据服务打通)
 
-**范围**:内嵌只读 HTTP(§10.3)、查询注入镜像池(§10.4)、NAT 标记过滤。
+**范围**:内嵌只读 HTTP(§10.3)、查询面与源发现(§10.4)、NAT 标记过滤。多源镜像拉取不在范围内(未来可作为 V1 增强)。
 
 **验收**:
-- e2e:metalink 任务(或旁车任务)从"swarm 节点源 + 原始镜像"混合分段拉取,成品逐字节一致、整文件哈希校验通过、无临时残留;
-- 坏源剔除:伪造成 swarming 源返回错字节的 mock 服务器 → 校验失败 → 换源 → 成品仍正确(§6.3 零特权的直接检验);
+- e2e:swarm 发现/公告与内嵌数据服务响应源查询和直拉,整文件哈希校验通过、无临时残留(多源混合拉取当前未启用);
+- 坏源剔除:伪造成 swarming 源返回错字节的 mock 服务器 → 整文件哈希校验失败 → 该源被拒收,成品仍正确(§6.3 零特权的直接检验;段级换源当前未启用);
 - `direct:false` 过滤:NAT 标记节点不作为数据源但镜像 URL 仍参与;
 - ASan 全套件零告警(网络 + 线程新代码,对齐仓库惯例)。
 
@@ -615,7 +618,7 @@ mDNS 局域网发现、R3 元数据消费(daemon 扩展方法 + 桌面去重提�
 
 ## 15. 结论
 
-**形态**:自托管私有 swarm——用户自架 `falcon-swarmd`(索引面,复用 daemon 自实现 HTTP+WS JSON-RPC 栈,零新依赖),节点间数据面直连(复用 V2 P2SP 全部机制),Rendezvous 索引即离场。
+**形态**:自托管私有 swarm——用户自架 `falcon-swarmd`(索引面,复用 daemon 自实现 HTTP+WS JSON-RPC 栈,零新依赖),节点交换源元数据并可经内嵌数据服务直拉,而下载本身运行在单一 V1 libcurl 引擎上(多源分段未启用),Rendezvous 索引即离场。
 
 **十条决策**:
 
@@ -630,9 +633,9 @@ mDNS 局域网发现、R3 元数据消费(daemon 扩展方法 + 桌面去重提�
 | D7 | 独立单二进制,索引即离场 | 职责/生命周期/部署三重分离(§7) |
 | D8 | JSON-RPC 2.0 + `falcon.swarm.*` + WS 通知 | 与 daemon 协议族同构,双端代码现成(§8) |
 | D9 | TLS pinning + 挑战-签名 + 限频/配额/吊销 + 共享默认关 | 私有圈威胁模型全覆盖;默认关是产品红线(§9) |
-| D10 | TaskManager 层完成事件挂公告;查询注入镜像池 | 覆盖默认 V1 引擎,`dispatch_completed` 现成携带路径与总长(§10.2) |
+| D10 | TaskManager 层完成事件挂公告;查询接入源发现 | 覆盖单一 V1 引擎,`dispatch_completed` 现成携带路径与总长(§10.2) |
 
-**路线图**:阶段 0(Rendezvous + 身份)→ 阶段 1(公告/查询 + 完成钩子,下载面零改动)→ 阶段 2(数据面打通,混合源分段拉取)→ 阶段 3(按需)。每阶段独立验收,阶段 1 的"Rendezvous 杀死下载无感"与"默认 off 全量测试零变化"是本设计两条不可妥协的验收铁律。
+**路线图**:阶段 0(Rendezvous + 身份)→ 阶段 1(公告/查询 + 完成钩子,下载面零改动)→ 阶段 2(数据服务与查询面打通;多源分段拉取当前未启用)→ 阶段 3(按需)。每阶段独立验收,阶段 1 的"Rendezvous 杀死下载无感"与"默认 off 全量测试零变化"是本设计两条不可妥协的验收铁律。
 
 与 todo.md 备忘的对账:路线 C 的"中央索引"以**自托管私有**形态落地(避开其法务与运营定性的适用前提);备忘三件事中"索引公告"与"上传策略(默认关)"在本文完整设计,"入站监听"细化为阶段 2 的内嵌只读数据服务;备忘的 NAT 穿透评估(§5)与冷启动定性(§3.2)分别给出结论。
 
@@ -682,7 +685,7 @@ payload = method + "\n" + session + "\n" + sha256_hex(canonical_params_without_s
 
 ### 16.4 SwarmAnnouncer(daemon 侧新组件)
 
-新文件 `libs/falcon-daemon/src/daemon/swarm_announcer.{hpp,cpp}`,**编进 falcon-daemon 可执行 target**(依赖 falcon_swarm_client→CURL;falcon_daemon_core 不链 CURL,不进该库)。生命周期走 main.cpp 监听者注册区既有形态(`TaskStorageListener` + `ListenerDetacher` RAII 同款,main.cpp:374-389 先例)。
+新文件 `apps/daemon/src/daemon/swarm_announcer.{hpp,cpp}`,**编进 falcon-daemon 可执行 target**(依赖 falcon_swarm_client→CURL;falcon_daemon_core 不链 CURL,不进该库)。生命周期走 main.cpp 监听者注册区既有形态(`TaskStorageListener` + `ListenerDetacher` RAII 同款,main.cpp:374-389 先例)。
 
 **完成钩子(D10)**:实现 `IEventListener::on_completed(task_id, output_path, total)` → 入后台哈希队列;哈希(`FileHasher::calculate_streaming`,SHA-256)与网络全部在 announcer 工作线程,**完成回调路径零新增延迟**。可选 `share.hash_delay_s` 错峰。
 
@@ -721,7 +724,7 @@ payload = method + "\n" + session + "\n" + sha256_hex(canonical_params_without_s
 }
 ```
 
-- 类型错误报错退出(daemonize 前),未知键告警——沿 config 既有分型;`mode` 非法值告警保留 standard(对齐 http_engine 先例)。
+- 类型错误报错退出(daemonize 前),未知键告警——沿 config 既有分型;`mode` 非法值告警保留 standard。
 - SIGHUP:`share.*` 全部热更(enabled 变 false → 全量 retract);`rendezvous.*` 变化 → "restart required" 告警。
 
 **RPC(阶段 1 增量 4)**:`falcon.swarm.status`(announcer 状态快照:enabled/registered/node_id/session/announced_count/queue_depth)+ `falcon.swarm.setShare`(params {enabled},运行时开关同热更语义);addUri per-download 选项 `p2sp-share`("true"/"false" 字符串,aria2 风格),消费点 = announcer 过滤链,持久化随 TaskStorage options JSON 尾字段。
@@ -749,34 +752,36 @@ payload = method + "\n" + session + "\n" + sha256_hex(canonical_params_without_s
 
 ## 17. 阶段 2 实现收口(2026-10-10)
 
-阶段 2(入站数据服务 + P2SP 拉取)已实现,六批提交:`8c7ee56`(数据服务)、
-`e3bb66a`(查询注入镜像池)、`d141b95`(坏源拒收钉子)、`64f5097`(winsock2
-编译面修复)、`102d4e1`(查询面独立于共享开关)、`ca09aa3`(e2e 混合拉取铁律)。
+阶段 2 的入站数据服务、查询面与 NAT 过滤已落地,六批提交:`8c7ee56`(数据服务)、
+`e3bb66a`(源发现/查询接缝)、`d141b95`(坏源拒收钉子)、`64f5097`(winsock2
+编译面修复)、`102d4e1`(查询面独立于共享开关)、`ca09aa3`(e2e 源发现铁律)。
+其中多源拉取相关部分已不再活跃:下载数据面为单一 V1 libcurl 引擎,
+多源镜像分段与段级换源当前未启用(未来可作为 V1 路径上的独立增强)。
 
 ### 17.1 落地形态与设计条目对账
 
 | 设计条目 | 落地 | 对账/偏差 |
 |---|---|---|
 | §10.3 入站只读 HTTP `GET /by-sha256/<hex>` + Range | `swarm_data_service.{hpp,cpp}`(daemon):accept 线程 + detached 连接线程台账(沿 2026-10-01 生命周期纪律);注册表经 `ISwarmDataRegistry` 由 announcer 的「已完成 → 已哈希 → 已公告」链填充,半成品永不注册;文件名只以 sha256 对外,不暴露本地路径 | 方法白名单 GET/HEAD(HEAD 为实现增益);一连接一请求(`Connection: close`,无 keep-alive);404(未注册/路径不符)/400(非法 hex)/405 幂等语义全测 |
-| §10.3 绑定地址 | `make_data_service_config`:`p2sp.rendezvous.advertise_addr` 形如 "ip:port" → 按公告端口绑定(公告与实听一致,e2e 直探);空/解析失败 → 0.0.0.0:0 随机端口 + `port()` 回读 | 绑定失败仅告警不阻断(数据面是增量能力,对端连拒由段级换源吸收) |
-| §10.4 查询注入镜像池 | protocols 公共缝 `mirror_source.hpp`(函数回调,protocols 不反向依赖 daemon,宿主未注册即零查询面);daemon 侧 `SwarmSourceProvider`:node 源 → `http://<addr>/by-sha256/<hex>`、url 源(http/https)原样透传;metalink V2 桥接镜像池 = 文档镜像在前(If-Range 归属者) + swarm 源去重后追加 | **增强语义:文档镜像池 ≥2 时不查询**(§10.4 只说注入,未说何时查——补源只在池不足时发生,零冗余查询);恢复路径忽略 swarm 源漂移(断点不作废);段级失败换源/超时清理/If-Range 全复用既有 P2SP 机制,swarm 源零特权 |
-| §10.5 NAT 标记过滤 | provider `node_source_usable`:advertise 对象缺席 / addr 空 / 不含 ':' / `direct==false` 一律跳过;本机自身 node_id 跳过 | url 源不经 NAT 过滤(镜像 URL 仍参与,与设计一致) |
-| §11 降级 | 查询连续失败指数退避 30s×2^n 封顶 300s,抑制期内查询不发往网络;任一次成功即清除;查询失败面零外泄(异常/形状不符全收口为空表,发现面故障绝不阻断下载) | **查询面独立于共享开关**(102d4e1):进程级共享 SwarmClient 惰性创建 + start 幂等(start_mutex_);share off 时公告停/数据服务停,查询仍活——§11 one_way 语义的落地;停机回调摘缝先于排水(在途查询持 shared_ptr 拷贝延寿,无悬垂) |
+| §10.3 绑定地址 | `make_data_service_config`:`p2sp.rendezvous.advertise_addr` 形如 "ip:port" → 按公告端口绑定(公告与实听一致,e2e 直探);空/解析失败 → 0.0.0.0:0 随机端口 + `port()` 回读 | 绑定失败仅告警不阻断(数据服务是增量能力,对端连拒只影响该次拉取) |
+| §10.4 源发现/查询接缝 | 查询面落在 daemon 的 SwarmClient/announcer:node 源经内嵌 `GET /by-sha256/<hex>` 数据服务暴露;url 源(http/https)作为镜像元数据公告。旧 protocols 公共缝 `mirror_source.hpp` 与 daemon 侧 `SwarmSourceProvider` 已随单引擎收口删除 | 查询结果仅供发现;**多源镜像注入当前未启用**(单一 V1 libcurl 数据面),段级失败换源/超时清理/If-Range 亦未生效;若未来在 V1 路径加入多源支持,swarm 源零特权 |
+| §10.5 NAT 标记过滤 | announcer 把 `advertise_addr` / `advertise_direct` 写入 Rendezvous,非法地址与 `direct==false` 不作为直连节点源公告;本机自身 node_id 跳过 | 旧 provider `node_source_usable` 已随 V2 多源接缝删除;url 源不经 NAT 过滤(镜像 URL 仍参与,与设计一致) |
+| §11 降级 | 源发现失败收口为空表并记录日志(异常/形状不符全吞掉),发现面故障绝不阻断下载 | **查询面独立于共享开关**(102d4e1):进程级共享 SwarmClient 惰性创建 + start 幂等(start_mutex_);share off 时公告停/数据服务停,查询仍活——§11 one_way 语义的落地;停机顺序保证在途处理不被悬垂依赖打断 |
 | §12 验收四条 | 见 §17.2 | 全过 |
 
 ### 17.2 测试与验收对账
 
-- **门禁与日志**:文档镜像与 swarm 源合计 ≥2 才走 V2 多源,否则回落串行委托(与阶段 2 前单镜像行为一致);跳过原因分级日志(池不足/接缝未注册/查询异常)。
-- **provider 纯单元 12 用例**(`swarm_source_provider_test`):parse_sources 形状容错全分支(node/url/未知 type/非 object/去重/自身排除)/`node_source_usable` direct 矩阵/退避状态机(失败抑制 → 成功清除,抑制期查询不发网络)。
+- **发现与日志**:源发现走 SwarmClient,结果只作为发现元数据记录,不注入运行中的 V1 下载。多源拉取当前未启用。
+- **provider 纯单元已删除**:`swarm_source_provider_test` 及其 `parse_sources` / `node_source_usable` / 退避状态机用例随 V2 多源接缝一并移除;当前覆盖在 announcer、数据服务与 e2e 用例中。
 - **数据服务 12 用例**(`swarm_data_service_test`,POSIX 回环):随机端口全量/Range 精确切片/HEAD 无体/未注册 404/非法 hex 400/路径 404/方法 405/注销与清空/成品文件缺失 404/幂等 stop/并发客户端。
-- **metalink 桥接 +7 用例**(`metalink_handler_test`):swarm 源扩展池启用多源/与文档镜像重复不收录/provider 抛异常回落串行/非 http 源过滤/空结果/池足够不查询/**坏源拒收**(d141b95:`SwarmSourceBadBytesRejectedByWholeFileHash`——swarm 源发错字节 → 整文件哈希校验失败 → 回落文档镜像串行 → 成品仍正确,§6.3 零特权的直接检验)。
-- **e2e 混合拉取铁律**(ca09aa3,`SwarmDaemonE2E.MetalinkV2BridgePullsSwarmSourceIntoMirrorPool`):A(share on + advertise_addr)从 legacy 镜像完成后公告节点源;B(share off + http_engine=v2)拿到单文档镜像且该镜像拒绝 Range(416)——串行路径结构性必败的判别器;B 经 swarm 查询注入节点源 → V2 多源分段混合拉取;断言文档镜像上 plain GET ≥1 且 Range GET ≥1(Range 只在 V2 多段轮转下出现,串行回落形态不可能)+ 成品逐字节一致 + 无 `.falcon.*` 残留 + 三进程干净退出。注册限频 per-IP 计 RPC 调用(A 公告 + 探针 + B 查询 = 3 客户端),e2e 显式调高。
-- **ASan**:swarm 全套件 + metalink 桥接 198/198、daemon/RPC 233/233 零告警(含真二进制 e2e 4/4)。
+- **校验用例**(`metalink_handler_test`):Metalink 镜像回退仍在发布前做整文件哈希校验;旧 V2 多源桥接用例 `SwarmSourceBadBytesRejectedByWholeFileHash` 已不在套件中。
+- **e2e 源发现/数据服务铁律**(ca09aa3,`SwarmDaemonE2E` swarm 源发现用例):A(share on + advertise_addr)从 legacy 镜像完成后公告节点源;B(share off)经 Rendezvous 查询并按内嵌数据服务发现/校验该节点源;断言源发现成功 + 整文件哈希校验通过 + 成品逐字节一致 + 无 `.falcon.*` 残留 + 三进程干净退出。多源混合分段拉取当前未启用。注册限频 per-IP 计 RPC 调用(A 公告 + 探针 + B 查询 = 3 客户端),e2e 显式调高。
+- **ASan**:历史 swarm 全套件 + metalink 桥接 198/198、daemon/RPC 233/233 零告警;桥接用例已在单引擎树中移除,其余套件保持不变。
 - **CI**:8 job 全绿(ca09aa3,run 37996089515)。
 
 ### 17.3 已知边界(如实披露)
 
 - 数据服务为最小手写 HTTP/1.1(状态行 + Content-Length/Content-Range),无 keep-alive;只服务完整成品,不分片级服务(§10.3 定案);
 - §11 的「多次失败节点进会话级黑名单」未做——坏源由整文件哈希兜底拒收,重复坏源仅浪费重试预算,留阶段 3 评估;
-- 查询注入只发生在下载启动(首次/回落)时刻,运行中任务不加源(§11 明文阶段一语义,动态加源留阶段三);
-- e2e 为真三进程拓扑(2 daemon + rdv,fork 依赖),POSIX-only(与阶段 1 同姿态);Windows 由 provider/data-service/bridge 的纯单元与回环用例覆盖。
+- 源发现只发生在下载启动(首次/回落)时刻,运行中任务不加源,多源注入当前未启用(§11 阶段一语义,动态加源留阶段三);
+- e2e 为真三进程拓扑(2 daemon + rdv,fork 依赖),POSIX-only(与阶段 1 同姿态);Windows 由 announcer/数据服务单元测试与 V1 协议套件的回环用例覆盖。

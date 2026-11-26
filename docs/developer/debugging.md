@@ -129,7 +129,7 @@ Observe:
 
 To understand the main flow, start with these implementations:
 
-- `libs/libfalcon-core/src/download_engine.cpp`
-- `libs/libfalcon-core/src/task_manager.cpp`
-- `libs/libfalcon-core/src/protocol_registry.cpp`
-- `libs/libfalcon-core/src/event_dispatcher.cpp`
+- `libs/core/src/download_engine.cpp`
+- `libs/core/src/task_manager.cpp`
+- `libs/core/src/protocol_registry.cpp`
+- `libs/core/src/event_dispatcher.cpp`

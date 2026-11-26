@@ -4,14 +4,15 @@
 
   # Falcon
 
-<p align="center"><a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License"></a> <a href="https://cuihairu.github.io/falcon/"><img src="https://img.shields.io/badge/docs-online-blue" alt="Docs"></a> <a href="https://github.com/cuihairu/falcon/actions/workflows/cmake-multi-platform.yml"><img src="https://github.com/cuihairu/falcon/actions/workflows/cmake-multi-platform.yml/badge.svg" alt="Build Status"></a> <a href="https://codecov.io/gh/cuihairu/falcon"><img src="https://codecov.io/gh/cuihairu/falcon/branch/main/graph/badge.svg" alt="codecov"></a> <a href="https://github.com/cuihairu/falcon/actions/workflows/nightly-build.yml"><img src="https://github.com/cuihairu/falcon/actions/workflows/nightly-build.yml/badge.svg" alt="Nightly"></a> <a href="https://github.com/cuihairu/falcon"><img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg" alt="Platform"></a> <a href="https://github.com/cuihairu/falcon/releases"><img src="https://img.shields.io/badge/status-in%20development-orange.svg" alt="状态：开发中"></a></p>
+<p align="center"><a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License"></a> <a href="https://cuihairu.github.io/falcon/"><img src="https://img.shields.io/badge/docs-online-blue" alt="Docs"></a> <a href="https://github.com/cuihairu/falcon/actions/workflows/cmake-multi-platform.yml"><img src="https://github.com/cuihairu/falcon/actions/workflows/cmake-multi-platform.yml/badge.svg" alt="Build Status"></a> <a href="https://codecov.io/gh/cuihairu/falcon"><img src="https://codecov.io/gh/cuihairu/falcon/branch/main/graph/badge.svg" alt="codecov"></a> <a href="https://github.com/cuihairu/falcon/actions/workflows/nightly-build.yml"><img src="https://github.com/cuihairu/falcon/actions/workflows/nightly-build.yml/badge.svg" alt="Nightly"></a> <a href="https://github.com/cuihairu/falcon"><img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg" alt="Platform"></a> <a href="https://isocpp.org/"><img src="https://img.shields.io/badge/C%2B%2B-17-00599C.svg" alt="C++17"></a> <a href="https://doc.qt.io/"><img src="https://img.shields.io/badge/Qt-6.2%2B-41CD52.svg" alt="Qt 6.2+"></a> <a href="https://github.com/cuihairu/falcon/releases"><img src="https://img.shields.io/badge/status-in%20development-orange.svg" alt="状态：开发中"></a></p>
 
   **统一资源传输引擎（Universal Resource Transfer Engine）**
 
   跨平台的 C++ 传输引擎,统一承载 HTTP、FTP、SFTP、WebDAV、对象存储与
   P2P 资源的下载与访问,以 CLI、Daemon、桌面端多形态交付。传输底座基于
   开源组件:libcurl、OpenSSL、libtorrent、libssh2 承载各协议数据面;
-  事件驱动的 V2 引擎与 aria2 兼容参数/RPC 参照 aria2 的架构与语义实现。
+  下载统一使用单一 V1 引擎(libcurl 路径),无引擎版本开关,aria2 兼容
+  参数/RPC 参照 aria2 的语义实现。
 
   [English](README.md) | [中文](README.zh.md)
 </div>
@@ -20,7 +21,7 @@
 
 - [文档站](https://cuihairu.github.io/falcon/zh/) · [English docs](https://cuihairu.github.io/falcon/)
 - 仓库维护说明：[简体中文](docs/zh/README.md) · [English](docs/README.md)
-- [UI 设计规范](docs/ui/design-spec.md) · [交互原型](docs/design/ui-next/index.html)
+- [交互原型](docs/design/ui-next/index.html) · [原型说明](docs/design/ui-next/README.zh.md)
 - [贡献指南](CONTRIBUTING_CN.md) · [许可证](LICENSE)
 
 ## 界面
@@ -33,30 +34,26 @@
   <img src="docs/public/design/ui-next/screens/warm-light/001-download-table.png" alt="下载视图 · 表格（暖橙亮色）" width="49%"/>
 </p>
 
-完整图库（24 屏 × 三主题色 × 亮暗，共 144 张）见
+完整图库（25 屏 × 三主题色 × 亮暗，共 150 张）见
 [`docs/public/design/ui-next/screens/`](docs/public/design/ui-next/screens/) 与
-[文档站](https://cuihairu.github.io/falcon/zh/)；正式说明见
-[UI 设计规范](https://cuihairu.github.io/falcon/zh/ui/design-spec)，评审记录见
+[文档站](https://cuihairu.github.io/falcon/zh/)；设计说明与评审记录见
 [docs/design/ui-next/README.zh.md](docs/design/ui-next/README.zh.md)。
 
 ## 特性
 
-- **双下载引擎**
-  - **V1 引擎**(默认):基于 libcurl,多线程分段下载、断点续传、任务级限速
-  - **V2 引擎**(实验性,`--http-engine v2`):aria2 风格事件驱动重写——非阻塞
-    I/O(epoll/kqueue/poll/WSAPoll)、命令模式与连接复用、`.falcon.ctrl` 控制文件
-    持久化断点(If-Range 内容变更防护)、多镜像多源分段下载(P2SP)、全局/任务级
-    限速、连接级重试、任务超时清理、chunked 传输编码、覆盖保护、临时文件原子发布
+- **单一 V1 下载引擎**
+  - 基于 libcurl,多线程分段下载、断点续传、全局/任务级限速、重试、任务超时清理、
+    覆盖保护与临时文件原子发布;无引擎版本开关,所有传输统一走 libcurl 数据面
 - **多协议支持**,围绕单一传输核心分级组织:
 
   | 层级 | 协议 | 定位 |
   |------|------|------|
   | **1 · 核心传输**(默认开) | HTTP/HTTPS、FTP/FTPS、SFTP、WebDAV | 文件传输:断点续传、分段下载、限速、代理 |
-  | **2 · P2P 与多源**(默认开) | BitTorrent/Magnet、Metalink | 分片级 P2P(libtorrent)、镜像列表多源分段传输(P2SP) |
+  | **2 · P2P 与多源**(默认开) | BitTorrent/Magnet、Metalink | 分片级 P2P(libtorrent)、镜像列表整文件哈希校验;多源分段传输(P2SP)当前未启用 |
   | **3 · 兼容插件**(可选) | 迅雷、QQ 旋风、快车、ED2K、HLS/DASH | 历史/私有链接格式与流媒体清单 |
   | **资源访问**(默认开) | S3、OSS、COS、Kodo、又拍云 | 对象存储(SigV4)、远程浏览、资源搜索 |
-- **Metalink**:RFC 5854 `.meta4` / Metalink3 `.metalink` 镜像列表,经 V2 引擎多镜像
-  P2SP 分段下载,发布前整文件哈希校验
+- **Metalink**:RFC 5854 `.meta4` / Metalink3 `.metalink` 镜像列表,发布前整文件哈希校验;
+  多源分段下载当前未启用
 - **守护进程与 RPC 服务** (`falcon-daemon`):aria2 兼容 JSON-RPC,同端口 HTTP +
   WebSocket(可直接对接 AriaNg),实时事件流(下载开始/暂停/完成/出错/进度),
   SQLite 任务持久化与重启恢复,`daemon.json` 配置与 SIGHUP 热重载,
@@ -64,8 +61,8 @@
 - **P2SP 网络** (`falcon-swarmd`):独立部署的会合服务(节点发现:Ed25519 挑战认证、
   Bearer + 限频、群组令牌、黑名单),daemon `p2sp.share` 把开启共享的下载向会合服务
   公告并按 TTL 续期、完成后撤销;内置只读数据服务(`GET /by-sha256/<hex>`,支持
-  Range)供对端拉取已校验文件;metalink 镜像池自动补 swarm 源(按 NAT 标记过滤、
-  整文件哈希校验,共享关闭时同样可用);RPC `falcon.swarm.status`/`falcon.swarm.setShare`,
+  Range)供对端拉取已校验文件;swarm 源的可发现/公告(按 NAT 标记过滤、整文件哈希校验,
+  查询面在共享关闭时同样可用;多源镜像拉取当前未启用);RPC `falcon.swarm.status`/`falcon.swarm.setShare`,
   CLI `--swarm-server` 单发公告;默认关闭
 - **桌面应用** (Qt6):Fluent 设计语言、亮暗主题、无边框窗口、表格/网格双任务视图、
   云盘浏览、资源搜索、双后端(进程内引擎或 Daemon RPC + WebSocket 事件刷新)
@@ -78,7 +75,7 @@
   [`apps/browser_extension/`](apps/browser_extension/README.md)
 - **性能相关设计**:
   - 多连接分段下载,自适应分段
-  - 事件驱动的非阻塞 I/O 架构
+  - 基于 libcurl 的多线程数据面与事件通知机制
   - 连接复用降低延迟
   - 速度控制与带宽限制(全局/任务级)
 - **高级特性**:
@@ -202,8 +199,6 @@ falcon-cli --proxy http://127.0.0.1:7890 \
   -H "Authorization: Bearer TOKEN" \
   https://example.com/file.bin
 
-# 试用实验性 V2 引擎
-falcon-cli --http-engine v2 https://example.com/file.zip
 ```
 
 ### aria2 兼容参数
@@ -250,7 +245,7 @@ falcon-cli -d /tmp/downloads -o custom_name.zip https://example.com/file.zip
 
 ## 云存储支持
 
-仓库已实现库层级的云存储浏览（`libs/libfalcon-storage`），覆盖亚马逊 S3、阿里云
+仓库已实现库层级的云存储浏览（`libs/storage`），覆盖亚马逊 S3、阿里云
 OSS、腾讯云 COS、七牛云 Kodo、又拍云：列举、树形视图、对象信息、建目录/改名/
 递归删除、配额查询，并支持自定义 endpoint（MinIO / RustFS / 私有化网关），对要求
 鉴权的 S3 兼容服务自动进行 AWS Signature V4 请求签名。桌面应用的云盘页
@@ -263,7 +258,8 @@ OSS、腾讯云 COS、七牛云 Kodo、又拍云：列举、树形视图、对�
 ## 安全配置
 
 `libfalcon-drives` 提供加密配置管理器（SQLite 存储，AES-256-GCM 凭据加密，主密码
-保护）。桌面应用的设置页基于它实现。CLI 管理命令尚未开放。
+保护）。桌面应用的设置页基于它实现。CLI 管理命令尚未开放。实现以运行时插件形式分发
+（`plugins/drives/config_storage`），`falcon_drives` 门面本身不链接任何第三方库。
 
 ## 高级功能
 
@@ -301,12 +297,12 @@ daemon 在 `POST /mcp` 暴露 MCP（Model Context Protocol）端点（Streamable
 
 ## 架构设计
 
-Falcon 采用模块化架构，数据面为 aria2 风格的事件驱动设计：
+Falcon 采用模块化架构，下载统一使用单一 V1 引擎：
 
 ```mermaid
 graph TD
     APP["<b>应用层</b><br/>falcon-cli · falcon-daemon · desktop (Qt6)"]
-    CORE["<b>Falcon 核心库</b>（aria2 风格）<br/>DownloadEngineV2 事件循环 · 命令队列<br/>请求组管理 · Socket 复用 · 任务管理器"]
+    CORE["<b>Falcon 核心库</b><br/>V1 DownloadEngine · TaskManager<br/>ProtocolRegistry · EventDispatcher"]
     PROTO["<b>libfalcon-protocols</b><br/>HTTP · FTP · BitTorrent · Metalink · HLS · 私有协议"]
     STOR["<b>libfalcon-storage</b><br/>S3 · OSS · COS · Kodo · 又拍云资源浏览"]
     DRV["<b>libfalcon-drives</b><br/>网盘 · 资源搜索 · 加密配置"]
@@ -319,14 +315,14 @@ graph TD
     CORE --> INFRA
 ```
 
-### 事件驱动架构
+### 引擎与事件模型
 
-Falcon 采用 aria2 启发的事件驱动命令模式：
+Falcon 使用单一 V1 下载引擎，围绕 `DownloadEngine`、`TaskManager` 与 `ProtocolRegistry` 构建：
 
-1. **命令执行**：所有下载操作封装为命令对象
-2. **I/O 多路复用**：epoll（Linux）、kqueue（macOS/BSD）或 poll（兜底）
-3. **连接复用**：HTTP/HTTPS 连接池化，降低延迟
-4. **非阻塞 I/O**：所有 socket 非阻塞，由事件驱动
+1. **任务执行**：`TaskManager` 排队任务并经协议处理器执行
+2. **协议路由**：`ProtocolRegistry` 将 URL 分派给对应处理器
+3. **分段传输**：基于 libcurl 的 HTTP/FTP 处理器执行多线程分段下载与断点续传
+4. **事件上报**：`EventDispatcher` 向监听器派发状态、进度与完成回调
 
 ## 开发指南
 
@@ -394,12 +390,12 @@ HTTP、FTP、BitTorrent、SFTP、WebDAV、Metalink、云存储、资源浏览/�
 ## 功能路线图
 
 ### 已完成
-- [x] 核心下载引擎（V1 libcurl + V2 事件驱动实验引擎）
+- [x] 单一 V1 下载引擎（libcurl 数据面）
 - [x] HTTP/HTTPS、FTP/FTPS 插件
-- [x] Metalink 下载（多镜像 P2SP 分段 + 整文件哈希校验）
+- [x] Metalink 下载（镜像列表 + 整文件哈希校验；多源分段拉取当前未启用）
 - [x] 命令行工具（60+ aria2 兼容参数）
 - [x] Daemon：aria2 兼容 JSON-RPC（HTTP + WebSocket 事件流）、SQLite 持久化、SIGHUP 热重载、MCP 工具端点（13 工具）
-- [x] P2SP 阶段 1+2：falcon-swarmd 会合服务，daemon 公告/撤销 + TTL 续期，RPC falcon.swarm.status/setShare，CLI --swarm-server，内置 /by-sha256 数据服务，metalink 镜像池补 swarm 源（NAT 过滤 + 哈希校验）
+- [x] P2SP 阶段 1+2：falcon-swarmd 会合服务，daemon 公告/撤销 + TTL 续期，RPC falcon.swarm.status/setShare，CLI --swarm-server，内置 /by-sha256 数据服务，swarm 源的可发现/公告（NAT 过滤 + 哈希校验；多源镜像拉取当前未启用）
 - [x] 桌面应用（Qt6，Fluent 设计、亮暗主题、云盘浏览）
 - [x] 私有协议支持（迅雷、QQDL、FlashGet、ED2K）
 - [x] SFTP、WebDAV 协议（libssh2 / libcurl 数据面）
