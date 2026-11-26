@@ -45,6 +45,8 @@ using falcon::protocols::detail::generate_cnonce;
 using falcon::protocols::detail::digest_request_uri;
 #ifdef FALCON_ENABLE_OPENSSL
 using falcon::protocols::detail::build_digest_authorization;
+using falcon::protocols::detail::pump_tls_in_tls;
+using falcon::protocols::detail::TlsInTlsPump;
 #endif
 
 namespace {
@@ -99,9 +101,9 @@ HttpResponseCommand::HttpResponseCommand(
     const DownloadOptions& options
 #ifdef FALCON_ENABLE_OPENSSL
     , HttpTlsSessionPtr tls_session
+    , HttpTlsSessionPtr proxy_tls_session
 #endif
-    , bool use_https,
-    std::string source_url,
+    , std::string source_url,
     SegmentId segment_id,
     Bytes range_offset,
     Bytes range_length)
@@ -113,9 +115,9 @@ HttpResponseCommand::HttpResponseCommand(
     , segment_id_(segment_id)
     , range_offset_(range_offset)
     , range_length_(range_length)
-    , use_https_(use_https)
 #ifdef FALCON_ENABLE_OPENSSL
     , tls_session_(std::move(tls_session))
+    , proxy_tls_session_(std::move(proxy_tls_session))
 #endif
 {
 }
@@ -329,6 +331,67 @@ AbstractCommand::ExecutionResult HttpResponseCommand::continue_auth_send(
         const char* data = auth_send_data_.data() + auth_send_offset_;
         const std::size_t remaining =
             auth_send_data_.size() - auth_send_offset_;
+#ifdef FALCON_ENABLE_OPENSSL
+        // TLS 会话在位（https 目标 / 明文目标经 HTTPS 代理）：重发必须
+        // 走 SSL（raw send 写出的是明文，对端收到的是垃圾）。TLS-in-TLS
+        // 隧道先泵一轮排空 origin 待发密文；WANT_* 注册方向等待，重入
+        // 从 auth_send_offset_ 原位续写
+        if (tls_session_) {
+            SSL* out_ssl = tls_session_.get();
+            SSL* transport_ssl =
+                (proxy_tls_session_ && proxy_tls_session_.get() != out_ssl)
+                    ? proxy_tls_session_.get()
+                    : nullptr;
+            if (transport_ssl) {
+                const TlsInTlsPump r = pump_tls_in_tls(
+                    out_ssl, transport_ssl, read_outbox_);
+                switch (r) {
+                case TlsInTlsPump::kProgress:
+                case TlsInTlsPump::kIdle:
+                    break;
+                case TlsInTlsPump::kWantRead:
+                case TlsInTlsPump::kWantWrite: {
+                    const auto ev = r == TlsInTlsPump::kWantRead
+                                        ? net::IOEvent::READ
+                                        : net::IOEvent::WRITE;
+                    if (engine && !engine->register_socket_event(
+                                      socket_fd_, static_cast<int>(ev),
+                                      id())) {
+                        return ExecutionResult::ERROR_OCCURRED;
+                    }
+                    return ExecutionResult::WAIT_FOR_SOCKET;
+                }
+                case TlsInTlsPump::kEof:
+                case TlsInTlsPump::kError:
+                    FALCON_LOG_ERROR_STREAM("代理隧道已断开，无法重发认证请求");
+                    return ExecutionResult::ERROR_OCCURRED;
+                }
+            }
+            const ssize_t n =
+                SSL_write(out_ssl, data, static_cast<int>(remaining));
+            if (n <= 0) {
+                const int err = SSL_get_error(out_ssl, static_cast<int>(n));
+                if (err == SSL_ERROR_WANT_READ ||
+                    err == SSL_ERROR_WANT_WRITE) {
+                    if (engine && !engine->register_socket_event(
+                                      socket_fd_,
+                                      static_cast<int>(
+                                          err == SSL_ERROR_WANT_WRITE
+                                              ? net::IOEvent::WRITE
+                                              : net::IOEvent::READ),
+                                      id())) {
+                        return ExecutionResult::ERROR_OCCURRED;
+                    }
+                    return ExecutionResult::WAIT_FOR_SOCKET;
+                }
+                FALCON_LOG_ERROR_STREAM("认证请求重发 SSL_write() 失败: "
+                                        << err);
+                return ExecutionResult::ERROR_OCCURRED;
+            }
+            auth_send_offset_ += static_cast<std::size_t>(n);
+            continue;
+        }
+#endif
 #ifdef _WIN32
         const ssize_t n = send(socket_fd_, data,
                                static_cast<int>(remaining), kSendFlags);
@@ -443,7 +506,37 @@ AbstractCommand::ExecutionResult HttpResponseCommand::receive_response_headers(D
     for (;;) {
         ssize_t n = 0;
 #ifdef FALCON_ENABLE_OPENSSL
-        if (use_https_ && tls_session_) {
+        if (tls_session_) {
+            // TLS-in-TLS 隧道（https 目标经 HTTPS 代理）：先泵一轮代理
+            // 密文（transport 入站 → origin rbio；origin 待发 → transport）。
+            // WANT_* 注册方向后等待且不改状态——重入落本分支重新泵；
+            // 隧道死亡按失败收口
+            if (proxy_tls_session_) {
+                const TlsInTlsPump r = pump_tls_in_tls(
+                    tls_session_.get(), proxy_tls_session_.get(), read_outbox_);
+                switch (r) {
+                case TlsInTlsPump::kProgress:
+                case TlsInTlsPump::kIdle:
+                    break;
+                case TlsInTlsPump::kWantRead:
+                case TlsInTlsPump::kWantWrite: {
+                    const auto ev = r == TlsInTlsPump::kWantRead
+                                        ? net::IOEvent::READ
+                                        : net::IOEvent::WRITE;
+                    if (engine) {
+                        if (!engine->register_socket_event(
+                                socket_fd_, static_cast<int>(ev), id())) {
+                            return ExecutionResult::ERROR_OCCURRED;
+                        }
+                    }
+                    return ExecutionResult::WAIT_FOR_SOCKET;
+                }
+                case TlsInTlsPump::kEof:
+                case TlsInTlsPump::kError:
+                    FALCON_LOG_ERROR_STREAM("代理隧道已断开，无法接收响应头");
+                    return ExecutionResult::ERROR_OCCURRED;
+                }
+            }
             // 使用 SSL_read 接收 HTTPS 数据
             n = SSL_read(tls_session_.get(), buffer, sizeof(buffer));
             if (n <= 0) {
@@ -801,7 +894,9 @@ bool HttpResponseCommand::schedule_multi_segment_download(DownloadEngineV2* engi
                                                         source_url_
 #ifdef FALCON_ENABLE_OPENSSL
                                                         ,
-                                                        /*tls_session=*/tls_session_
+                                                        /*tls_session=*/tls_session_,
+                                                        /*proxy_tls_session=*/
+                                                            proxy_tls_session_
 #endif
                                                         ));
 
@@ -923,7 +1018,9 @@ bool HttpResponseCommand::schedule_resume_download(DownloadEngineV2* engine,
                                                             source_url_
 #ifdef FALCON_ENABLE_OPENSSL
                                                             ,
-                                                            /*tls_session=*/tls_session_
+                                                            /*tls_session=*/tls_session_,
+                                                            /*proxy_tls_session=*/
+                                                                proxy_tls_session_
 #endif
                                                             ));
     } else {
@@ -1013,7 +1110,9 @@ bool HttpResponseCommand::determine_download_strategy(DownloadEngineV2* engine) 
                                                             source_url_
 #ifdef FALCON_ENABLE_OPENSSL
                                                             ,
-                                                            /*tls_session=*/tls_session_
+                                                            /*tls_session=*/tls_session_,
+                                                            /*proxy_tls_session=*/
+                                                                proxy_tls_session_
 #endif
                                                             ));
         return true;
@@ -1055,7 +1154,9 @@ bool HttpResponseCommand::determine_download_strategy(DownloadEngineV2* engine) 
                                                         source_url_
 #ifdef FALCON_ENABLE_OPENSSL
                                                         ,
-                                                        /*tls_session=*/tls_session_
+                                                        /*tls_session=*/tls_session_,
+                                                        /*proxy_tls_session=*/
+                                                            proxy_tls_session_
 #endif
                                                         ));
     // 建立续传追踪（总长未知/chunked 下载无从续传，begin 内部自行忽略）

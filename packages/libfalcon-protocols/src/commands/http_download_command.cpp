@@ -39,6 +39,10 @@ using falcon::protocols::detail::close_socket_fd;
 using falcon::protocols::detail::sock_errno;
 using falcon::protocols::detail::sock_err_str;
 using falcon::protocols::detail::sock_would_block;
+#ifdef FALCON_ENABLE_OPENSSL
+using falcon::protocols::detail::pump_tls_in_tls;
+using falcon::protocols::detail::TlsInTlsPump;
+#endif
 
 namespace {
 
@@ -223,6 +227,7 @@ HttpDownloadCommand::HttpDownloadCommand(
     std::string source_url
 #ifdef FALCON_ENABLE_OPENSSL
     , HttpTlsSessionPtr tls_session
+    , HttpTlsSessionPtr proxy_tls_session
 #endif
     )
     : AbstractCommand(task_id)
@@ -239,6 +244,7 @@ HttpDownloadCommand::HttpDownloadCommand(
     , chunked_encoding_(chunked)
 #ifdef FALCON_ENABLE_OPENSSL
     , tls_session_(std::move(tls_session))
+    , proxy_tls_session_(std::move(proxy_tls_session))
 #endif
     , last_update_(std::chrono::steady_clock::now())
 {
@@ -586,6 +592,37 @@ AbstractCommand::ExecutionResult HttpDownloadCommand::receive_data(DownloadEngin
         ssize_t n = 0;
 #ifdef FALCON_ENABLE_OPENSSL
         if (tls_session_) {
+            // TLS-in-TLS 隧道（https 目标经 HTTPS 代理）：先泵一轮代理
+            // 密文（transport 入站 → origin rbio；origin 待发 → transport）。
+            // WANT_* 注册方向后等待且不改状态——重入落本分支重新泵；
+            // 隧道死亡按失败收口
+            if (proxy_tls_session_) {
+                const TlsInTlsPump r = pump_tls_in_tls(
+                    tls_session_.get(), proxy_tls_session_.get(), read_outbox_);
+                switch (r) {
+                case TlsInTlsPump::kProgress:
+                case TlsInTlsPump::kIdle:
+                    break;
+                case TlsInTlsPump::kWantRead:
+                case TlsInTlsPump::kWantWrite: {
+                    if (engine) {
+                        if (!engine->register_socket_event(
+                                socket_fd_,
+                                static_cast<int>(r == TlsInTlsPump::kWantWrite
+                                                     ? net::IOEvent::WRITE
+                                                     : net::IOEvent::READ),
+                                id())) {
+                            return ExecutionResult::ERROR_OCCURRED;
+                        }
+                    }
+                    return ExecutionResult::WAIT_FOR_SOCKET;
+                }
+                case TlsInTlsPump::kEof:
+                case TlsInTlsPump::kError:
+                    FALCON_LOG_ERROR_STREAM("代理隧道已断开，无法接收响应体");
+                    return ExecutionResult::ERROR_OCCURRED;
+                }
+            }
             // TLS 连接必须经 SSL_read 解密（明文 recv 只能读到密文）
             n = SSL_read(tls_session_.get(), buffer, static_cast<int>(chunk));
             if (n <= 0) {

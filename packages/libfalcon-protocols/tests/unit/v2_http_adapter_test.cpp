@@ -881,7 +881,7 @@ TEST_F(V2HttpAdapterSupports, FallbackTable) {
 
     options = DownloadOptions{};
     options.proxy = "https://192.0.2.1:8443";
-    EXPECT_FALSE(V2HttpDownloadAdapter::supports(options)) << "HTTPS 代理回退";
+    EXPECT_TRUE(V2HttpDownloadAdapter::supports(options)) << "HTTPS 代理已原生化";
 
     options = DownloadOptions{};
     options.proxy = "http://192.0.2.1:8080";

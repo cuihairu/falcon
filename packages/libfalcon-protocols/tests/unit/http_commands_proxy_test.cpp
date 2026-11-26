@@ -706,10 +706,12 @@ TEST(ParseHttpProxy, Socks4IsUnsupported) {
     }
 }
 
-TEST(ParseHttpProxy, HttpsProxyIsUnsupported) {
+TEST(ParseHttpProxy, HttpsProxyParsedWithDefaultPort) {
     DownloadOptions options;
-    options.proxy = "https://proxy.local:443";
-    EXPECT_EQ(parse_http_proxy(options).kind, HttpProxyKind::Unsupported);
+    options.proxy = "https://proxy.local";
+    EXPECT_EQ(parse_http_proxy(options).kind, HttpProxyKind::HttpsProxy);
+    EXPECT_EQ(parse_http_proxy(options).host, "proxy.local");
+    EXPECT_EQ(parse_http_proxy(options).port, 443);
 }
 
 TEST(ParseHttpProxy, ProxyTypeSocks5OverridesScheme) {

@@ -33,7 +33,7 @@ bool V2HttpDownloadAdapter::supports(const DownloadOptions& options) {
     }
     // curl 专属能力 → 回退 V1（同一任务两侧行为完全一致）
     if (parse_http_proxy(options).kind == HttpProxyKind::Unsupported) {
-        return false;  // HTTPS 代理/socks4 与非法 proxy 表达式（socks5 已原生）
+        return false;  // socks4 与非法 proxy 表达式（socks5/HTTPS 代理已原生）
     }
     if (!options.cookie_file.empty() || !options.cookie_jar.empty()) {
         return false;  // cookie 引擎（CURLOPT_COOKIEFILE/JAR）

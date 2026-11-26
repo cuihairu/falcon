@@ -7,7 +7,7 @@
  *
  * 覆盖的核心不变量：
  * - parse_http_proxy：socks5:// / socks5h:// 的缺省端口与凭据解析；
- *   socks4/https 仍 Unsupported（适配层回退 V1 curl）
+ *   socks4 仍 Unsupported（适配层回退 V1 curl；https 代理已原生化）
  * - 方法协商 0x00/0x02/0xFF 三态与子协商成功/失败；凭据精确上线
  * - CONNECT 目标编码三形态：ATYP 0x01（v4 字面量）/0x03（域名，
  *   socks5h 语义）/0x04（v6 字面量），端口大端

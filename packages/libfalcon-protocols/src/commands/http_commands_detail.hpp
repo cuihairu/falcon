@@ -44,7 +44,9 @@ typedef SSIZE_T ssize_t;
 #include <vector>
 
 #ifdef FALCON_ENABLE_OPENSSL
+#include <openssl/bio.h>
 #include <openssl/evp.h>
+#include <openssl/ssl.h>
 #endif
 
 namespace falcon {
@@ -466,6 +468,109 @@ inline std::string build_digest_authorization(const AuthChallenge& challenge,
                   escape_quoted_string(cnonce) + "\"";
     }
     return header;
+}
+
+// ========================= TLS-in-TLS 泵（HTTPS 代理） =========================
+// HTTPS 代理隧道内的目标 TLS 会话（origin）挂内存 BIO——socket 载荷是
+// 代理侧密文，不能 SSL_set_fd。密文搬运全走本泵：
+//   origin wbio → outbox → transport SSL_write
+//   transport SSL_read → origin rbio
+//
+// outbox 由调用方持有（命令成员）且跨事件重入保留——transport 非阻塞
+// SSL_write 合法返回 WANT_WRITE 时，已从 origin wbio 读出的密文不能丢
+// （无状态栈缓冲泵在此丢字节）；WANT_* 重入后续发 outbox 残量。
+// SSL_read 期间 origin 可能产生新的待发密文（TLS 1.3 KeyUpdate 等
+// 后握手消息），同样经 outbox 排出
+enum class TlsInTlsPump {
+    kProgress,  // 本轮搬运完成且有净推进（搬运的密文原样发出）
+    kIdle,      // 本轮净搬运零字节且 transport 无可收——握手推进点（motor
+                // 循环据此再驱动一次 SSL_connect；调用方其余消费点视同 kProgress
+                // 继续推进）
+    kWantRead,  // transport 读方向暂不可用（outbox 残量等待，注册 READ）
+    kWantWrite, // transport 写方向暂不可用（outbox 残量等待，注册 WRITE）
+    kEof,       // 代理侧 TLS 关闭（close_notify/断连）——隧道已死
+    kError      // 硬失败
+};
+
+inline TlsInTlsPump pump_tls_in_tls(SSL* origin, SSL* transport,
+                                    std::string& outbox) {
+    static constexpr int kChunkSize = 16384;
+    bool moved = false;
+
+    for (;;) {
+        // 1) origin 待发密文全量排入 outbox（BIO_pending 驱动）
+        for (;;) {
+            if (BIO_pending(SSL_get_wbio(origin)) == 0) break;
+            char buf[kChunkSize];
+            const int n = BIO_read(SSL_get_wbio(origin), buf, kChunkSize);
+            if (n <= 0) return TlsInTlsPump::kError;
+            outbox.append(buf, static_cast<std::size_t>(n));
+            moved = true;
+        }
+
+        // 2) outbox → transport（部分写循环；WANT_* 时残量留在 outbox
+        //    等待重入续发——这正是 outbox 必须由调用方持有的原因）
+        while (!outbox.empty()) {
+            const int n = SSL_write(transport, outbox.data(),
+                                    static_cast<int>(outbox.size()));
+            if (n > 0) {
+                outbox.erase(0, static_cast<std::size_t>(n));
+                moved = true;
+                continue;
+            }
+            const int err = SSL_get_error(transport, n);
+            if (err == SSL_ERROR_WANT_WRITE) {
+                return TlsInTlsPump::kWantWrite;
+            }
+            if (err == SSL_ERROR_WANT_READ) {
+                return TlsInTlsPump::kWantRead;
+            }
+            if (err == SSL_ERROR_ZERO_RETURN || err == SSL_ERROR_SYSCALL ||
+                err == SSL_ERROR_SSL) {
+                return TlsInTlsPump::kEof;
+            }
+            return TlsInTlsPump::kError;
+        }
+
+        // 3) transport 入站密文 → origin rbio（喂给 origin 解密）
+        for (;;) {
+            char buf[kChunkSize];
+            const int n = SSL_read(transport, buf, kChunkSize);
+            if (n > 0) {
+                moved = true;
+                if (BIO_write(SSL_get_rbio(origin), buf, n) != n) {
+                    return TlsInTlsPump::kError;
+                }
+                continue;
+            }
+            const int err = SSL_get_error(transport, n);
+            if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+                break;  // 无更多入站（WANT_WRITE 极罕见——重协商，下轮再泵）
+            }
+            if (err == SSL_ERROR_ZERO_RETURN || err == SSL_ERROR_SYSCALL ||
+                err == SSL_ERROR_SSL) {
+                // 隧道侧 EOF/断连不等于立即失败：按记录逐条解密，此前 BIO_write
+                // 进 origin 的密文全部有效（失败的记录 OpenSSL 自行丢弃）。
+                // 本轮已搬运、或 origin 仍有未消费密文/已解密数据时按推进返回
+                // ——调用方先读 origin；若 origin 之后真被饿死（响应被截断），
+                // 下一轮泵 rbio 已空、无新数据 → 走 kEof 收口
+                if (moved || BIO_pending(SSL_get_rbio(origin)) > 0 ||
+                    SSL_pending(origin) > 0) {
+                    return TlsInTlsPump::kProgress;
+                }
+                return TlsInTlsPump::kEof;
+            }
+            return TlsInTlsPump::kError;
+        }
+
+        // 4) origin 解密入站后可能产生新的待发（后握手消息）——回到
+        //    步骤 1 排出；排净则按本轮是否有净推进返回。kProgress/kIdle
+        //    的区分供握手推进点（advance_tls_handshake 隧道分支）区分
+        //    「继续驱动 motor」与「无事可做，按 origin 状态等待/收口」
+        if (BIO_pending(SSL_get_wbio(origin)) == 0) {
+            return moved ? TlsInTlsPump::kProgress : TlsInTlsPump::kIdle;
+        }
+    }
 }
 #endif  // FALCON_ENABLE_OPENSSL
 

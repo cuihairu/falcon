@@ -42,6 +42,10 @@ using falcon::protocols::detail::sock_would_block;
 using falcon::protocols::detail::make_connection_retry;
 using falcon::protocols::detail::fail_group_terminal;
 using falcon::protocols::detail::base64_encode;
+#ifdef FALCON_ENABLE_OPENSSL
+using falcon::protocols::detail::pump_tls_in_tls;
+using falcon::protocols::detail::TlsInTlsPump;
+#endif
 
 //==============================================================================
 // 多连接分段计划
@@ -256,6 +260,7 @@ HttpProxyConfig parse_http_proxy(const DownloadOptions& options) {
     std::string rest = raw;
     uint16_t default_port = 80;
     bool is_socks5 = false;
+    bool is_https_proxy = false;
 
     if (rest.rfind("http://", 0) == 0) {
         rest = rest.substr(7);
@@ -265,9 +270,14 @@ HttpProxyConfig parse_http_proxy(const DownloadOptions& options) {
         is_socks5 = true;
         default_port = 1080;
         rest = rest.substr(rest.rfind("socks5h://", 0) == 0 ? 10 : 9);
-    } else if (rest.rfind("https://", 0) == 0 || rest.rfind("socks", 0) == 0) {
-        // TLS 代理与 socks4 不支持——适配层回退 V1 curl
+    } else if (rest.rfind("socks", 0) == 0) {
+        // socks4/其他 socks 变体不支持——适配层回退 V1 curl
         return unsupported();
+    } else if (rest.rfind("https://", 0) == 0) {
+        // HTTPS 代理：先与代理解析做 TLS 握手，CONNECT/凭据走该会话
+        rest = rest.substr(8);
+        default_port = 443;
+        is_https_proxy = true;
     } else if (rest.find("://") != std::string::npos) {
         return unsupported();  // 未知 scheme
     }  // 无 scheme：按明文 HTTP 代理（curl 对无 scheme 代理同语义）
@@ -280,6 +290,10 @@ HttpProxyConfig parse_http_proxy(const DownloadOptions& options) {
         default_port = 1080;
     } else if (proxy_type_lc.find("socks") != std::string::npos) {
         return unsupported();
+    } else if (proxy_type_lc.find("https") != std::string::npos) {
+        // proxy_type 显式声明兜底：https → HTTPS 代理
+        is_https_proxy = true;
+        default_port = 443;
     }
 
     // userinfo：user:pass@ 优先于独立凭据字段
@@ -320,7 +334,9 @@ HttpProxyConfig parse_http_proxy(const DownloadOptions& options) {
     }
 
     HttpProxyConfig cfg;
-    cfg.kind = is_socks5 ? HttpProxyKind::Socks5 : HttpProxyKind::HttpProxy;
+    cfg.kind = is_socks5       ? HttpProxyKind::Socks5
+               : is_https_proxy ? HttpProxyKind::HttpsProxy
+                                : HttpProxyKind::HttpProxy;
     cfg.host = host;
     cfg.port = port;
     cfg.username = username.empty() ? options.proxy_username : username;
@@ -399,6 +415,9 @@ HttpInitiateConnectionCommand::HttpInitiateConnectionCommand(
     } else if (proxy_cfg_.kind == HttpProxyKind::Socks5) {
         FALCON_LOG_INFO_STREAM("使用 socks5 代理: " << proxy_cfg_.host << ":"
                                                     << proxy_cfg_.port);
+    } else if (proxy_cfg_.kind == HttpProxyKind::HttpsProxy) {
+        FALCON_LOG_INFO_STREAM("使用 HTTPS 代理: " << proxy_cfg_.host << ":"
+                                                    << proxy_cfg_.port);
     }
 }
 
@@ -409,6 +428,11 @@ HttpInitiateConnectionCommand::~HttpInitiateConnectionCommand() {
     if (ssl_ctx_) {
         SSL_CTX_free(ssl_ctx_);
         ssl_ctx_ = nullptr;
+    }
+    // 代理侧 TLS 同理由 proxy_ssl_conn_ 的 deleter 释放
+    if (proxy_ssl_ctx_) {
+        SSL_CTX_free(proxy_ssl_ctx_);
+        proxy_ssl_ctx_ = nullptr;
     }
 #endif
     // Socket 的清理由连接池负责
@@ -505,7 +529,13 @@ bool HttpInitiateConnectionCommand::execute(DownloadEngineV2* engine) {
                 }
 
                 connection_state_ = HttpConnectionState::CONNECTED;
-                if (use_https_) {
+                if (proxy_cfg_.kind == HttpProxyKind::HttpsProxy) {
+                    // HTTPS 代理：先与代理自身握手（CONNECT 与代理凭据
+                    // 全部走该 TLS 会话）；目标 HTTPS 时再在隧道内做
+                    // 第二次握手
+                    connection_state_ =
+                        HttpConnectionState::PROXY_TLS_HANDSHAKING;
+                } else if (use_https_) {
                     // HTTPS 经代理：先建 CONNECT 隧道（或 socks5 握
                     // 手）再 TLS 握手（隧道内字节端到端加密，代理
                     // 只见 host:port）；直连直接进 TLS 握手
@@ -524,6 +554,18 @@ bool HttpInitiateConnectionCommand::execute(DownloadEngineV2* engine) {
                     // 请求（代理负责解析主机名，见 CONNECT 请求 ATYP）
                     connection_state_ =
                         HttpConnectionState::SOCKS_HANDSHAKE_SEND;
+                }
+                [[fallthrough]];
+
+            case HttpConnectionState::PROXY_TLS_HANDSHAKING:
+                if (connection_state_ == HttpConnectionState::PROXY_TLS_HANDSHAKING) {
+                    // HTTPS 代理 TLS 握手：WANT_* 挂起等 socket 事件重入。
+                    // 成功后 HTTPS 目标进 CONNECT 发送；明文目标直接
+                    // 用该会话发 absolute-form 请求
+                    const auto proxy_tls_res = advance_proxy_tls_handshake(engine);
+                    if (proxy_tls_res != ExecutionResult::OK) {
+                        return handle_result(proxy_tls_res);
+                    }
                 }
                 [[fallthrough]];
 
@@ -662,11 +704,13 @@ bool HttpInitiateConnectionCommand::resolve_host(
 }
 
 bool HttpInitiateConnectionCommand::resolve_connect_endpoint() {
-    // 代理生效时（明文 HTTP 代理或 socks5）连接对象是代理主机——两者均
-    // 不本地解析目标主机名（明文代理经 absolute-form 把目标交给代理解析，
-    // socks5 经 CONNECT ATYP 0x03 交给代理解析）；v6 字面量代理已被
-    // parse_http_proxy 拒绝，代理主机名可解析出 v6，家族判定同路径
+    // 代理生效时（明文/HTTPS HTTP 代理或 socks5）连接对象是代理主机——
+    // 均不本地解析目标主机名（明文代理经 absolute-form 把目标交给代理解析，
+    // HTTPS 代理经 CONNECT、socks5 经 CONNECT ATYP 0x03 交给代理解析）；
+    // v6 字面量代理已被 parse_http_proxy 拒绝，代理主机名可解析出 v6，
+    // 家族判定同路径
     const bool use_proxy = proxy_cfg_.kind == HttpProxyKind::HttpProxy ||
+                           proxy_cfg_.kind == HttpProxyKind::HttpsProxy ||
                            proxy_cfg_.kind == HttpProxyKind::Socks5;
     const std::string& connect_host = use_proxy ? proxy_cfg_.host : host_;
 
@@ -736,12 +780,13 @@ bool HttpInitiateConnectionCommand::create_socket() {
 }
 
 bool HttpInitiateConnectionCommand::connect_socket() {
-    // 代理生效时（明文 HTTP 代理或 socks5）连接代理服务器（absolute-form
-    // 请求、CONNECT 隧道或 socks5 握手均在代理连接上承载）；目标主机名
-    // 的解析延迟到隧道建立之后（TLS 握手也只与目标主机相关）。端点解析
-    // 已在 resolve_connect_endpoint 完成（execute 的连接步骤 1），此处
-    // 只按家族组装地址并 connect
+    // 代理生效时（明文/HTTPS HTTP 代理或 socks5）连接代理服务器（TLS
+    // 到代理、absolute-form 请求、CONNECT 隧道或 socks5 握手均在代理连接
+    // 上承载）；目标主机名的解析延迟到隧道建立之后（目标 TLS 握手也只在
+    // 隧道内发生）。端点解析已在 resolve_connect_endpoint 完成（execute
+    // 的连接步骤 1），此处只按家族组装地址并 connect
     const bool use_proxy = proxy_cfg_.kind == HttpProxyKind::HttpProxy ||
+                           proxy_cfg_.kind == HttpProxyKind::HttpsProxy ||
                            proxy_cfg_.kind == HttpProxyKind::Socks5;
     const std::string& connect_host = use_proxy ? proxy_cfg_.host : host_;
     const uint16_t connect_port = use_proxy ? proxy_cfg_.port : port_;
@@ -810,72 +855,90 @@ bool HttpInitiateConnectionCommand::connect_socket() {
 }
 
 #ifdef FALCON_ENABLE_OPENSSL
+namespace {
+
+/// 构造客户端 SSL_CTX（直连目标与 HTTPS 代理共用）：TLS1.2 下限、
+/// 选项、校验模式；with_client_cert 时加载 mTLS 客户端证书（客户端
+/// 证书只属于目标站点，绝不发给代理）。失败返回 nullptr
+SSL_CTX* make_client_ssl_ctx(const DownloadOptions& options,
+                             bool with_client_cert) {
+    const SSL_METHOD* method =
+        ::falcon::detail::inject_failure(
+            ::falcon::detail::InjectPoint::TlsMethodFail)
+            ? nullptr
+            : TLS_client_method();
+    if (!method) {
+        FALCON_LOG_ERROR_STREAM("无法获取 TLS 方法: " << ERR_error_string(ERR_get_error(), nullptr));
+        return nullptr;
+    }
+
+    SSL_CTX* ctx = ::falcon::detail::inject_failure(
+                       ::falcon::detail::InjectPoint::TlsCtxNewFail)
+                       ? nullptr
+                       : SSL_CTX_new(method);
+    if (!ctx) {
+        FALCON_LOG_ERROR_STREAM("无法创建 SSL_CTX: " << ERR_error_string(ERR_get_error(), nullptr));
+        return nullptr;
+    }
+
+    // 设置最小 TLS 版本为 1.2
+    SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+
+    // 配置 SSL 选项
+    SSL_CTX_set_options(ctx, SSL_OP_ALL | SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_COMPRESSION);
+
+    // 设置验证模式
+    if (options.verify_ssl) {
+        SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nullptr);
+    } else {
+        SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, nullptr);
+    }
+
+    // 双向 TLS（mTLS）：客户端证书 + 私钥（PEM，aria2
+    // --certificate/--private-key 同语义）。任一加载失败都在
+    // 握手前失败收口——配置错误绝不退化成匿名连接；单给其一
+    // 时 check_private_key 失败同样收口（两字段可指向同一
+    // 复合 PEM 文件）
+    if (with_client_cert &&
+        (!options.client_certificate.empty() ||
+         !options.client_private_key.empty())) {
+        const bool loaded =
+            (!options.client_certificate.empty() &&
+             SSL_CTX_use_certificate_chain_file(
+                 ctx, options.client_certificate.c_str()) == 1) &&
+            (!options.client_private_key.empty() &&
+             SSL_CTX_use_PrivateKey_file(
+                 ctx, options.client_private_key.c_str(),
+                 SSL_FILETYPE_PEM) == 1) &&
+            SSL_CTX_check_private_key(ctx) == 1;
+        if (!loaded) {
+            FALCON_LOG_ERROR_STREAM(
+                "客户端证书加载失败: "
+                << ERR_error_string(ERR_get_error(), nullptr));
+            ERR_clear_error();
+            SSL_CTX_free(ctx);
+            return nullptr;
+        }
+    }
+
+    // 加载默认证书
+    if (!SSL_CTX_set_default_verify_paths(ctx)) {
+        FALCON_LOG_WARN_STREAM("无法加载默认 CA 证书，继续使用系统证书");
+    }
+    return ctx;
+}
+
+} // namespace
+
 TlsHandshakeResult HttpInitiateConnectionCommand::setup_tls() {
     // SSL 对象只创建一次：非阻塞握手的 WANT_* 重入在既有对象上续推
     //（每次 SSL_new 会丢弃已完成的握手进度且泄漏旧对象）
     if (!tls_started_) {
         if (!ssl_ctx_) {
-            // 创建 SSL_CTX
-            const SSL_METHOD* method =
-                ::falcon::detail::inject_failure(
-                    ::falcon::detail::InjectPoint::TlsMethodFail)
-                    ? nullptr
-                    : TLS_client_method();
-            if (!method) {
-                FALCON_LOG_ERROR_STREAM("无法获取 TLS 方法: " << ERR_error_string(ERR_get_error(), nullptr));
-                return TlsHandshakeResult::FAILED;
-            }
-
-            ssl_ctx_ = ::falcon::detail::inject_failure(
-                           ::falcon::detail::InjectPoint::TlsCtxNewFail)
-                           ? nullptr
-                           : SSL_CTX_new(method);
+            ssl_ctx_ = make_client_ssl_ctx(options_,
+                                           /*with_client_cert=*/true);
             if (!ssl_ctx_) {
-                FALCON_LOG_ERROR_STREAM("无法创建 SSL_CTX: " << ERR_error_string(ERR_get_error(), nullptr));
                 return TlsHandshakeResult::FAILED;
-            }
-
-            // 设置最小 TLS 版本为 1.2
-            SSL_CTX_set_min_proto_version(ssl_ctx_, TLS1_2_VERSION);
-
-            // 配置 SSL 选项
-            SSL_CTX_set_options(ssl_ctx_, SSL_OP_ALL | SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_COMPRESSION);
-
-            // 设置验证模式
-            if (options_.verify_ssl) {
-                SSL_CTX_set_verify(ssl_ctx_, SSL_VERIFY_PEER, nullptr);
-            } else {
-                SSL_CTX_set_verify(ssl_ctx_, SSL_VERIFY_NONE, nullptr);
-            }
-
-            // 双向 TLS（mTLS）：客户端证书 + 私钥（PEM，aria2
-            // --certificate/--private-key 同语义）。任一加载失败都在
-            // 握手前失败收口——配置错误绝不退化成匿名连接；单给其一
-            // 时 check_private_key 失败同样收口（两字段可指向同一
-            // 复合 PEM 文件）
-            if (!options_.client_certificate.empty() ||
-                !options_.client_private_key.empty()) {
-                const bool loaded =
-                    (!options_.client_certificate.empty() &&
-                     SSL_CTX_use_certificate_chain_file(
-                         ssl_ctx_, options_.client_certificate.c_str()) == 1) &&
-                    (!options_.client_private_key.empty() &&
-                     SSL_CTX_use_PrivateKey_file(
-                         ssl_ctx_, options_.client_private_key.c_str(),
-                         SSL_FILETYPE_PEM) == 1) &&
-                    SSL_CTX_check_private_key(ssl_ctx_) == 1;
-                if (!loaded) {
-                    FALCON_LOG_ERROR_STREAM(
-                        "客户端证书加载失败: "
-                        << ERR_error_string(ERR_get_error(), nullptr));
-                    ERR_clear_error();
-                    return TlsHandshakeResult::FAILED;
-                }
-            }
-
-            // 加载默认证书
-            if (!SSL_CTX_set_default_verify_paths(ssl_ctx_)) {
-                FALCON_LOG_WARN_STREAM("无法加载默认 CA 证书，继续使用系统证书");
             }
         }
 
@@ -1008,20 +1071,227 @@ HttpInitiateConnectionCommand::advance_tls_handshake(
     socket_fd_ = -1;
     return ExecutionResult::ERROR_OCCURRED;
 #else
-    switch (setup_tls()) {
-    case TlsHandshakeResult::OK:
+    // HTTPS 代理隧道：origin TLS（目标站点）挂内存 BIO，密文经代理
+    // SSL 会话搬运（TLS-in-TLS 泵）；直连/明文代理路径 origin 直接
+    // 绑 fd（setup_tls 既有形态）
+    const bool in_tunnel = proxy_cfg_.kind == HttpProxyKind::HttpsProxy &&
+                           proxy_ssl_conn_ != nullptr;
+    TlsHandshakeResult hs = TlsHandshakeResult::FAILED;
+    TlsInTlsPump pump = TlsInTlsPump::kIdle;
+    if (in_tunnel) {
+        hs = setup_tunnel_tls();
+        // SSL_connect 无论是否完成都已把 ClientHello 写进 origin wbio——
+        // 不搬运代理就收不到。motor 循环：泵有净推进（kProgress）即再驱动
+        // 一次 SSL_connect 消化刚喂进 rbio 的密文；泵空转（kIdle）说明
+        // transport 两侧暂无可搬运字节，退出循环按 origin 所需方向注册
+        // 事件等待重入。收敛性：kProgress 恒以 ≥1 字节净搬运为前提，服务
+        // 端握手飞行字节有限，循环必然落在 kIdle / 完成 / 失败之一；
+        // setup_tunnel_tls/pump 对重入均幂等
+        while (hs != TlsHandshakeResult::FAILED &&
+               hs != TlsHandshakeResult::OK) {
+            pump = pump_tls_in_tls(ssl_conn_.get(), proxy_ssl_conn_.get(),
+                                   tunnel_outbox_);
+            if (pump != TlsInTlsPump::kProgress) {
+                break;
+            }
+            hs = setup_tunnel_tls();
+        }
+    } else {
+        hs = setup_tls();
+    }
+
+    // 失败收口：握手失败或代理侧 TLS 已死（隧道断裂）
+    const bool failed = hs == TlsHandshakeResult::FAILED ||
+                        pump == TlsInTlsPump::kEof ||
+                        pump == TlsInTlsPump::kError;
+    // 等待方向：泵的 transport 残量方向优先；泵空转（kIdle）说明两侧均
+    // 无可搬运字节，按 origin 握手所需方向等 transport 变为可用
+    const bool wait_read =
+        !failed && (pump == TlsInTlsPump::kWantRead ||
+                    (pump == TlsInTlsPump::kIdle &&
+                     hs == TlsHandshakeResult::WANT_READ));
+    const bool wait_write =
+        !failed && !wait_read &&
+        (pump == TlsInTlsPump::kWantWrite ||
+         (pump == TlsInTlsPump::kIdle &&
+          hs == TlsHandshakeResult::WANT_WRITE));
+
+    if (!failed && (wait_read || wait_write)) {
+        connection_state_ = HttpConnectionState::TLS_HANDSHAKING;
+        // 注册失败无法等待重入，落到下方握手失败收口
+        if (engine->register_socket_event(
+                socket_fd_,
+                static_cast<int>(wait_read ? net::IOEvent::READ
+                                           : net::IOEvent::WRITE),
+                id())) {
+            return ExecutionResult::WAIT_FOR_SOCKET;
+        }
+    } else if (!failed) {
+        // 泵净 + origin 握手完成
         connection_state_ = HttpConnectionState::CONNECTED;
         return ExecutionResult::OK;
+    }
+
+    FALCON_LOG_ERROR_STREAM("TLS 握手失败: " << host_);
+    notify_segment_failure(engine, "TLS handshake failed: " + host_);
+    close_socket_fd(socket_fd_);
+    socket_fd_ = -1;
+    return ExecutionResult::ERROR_OCCURRED;
+#endif
+}
+
+#ifdef FALCON_ENABLE_OPENSSL
+/// HTTPS 代理会话的 TLS 握手（与 setup_tls 同构，对象换成代理会话）：
+/// proxy_tls_started_ 一次性守卫 + 证书校验绑定代理主机。客户端证书
+/// 绝不发给代理（make_client_ssl_ctx with_client_cert=false）
+TlsHandshakeResult HttpInitiateConnectionCommand::setup_proxy_tls() {
+    if (!proxy_tls_started_) {
+        if (!proxy_ssl_ctx_) {
+            proxy_ssl_ctx_ =
+                make_client_ssl_ctx(options_, /*with_client_cert=*/false);
+            if (!proxy_ssl_ctx_) {
+                return TlsHandshakeResult::FAILED;
+            }
+        }
+
+        proxy_ssl_conn_ = HttpTlsSessionPtr(
+            ::falcon::detail::inject_failure(
+                ::falcon::detail::InjectPoint::TlsSslNewFail)
+                ? nullptr
+                : SSL_new(proxy_ssl_ctx_),
+            HttpTlsSessionDeleter{});
+        if (!proxy_ssl_conn_) {
+            FALCON_LOG_ERROR_STREAM("无法创建代理 SSL 连接: " << ERR_error_string(ERR_get_error(), nullptr));
+            return TlsHandshakeResult::FAILED;
+        }
+
+        // 代理会话直接绑 socket：socket 载荷即代理密文
+        if (::falcon::detail::inject_failure(
+                ::falcon::detail::InjectPoint::TlsSetFdFail) ||
+            SSL_set_fd(proxy_ssl_conn_.get(),
+                       static_cast<int>(socket_fd_)) != 1) {
+            FALCON_LOG_ERROR_STREAM("无法绑定 Socket 到代理 SSL: " << ERR_error_string(ERR_get_error(), nullptr));
+            return TlsHandshakeResult::FAILED;
+        }
+
+        // parse_http_proxy 已拒绝括号 IPv6 代理 authority——代理主机
+        // 恒为 DNS 名或无括号 IP 字面量（is_ipv6_literal_ 描述的是
+        // 下载目标，与此无关）
+        const bool ip_proxy = is_ip_literal(AF_INET, proxy_cfg_.host) ||
+                              is_ip_literal(AF_INET6, proxy_cfg_.host);
+
+        // SNI：IP 字面量不发（RFC 6066），DNS 名照发
+        if (!ip_proxy) {
+            SSL_set_tlsext_host_name(proxy_ssl_conn_.get(),
+                                     proxy_cfg_.host.c_str());
+        }
+
+        // 证书校验绑定代理主机（语义与 setup_tls 的目标绑定一致）
+        if (options_.verify_ssl) {
+            const bool bound_ok =
+                ::falcon::detail::inject_failure(
+                    ::falcon::detail::InjectPoint::TlsSetHostFail)
+                    ? false
+                    : (ip_proxy
+                           ? X509_VERIFY_PARAM_set1_ip_asc(
+                                 SSL_get0_param(proxy_ssl_conn_.get()),
+                                 proxy_cfg_.host.c_str()) == 1
+                           : SSL_set1_host(proxy_ssl_conn_.get(),
+                                           proxy_cfg_.host.c_str()) == 1);
+            if (!bound_ok) {
+                FALCON_LOG_ERROR_STREAM("无法设置代理证书主机名校验: "
+                                        << proxy_cfg_.host);
+                return TlsHandshakeResult::FAILED;
+            }
+        }
+
+        FALCON_LOG_INFO_STREAM("开始代理 TLS 握手: " << proxy_cfg_.host);
+        proxy_tls_started_ = true;
+    }
+
+    const int ret = SSL_connect(proxy_ssl_conn_.get());
+    if (ret != 1) {
+        const int error =
+            ::falcon::detail::inject_failure(
+                ::falcon::detail::InjectPoint::TlsHandshakeWantWrite)
+                ? SSL_ERROR_WANT_WRITE
+                : SSL_get_error(proxy_ssl_conn_.get(), ret);
+
+        if (error == SSL_ERROR_WANT_READ) {
+            FALCON_LOG_DEBUG_STREAM("代理 TLS 握手等待可读: " << proxy_cfg_.host);
+            return TlsHandshakeResult::WANT_READ;
+        }
+        if (error == SSL_ERROR_WANT_WRITE) {
+            FALCON_LOG_DEBUG_STREAM("代理 TLS 握手等待可写: " << proxy_cfg_.host);
+            return TlsHandshakeResult::WANT_WRITE;
+        }
+
+        if (options_.verify_ssl) {
+            const long verify_result =
+                SSL_get_verify_result(proxy_ssl_conn_.get());
+            if (verify_result != X509_V_OK) {
+                FALCON_LOG_ERROR_STREAM("代理证书验证失败: "
+                                        << X509_verify_cert_error_string(verify_result));
+                return TlsHandshakeResult::FAILED;
+            }
+        }
+
+        char error_buf[256];
+        ERR_error_string_n(ERR_get_error(), error_buf, sizeof(error_buf));
+        FALCON_LOG_ERROR_STREAM("代理 TLS 握手失败: " << error_buf);
+        return TlsHandshakeResult::FAILED;
+    }
+
+    if (options_.verify_ssl) {
+        const long verify_result = SSL_get_verify_result(proxy_ssl_conn_.get());
+        if (verify_result != X509_V_OK) {
+            FALCON_LOG_ERROR_STREAM("代理证书验证失败: "
+                                    << X509_verify_cert_error_string(verify_result));
+            return TlsHandshakeResult::FAILED;
+        }
+        X509* cert = SSL_get_peer_certificate(proxy_ssl_conn_.get());
+        if (!cert) {
+            FALCON_LOG_ERROR_STREAM("未收到代理服务器证书");
+            return TlsHandshakeResult::FAILED;
+        }
+        X509_free(cert);
+    }
+
+    const char* cipher = SSL_get_cipher(proxy_ssl_conn_.get());
+    FALCON_LOG_INFO_STREAM("代理 TLS 握手成功，使用加密套件: "
+                           << (cipher ? cipher : "unknown"));
+    return TlsHandshakeResult::OK;
+}
+
+AbstractCommand::ExecutionResult
+HttpInitiateConnectionCommand::advance_proxy_tls_handshake(
+    DownloadEngineV2* engine) {
+#ifndef FALCON_ENABLE_OPENSSL
+    FALCON_LOG_ERROR_STREAM("HTTPS 代理支持需要启用 OpenSSL");
+    notify_segment_failure(engine, "HTTPS proxy requires OpenSSL");
+    close_socket_fd(socket_fd_);
+    socket_fd_ = -1;
+    return ExecutionResult::ERROR_OCCURRED;
+#else
+    switch (setup_proxy_tls()) {
+    case TlsHandshakeResult::OK:
+        // https 目标进 CONNECT 隧道（TLS-in-TLS）；明文目标直接在
+        // 代理 TLS 会话上发 absolute-form 请求（CONNECTED 分支的
+        // per-case 状态守卫会跳过隧道/socks/TLS 各分支直达
+        // send_http_request）
+        connection_state_ = use_https_
+                                ? HttpConnectionState::PROXY_TUNNEL_SEND
+                                : HttpConnectionState::CONNECTED;
+        return ExecutionResult::OK;
     case TlsHandshakeResult::WANT_READ:
-        connection_state_ = HttpConnectionState::TLS_HANDSHAKING;
-        // 注册失败无法等待重入，跳出 switch 落到下方握手失败收口
+        connection_state_ = HttpConnectionState::PROXY_TLS_HANDSHAKING;
         if (engine->register_socket_event(
                 socket_fd_, static_cast<int>(net::IOEvent::READ), id())) {
             return ExecutionResult::WAIT_FOR_SOCKET;
         }
         break;
     case TlsHandshakeResult::WANT_WRITE:
-        connection_state_ = HttpConnectionState::TLS_HANDSHAKING;
+        connection_state_ = HttpConnectionState::PROXY_TLS_HANDSHAKING;
         if (engine->register_socket_event(
                 socket_fd_, static_cast<int>(net::IOEvent::WRITE), id())) {
             return ExecutionResult::WAIT_FOR_SOCKET;
@@ -1032,13 +1302,137 @@ HttpInitiateConnectionCommand::advance_tls_handshake(
         break;
     }
 
-    FALCON_LOG_ERROR_STREAM("TLS 握手失败: " << host_);
-    notify_segment_failure(engine, "TLS handshake failed: " + host_);
+    FALCON_LOG_ERROR_STREAM("代理 TLS 握手失败: " << proxy_cfg_.host);
+    notify_segment_failure(engine,
+                           "proxy TLS handshake failed: " + proxy_cfg_.host);
     close_socket_fd(socket_fd_);
     socket_fd_ = -1;
     return ExecutionResult::ERROR_OCCURRED;
 #endif
 }
+
+/// 隧道内目标 TLS 会话（origin）挂内存 BIO——socket 载荷是代理侧
+/// 密文，绝不能 SSL_set_fd；密文搬运由 pump_tls_in_tls 承担。
+/// CONNECT 应答捎带的残余密文（tunnel_pending_）先于 ClientHello
+/// 喂入 rbio（顺序不可颠倒）
+TlsHandshakeResult HttpInitiateConnectionCommand::setup_tunnel_tls() {
+    if (!ssl_ctx_) {
+        // 隧道路径 setup_tls 不会执行：ctx 在此创建（带 mTLS——客户
+        // 端证书发给目标，不发代理）
+        ssl_ctx_ = make_client_ssl_ctx(options_, /*with_client_cert=*/true);
+        if (!ssl_ctx_) {
+            return TlsHandshakeResult::FAILED;
+        }
+    }
+
+    // SSL 对象只创建一次：泵驱动的 WANT_* 重入在既有对象上续推
+    if (!tls_started_) {
+        ssl_conn_ = HttpTlsSessionPtr(
+            ::falcon::detail::inject_failure(
+                ::falcon::detail::InjectPoint::TlsSslNewFail)
+                ? nullptr
+                : SSL_new(ssl_ctx_),
+            HttpTlsSessionDeleter{});
+        if (!ssl_conn_) {
+            FALCON_LOG_ERROR_STREAM("无法创建隧道 SSL 连接: " << ERR_error_string(ERR_get_error(), nullptr));
+            return TlsHandshakeResult::FAILED;
+        }
+
+        // 内存 BIO：SSL_set_bio 移交所有权（勿手动释放；此处禁止
+        // SSL_set_fd——socket 上是代理密文）
+        BIO* rbio = BIO_new(BIO_s_mem());
+        BIO* wbio = BIO_new(BIO_s_mem());
+        if (!rbio || !wbio) {
+            BIO_free(rbio);
+            BIO_free(wbio);
+            FALCON_LOG_ERROR_STREAM("无法创建隧道内存 BIO");
+            return TlsHandshakeResult::FAILED;
+        }
+        SSL_set_bio(ssl_conn_.get(), rbio, wbio);
+
+        if (!tunnel_pending_.empty()) {
+            const int written =
+                BIO_write(SSL_get_rbio(ssl_conn_.get()),
+                          tunnel_pending_.data(),
+                          static_cast<int>(tunnel_pending_.size()));
+            if (written != static_cast<int>(tunnel_pending_.size())) {
+                FALCON_LOG_ERROR_STREAM("隧道残余密文喂入失败");
+                return TlsHandshakeResult::FAILED;
+            }
+            tunnel_pending_.clear();
+        }
+
+        const bool ip_target =
+            is_ip_literal(is_ipv6_literal_ ? AF_INET6 : AF_INET, host_);
+
+        if (!ip_target) {
+            SSL_set_tlsext_host_name(ssl_conn_.get(), host_.c_str());
+        }
+
+        if (options_.verify_ssl) {
+            const bool bound_ok =
+                ip_target
+                    ? X509_VERIFY_PARAM_set1_ip_asc(
+                          SSL_get0_param(ssl_conn_.get()),
+                          host_.c_str()) == 1
+                    : SSL_set1_host(ssl_conn_.get(), host_.c_str()) == 1;
+            if (!bound_ok) {
+                FALCON_LOG_ERROR_STREAM("无法设置证书主机名校验: " << host_);
+                return TlsHandshakeResult::FAILED;
+            }
+        }
+
+        FALCON_LOG_INFO_STREAM("隧道内开始 TLS 握手: " << host_);
+        tls_started_ = true;
+    }
+
+    // 内存 BIO 上 SSL_connect 永不阻塞（WANT_* 只出现在泵的
+    // transport 方向）；重入幂等
+    const int ret = SSL_connect(ssl_conn_.get());
+    if (ret != 1) {
+        const int error = SSL_get_error(ssl_conn_.get(), ret);
+        if (error == SSL_ERROR_WANT_READ) {
+            return TlsHandshakeResult::WANT_READ;
+        }
+        if (error == SSL_ERROR_WANT_WRITE) {
+            return TlsHandshakeResult::WANT_WRITE;
+        }
+
+        if (options_.verify_ssl) {
+            const long verify_result = SSL_get_verify_result(ssl_conn_.get());
+            if (verify_result != X509_V_OK) {
+                FALCON_LOG_ERROR_STREAM("证书验证失败: "
+                                        << X509_verify_cert_error_string(verify_result));
+                return TlsHandshakeResult::FAILED;
+            }
+        }
+
+        char error_buf[256];
+        ERR_error_string_n(ERR_get_error(), error_buf, sizeof(error_buf));
+        FALCON_LOG_ERROR_STREAM("TLS 握手失败: " << error_buf);
+        return TlsHandshakeResult::FAILED;
+    }
+
+    if (options_.verify_ssl) {
+        const long verify_result = SSL_get_verify_result(ssl_conn_.get());
+        if (verify_result != X509_V_OK) {
+            FALCON_LOG_ERROR_STREAM("证书验证失败: "
+                                    << X509_verify_cert_error_string(verify_result));
+            return TlsHandshakeResult::FAILED;
+        }
+        X509* cert = SSL_get_peer_certificate(ssl_conn_.get());
+        if (!cert) {
+            FALCON_LOG_ERROR_STREAM("未收到服务器证书");
+            return TlsHandshakeResult::FAILED;
+        }
+        X509_free(cert);
+    }
+
+    const char* cipher = SSL_get_cipher(ssl_conn_.get());
+    FALCON_LOG_INFO_STREAM("TLS 握手成功，使用加密套件: " << (cipher ? cipher : "unknown"));
+    return TlsHandshakeResult::OK;
+}
+#endif  // FALCON_ENABLE_OPENSSL
 
 AbstractCommand::ExecutionResult
 HttpInitiateConnectionCommand::send_proxy_connect(
@@ -1064,6 +1458,53 @@ HttpInitiateConnectionCommand::send_proxy_connect(
     while (proxy_sent_ < proxy_request_.size()) {
         const char* data = proxy_request_.data() + proxy_sent_;
         const std::size_t remaining = proxy_request_.size() - proxy_sent_;
+        // HTTPS 代理：CONNECT 明文只存在于代理 TLS 会话之内——经
+        // 代理 SSL 写出，不经裸 socket
+#ifdef FALCON_ENABLE_OPENSSL
+        if (proxy_ssl_conn_) {
+            bool want_write = ::falcon::detail::inject_failure(
+                ::falcon::detail::InjectPoint::HttpSendWantWrite);
+            bool hard_fail =
+                !want_write && ::falcon::detail::inject_failure(
+                                   ::falcon::detail::InjectPoint::
+                                       ProxyConnectSendFail);
+            const int n =
+                (want_write || hard_fail)
+                    ? -1
+                    : SSL_write(proxy_ssl_conn_.get(), data,
+                                static_cast<int>(remaining));
+            if (n <= 0) {
+                const int err = want_write
+                                    ? SSL_ERROR_WANT_WRITE
+                                    : (hard_fail ? SSL_ERROR_SYSCALL
+                                                 : SSL_get_error(
+                                                       proxy_ssl_conn_.get(),
+                                                       n));
+                if (err == SSL_ERROR_WANT_WRITE || err == SSL_ERROR_WANT_READ) {
+                    if (!engine->register_socket_event(
+                            socket_fd_, static_cast<int>(net::IOEvent::WRITE),
+                            id())) {
+                        notify_segment_failure(
+                            engine,
+                            "Failed to register proxy connect send event");
+                        close_socket_fd(socket_fd_);
+                        socket_fd_ = -1;
+                        return ExecutionResult::ERROR_OCCURRED;
+                    }
+                    return ExecutionResult::WAIT_FOR_SOCKET;
+                }
+                FALCON_LOG_ERROR_STREAM("发送 CONNECT 失败: SSL error "
+                                        << err);
+                notify_segment_failure(engine,
+                                       "Failed to send CONNECT to proxy");
+                close_socket_fd(socket_fd_);
+                socket_fd_ = -1;
+                return ExecutionResult::ERROR_OCCURRED;
+            }
+            proxy_sent_ += static_cast<std::size_t>(n);
+            continue;
+        }
+#endif
 #ifdef _WIN32
         ssize_t n;
         if (::falcon::detail::inject_failure(
@@ -1137,6 +1578,37 @@ HttpInitiateConnectionCommand::receive_proxy_connect_response(
     char buf[4096];
     while (proxy_response_.find("\r\n\r\n") == std::string::npos &&
            proxy_response_.size() < 64 * 1024) {
+        // HTTPS 代理：应答来自代理 TLS 会话
+#ifdef FALCON_ENABLE_OPENSSL
+        if (proxy_ssl_conn_) {
+            const int n =
+                SSL_read(proxy_ssl_conn_.get(), buf, static_cast<int>(sizeof(buf)));
+            if (n <= 0) {
+                const int err = SSL_get_error(proxy_ssl_conn_.get(), n);
+                if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+                    if (!engine->register_socket_event(
+                            socket_fd_, static_cast<int>(net::IOEvent::READ),
+                            id())) {
+                        notify_segment_failure(
+                            engine,
+                            "Failed to register proxy response event");
+                        close_socket_fd(socket_fd_);
+                        socket_fd_ = -1;
+                        return ExecutionResult::ERROR_OCCURRED;
+                    }
+                    return ExecutionResult::WAIT_FOR_SOCKET;
+                }
+                FALCON_LOG_ERROR_STREAM("代理在应答完成前关闭连接");
+                notify_segment_failure(engine,
+                                       "Proxy closed connection before response");
+                close_socket_fd(socket_fd_);
+                socket_fd_ = -1;
+                return ExecutionResult::ERROR_OCCURRED;
+            }
+            proxy_response_.append(buf, static_cast<std::size_t>(n));
+            continue;
+        }
+#endif
 #ifdef _WIN32
         const ssize_t n = recv(socket_fd_, buf, static_cast<int>(sizeof(buf)), 0);
 #else
@@ -1202,7 +1674,20 @@ HttpInitiateConnectionCommand::receive_proxy_connect_response(
     }
 
     FALCON_LOG_INFO_STREAM("代理隧道已建立: " << host_ << ":" << port_);
-    connection_state_ = HttpConnectionState::TLS_HANDSHAKING;
+    // 头区之后的字节是隧道载荷（可能是目标 TLS 的 ServerHello 前缀，
+    // piggyback 场景合法）——无条件暂存，setup_tunnel_tls 首次进入时
+    // 灌入 origin rbio
+    const auto body_start = proxy_response_.find("\r\n\r\n");
+    if (body_start != std::string::npos &&
+        body_start + 4 < proxy_response_.size()) {
+        tunnel_pending_ = proxy_response_.substr(body_start + 4);
+    }
+    // https 目标：进隧道内 origin TLS 握手（TLS-in-TLS）；明文目标：
+    // 隧道已就绪，直接落 CONNECTED——execute 同轮 fallthrough 到请求
+    // 发送（absolute-form 明文跑在代理 TLS 之上）
+    connection_state_ = use_https_
+                            ? HttpConnectionState::TLS_HANDSHAKING
+                            : HttpConnectionState::CONNECTED;
     return ExecutionResult::OK;
 }
 
@@ -1544,7 +2029,8 @@ bool HttpInitiateConnectionCommand::prepare_http_request() {
     // （代理不见内部请求，目标服务器也不认 absolute-form）；直连为
     // origin-form
     const bool plain_via_proxy =
-        proxy_cfg_.kind == HttpProxyKind::HttpProxy && !use_https_;
+        (proxy_cfg_.kind == HttpProxyKind::HttpProxy ||
+         proxy_cfg_.kind == HttpProxyKind::HttpsProxy) && !use_https_;
     http_request_->set_url(plain_via_proxy ? url_ : path_);
 
     http_request_->set_header("Host", host_authority());
@@ -1558,8 +2044,11 @@ bool HttpInitiateConnectionCommand::prepare_http_request() {
     http_request_->set_header("Accept-Encoding", "identity");
     http_request_->set_header("Connection", "close");
 
-    // 代理认证只随明文代理请求发出（CONNECT 隧道的凭据已在 CONNECT
-    // 请求里交给代理，隧道内再发既无意义也向目标泄漏代理凭据）
+    // 代理认证分发规则：CONNECT 隧道（https 目标）的凭据随 CONNECT
+    // 交割，隧道内 origin-form 请求绝不再携带（无意义且向目标泄漏）；
+    // 明文目标的 absolute-form GET 以代理为下一跳，凭据随该请求交割
+    // （HTTP/HTTPS 代理同规则——Proxy-Authorization 是 hop-by-hop，
+    // 代理消费后不转发给目标）
     if (plain_via_proxy && !proxy_cfg_.username.empty()) {
         http_request_->set_header(
             "Proxy-Authorization",
@@ -1614,16 +2103,81 @@ AbstractCommand::ExecutionResult HttpInitiateConnectionCommand::send_http_reques
         }
     }
 
+    // TLS 写出通道选择：
+    // - https 目标：origin 会话 ssl_conn_（fd-backed 直连 / mem-BIO
+    //   隧道内）；经 HTTPS 代理时 transport = 代理会话（TLS-in-TLS 泵）
+    // - 明文目标经 HTTPS 代理：请求直接跑在代理 TLS 会话上
+    //   （absolute-form），无 transport
+    // - 其余：裸 socket send
+#ifdef FALCON_ENABLE_OPENSSL
+    SSL* out_ssl = nullptr;
+    SSL* transport_ssl = nullptr;
+    if (ssl_conn_) {
+        out_ssl = ssl_conn_.get();
+        if (proxy_ssl_conn_ && proxy_ssl_conn_.get() != out_ssl) {
+            transport_ssl = proxy_ssl_conn_.get();
+        }
+    } else if (proxy_ssl_conn_) {
+        out_ssl = proxy_ssl_conn_.get();
+    }
+#endif
+
+    // TLS-in-TLS 泵一轮：origin 待发密文 → transport，transport 入站
+    // → origin。WANT_* 注册方向后等待且不改状态——重入落 CONNECTED、
+    // request_sent_ 已推进时跳过写入循环，径直续泵
+    auto pump_transport = [&]() -> ExecutionResult {
+#ifdef FALCON_ENABLE_OPENSSL
+        if (!transport_ssl) {
+            return ExecutionResult::OK;
+        }
+        const TlsInTlsPump r =
+            pump_tls_in_tls(out_ssl, transport_ssl, tunnel_outbox_);
+        switch (r) {
+        case TlsInTlsPump::kProgress:
+        case TlsInTlsPump::kIdle:
+            return ExecutionResult::OK;
+        case TlsInTlsPump::kWantRead:
+        case TlsInTlsPump::kWantWrite: {
+            const auto ev = r == TlsInTlsPump::kWantRead
+                                ? net::IOEvent::READ
+                                : net::IOEvent::WRITE;
+            if (!engine->register_socket_event(
+                    socket_fd_, static_cast<int>(ev), id())) {
+                return ExecutionResult::ERROR_OCCURRED;
+            }
+            return ExecutionResult::WAIT_FOR_SOCKET;
+        }
+        case TlsInTlsPump::kEof:
+        case TlsInTlsPump::kError:
+            FALCON_LOG_ERROR_STREAM("代理隧道已断开，无法发送请求");
+            return ExecutionResult::ERROR_OCCURRED;
+        }
+#endif
+        return ExecutionResult::OK;
+    };
+
     while (request_sent_ < request_data_.size()) {
         const char* data = request_data_.data() + request_sent_;
         const std::size_t remaining = request_data_.size() - request_sent_;
 
+        // 写之前先泵（上轮残量 + 本轮 SSL_write 即将入 wbio 的记录都要
+        // 经 transport 送出；泵不开路则暂不写新数据）
+        {
+            const ExecutionResult r = pump_transport();
+            if (r != ExecutionResult::OK) {
+                return r;
+            }
+        }
+
         ssize_t n = 0;
 #ifdef FALCON_ENABLE_OPENSSL
-        if (use_https_ && ssl_conn_) {
-            // 使用 SSL_write 发送 HTTPS 数据（注入时未发出任何字节，
-            // SSL_get_error 的前置条件"真实失败操作"不成立，故错误码
-            // 一并注入：WantWrite 模拟缓冲满走重入，Fail 取 SYSCALL）
+        if (out_ssl) {
+            // origin TLS 会话写出：mem-BIO 时 SSL_write 落 wbio 即成功
+            // （密文随后由泵送达 transport），先推进游标防重入对同一段
+            // 数据重复 SSL_write；fd-backed 时 WANT_* 走既有重入语义
+            // （注入时未发出任何字节，SSL_get_error 的前置条件"真实
+            // 失败操作"不成立，故错误码一并注入：WantWrite 模拟缓冲
+            // 满走重入，Fail 取 SYSCALL）
             const bool write_want_write =
                 ::falcon::detail::inject_failure(
                     ::falcon::detail::InjectPoint::TlsRequestWriteWantWrite);
@@ -1633,13 +2187,12 @@ AbstractCommand::ExecutionResult HttpInitiateConnectionCommand::send_http_reques
                     ::falcon::detail::InjectPoint::TlsRequestWriteFail);
             n = write_injected
                     ? -1
-                    : SSL_write(ssl_conn_.get(), data,
-                                static_cast<int>(remaining));
+                    : SSL_write(out_ssl, data, static_cast<int>(remaining));
             if (n <= 0) {
                 int ssl_error =
                     write_want_write ? SSL_ERROR_WANT_WRITE
                     : write_injected ? SSL_ERROR_SYSCALL
-                                     : SSL_get_error(ssl_conn_.get(),
+                                     : SSL_get_error(out_ssl,
                                                      static_cast<int>(n));
                 if (ssl_error == SSL_ERROR_WANT_WRITE || ssl_error == SSL_ERROR_WANT_READ) {
                     if (!engine->register_socket_event(
@@ -1652,6 +2205,8 @@ AbstractCommand::ExecutionResult HttpInitiateConnectionCommand::send_http_reques
                 FALCON_LOG_ERROR_STREAM("SSL_write() 失败: " << ssl_error);
                 return ExecutionResult::ERROR_OCCURRED;
             }
+            request_sent_ += static_cast<std::size_t>(n);
+            continue;
         } else {
 #endif
             // 使用普通 send 发送 HTTP 数据（注入模拟内核发送缓冲满）
@@ -1692,19 +2247,36 @@ AbstractCommand::ExecutionResult HttpInitiateConnectionCommand::send_http_reques
         request_sent_ += static_cast<std::size_t>(n);
     }
 
+    // 尾泵：最后一段请求的密文可能仍滞留 origin wbio/outbox，全部
+    // 送达 transport 才算真正发出；WANT_* 等待后重入落 CONNECTED、
+    // request_sent_ 已满，径直到这里续泵
+    {
+        const ExecutionResult r = pump_transport();
+        if (r != ExecutionResult::OK) {
+            return r;
+        }
+    }
+
     connection_state_ = HttpConnectionState::REQUEST_SENT;
 
-    // 发送完成，进入响应阶段
-    // 注意：HTTPS 时传递 TLS 会话共享句柄（响应/下载命令经 SSL_read 解密）；
+    // 发送完成，进入响应阶段。TLS 会话交接：
+    // - https 目标：origin 会话 ssl_conn_（响应/下载命令经 SSL_read
+    //   解密）；经 HTTPS 代理时同时移交代理传输会话（响应侧接管泵）
+    // - 明文目标经 HTTPS 代理：代理 TLS 会话即响应读取通道
     // 分段连接需携带 URL 与分段信息，供响应命令按该段范围调度下载命令
     auto response_cmd = std::make_unique<HttpResponseCommand>(get_task_id(),
                                                              socket_fd_,
                                                              http_request_,
                                                              options_,
 #ifdef FALCON_ENABLE_OPENSSL
-                                                             ssl_conn_,
+                                                             ssl_conn_
+                                                                 ? ssl_conn_
+                                                                 : proxy_ssl_conn_,
+                                                             ssl_conn_ &&
+                                                                     proxy_ssl_conn_
+                                                                 ? proxy_ssl_conn_
+                                                                 : HttpTlsSessionPtr{},
 #endif
-                                                             use_https_,
                                                              url_,
                                                              range_segment_id_,
                                                              range_offset_,

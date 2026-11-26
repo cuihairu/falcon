@@ -992,7 +992,7 @@ TEST(RequestGroupCovR, InitRejectsUnsupportedProxy) {
 // init 失败经 create_initial_command 收口：命令为空、组保持 FAILED
 TEST(RequestGroupCovR, CreateInitialCommandNullWhenInitFails) {
     DownloadOptions options;
-    options.proxy = "https://127.0.0.1:8443";
+    options.proxy = "socks4://127.0.0.1:1080";
 
     RequestGroup group(5, {"http://127.0.0.1:1/f.bin"}, options);
     ASSERT_FALSE(group.init());

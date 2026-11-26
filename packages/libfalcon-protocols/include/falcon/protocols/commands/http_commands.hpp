@@ -54,6 +54,9 @@ enum class HttpConnectionState {
     SOCKS_HANDSHAKE_SEND,
     /// 等待/接收 socks5 服务器应答（按当前阶段判定收齐长度）
     SOCKS_HANDSHAKE_RECV,
+    /// 与 HTTPS 代理自身的 TLS 握手进行中（CONNECT/代理凭据全部走
+    /// 该 TLS 会话；与目标站点的 TLS 握手是独立的第二次握手）
+    PROXY_TLS_HANDSHAKING,
     REQUEST_SENT,
     RECEIVING,
     COMPLETE
@@ -63,16 +66,19 @@ enum class HttpConnectionState {
  * @brief 代理配置解析结论
  *
  * V2 数据面支持明文 HTTP 代理（absolute-form 请求行 + CONNECT
- * 隧道）与 socks5 代理（RFC 1928 握手 + RFC 1929 用户名密码子协商，
- * socks5h 语义：目标主机名经 ATYP 0x03 交由代理解析）；TLS 代理与
- * socks4 明确判 Unsupported——M2 适配层据此回退 V1 curl
+ * 隧道）、socks5 代理（RFC 1928 握手 + RFC 1929 用户名密码子协商，
+ * socks5h 语义：目标主机名经 ATYP 0x03 交由代理解析）与 HTTPS
+ * 代理（先与代理解析做 TLS 握手、CONNECT 与凭据走该 TLS 会话，
+ * 目标为 HTTPS 时再在隧道内做第二次 TLS 握手）；socks4 与未知
+ * scheme 明确判 Unsupported——M2 适配层据此回退 V1 curl
  * （libcurl 自带相应支持）
  */
 enum class HttpProxyKind {
     None,         ///< 无代理（proxy 配置为空）
     HttpProxy,    ///< 明文 HTTP 代理
     Socks5,       ///< socks5 代理（socks5:// / socks5h://；默认端口 1080）
-    Unsupported   ///< socks4 / https 代理 / 未知 scheme / 无法解析
+    HttpsProxy,   ///< HTTPS 代理（https://默认端口 443，CONNECT 走 TLS）
+    Unsupported   ///< socks4 / 未知 scheme / 无法解析
 };
 
 struct HttpProxyConfig {
@@ -358,6 +364,12 @@ private:
     bool connect_socket();
     TlsHandshakeResult setup_tls();  // 始终声明，实现根据 FALCON_ENABLE_OPENSSL 条件编译
     ExecutionResult advance_tls_handshake(DownloadEngineV2* engine);
+    /// HTTPS 代理：与代理解析的 TLS 握手（独立于目标站点的 ssl_conn_）
+    TlsHandshakeResult setup_proxy_tls();
+    ExecutionResult advance_proxy_tls_handshake(DownloadEngineV2* engine);
+    /// HTTPS 代理隧道内的目标 TLS 握手（TLS-in-TLS）：origin 会话挂
+    /// 内存 BIO，密文经 pump_tls_in_tls 在 proxy_ssl_conn_ 上搬运
+    TlsHandshakeResult setup_tunnel_tls();
     ExecutionResult send_proxy_connect(DownloadEngineV2* engine);
     ExecutionResult receive_proxy_connect_response(DownloadEngineV2* engine);
     ExecutionResult send_socks_handshake(DownloadEngineV2* engine);
@@ -437,8 +449,25 @@ private:
 
 #ifdef FALCON_ENABLE_OPENSSL
     SSL_CTX* ssl_ctx_ = nullptr;
-    HttpTlsSessionPtr ssl_conn_;  // 握手完成后沿命令链（响应 → 下载）共享
+    HttpTlsSessionPtr ssl_conn_;  // 目标站点 TLS：握手完成后沿命令链共享
     bool tls_started_ = false;    // SSL 对象只建一次，重入在其上续握手
+
+    // HTTPS 代理 TLS：CONNECT 与代理凭据走该会话；HTTPS 目标再在隧道内
+    // 做独立的第二次握手（ssl_conn_）。纯 HTTP 目标的数据面直接走
+    // proxy_ssl_conn_（absolute-form 请求行）
+    SSL_CTX* proxy_ssl_ctx_ = nullptr;
+    HttpTlsSessionPtr proxy_ssl_conn_;
+    bool proxy_tls_started_ = false;
+
+    // TLS-in-TLS 隧道（HTTPS 目标经 HTTPS 代理）：目标 TLS 会话不能
+    // SSL_set_fd（socket 载荷是代理密文），改挂内存 BIO 对，密文由
+    // pump_tls_in_tls 在 proxy_ssl_conn_ 上双向搬运。SSL_set_bio 后
+    // BIO 所有权归 SSL，绝不手动释放
+    // CONNECT 应答头后的残余字节（合规代理不会发——防御性保留，
+    // 隧道建立后喂给目标会话 rbio）
+    std::string tunnel_pending_;
+    // TLS-in-TLS 泵的出站积压（跨 WANT_* 重入保留，见 pump_tls_in_tls）
+    std::string tunnel_outbox_;
 #endif
 };
 
@@ -464,9 +493,12 @@ public:
      * @param socket_fd Socket 文件描述符
      * @param request HTTP 请求对象
      * @param options 下载选项
-     * @param tls_session TLS 会话（HTTPS 时使用；调度下载命令时继续
-     *        传递——响应体必须经 SSL_read 解密）
-     * @param use_https 是否使用 HTTPS
+     * @param tls_session 数据面 TLS 会话（HTTPS 直连或 HTTPS 代理承载
+     *        时使用；调度下载命令时继续传递——响应体必须经 SSL_read 解密）
+     * @param proxy_tls_session HTTPS 代理隧道承载时的代理侧 TLS 会话
+     *        （tls_session 为隧道内的目标会话、挂内存 BIO，需经其在
+     *        代理连接上泵运密文；与 tls_session 相同或为空 = 直连/
+     *        代理自身承载，无需泵）
      * @param source_url 原始完整 URL（多连接分段时为段 1..N-1 创建新连接用；
      *                   空串表示不启用多连接）
      * @param segment_id 分段编号（0 = 初始连接）
@@ -479,8 +511,8 @@ public:
                         const DownloadOptions& options,
 #ifdef FALCON_ENABLE_OPENSSL
                         HttpTlsSessionPtr tls_session = {},
+                        HttpTlsSessionPtr proxy_tls_session = {},
 #endif
-                        bool use_https = false,
                         std::string source_url = {},
                         SegmentId segment_id = 0,
                         Bytes range_offset = 0,
@@ -656,9 +688,13 @@ private:
     int redirect_depth_ = 0;
 
     // TLS/HTTPS 支持
-    bool use_https_ = false;
 #ifdef FALCON_ENABLE_OPENSSL
     HttpTlsSessionPtr tls_session_;  ///< 与初始连接共享的 TLS 会话
+    /// HTTPS 代理隧道承载时的代理侧会话（与 tls_session 不同 = 隧道
+    /// 模式，SSL_read 前后须经代理会话泵运密文）
+    HttpTlsSessionPtr proxy_tls_session_;
+    /// 泵的入站暂存（代理密文 → origin rbio 前的缓冲，跨重入保留）
+    std::string read_outbox_;
 #endif
 
     // 响应解析状态
@@ -723,6 +759,9 @@ public:
      *        临时文件里存着本段与其他段的已落盘数据，截断即销毁断点）
      * @param tls_session TLS 会话（HTTPS 时必传——响应体必须经
      *        SSL_read 解密，对 TLS 连接做明文 recv 只能读到密文）
+     * @param proxy_tls_session HTTPS 代理隧道承载时的代理侧会话
+     *        （tls_session 为隧道内的目标会话，SSL_read 前后须经理
+     *        会话泵运密文；与 tls_session 相同或为空 = 无需泵）
      */
     HttpDownloadCommand(TaskId task_id,
                         int socket_fd,
@@ -737,7 +776,8 @@ public:
                         std::string source_url = {}
 #ifdef FALCON_ENABLE_OPENSSL
                         ,
-                        HttpTlsSessionPtr tls_session = {}
+                        HttpTlsSessionPtr tls_session = {},
+                        HttpTlsSessionPtr proxy_tls_session = {}
 #endif
                         );
 
@@ -881,6 +921,11 @@ private:
 #ifdef FALCON_ENABLE_OPENSSL
     // TLS 会话（HTTPS 下载体必须经 SSL_read 解密；与初始连接共享）
     HttpTlsSessionPtr tls_session_;
+    /// HTTPS 代理隧道承载时的代理侧会话（与 tls_session 不同 = 隧道
+    /// 模式，SSL_read 前后须经代理会话泵运密文）
+    HttpTlsSessionPtr proxy_tls_session_;
+    /// 泵的入站暂存（代理密文 → origin rbio 前的缓冲，跨重入保留）
+    std::string read_outbox_;
 #endif
     enum class ChunkParseState {
         READ_SIZE,      // 读取块大小

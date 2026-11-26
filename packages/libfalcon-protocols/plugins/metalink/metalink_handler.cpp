@@ -702,8 +702,8 @@ bool MetalinkHandler::v2_multi_source_gate(const DownloadOptions& options,
     if (!V2EngineHost::instance().v2_http_enabled()) return false;
 
     // 2. curl 专属能力 → 回退(本地复刻 V2 adapter 的回退表:同一
-    //    任务的能力必须两侧等价,HTTPS 代理/socks4 V2 判 Unsupported;
-    //    socks5 已原生化)
+    //    任务的能力必须两侧等价,socks4 V2 判 Unsupported;
+    //    socks5/HTTPS 代理已原生化)
     if (parse_http_proxy(options).kind == HttpProxyKind::Unsupported) {
         return false;
     }
