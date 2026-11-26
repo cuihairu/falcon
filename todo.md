@@ -307,7 +307,7 @@ libs/
 
 - [x] LAY-001 [P1] 拆分 `libs/libfalcon-protocols/src/commands/http_commands.cpp`（3640 行）——HTTP 多连接分段、TLS/代理、文件分配与 V2 重试命令混合在单 TU（`libs/libfalcon-protocols/src/commands/http_commands.cpp:61`）（commit `c7c23ae`）。
 - [x] LAY-002 [P1] 拆分 `libs/falcon-daemon/src/rpc/json_rpc_server.cpp`（1979 行 → 967 行）——aria2 方法分发 `dispatch_rpc` 拆到独立 TU，共享内部辅助（序列化/鉴权/分页）落 `json_rpc_server_detail.hpp`（commit `bfbabba`；build-desktop 全量 ctest 3219/3219）。
-- [ ] LAY-003 [P1] 拆分 `apps/desktop/src/pages/download_page.cpp`（1666 行）——任务表格/网格视图、筛选、操作菜单与 QSettings 记忆集中（`apps/desktop/src/pages/download_page.cpp:81`、`apps/desktop/src/pages/download_page.cpp:847`）。
+- [x] LAY-003 [P1] 拆分 `apps/desktop/src/pages/download_page.cpp`（1666 行）——任务表格/网格视图、筛选、操作菜单与 QSettings 记忆集中（`apps/desktop/src/pages/download_page.cpp:81`、`apps/desktop/src/pages/download_page.cpp:847`）（commit `9b9dbc3`；desktop 8 二进制 113/113）。
 - [ ] LAY-004 [P1] 拆分 `apps/desktop/src/main_window.cpp`（1372 行）——窗口装配、侧栏/页面创建、托盘、IPC、设置与 40+ 信号槽共存（`apps/desktop/src/main_window.cpp:187`、`apps/desktop/src/main_window.cpp:935`）。
 - [ ] LAY-005 [P1] 拆分 `apps/desktop/src/pages/settings_page.cpp`（1346 行）——设置项 UI 与 engines.json 编辑/校验/持久化混合同页（`apps/desktop/src/pages/settings_page.cpp:791`、`apps/desktop/src/pages/settings_page.cpp:910`）。
 - [ ] LAY-006 [P1] 拆分 `libs/libfalcon-protocols/src/incremental_download.cpp`（1246 行）——增量差分/全量回退/哈希校验与流控同文件（`libs/libfalcon-protocols/src/incremental_download.cpp:1055`）。
