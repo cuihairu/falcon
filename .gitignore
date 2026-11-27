@@ -3,6 +3,8 @@ build/
 build-*/
 */build/
 *.build/
+.kbengine/
+pyringhtconfig.json
 
 # CMake generated files
 CMakeCache.txt
