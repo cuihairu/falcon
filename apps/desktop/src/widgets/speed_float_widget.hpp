@@ -79,7 +79,10 @@ public:
     void set_opacity_percent(int percent);
     /// 鼠标穿透:开启后悬浮窗对点击完全透明(经设置页开关关闭)
     void set_click_through(bool enable);
+    /// 原型 ui-next 两态：true=迷你胶囊(只显示速度)，false=详情卡片
+    void setCompact(bool compact);
 
+    bool is_compact() const { return compact_; }
     bool shows_active_tasks() const { return show_active_tasks_; }
     bool shows_total_progress() const { return show_total_progress_; }
     SizePreset size_preset() const { return size_preset_; }
@@ -131,6 +134,7 @@ private:
     SizePreset size_preset_ = SizePreset::Small;   // B21①: 默认紧凑档
     int opacity_percent_ = 90;
     bool click_through_ = false;
+    bool compact_ = false;   // 胶囊态（原型两态之一）
     bool dragging_ = false;
     QPoint drag_offset_;
 };

@@ -12,6 +12,7 @@
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QGroupBox>
 #include <QHeaderView>
 #include <QMessageBox>
 #include <QClipboard>
@@ -20,6 +21,7 @@
 #include <QMenu>
 #include <QProgressBar>
 #include <QApplication>
+#include <QStringList>
 #include <QStyle>
 
 namespace falcon::desktop {
@@ -59,6 +61,10 @@ void DiscoveryPage::setup_ui()
 
     filter_bar_ = create_filter_bar();
     main_layout->addWidget(filter_bar_);
+
+    // 已启用资源站（默认折叠）：原型 ui-next 要求展示引擎与其延迟
+    engines_box_ = create_engines_box();
+    main_layout->addWidget(engines_box_);
 
     // 创建结果表格
     create_results_table();
@@ -163,6 +169,68 @@ QWidget* DiscoveryPage::create_filter_bar()
     return filter_bar;
 }
 
+QGroupBox* DiscoveryPage::create_engines_box()
+{
+    // 可折叠区：标题实时显示「已启用资源站 · N 个站点 · 搜索时并发请求」
+    auto* box = new QGroupBox(this);
+    box->setCheckable(true);
+    box->setChecked(false);  // 默认折叠（原型行为）
+    box->setObjectName("enginesBox");
+
+    auto* box_layout = new QVBoxLayout(box);
+    box_layout->setContentsMargins(12, 8, 12, 10);
+    box_layout->setSpacing(6);
+
+    engines_detail_ = new QLabel(box);
+    engines_detail_->setWordWrap(true);
+    engines_detail_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    box_layout->addWidget(engines_detail_);
+
+    auto* manage_btn = new QPushButton(tr("管理资源站"), box);
+    manage_btn->setObjectName("toolButton");
+    manage_btn->setCursor(Qt::PointingHandCursor);
+    connect(manage_btn, &QPushButton::clicked, this,
+            &DiscoveryPage::manage_engines_requested);
+    box_layout->addWidget(manage_btn, 0, Qt::AlignLeft);
+
+    // 先设为成员再刷新（refresh 依赖 engines_box_ 非空）
+    engines_box_ = box;
+    refresh_engines_box();
+    return box;
+}
+
+void DiscoveryPage::refresh_engines_box()
+{
+    if (!engines_box_ || !engines_detail_) {
+        return;
+    }
+    SearchEngineCatalog catalog;
+    const bool loaded = catalog.load();
+    const auto& all = catalog.engines();
+    int enabled = 0;
+    for (const auto& engine : all) {
+        if (engine.enabled) ++enabled;
+    }
+    engines_box_->setTitle(loaded
+        ? tr("已启用资源站 · %1 个站点 · 搜索时并发请求").arg(enabled)
+        : tr("已启用资源站 · 配置不可读"));
+
+    if (!loaded || enabled == 0) {
+        engines_detail_->setText(tr("未启用任何资源站。请在设置页「资源搜索」组添加并启用搜索引擎。"));
+        return;
+    }
+    QStringList lines;
+    lines << tr("来自 engines.json · 搜索时并发请求以下站点：");
+    for (const auto& engine : all) {
+        if (!engine.enabled) continue;
+        const QString name = QString::fromStdString(engine.name);
+        const QString url = QString::fromStdString(engine.base_url);
+        const QString delay = QString::number(engine.delay_ms) + tr(" ms");
+        lines << QStringLiteral("• %1 — %2 · %3").arg(name, url, delay);
+    }
+    engines_detail_->setText(lines.join(QLatin1Char('\n')));
+}
+
 void DiscoveryPage::create_results_table()
 {
     results_table_ = new QTableWidget(this);
@@ -219,6 +287,7 @@ QWidget* DiscoveryPage::create_status_bar()
 
 void DiscoveryPage::perform_search()
 {
+    refresh_engines_box();  // 设置页可能改过引擎启停，搜索前同步折叠区
     QString keyword = search_input_->text().trimmed();
     if (keyword.isEmpty()) {
         QMessageBox::warning(this, tr("提示"), tr("请输入关键词。"));

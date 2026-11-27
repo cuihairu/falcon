@@ -1,28 +1,78 @@
 /**
  * @file download_page_grid.cpp
- * @brief DownloadPage grid view implementation
+ * @brief Download Page Implementation (Xunlei-style)
+ * @author Falcon Team
+ * @date 2026-04-15
  */
 
 #include "download_page.hpp"
-#include "download_page_detail.hpp"
 #include "services/task_order.hpp"
+#include "services/task_visibility.hpp"
 #include "utils/icon_utils.hpp"
+#include "widgets/task_table_widget.hpp"
 
+#include <QButtonGroup>
+#include <QHeaderView>
+#include <QProgressBar>
+#include <QStyle>
+#include <QMenu>
 #include <QAction>
+#include <QKeySequence>
+#include <QDesktopServices>
 #include <QApplication>
 #include <QClipboard>
-#include <QDesktopServices>
-#include <QFileInfo>
-#include <QGridLayout>
-#include <QMenu>
-#include <QProgressBar>
 #include <QScrollArea>
+#include <QFrame>
+#include <QFileInfo>
+#include <QUrl>
+#include <QSet>
+#include <QStringList>
+#include <QSettings>
+#include <QMessageBox>
+#include <QPushButton>
 #include <QToolButton>
-
 #include <algorithm>
+#include <limits>
 
-using namespace falcon::desktop;
+namespace falcon::desktop {
 
+namespace {
+constexpr int kRowHeight = 56;
+constexpr int kSummaryCardWidth = 168;
+// 紧凑横条标准（用户 bug 反馈）：hero 与统计卡固定高度，纵向空白不随窗口拉伸
+constexpr int kHeroHeight = 78;
+constexpr int kSummaryCardHeight = 72;
+// 空态卡最小展示高度（用户 bug 反馈：自然高度 ~90px 塌缩挤压，给足 ≥200px）
+constexpr int kEmptyStateMinHeight = 232;
+
+// 表格列索引（与 create_task_table 的表头顺序对齐）：
+// 下载中视图隐藏「做种」（本视图恒空），已完成视图隐藏「进度」「速度」（恒 100%/—）
+// 追加列 kColExtra：下载中显示「来源」（URL 派生域名），已完成显示「保存位置」，
+// 列名与内容随视图切换；追加在末尾保证原 0-6 列索引不变，拖拽/右键/持久化不受影响。
+constexpr int kColFilename = 0;
+constexpr int kColProgress = 1;
+constexpr int kColSize = 2;
+constexpr int kColSpeed = 3;
+constexpr int kColStatus = 4;
+constexpr int kColSeed = 5;
+constexpr int kColAction = 6;
+constexpr int kColExtra = 7;
+
+// 快照状态 → 界面中文文案（引擎状态名不外露）
+QString status_display_text(falcon::TaskStatus status)
+{
+    switch (status) {
+        case falcon::TaskStatus::Pending:    return QObject::tr("等待中");
+        case falcon::TaskStatus::Preparing:  return QObject::tr("准备中");
+        case falcon::TaskStatus::Downloading: return QObject::tr("下载中");
+        case falcon::TaskStatus::Paused:     return QObject::tr("已暂停");
+        case falcon::TaskStatus::Completed:  return QObject::tr("已完成");
+        case falcon::TaskStatus::Failed:     return QObject::tr("失败");
+        case falcon::TaskStatus::Cancelled:  return QObject::tr("已取消");
+    }
+    return QObject::tr("未知");
+}
+} // namespace
 
 void DownloadPage::create_task_grid()
 {
@@ -55,6 +105,7 @@ void DownloadPage::create_task_grid()
     connect(grid_widget_, &QWidget::customContextMenuRequested,
             this, &DownloadPage::show_grid_context_menu);
 }
+
 void DownloadPage::set_display_style(TaskDisplayStyle style)
 {
     if (display_style_ == style) {
@@ -76,6 +127,7 @@ void DownloadPage::set_display_style(TaskDisplayStyle style)
     // 手动切换记忆：MainWindow 落 QSettings 并同步设置页（首次/无记录默认卡片）
     emit display_style_changed(display_style_ == TaskDisplayStyle::Grid);
 }
+
 void DownloadPage::set_text_filter(const QString& text)
 {
     if (text_filter_ == text) {
@@ -87,6 +139,7 @@ void DownloadPage::set_text_filter(const QString& text)
     // 网格视图在其尾部统一 sync_task_grid
     rerender();
 }
+
 void DownloadPage::toggle_display_style()
 {
     set_display_style(display_style_ == TaskDisplayStyle::Table
@@ -98,6 +151,7 @@ void DownloadPage::on_style_toggle_clicked()
 {
     toggle_display_style();
 }
+
 void DownloadPage::show_grid_context_menu(const QPoint& pos)
 {
     // 找到点击的任务卡片
@@ -135,11 +189,13 @@ void DownloadPage::show_grid_context_menu(const QPoint& pos)
     if (status == falcon::TaskStatus::Downloading ||
         status == falcon::TaskStatus::Preparing) {
         auto* pause_action = menu.addAction(tr("暂停"));
+        pause_action->setShortcut(QKeySequence(QStringLiteral("Ctrl+P")));
         connect(pause_action, &QAction::triggered, this,
                 [this, id = snapshot.id]() { emit pause_requested(id); });
     } else if (status == falcon::TaskStatus::Paused ||
                status == falcon::TaskStatus::Failed) {
         auto* resume_action = menu.addAction(tr("继续"));
+        resume_action->setShortcut(QKeySequence(QStringLiteral("Ctrl+P")));
         connect(resume_action, &QAction::triggered, this,
                 [this, id = snapshot.id]() { emit resume_requested(id); });
     }
@@ -158,12 +214,14 @@ void DownloadPage::show_grid_context_menu(const QPoint& pos)
     const QString save_path_for_open = record->save_path;
     if (snapshot.status == falcon::TaskStatus::Completed) {
         auto* open_file_action = menu.addAction(tr("打开文件"));
+        open_file_action->setShortcut(QKeySequence(QStringLiteral("Return")));
         connect(open_file_action, &QAction::triggered, this,
                 [this, save_path_for_open]() {
                     open_completed_target(save_path_for_open, false);
                 });
     }
     auto* open_dir_action = menu.addAction(tr("打开文件夹"));
+    open_dir_action->setShortcut(QKeySequence(QStringLiteral("Ctrl+E")));
     connect(open_dir_action, &QAction::triggered, this,
             [this, save_path_for_open]() {
                 open_completed_target(save_path_for_open, true);
@@ -171,8 +229,51 @@ void DownloadPage::show_grid_context_menu(const QPoint& pos)
 
     const QString url_for_copy = QString::fromStdString(record->snapshot.url);
     auto* copy_url_action = menu.addAction(tr("复制下载链接"));
+    copy_url_action->setShortcut(QKeySequence(QStringLiteral("Ctrl+C")));
     connect(copy_url_action, &QAction::triggered, this, [url_for_copy]() {
         QApplication::clipboard()->setText(url_for_copy);
+    });
+
+    // ui-next 屏3/25（网格视图）：文件详情 / 收藏 / 添加到云盘 / 移动文件到 / 彻底删除
+    const falcon::daemon::rpc::TaskSnapshot snapshot_for_menu = snapshot;
+    const auto menu_task_id_for_detail = snapshot.id;
+
+    auto* detail_action = menu.addAction(tr("文件详情"));
+    connect(detail_action, &QAction::triggered, this, [this, snapshot_for_menu]() {
+        emit file_details_requested(snapshot_for_menu);
+    });
+
+    auto* favorite_action = menu.addAction(tr("收藏至收藏夹"));
+    connect(favorite_action, &QAction::triggered, this, [this, save_path_for_open]() {
+        toggle_favorite(save_path_for_open);
+    });
+
+    auto* add_cloud_action = menu.addAction(tr("添加到云盘"));
+    connect(add_cloud_action, &QAction::triggered, this, [this]() {
+        emit add_to_cloud_requested();
+    });
+
+    // 移动文件到：子菜单列预设目录（真实复制文件到目标目录，不破坏任务记录）
+    auto* move_menu = menu.addMenu(tr("复制文件到"));
+    const QString current_dir = QFileInfo(record->save_path).absolutePath();
+    const QStringList dirs = { current_dir, current_dir + QStringLiteral("/Software"),
+                               current_dir + QStringLiteral("/ISO") };
+    for (const QString& dir : dirs) {
+        auto* dir_action = move_menu->addAction(dir);
+        connect(dir_action, &QAction::triggered, this, [this, save_path_for_open, dir]() {
+            copy_file_to(save_path_for_open, dir);
+        });
+    }
+
+    auto* purge_action = menu.addAction(tr("彻底删除"));
+    purge_action->setEnabled(view_mode_ == DownloadViewMode::Completed);
+    connect(purge_action, &QAction::triggered, this, [this, menu_task_id_for_detail]() {
+        const auto answer = QMessageBox::warning(
+            this, tr("彻底删除"), tr("彻底删除不可恢复，确认移除该任务记录？"),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (answer == QMessageBox::Yes) {
+            emit remove_task_requested(static_cast<falcon::TaskId>(menu_task_id_for_detail));
+        }
     });
 
     menu.addSeparator();
@@ -206,6 +307,7 @@ void DownloadPage::show_grid_context_menu(const QPoint& pos)
 
     menu.exec(grid_widget_->mapToGlobal(pos));
 }
+
 void DownloadPage::sync_task_grid()
 {
     // 清空现有网格内容
@@ -251,6 +353,7 @@ void DownloadPage::sync_task_grid()
         }
     }
 }
+
 QWidget* DownloadPage::create_task_card(const TaskRecord& record)
 {
     const auto& snap = record.snapshot;
@@ -347,3 +450,5 @@ QWidget* DownloadPage::create_task_card(const TaskRecord& record)
 
     return card;
 }
+
+} // namespace falcon::desktop

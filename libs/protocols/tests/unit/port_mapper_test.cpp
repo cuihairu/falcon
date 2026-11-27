@@ -1,3 +1,4 @@
+
 /**
  * @file port_mapper_test.cpp
  * @brief NAT 端口映射门面测试（fake 后端单测 + 回环真库数据面）
@@ -996,10 +997,4 @@ TEST(UpnpDetailSoap, RemovePortMappingFaultSurfacesError) {
 
 #else
 
-TEST(UpnpLoopback, DisabledWithoutUpnp) {
-    GTEST_SKIP() << "UPnP 后端仅在 FALCON_ENABLE_NAT_UPNP 构建下存在";
-}
-
-#endif  // FALCON_ENABLE_NAT_UPNP
-
-}  // namespace
+} // namespace

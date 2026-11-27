@@ -209,6 +209,20 @@ void SpeedFloatWidget::set_click_through(bool enable)
     setCursor(enable ? Qt::ArrowCursor : Qt::SizeAllCursor);
 }
 
+void SpeedFloatWidget::setCompact(bool compact)
+{
+    compact_ = compact;
+    // 胶囊态：只保留速度标签，其余控件隐藏；布局自动收缩，窗口按内容重算高度。
+    // 详情态：恢复所有控件（各自显示开关仍由 show_active_tasks_ 等控制）。
+    if (name_label_) name_label_->setVisible(!compact);
+    if (pause_button_) pause_button_->setVisible(!compact && preview_.has_task);
+    if (progress_bar_) progress_bar_->setVisible(!compact && show_total_progress_);
+    if (percent_label_) percent_label_->setVisible(!compact && show_total_progress_);
+    if (task_count_label_) task_count_label_->setVisible(!compact && show_active_tasks_);
+    refresh_display();
+    adjustSize();  // 与 set_size_preset 一致：高度交还布局按内容收缩/展开
+}
+
 void SpeedFloatWidget::refresh_display()
 {
     // 标题行:预览任务文件名(省略),无任务显示占位
@@ -231,8 +245,9 @@ void SpeedFloatWidget::refresh_display()
         ? preview_.progress
         : stats_.overall_progress;
     const bool has_progress = preview_.has_task || progress >= 0.0;
-    progress_bar_->setVisible(show_total_progress_ && has_progress);
-    percent_label_->setVisible(show_total_progress_ && has_progress);
+    const bool show_progress = !compact_ && show_total_progress_ && has_progress;
+    progress_bar_->setVisible(show_progress);
+    percent_label_->setVisible(show_progress);
     if (has_progress) {
         const int pct = qRound(qBound(0.0, progress, 1.0) * 100.0);
         progress_bar_->setValue(pct);
@@ -242,7 +257,12 @@ void SpeedFloatWidget::refresh_display()
     // 元信息行:速度 | 任务数(两格,各自独立布局约束)
     speed_label_->setText(tr("⬇ %1").arg(format_speed(stats_.download_speed)));
     task_count_label_->setText(tr("%1 个任务").arg(stats_.active_tasks));
-    task_count_label_->setVisible(show_active_tasks_);
+    task_count_label_->setVisible(!compact_ && show_active_tasks_);
+    // 详情态下文件名/暂停钮随任务存在性恢复（setCompact(true) 时已隐藏）
+    if (!compact_) {
+        name_label_->setVisible(true);
+        pause_button_->setVisible(preview_.has_task);
+    }
 }
 
 void SpeedFloatWidget::refresh_name_elide()
@@ -310,6 +330,13 @@ void SpeedFloatWidget::contextMenuEvent(QContextMenuEvent* event)
     open_dir->setEnabled(!preview_.directory.isEmpty());
     connect(open_dir, &QAction::triggered, this, [this]() {
         QDesktopServices::openUrl(QUrl::fromLocalFile(preview_.directory));
+    });
+
+    // 原型 ui-next 屏24：胶囊/详情两态切换
+    QAction* compact_action = menu.addAction(
+        compact_ ? tr("展开详情") : tr("收起为胶囊"));
+    connect(compact_action, &QAction::triggered, this, [this]() {
+        setCompact(!compact_);
     });
 
     menu.addSeparator();

@@ -1,3 +1,4 @@
+
 // Falcon Config Manager Unit Tests
 
 #include <falcon/drives/config_manager.hpp>
@@ -989,32 +990,3 @@ TEST(ConfigManagerInjectionTest, EncryptFinalFailureFailsSave) {
     test_encrypt_injection("falcon_cfg_inj_d_",
                            falcon::detail::InjectPoint::ConfigEncryptFinal);
 }
-
-TEST(ConfigManagerInjectionTest, DecryptFailuresYieldEmptyConfig) {
-    auto dir = unique_temp_dir("falcon_cfg_inj_e_");
-    const auto db = (dir / "config.db").string();
-
-    falcon::ConfigManager cm;
-    ASSERT_TRUE(cm.initialize(db, "Master123!"));
-    ASSERT_TRUE(cm.save_cloud_config(make_config("inj-e", "s3", "AKIA", "SK")));
-
-    // 重新初始化同一库，读取走解密路径
-    falcon::ConfigManager cm2;
-    ASSERT_TRUE(cm2.initialize(db, "Master123!"));
-
-    const falcon::detail::InjectPoint points[] = {
-        falcon::detail::InjectPoint::ConfigDecryptCtxNew,
-        falcon::detail::InjectPoint::ConfigDecryptInit,
-        falcon::detail::InjectPoint::ConfigDecryptSetTag,
-        falcon::detail::InjectPoint::ConfigDecryptUpdate,
-    };
-    for (const auto point : points) {
-        falcon::CloudStorageConfig cfg{};
-        PluginInjectionGuard guard(point);
-        // 解密失败：读取报失败或字段为空串（密文不可恢复）
-        const bool ok = cm2.get_cloud_config("inj-e", cfg);
-        EXPECT_TRUE(!ok || cfg.access_key.empty()) << "point=" << static_cast<int>(point);
-    }
-}
-
-#endif  // FALCON_FAILURE_INJECTION

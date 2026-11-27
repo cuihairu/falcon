@@ -12,6 +12,7 @@
 #include <QPushButton>
 #include <QTableWidget>
 #include <QComboBox>
+#include <QGroupBox>
 #include <QLabel>
 #include <QTabWidget>
 #include <QSharedPointer>
@@ -38,6 +39,8 @@ public:
 signals:
     void configured_download_requested(const QString& url);
     void direct_download_requested(const QString& url, bool start_immediately);
+    /// 「管理资源站」→ 请求宿主切到设置页的资源搜索组
+    void manage_engines_requested();
 
 private slots:
     // 执行搜索
@@ -74,6 +77,8 @@ private:
     QWidget* create_page_hero();
     QWidget* create_search_bar();
     QWidget* create_filter_bar();
+    QGroupBox* create_engines_box();   // 已启用资源站（可折叠）
+    void refresh_engines_box();        // 从 engines.json 刷新站点清单
     void create_results_table();
     QWidget* create_status_bar();
 
@@ -88,6 +93,8 @@ private:
     // 控件
     QWidget* search_bar_;
     QWidget* filter_bar_;
+    QGroupBox* engines_box_ = nullptr;   // 已启用资源站折叠区
+    QLabel* engines_detail_ = nullptr;
 
     // 搜索栏
     QLineEdit* search_input_;

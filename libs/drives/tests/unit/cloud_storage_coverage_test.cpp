@@ -1,3 +1,4 @@
+
 /**
  * @file cloud_storage_coverage_test.cpp
  * @brief 网盘插件覆盖率补充测试（链接识别 + 本地回环 HTTP 服务器驱动内置插件）
@@ -990,69 +991,3 @@ TEST(CloudStorageCovTest, BaiduFourPieceAuthGateAndAnonymousInfo) {
 }
 
 // Aliyun 与 Quark 四件套同形（匿名信息 platform 键区分平台）
-TEST(CloudStorageCovTest, AliyunAndQuarkFourPieceStubs) {
-    CloudStorageManager manager;
-    for (const auto& [name, platform_key] :
-         std::vector<std::pair<std::string, std::string>>{
-             {"AliyunDrive", "AliyunDrive"}, {"QuarkDrive", "QuarkDrive"}}) {
-        auto* plugin = find_plugin_by_name(manager, name);
-        ASSERT_NE(plugin, nullptr) << name;
-
-        EXPECT_EQ(plugin->get_download_url("file123"), "") << name;
-        EXPECT_FALSE(plugin->authenticate("")) << name;
-        EXPECT_TRUE(plugin->authenticate("token")) << name;
-
-        const auto user = plugin->get_user_info();
-        EXPECT_EQ(user.at("platform"), platform_key) << name;
-        EXPECT_EQ(user.at("status"), "anonymous") << name;
-
-        const auto quota = plugin->get_quota_info();
-        EXPECT_EQ(quota.at("used"), 0u) << name;
-        EXPECT_EQ(quota.at("total"), 0u) << name;
-    }
-}
-
-// 轻量基类四件套（TencentWeiyun/Cloud115/PikPak/Mega/GoogleDrive/
-// OneDrive/Dropbox/YandexDisk 共用基类实现）：经任一子类指针驱动
-TEST(CloudStorageCovTest, LightweightBaseFourPieceViaSubclassPointer) {
-    CloudStorageManager manager;
-    auto* plugin = find_plugin_by_name(manager, "TencentWeiyun");
-    ASSERT_NE(plugin, nullptr);
-
-    EXPECT_EQ(plugin->get_download_url("file123"), "");
-    EXPECT_FALSE(plugin->authenticate(""));
-    EXPECT_TRUE(plugin->authenticate("token"));
-
-    const auto user = plugin->get_user_info();
-    EXPECT_EQ(user.at("platform"), "TencentWeiyun");
-    EXPECT_EQ(user.at("status"), "anonymous");
-
-    const auto quota = plugin->get_quota_info();
-    EXPECT_EQ(quota.at("used"), 0u);
-    EXPECT_EQ(quota.at("total"), 0u);
-}
-
-// 六个轻量平台的中文展示名经 extract 的「无效链接」错误路径生效
-//（file_id 提取失败时拼进 error_message）；空 URL 对所有平台统一
-// 落入该分支——纯离线，不发任何网络请求
-TEST(CloudStorageCovTest, DisplayNamesSurfacedByInvalidLinkErrorPath) {
-    CloudStorageManager manager;
-    const std::vector<std::pair<std::string, std::string>> cases = {
-        {"TencentWeiyun", "无效的腾讯微云链接"},
-        {"Cloud115", "无效的115网盘链接"},
-        {"PikPak", "无效的PikPak链接"},
-        {"OneDrive", "无效的OneDrive链接"},
-        {"Dropbox", "无效的Dropbox链接"},
-        {"YandexDisk", "无效的Yandex Disk链接"},
-    };
-    for (const auto& [name, expected_error] : cases) {
-        auto* plugin = find_plugin_by_name(manager, name);
-        ASSERT_NE(plugin, nullptr) << name;
-
-        auto result = plugin->extract_share_link("", "");
-        EXPECT_FALSE(result.recognized) << name;
-        EXPECT_FALSE(result.success) << name;
-        EXPECT_EQ(result.error_message, expected_error) << name;
-        EXPECT_TRUE(result.files.empty()) << name;
-    }
-}

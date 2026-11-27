@@ -95,6 +95,10 @@ signals:
     /// （B20 双向联动：页头分段切换器 → 侧栏方向；侧栏 → 页签方向
     /// 走 downloadingTabClicked/completedTabClicked 既有接线）
     void view_mode_changed(DownloadViewMode mode);
+    /// 右键「文件详情」→ MainWindow 弹 TaskDetailDialog（真实快照数据）
+    void file_details_requested(const falcon::daemon::rpc::TaskSnapshot& snapshot);
+    /// 右键「添加到云盘」→ MainWindow 切到云盘页
+    void add_to_cloud_requested();
 
 private slots:
     void on_new_task_clicked();
@@ -151,6 +155,10 @@ private:
     // B18: 打开成品文件/所在文件夹；不存在或被移动时明确提示不静默
     void open_completed_target(const QString& save_path, bool open_folder);
 
+    // ui-next 右键能力：收藏夹（QSettings 本地持久化）/ 复制文件到目录（不破坏任务记录）
+    void toggle_favorite(const QString& save_path);
+    void copy_file_to(const QString& save_path, const QString& target_dir);
+
     const TaskRecord* record_by_id(qulonglong key) const;
     const TaskRecord* record_from_sender() const;
     const TaskRecord* selected_record() const;
@@ -169,6 +177,8 @@ private:
     static QString seed_column_tooltip(const falcon::daemon::rpc::TaskSnapshot& snapshot);
     // 活动任务才显示速度,暂停/终态显示 "—"(0 B/s 是无信息量噪音)
     static QString speed_display_text(const falcon::daemon::rpc::TaskSnapshot& snapshot);
+    // 追加列：下载中=来源域名(URL host)，已完成=保存位置目录(output_path 父目录)
+    QString extra_column_text(const falcon::daemon::rpc::TaskSnapshot& snapshot) const;
 
     // 当前视图模式
     DownloadViewMode view_mode_;

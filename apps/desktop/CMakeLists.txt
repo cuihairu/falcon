@@ -40,30 +40,33 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(SOURCES
     src/main.cpp
     src/main_window.cpp
-    src/main_window_frameless.cpp
-    src/main_window_ipc.cpp
-    src/main_window_service.cpp
-    src/main_window_settings.cpp
-    src/main_window_tray.cpp
+    src/main_window_runtime.cpp
     src/widgets/top_bar.cpp
     src/widgets/status_bar.cpp
     src/widgets/speed_float_widget.cpp
     src/widgets/task_table_widget.cpp
+    src/widgets/proto_widgets.cpp
+    src/widgets/proto_page.cpp
     src/navigation/sidebar.cpp
     src/pages/download_page.cpp
-    src/pages/download_page_table.cpp
+    src/pages/download_page_actions.cpp
     src/pages/download_page_grid.cpp
-    src/pages/download_page_formatting.cpp
     src/pages/cloud_page.cpp
+    src/pages/cloud_page_aux.cpp
     src/pages/discovery_page.cpp
     src/pages/trash_page.cpp
     src/pages/settings_page.cpp
+    src/pages/settings_page_sections.cpp
+    src/pages/device_pages.cpp
+    src/pages/social_pages.cpp
     src/dialogs/add_download_dialog.cpp
     src/dialogs/search_engine_dialog.cpp
+    src/dialogs/flow_dialogs.cpp
     src/utils/url_detector.cpp
     src/utils/clipboard_monitor.cpp
     src/utils/theme_manager.cpp
     src/utils/icon_utils.cpp
+    src/utils/qr_code.cpp
     src/services/storage_service.cpp
     src/services/search_service.cpp
     src/services/search_engine_catalog.cpp
@@ -71,6 +74,8 @@ set(SOURCES
     src/services/download_service.cpp
     src/services/task_order.cpp
     src/services/trash_store.cpp
+    src/services/local_store.cpp
+    src/services/local_store_social.cpp
     src/services/update_checker.cpp
     src/ipc/http_server.cpp
 )
@@ -82,14 +87,19 @@ set(HEADERS
     src/widgets/status_bar.hpp
     src/widgets/speed_float_widget.hpp
     src/widgets/task_table_widget.hpp
+    src/widgets/proto_widgets.hpp
+    src/widgets/proto_page.hpp
     src/navigation/sidebar.hpp
     src/pages/download_page.hpp
     src/pages/cloud_page.hpp
     src/pages/discovery_page.hpp
     src/pages/trash_page.hpp
     src/pages/settings_page.hpp
+    src/pages/device_pages.hpp
+    src/pages/social_pages.hpp
     src/dialogs/add_download_dialog.hpp
     src/dialogs/search_engine_dialog.hpp
+    src/dialogs/flow_dialogs.hpp
     src/utils/url_detector.hpp
     src/utils/clipboard_monitor.hpp
     src/utils/theme_manager.hpp
@@ -102,6 +112,7 @@ set(HEADERS
     src/services/download_service.hpp
     src/services/task_order.hpp
     src/services/trash_store.hpp
+    src/services/local_store.hpp
     src/services/update_checker.hpp
     src/ipc/http_server.hpp
 )

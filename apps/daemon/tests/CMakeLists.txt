@@ -20,6 +20,7 @@ add_executable(falcon_daemon_rpc_tests
     json_rpc_server_test.cpp
     websocket_test.cpp
     mcp_server_test.cpp
+    mcp_server_test_part2.cpp
 )
 
 # MCP stdio 薄壳（桥层 fake 单测 + 真 curl 回环 e2e）：
@@ -71,6 +72,7 @@ gtest_discover_tests(falcon_daemon_config_tests)
 # 网关经 SwarmAnnouncerGateway 接缝替换为 fake，无需 CURL/swarmd client）
 add_executable(falcon_daemon_swarm_announcer_tests
     swarm_announcer_test.cpp
+    swarm_announcer_test_part2.cpp
     ../src/daemon/swarm_announcer.cpp
 )
 
@@ -175,6 +177,7 @@ add_executable(falcon_daemon_rpc_client_tests
     json_rpc_client_test.cpp
     aria2_snapshots_test.cpp
     websocket_rpc_client_test.cpp
+    websocket_rpc_client_test_part2.cpp
 )
 
 target_link_libraries(falcon_daemon_rpc_client_tests
@@ -205,6 +208,8 @@ find_package(Threads REQUIRED)
 # Extended JSON-RPC server coverage: HTTP layer + every RPC method.
 add_executable(falcon_daemon_rpc_coverage_tests
     json_rpc_server_coverage_test.cpp
+    json_rpc_server_coverage_test_part2.cpp
+    json_rpc_server_coverage_test_part3.cpp
 )
 
 target_link_libraries(falcon_daemon_rpc_coverage_tests
@@ -256,6 +261,7 @@ if(NOT WIN32)
     # argument sets and assert exit codes / output (POSIX only).
     add_executable(falcon_daemon_main_tests
         main_integration_test.cpp
+        main_integration_test_part2.cpp
         mcp_main_integration_test.cpp
     )
 
@@ -291,6 +297,7 @@ if(NOT WIN32)
     # （与 FALCON_HAS_SWARM 补链同款形态）。宏缺席时编译为单 skip 占位。
     add_executable(falcon_daemon_swarm_e2e_tests
         swarm_daemon_e2e_test.cpp
+        swarm_daemon_e2e_test_part2.cpp
     )
 
     target_link_libraries(falcon_daemon_swarm_e2e_tests

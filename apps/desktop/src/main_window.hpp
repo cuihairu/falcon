@@ -39,6 +39,17 @@ class UpdateChecker;
 struct UrlInfo;
 struct IncomingDownloadRequest;
 
+namespace proto {
+class CrossDevicePage;
+class NasNodesPage;
+class AirdropPage;
+class AccountPage;
+class FriendsPage;
+class ShareGroupsPage;
+class ShareRecordsPage;
+class NasWebPage;
+}
+
 /**
  * @brief 主窗口类
  *
@@ -118,6 +129,15 @@ private:
     void setup_speed_float();
     void ensure_download_service();
     void show_add_download_dialog(UrlInfo url_info, const IncomingDownloadRequest* request_context);
+    /** 数据变化后刷新全部本地数据页（设备域 + 社交域） */
+    void refresh_proto_pages();
+
+    // ui-next 弹层入口（本地闭环：数据落 LocalStore）
+    void open_show_code_dialog();
+    void open_pair_code_dialog();
+    void open_add_node_dialog();
+    void open_login_dialog();
+    void open_edit_profile_dialog();
     bool add_download_task(const QString& url, bool start_immediately);
     void load_settings();
     void save_settings() const;
@@ -178,13 +198,22 @@ private:
     // 边缘缩放光标当前是否由本类设置(true 才在离开边缘带时恢复箭头)
     bool resize_cursor_active_ = false;
 
-    // 页面索引
+    // 页面索引（须与 create_pages 中 addWidget 顺序一致）
     enum PageIndex {
         PAGE_DOWNLOAD = 0,
         PAGE_CLOUD,
         PAGE_DISCOVERY,
         PAGE_TRASH,
         PAGE_SETTINGS,
+        // ui-next 新增页面
+        PAGE_CROSS_DEVICE,
+        PAGE_NAS_NODES,
+        PAGE_AIRDROP,
+        PAGE_NAS_WEB,
+        PAGE_ACCOUNT,
+        PAGE_FRIENDS,
+        PAGE_SHARE_GROUPS,
+        PAGE_SHARE_RECORDS,
         PAGE_COUNT
     };
 };

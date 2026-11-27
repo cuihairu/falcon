@@ -4,38 +4,75 @@
  * @author Falcon Team
  * @date 2026-04-15
  */
+
 #include "download_page.hpp"
-#include "download_page_detail.hpp"
+#include "services/task_order.hpp"
 #include "services/task_visibility.hpp"
+#include "utils/icon_utils.hpp"
 #include "widgets/task_table_widget.hpp"
 
 #include <QButtonGroup>
-#include <QFileInfo>
-#include <QPushButton>
+#include <QHeaderView>
+#include <QProgressBar>
+#include <QStyle>
+#include <QMenu>
+#include <QAction>
+#include <QDesktopServices>
+#include <QApplication>
+#include <QClipboard>
 #include <QScrollArea>
-#include <QSettings>
+#include <QFrame>
+#include <QFileInfo>
+#include <QUrl>
 #include <QSet>
-
+#include <QStringList>
+#include <QSettings>
+#include <QMessageBox>
+#include <QPushButton>
+#include <QToolButton>
 #include <algorithm>
 #include <limits>
 
 namespace falcon::desktop {
 
-// 布局常量与列下标单一事实源在 download_page_detail.hpp，本 TU 与
-// table/grid/formatting 三个拆分 TU 共用
-using download_page_detail::kRowHeight;
-using download_page_detail::kSummaryCardWidth;
-using download_page_detail::kHeroHeight;
-using download_page_detail::kSummaryCardHeight;
-using download_page_detail::kEmptyStateMinHeight;
-using download_page_detail::kColFilename;
-using download_page_detail::kColSize;
-using download_page_detail::kColStatus;
-using download_page_detail::kColSpeed;
-using download_page_detail::kColProgress;
-using download_page_detail::kColSeed;
-using download_page_detail::kColAction;
-using download_page_detail::status_display_text;
+namespace {
+constexpr int kRowHeight = 56;
+constexpr int kSummaryCardWidth = 168;
+// 紧凑横条标准（用户 bug 反馈）：hero 与统计卡固定高度，纵向空白不随窗口拉伸
+constexpr int kHeroHeight = 78;
+constexpr int kSummaryCardHeight = 72;
+// 空态卡最小展示高度（用户 bug 反馈：自然高度 ~90px 塌缩挤压，给足 ≥200px）
+constexpr int kEmptyStateMinHeight = 232;
+
+// 表格列索引（与 create_task_table 的表头顺序对齐）：
+// 下载中视图隐藏「做种」（本视图恒空），已完成视图隐藏「进度」「速度」（恒 100%/—）
+// 追加列 kColExtra：下载中显示「来源」（URL 派生域名），已完成显示「保存位置」，
+// 列名与内容随视图切换；追加在末尾保证原 0-6 列索引不变，拖拽/右键/持久化不受影响。
+constexpr int kColFilename = 0;
+constexpr int kColProgress = 1;
+constexpr int kColSize = 2;
+constexpr int kColSpeed = 3;
+constexpr int kColStatus = 4;
+constexpr int kColSeed = 5;
+constexpr int kColAction = 6;
+constexpr int kColExtra = 7;
+
+// 快照状态 → 界面中文文案（引擎状态名不外露）
+QString status_display_text(falcon::TaskStatus status)
+{
+    switch (status) {
+        case falcon::TaskStatus::Pending:    return QObject::tr("等待中");
+        case falcon::TaskStatus::Preparing:  return QObject::tr("准备中");
+        case falcon::TaskStatus::Downloading: return QObject::tr("下载中");
+        case falcon::TaskStatus::Paused:     return QObject::tr("已暂停");
+        case falcon::TaskStatus::Completed:  return QObject::tr("已完成");
+        case falcon::TaskStatus::Failed:     return QObject::tr("失败");
+        case falcon::TaskStatus::Cancelled:  return QObject::tr("已取消");
+    }
+    return QObject::tr("未知");
+}
+} // namespace
+
 
 DownloadPage::DownloadPage(QWidget* parent)
     : QWidget(parent)
@@ -262,6 +299,95 @@ void DownloadPage::create_header_bar()
     header_layout_->addWidget(more_button_);
 }
 
+void DownloadPage::create_task_table()
+{
+    task_table_ = new TaskTableWidget(this);
+    task_table_->setColumnCount(8);
+    task_table_->setHorizontalHeaderLabels({
+        tr("标题"),       // 原型 ui-next 列名（原「文件名」）
+        tr("进度"),
+        tr("大小"),
+        tr("速度"),
+        tr("状态"),
+        tr("做种"),
+        tr("操作"),
+        tr("来源")        // 追加列，下载中=来源域名，已完成时表头切为「保存位置」
+    });
+
+    task_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    task_table_->setSelectionMode(QAbstractItemView::SingleSelection);
+    task_table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    task_table_->setShowGrid(false);
+    task_table_->setAlternatingRowColors(true);
+    task_table_->verticalHeader()->setVisible(false);
+    task_table_->horizontalHeader()->setStretchLastSection(false);
+    task_table_->horizontalHeader()->setHighlightSections(false);
+    // 表头与内容统一左对齐(扫描友好,表头不与内容错位)
+    task_table_->horizontalHeader()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+
+    // 启用右键菜单
+    task_table_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(task_table_, &QTableWidget::customContextMenuRequested,
+            this, &DownloadPage::show_context_menu);
+
+    // B18: 已完成任务双击 = 打开文件（迅雷语义；下载中视图双击无动作不变）
+    connect(task_table_, &QTableWidget::cellDoubleClicked, this,
+            [this](int row, int) {
+                if (view_mode_ != DownloadViewMode::Completed) {
+                    return;
+                }
+                if (const auto* record = record_at_row(row)) {
+                    handle_completed_double_click(*record);
+                }
+            });
+
+    // 拖拽排序：落定换位 + 会话期间挂起快照刷新
+    connect(task_table_, &TaskTableWidget::reorderRequested,
+            this, &DownloadPage::on_table_reorder);
+    connect(task_table_, &TaskTableWidget::dragSessionChanged,
+            this, &DownloadPage::on_drag_session);
+
+    // 列宽:文件名列弹性伸缩跟随窗口,其余列固定内容宽
+    task_table_->horizontalHeader()->setSectionResizeMode(kColFilename, QHeaderView::Stretch);
+    task_table_->setColumnWidth(kColProgress, 200);  // 进度(条 + 百分比)
+    task_table_->setColumnWidth(kColSize, 100);      // 大小
+    task_table_->setColumnWidth(kColSpeed, 100);     // 速度
+    task_table_->setColumnWidth(kColStatus, 88);     // 状态
+    task_table_->setColumnWidth(kColSeed, 200);      // 做种(状态 · ratio · 时长;单行不折)
+    task_table_->setColumnWidth(kColAction, 80);     // 操作
+    task_table_->setColumnWidth(kColExtra, 180);     // 来源/保存位置
+
+    task_table_->setObjectName("taskTable");
+
+    // 初始列显隐(构造默认视图 Downloading → 隐藏做种列)
+    update_column_visibility();
+}
+
+void DownloadPage::set_view_mode(DownloadViewMode mode)
+{
+    const bool changed = (view_mode_ != mode);
+    view_mode_ = mode;
+    update_header_for_mode();
+    // 列显隐随视图切换（重插行之前生效，避免错误列闪现）
+    update_column_visibility();
+
+    // 同步页头分段切换器选中态(setChecked 不触发 clicked,无递归)
+    if (view_segment_downloading_ && view_segment_completed_) {
+        view_segment_downloading_->setChecked(mode == DownloadViewMode::Downloading);
+        view_segment_completed_->setChecked(mode == DownloadViewMode::Completed);
+    }
+
+    // 清空并按新过滤条件重新加载任务
+    task_table_->setRowCount(0);
+    row_by_task_id_.clear();
+    rerender();
+
+    // B20 双向联动（页签 → 侧栏方向）：视图模式实际变化才发信号，
+    // 侧栏高亮由 MainWindow 接线跟随
+    if (changed) {
+        emit view_mode_changed(mode);
+    }
+}
 
 void DownloadPage::update_header_for_mode()
 {
@@ -288,9 +414,9 @@ QString DownloadPage::filename_for(const falcon::daemon::rpc::TaskSnapshot& snap
     }
     // 回退：从 URL 取最后一段（去掉查询串）
     const QString url = QString::fromStdString(snapshot.url);
-    const auto slash = url.lastIndexOf('/');
+    const int slash = url.lastIndexOf('/');
     QString name = (slash >= 0 && slash < url.length() - 1) ? url.mid(slash + 1) : url;
-    const auto query = name.indexOf('?');
+    const int query = name.indexOf('?');
     if (query >= 0) {
         name = name.left(query);
     }
@@ -398,6 +524,390 @@ bool DownloadPage::should_show(const falcon::daemon::rpc::TaskSnapshot& snapshot
     return false;
 }
 
+void DownloadPage::sync_task_row(const TaskRecord& record)
+{
+    const qulonglong key = static_cast<qulonglong>(record.snapshot.id);
+
+    if (!should_show(record.snapshot)) {
+        remove_task_row(key);
+        update_empty_state();
+        return;
+    }
+
+    if (row_by_task_id_.contains(key)) {
+        return;  // 行已存在，动态列由 rerender 统一更新
+    }
+
+    // 按显示顺序定位插入点——task_records_ 是 QHash 无序遍历,
+    // 直接 append 会让行序随机(每次全量重建都可能变化)。
+    // 排序键 = (order 位置, id)：未入 order 的任务排最后,之间按 id 升序
+    const int kUnknownPos = std::numeric_limits<int>::max();
+    const int key_pos = display_pos_.value(key, kUnknownPos);
+    int row = task_table_->rowCount();
+    for (auto it = row_by_task_id_.cbegin(); it != row_by_task_id_.cend(); ++it) {
+        const int other_pos = display_pos_.value(it.key(), kUnknownPos);
+        const bool other_above = (other_pos != key_pos)
+                                     ? (other_pos < key_pos)
+                                     : (it.key() < key);
+        if (other_above) {
+            continue;
+        }
+        row = std::min(row, it.value());
+    }
+    task_table_->insertRow(row);
+    // 中间插入把后续行往下推,既有行号同步 +1(与 remove_task_row 的 -1 对称)
+    for (auto it = row_by_task_id_.begin(); it != row_by_task_id_.end(); ++it) {
+        if (it.value() >= row) {
+            it.value() += 1;
+        }
+    }
+    task_table_->setRowHeight(row, kRowHeight);
+    row_by_task_id_.insert(key, row);
+
+    // 文件名
+    auto* name_item = new QTableWidgetItem(record.filename);
+    name_item->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    name_item->setData(Qt::UserRole, QVariant::fromValue<qulonglong>(key));
+    task_table_->setItem(row, 0, name_item);
+
+    // 进度 = 进度条 + 右侧百分比标签(条内不放文字——6px 条高压不下 11px 文字)
+    auto* progress_widget = new QWidget(this);
+    auto* progress_layout = new QHBoxLayout(progress_widget);
+    progress_layout->setContentsMargins(0, 0, 8, 0);
+    progress_layout->setSpacing(8);
+
+    auto* progress_bar = new QProgressBar(progress_widget);
+    progress_bar->setRange(0, 100);
+    progress_bar->setValue(0);
+    progress_bar->setTextVisible(false);
+    progress_bar->setObjectName("taskProgressBar");
+    progress_layout->addWidget(progress_bar, 1);
+
+    auto* pct_label = new QLabel("0%", progress_widget);
+    pct_label->setObjectName("progressPctLabel");
+    pct_label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    progress_layout->addWidget(pct_label);
+
+    task_table_->setCellWidget(row, 1, progress_widget);
+
+    // 大小
+    auto* size_item = new QTableWidgetItem(record.size_text);
+    size_item->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    task_table_->setItem(row, 2, size_item);
+
+    // 速度
+    auto* speed_item = new QTableWidgetItem(speed_display_text(record.snapshot));
+    speed_item->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    task_table_->setItem(row, 3, speed_item);
+
+    // 状态
+    auto* status_item = new QTableWidgetItem(record.status_text);
+    status_item->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    task_table_->setItem(row, 4, status_item);
+
+    // 做种(状态 · ratio · 时长;上传/下载量收进 tooltip)
+    auto* seed_item = new QTableWidgetItem(seed_column_text(record.snapshot));
+    seed_item->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    task_table_->setItem(row, 5, seed_item);
+
+    // 追加列：下载中=来源域名，已完成=保存位置（表头随视图切换）
+    auto* extra_item = new QTableWidgetItem(extra_column_text(record.snapshot));
+    extra_item->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    extra_item->setToolTip(extra_item->text());
+    task_table_->setItem(row, kColExtra, extra_item);
+
+    // 操作按钮(图标化;暂停⇄继续按状态切换,click 统一走状态分发)
+    auto* actions_widget = new QWidget(this);
+    auto* actions_layout = new QHBoxLayout(actions_widget);
+    actions_layout->setContentsMargins(4, 0, 4, 0);
+    actions_layout->setSpacing(4);
+
+    // 暂停⇄继续按状态切换;终态(已完成/已取消)与排队中无暂停语义,按钮隐藏
+    const auto row_status = record.snapshot.status;
+    const bool pausable = row_status == falcon::TaskStatus::Downloading ||
+                          row_status == falcon::TaskStatus::Preparing;
+    const bool resumable = row_status == falcon::TaskStatus::Paused ||
+                           row_status == falcon::TaskStatus::Failed;
+    auto* pause_btn = new QToolButton(actions_widget);
+    pause_btn->setObjectName("rowActionButton");
+    pause_btn->setIcon(icons::themed(resumable ? icons::Id::Play : icons::Id::Pause,
+                                     icons::ColorRole::TextSecondary));
+    pause_btn->setAutoRaise(true);
+    pause_btn->setToolTip(resumable ? tr("继续") : tr("暂停"));
+    pause_btn->setProperty("taskId", QVariant::fromValue<qulonglong>(key));
+    pause_btn->setVisible(pausable || resumable);
+    connect(pause_btn, &QToolButton::clicked, this, &DownloadPage::on_pause_selected);
+    actions_layout->addWidget(pause_btn);
+
+    auto* delete_btn = new QToolButton(actions_widget);
+    delete_btn->setObjectName("rowActionButton");
+    delete_btn->setIcon(icons::themed(icons::Id::Trash, icons::ColorRole::TextSecondary));
+    delete_btn->setAutoRaise(true);
+    delete_btn->setToolTip(tr("删除"));
+    delete_btn->setProperty("taskId", QVariant::fromValue<qulonglong>(key));
+    connect(delete_btn, &QToolButton::clicked, this, &DownloadPage::on_delete_selected);
+    actions_layout->addWidget(delete_btn);
+
+    task_table_->setCellWidget(row, 6, actions_widget);
+    update_row_texts(row, record);
+    update_empty_state();
+}
+
+void DownloadPage::update_row_texts(int row, const TaskRecord& record)
+{
+    const auto& snap = record.snapshot;
+    const int pct = static_cast<int>(snap.progress * 100.0);
+
+    if (auto* name_item = task_table_->item(row, 0)) {
+        name_item->setText(record.filename);
+    }
+    if (auto* size_item = task_table_->item(row, 2)) {
+        size_item->setText(record.size_text);
+    }
+    if (auto* speed_item = task_table_->item(row, 3)) {
+        speed_item->setText(speed_display_text(snap));
+    }
+    if (auto* status_item = task_table_->item(row, 4)) {
+        status_item->setText(record.status_text);
+    }
+    if (auto* seed_item = task_table_->item(row, 5)) {
+        seed_item->setText(seed_column_text(snap));
+        seed_item->setToolTip(seed_column_tooltip(snap));
+    }
+    if (auto* extra_item = task_table_->item(row, kColExtra)) {
+        const QString extra = extra_column_text(snap);
+        extra_item->setText(extra);
+        extra_item->setToolTip(extra);
+    }
+    if (auto* widget = task_table_->cellWidget(row, 1)) {
+        if (auto* bar = widget->findChild<QProgressBar*>()) {
+            bar->setValue(std::max(0, std::min(100, pct)));
+        }
+        if (auto* pct_label = widget->findChild<QLabel*>()) {
+            pct_label->setText(QString::number(pct) + QLatin1Char('%'));
+        }
+    }
+}
+
+void DownloadPage::remove_task_row(qulonglong key)
+{
+    if (!row_by_task_id_.contains(key)) {
+        return;
+    }
+    const int row = row_by_task_id_.value(key);
+    task_table_->removeRow(row);
+    row_by_task_id_.remove(key);
+    for (auto it = row_by_task_id_.begin(); it != row_by_task_id_.end(); ++it) {
+        if (it.value() > row) {
+            it.value() -= 1;
+        }
+    }
+}
+
+void DownloadPage::set_task_order(const std::vector<falcon::TaskId>& order)
+{
+    task_order_ = order;
+    // 启动时装载可能早于首份快照(此时无行可排),rerender 时自然生效
+    if (task_table_ && task_table_->rowCount() > 0) {
+        rebuild_table_rows();
+    }
+}
+
+void DownloadPage::rebuild_display_positions()
+{
+    display_pos_.clear();
+    std::vector<falcon::TaskId> id_list;
+    id_list.reserve(static_cast<std::size_t>(task_records_.size()));
+    for (auto it = task_records_.cbegin(); it != task_records_.cend(); ++it) {
+        id_list.push_back(static_cast<falcon::TaskId>(it.key()));
+    }
+    const std::vector<falcon::TaskId> sorted =
+        task_order::sort_ids(task_order_, id_list);
+    display_pos_.reserve(static_cast<int>(sorted.size()) * 2);
+    for (std::size_t i = 0; i < sorted.size(); ++i) {
+        display_pos_.insert(static_cast<qulonglong>(sorted[static_cast<int>(i)]),
+                            static_cast<int>(i));
+    }
+}
+
+void DownloadPage::rebuild_table_rows()
+{
+    // 全量重插(与 set_view_mode 同款模式)——就地移动行的方案对
+    // cellWidget(进度条/操作钮)搬迁过于侵入,收益不成比例
+    task_table_->setRowCount(0);
+    row_by_task_id_.clear();
+    rerender();
+}
+
+void DownloadPage::on_table_reorder(int from_row, int to_row)
+{
+    // 当前可见行(含过滤/视图模式)的 id 序列——表格外(被过滤或另一
+    // 视图)的任务保持各自位置不动,只有可见子集按新序重排
+    std::vector<falcon::TaskId> visible;
+    const int rows = task_table_->rowCount();
+    visible.reserve(static_cast<std::size_t>(rows));
+    for (int r = 0; r < rows; ++r) {
+        if (const auto* item = task_table_->item(r, 0)) {
+            visible.push_back(static_cast<falcon::TaskId>(
+                item->data(Qt::UserRole).toULongLong()));
+        }
+    }
+
+    const std::vector<falcon::TaskId> moved = task_order::move_to(
+        visible, static_cast<std::size_t>(from_row), static_cast<std::size_t>(to_row));
+    task_order_ = task_order::apply_drag(task_order_, moved);
+
+    // 剪掉已消失任务的 id:防 QSettings 无限增长 + 限制陈旧 id 影响面
+    std::vector<falcon::TaskId> pruned;
+    pruned.reserve(task_order_.size());
+    for (const falcon::TaskId id : task_order_) {
+        if (task_records_.contains(static_cast<qulonglong>(id))) {
+            pruned.push_back(id);
+        }
+    }
+    task_order_ = std::move(pruned);
+
+    rebuild_table_rows();
+    emit task_order_changed(
+        QString::fromStdString(task_order::serialize(task_order_)));
+}
+
+void DownloadPage::on_drag_session(bool active)
+{
+    if (drag_active_ == active) {
+        return;
+    }
+    drag_active_ = active;
+    // 会话结束:补刷挂起的最后一份快照(期间可能有多份,只留最新即可)
+    if (!active && has_pending_tasks_) {
+        has_pending_tasks_ = false;
+        update_tasks(pending_tasks_);
+    }
+}
+
+const DownloadPage::TaskRecord* DownloadPage::record_by_id(qulonglong key) const
+{
+    auto it = task_records_.constFind(key);
+    return it == task_records_.constEnd() ? nullptr : &it.value();
+}
+
+const DownloadPage::TaskRecord* DownloadPage::selected_record() const
+{
+    if (!task_table_ || !task_table_->selectionModel()) {
+        return nullptr;
+    }
+
+    const auto selected_rows = task_table_->selectionModel()->selectedRows();
+    if (selected_rows.isEmpty()) {
+        return nullptr;
+    }
+
+    auto* item = task_table_->item(selected_rows.first().row(), 0);
+    if (!item) {
+        return nullptr;
+    }
+
+    return record_by_id(item->data(Qt::UserRole).toULongLong());
+}
+
+const DownloadPage::TaskRecord* DownloadPage::record_from_sender() const
+{
+    const QObject* sender_object = sender();
+    if (!sender_object) {
+        return nullptr;
+    }
+
+    const QVariant task_id_var = sender_object->property("taskId");
+    if (!task_id_var.isValid()) {
+        return nullptr;
+    }
+
+    return record_by_id(task_id_var.toULongLong());
+}
+
+const DownloadPage::TaskRecord* DownloadPage::record_at_row(int row) const
+{
+    if (row < 0 || row >= task_table_->rowCount()) {
+        return nullptr;
+    }
+
+    auto* item = task_table_->item(row, 0);
+    if (!item) {
+        return nullptr;
+    }
+
+    return record_by_id(item->data(Qt::UserRole).toULongLong());
+}
+
+bool DownloadPage::eventFilter(QObject* watched, QEvent* event)
+{
+    // B18: 网格卡片双击——卡片本体是普通 QWidget（taskId 属性在卡上，
+    // 子控件忽略鼠标事件后冒泡回卡片），只在已完成视图响应
+    if (event->type() == QEvent::MouseButtonDblClick &&
+        view_mode_ == DownloadViewMode::Completed) {
+        if (auto* card = qobject_cast<QWidget*>(watched)) {
+            const QVariant task_id_var = card->property("taskId");
+            if (task_id_var.isValid()) {
+                if (const auto* record = record_by_id(task_id_var.toULongLong())) {
+                    handle_completed_double_click(*record);
+                    return true;
+                }
+            }
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void DownloadPage::handle_completed_double_click(const TaskRecord& record)
+{
+    // 双击行为每次事件时即时读取设置（设置页改动即时落盘，无需额外接线）：
+    // 0 = 打开文件（默认） / 1 = 打开所在文件夹
+    QSettings settings;
+    const int action =
+        settings.value("desktop/completed_double_click_action", 0).toInt();
+    open_completed_target(record.save_path, action == 1);
+}
+
+void DownloadPage::open_completed_target(const QString& save_path, bool open_folder)
+{
+    if (save_path.isEmpty()) {
+        QMessageBox::warning(this, tr("无法打开"),
+                             tr("无法确定该任务的文件位置。"));
+        return;
+    }
+
+    const QFileInfo file_info(save_path);
+    const QString target = open_folder ? file_info.absolutePath()
+                                       : file_info.absoluteFilePath();
+    const QString target_kind = open_folder ? tr("文件夹") : tr("文件");
+
+    if (!QFileInfo::exists(target)) {
+        // B18: 文件/文件夹不存在或已被移动时明确提示（不静默），顺带给
+        // 「打开所在文件夹」出口
+        QMessageBox box(QMessageBox::Warning, tr("%1不存在").arg(target_kind),
+                        tr("%1不存在或已被移动：\n%2").arg(target_kind, target),
+                        QMessageBox::Close, this);
+        QPushButton* open_dir_btn =
+            box.addButton(tr("打开所在文件夹"), QMessageBox::ActionRole);
+        box.exec();
+        if (box.clickedButton() == open_dir_btn) {
+            const QString dir = file_info.absolutePath();
+            if (QFileInfo::exists(dir)) {
+                QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+            } else {
+                QMessageBox::warning(
+                    this, tr("文件夹不存在"),
+                    tr("文件夹不存在或已被移动：\n%1").arg(dir));
+            }
+        }
+        return;
+    }
+
+    if (!QDesktopServices::openUrl(QUrl::fromLocalFile(target))) {
+        QMessageBox::warning(this, tr("打开失败"),
+                             tr("系统没有找到能打开「%1」的程序。").arg(target));
+    }
+}
 
 void DownloadPage::update_summary_cards()
 {
@@ -439,6 +949,22 @@ void DownloadPage::update_summary_cards()
     }
 }
 
+void DownloadPage::update_column_visibility()
+{
+    if (!task_table_) {
+        return;
+    }
+    const bool completed = (view_mode_ == DownloadViewMode::Completed);
+    // 已完成视图：进度（恒 100%）与速度（恒 "—"）是无信息量噪音 → 隐藏；
+    // 下载中视图：做种列恒空（做种任务只出现在已完成视图）→ 隐藏
+    task_table_->setColumnHidden(kColProgress, completed);
+    task_table_->setColumnHidden(kColSpeed, completed);
+    task_table_->setColumnHidden(kColSeed, !completed);
+    // 追加列两视图都显示，但语义不同：下载中=来源，已完成=保存位置。
+    // 表头切换；内容由 rerender 重插行时按视图生成（set_view_mode 已清行重渲染）。
+    task_table_->setHorizontalHeaderItem(
+        kColExtra, new QTableWidgetItem(completed ? tr("保存位置") : tr("来源")));
+}
 
 void DownloadPage::update_empty_state()
 {
@@ -466,17 +992,6 @@ void DownloadPage::update_empty_state()
     } else {
         content_stack_->setCurrentWidget(task_table_);
     }
-}
-
-void DownloadPage::on_new_task_clicked()
-{
-    emit new_task_requested();
-}
-
-void DownloadPage::on_refresh_clicked()
-{
-    // 数据由 DownloadService 周期推送；此处重渲染当前快照
-    rerender();
 }
 
 

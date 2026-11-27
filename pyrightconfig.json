@@ -1,0 +1,82 @@
+{
+  "executionEnvironments": [
+    {
+      "root": ".kbengine/stubs/base",
+      "extraPaths": [
+        ".kbengine/stubs/base",
+        ".kbengine/stubs/shared",
+        ".kbengine/stubs"
+      ]
+    },
+    {
+      "root": ".kbengine/stubs/cell",
+      "extraPaths": [
+        ".kbengine/stubs/cell",
+        ".kbengine/stubs/shared",
+        ".kbengine/stubs"
+      ]
+    },
+    {
+      "root": ".kbengine/stubs/bots",
+      "extraPaths": [
+        ".kbengine/stubs/bots",
+        ".kbengine/stubs/shared",
+        ".kbengine/stubs"
+      ]
+    },
+    {
+      "root": ".kbengine/stubs/client",
+      "extraPaths": [
+        ".kbengine/stubs/client",
+        ".kbengine/stubs/shared",
+        ".kbengine/stubs"
+      ]
+    },
+    {
+      "root": ".kbengine/stubs/dbmgr",
+      "extraPaths": [
+        ".kbengine/stubs/dbmgr",
+        ".kbengine/stubs/shared",
+        ".kbengine/stubs"
+      ]
+    },
+    {
+      "root": ".kbengine/stubs/interfaces",
+      "extraPaths": [
+        ".kbengine/stubs/interfaces",
+        ".kbengine/stubs/shared",
+        ".kbengine/stubs"
+      ]
+    },
+    {
+      "root": ".kbengine/stubs/logger",
+      "extraPaths": [
+        ".kbengine/stubs/logger",
+        ".kbengine/stubs/shared",
+        ".kbengine/stubs"
+      ]
+    },
+    {
+      "root": ".kbengine/stubs/loginapp",
+      "extraPaths": [
+        ".kbengine/stubs/loginapp",
+        ".kbengine/stubs/shared",
+        ".kbengine/stubs"
+      ]
+    },
+    {
+      "root": ".kbengine/stubs/shared",
+      "extraPaths": [
+        ".kbengine/stubs/shared",
+        ".kbengine/stubs"
+      ]
+    }
+  ],
+  "stubPath": "typings",
+  "extraPaths": [
+    ".kbengine/stubs/shared",
+    "scripts",
+    ".kbengine/stubs"
+  ],
+  "reportMissingModuleSource": false
+}

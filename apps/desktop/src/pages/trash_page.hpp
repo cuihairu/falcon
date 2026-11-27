@@ -47,6 +47,7 @@ private:
     void rebuild_table();
     static QString format_bytes(std::uint64_t bytes);
     static QString format_deleted_at(std::int64_t epoch_seconds);
+    static QString remaining_text(std::int64_t epoch_seconds);
     static QString status_text(const TrashEntry& entry);
 
     QTableWidget* table_ = nullptr;

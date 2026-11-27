@@ -72,6 +72,12 @@ if(BUILD_SHARED_LIBS)
     # （无任何 __declspec 接线），共享构建导出表为空 = 坏 DLL。CMake 在
     # MSVC 构建期枚举符号生成 .def 自动导出（非 MSVC 平台忽略此属性）
     set_target_properties(falcon_core PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+    # SONAME 主版本号：装载期据此拒绝不兼容的共享库（与 C ABI 的 major
+    # 校验一致）。静态库构建不设置这些属性。
+    set_target_properties(falcon_core PROPERTIES
+        VERSION ${PROJECT_VERSION}
+        SOVERSION ${PROJECT_VERSION_MAJOR}
+    )
 endif()
 
 target_link_libraries(falcon_core

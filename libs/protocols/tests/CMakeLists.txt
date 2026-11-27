@@ -47,8 +47,12 @@ endfunction()
 # ============================================================================
 add_executable(falcon_protocols_tests
     unit/segment_downloader_test.cpp
+    unit/segment_downloader_test_part2.cpp
     unit/incremental_download_test.cpp
+    unit/incremental_download_test_part2.cpp
+    unit/incremental_download_test_part3.cpp
     unit/file_hash_test.cpp
+    unit/file_hash_test_part2.cpp
     unit/cloud_protocols_test.cpp
     unit/builtin_protocol_handlers_test.cpp
     unit/fs_rename_test.cpp
@@ -59,7 +63,7 @@ add_executable(falcon_protocols_tests
 if(FALCON_ENABLE_BITTORRENT)
     target_sources(falcon_protocols_tests PRIVATE unit/bittorrent_plugin_test.cpp)
     target_sources(falcon_protocols_tests PRIVATE unit/bittorrent_parse_test.cpp)
-    target_sources(falcon_protocols_tests PRIVATE unit/dht_node_test.cpp)
+    target_sources(falcon_protocols_tests PRIVATE unit/dht_node_test.cpp unit/dht_node_test_part2.cpp)
     target_sources(falcon_protocols_tests PRIVATE unit/pex_protocol_test.cpp)
     target_sources(falcon_protocols_tests PRIVATE unit/bencode_edge_test.cpp)
     target_sources(falcon_protocols_tests PRIVATE unit/seed_policy_test.cpp)
@@ -117,7 +121,7 @@ endif()
 
 # NAT 端口映射门面测试：无条件挂载（库缺失时真库用例运行时 skip），
 # 真库宏与库编译定义保持一致（变量来自上级目录 find 结果）
-target_sources(falcon_protocols_tests PRIVATE unit/port_mapper_test.cpp)
+target_sources(falcon_protocols_tests PRIVATE unit/port_mapper_test.cpp unit/port_mapper_test_part2.cpp)
 if(FALCON_NAT_BACKENDS_ENABLED)
     target_compile_definitions(falcon_protocols_tests PRIVATE
         FALCON_ENABLE_NAT_UPNP FALCON_ENABLE_NAT_NATPMP)
@@ -161,6 +165,7 @@ target_include_directories(falcon_protocols_tests PRIVATE
 add_executable(falcon_http_tests
     unit/http_handler_test.cpp
     unit/http_handler_edges_test.cpp
+    unit/http_handler_edges_test_part2.cpp
     unit/global_speed_limit_test.cpp
     unit/pause_resume_e2e_test.cpp
     unit/range_integrity_test.cpp

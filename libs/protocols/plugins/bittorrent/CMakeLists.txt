@@ -17,6 +17,7 @@ add_library(falcon_plugin_bittorrent STATIC
     bittorrent_plugin.cpp
     seed_policy.cpp
     dht_node.cpp
+    dht_node_client.cpp
     pex_protocol.cpp
     bencode.cpp
 )

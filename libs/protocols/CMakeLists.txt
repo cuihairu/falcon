@@ -129,6 +129,7 @@ endif()
 add_library(falcon_protocols
     src/segment_downloader.cpp
     src/incremental_download.cpp
+    src/incremental_download_core.cpp
     src/file_hash.cpp
     src/host_api.cpp
 )

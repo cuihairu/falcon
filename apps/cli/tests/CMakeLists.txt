@@ -72,6 +72,7 @@ target_sources(falcon_cli_tests PRIVATE
 if(NOT WIN32 AND NOT CMAKE_CROSSCOMPILING)
     add_executable(falcon_cli_integration_tests
         integration/cli_main_integration_test.cpp
+        integration/cli_main_integration_test_part2.cpp
     )
 
     target_compile_definitions(falcon_cli_integration_tests PRIVATE

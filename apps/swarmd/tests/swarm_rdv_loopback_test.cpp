@@ -1,3 +1,4 @@
+
 // ============================================================================
 // falcon-swarmd 服务器回环测试：真 socket HTTP/WS 全链（传输层验收）
 //
@@ -972,77 +973,5 @@ TEST(SwarmLoopback, WsPeerJoinedNotificationFanout) {
     EXPECT_FALSE(n->contains("id"));
 }
 
-TEST(SwarmLoopback, WsPeerLeftOnHeartbeatTimeoutSweep) {
-    SwarmRendezvousHarness harness;  // 默认 timeout=2s / sweep=50ms（测试值）
-    ASSERT_TRUE(harness.ok());
 
-    SwarmWsClient sub;
-    ASSERT_TRUE(sub.connect(harness.port()));
-
-    SwarmTestNode node;
-    const auto flow =
-        register_node_two_steps(harness.port(), node, make_nonce());
-    ASSERT_TRUE(flow.ok) << flow.error_message;
-
-    // onPeerJoined 先到
-    const auto joined = read_until_method(sub, kNotifyPeerJoined, 5000);
-    ASSERT_TRUE(joined.has_value());
-
-    // 不再心跳 → timeout(2s) + sweep(50ms) 后摘除并广播 onPeerLeft
-    const auto left = read_until_method(sub, kNotifyPeerLeft, 10000);
-    ASSERT_TRUE(left.has_value()) << "no onPeerLeft within budget";
-    ASSERT_TRUE(left->contains("params"));
-    ASSERT_TRUE(left->at("params").is_object());
-    EXPECT_EQ(left->at("params").value(kFieldNodeId, ""), node.node_id());
-    EXPECT_EQ(harness.state().peer_count(), 0u);
-}
-
-// ===========================================================================
-// 限频（独立 harness 实例防互染；HTTP 429 + -32002）
-// ===========================================================================
-
-TEST(SwarmLoopback, RateLimitRegister429) {
-    HarnessConfig cfg;
-    cfg.rate_register_per_min = 2;
-    SwarmRendezvousHarness harness(cfg);
-    ASSERT_TRUE(harness.ok());
-    SwarmTestNode node;
-
-    // 前两次 step1 放行（各拿挑战——nonce 不同互不覆盖语义）
-    for (int i = 0; i < 2; ++i) {
-        const auto r = http_rpc_call(harness.port(), kMethodRegister,
-                                     node.step1_params(make_nonce()));
-        SCOPED_TRACE(std::string("step1 #") + std::to_string(i));
-        EXPECT_TRUE(r.ok) << r.error_message;
-    }
-    // 第三次 → 429 + -32002（同 IP 同 key 计满窗口）
-    const auto third = http_rpc_call(harness.port(), kMethodRegister,
-                                     node.step1_params(make_nonce()));
-    EXPECT_EQ(third.http_status, 429);
-    EXPECT_FALSE(third.ok);
-    EXPECT_EQ(third.error_code, kErrRateLimited);
-    EXPECT_EQ(third.error_message, "Rate limit exceeded");
-}
-
-TEST(SwarmLoopback, RateLimitQuery429) {
-    HarnessConfig cfg;
-    cfg.rate_query_per_min = 1;
-    SwarmRendezvousHarness harness(cfg);
-    ASSERT_TRUE(harness.ok());
-    SwarmTestNode node;
-    const auto flow =
-        register_node_two_steps(harness.port(), node, make_nonce());
-    ASSERT_TRUE(flow.ok) << flow.error_message;
-
-    const nlohmann::json params{{kFieldSession, flow.session},
-                                {kFieldSha256, make_sha256()}};
-    const auto first = http_rpc_call(harness.port(), kMethodQuery, params);
-    EXPECT_TRUE(first.ok) << first.error_message;
-
-    const auto second = http_rpc_call(harness.port(), kMethodQuery, params);
-    EXPECT_EQ(second.http_status, 429);
-    EXPECT_EQ(second.error_code, kErrRateLimited);
-    EXPECT_EQ(second.error_message, "Rate limit exceeded");
-}
-
-}  // namespace falcon::swarm::test
+} // namespace

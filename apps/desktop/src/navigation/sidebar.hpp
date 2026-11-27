@@ -13,6 +13,8 @@
 #include <QVBoxLayout>
 #include <QButtonGroup>
 
+#include <QVector>
+
 #include "../utils/icon_utils.hpp"
 
 namespace falcon::desktop {
@@ -53,10 +55,22 @@ signals:
     void downloadingTabClicked();
     void completedTabClicked();
 
+    // ui-next 新增页面（跨设备与节点 / 账号与分享）
+    void crossDeviceClicked();
+    void nasNodesClicked();
+    void airdropClicked();
+    void accountClicked();
+    void friendsClicked();
+    void shareGroupsClicked();
+    void shareRecordsClicked();
+    void nasWebClicked();
+
 private:
     void setup_ui();
     void create_download_section();
     void create_space_section();
+    void create_device_section();
+    void create_social_section();
     QPushButton* create_nav_button(const QString& text, icons::Id icon);
     QWidget* create_separator();
 
@@ -76,6 +90,9 @@ private:
     QPushButton* third_party_button_;
     QPushButton* trash_button_;
     QPushButton* settings_button_;
+
+    // ui-next 新增两组导航按钮（按声明顺序对应 crossDeviceClicked..nasWebClicked）
+    QVector<QPushButton*> extra_nav_buttons_;
 
     QWidget* footer_card_ = nullptr;
     QLabel* footer_value_ = nullptr;

@@ -12,6 +12,7 @@
 #include <QDateTime>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QSettings>
 #include <QVBoxLayout>
 
 namespace falcon::desktop {
@@ -51,14 +52,15 @@ void TrashPage::setup_ui()
     // 条目表格
     table_ = new QTableWidget(this);
     table_->setObjectName("taskTable");
-    table_->setColumnCount(6);
+    table_->setColumnCount(7);
     table_->setHorizontalHeaderLabels({
         tr("文件名"),
         tr("大小"),
         tr("状态"),
         tr("原始位置"),
         tr("删除时间"),
-        tr("操作")
+        tr("操作"),
+        tr("剩余")   // 追加列：由 deleted_at + 保留天数算出，原型 ui-next 要求
     });
     table_->setSelectionBehavior(QAbstractItemView::SelectRows);
     table_->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -73,6 +75,7 @@ void TrashPage::setup_ui()
     table_->setColumnWidth(3, 260);
     table_->setColumnWidth(4, 150);
     table_->setColumnWidth(5, 150);
+    table_->setColumnWidth(6, 90);
     main_layout->addWidget(table_, 1);
 
     // 空态
@@ -158,6 +161,9 @@ void TrashPage::rebuild_table()
         op_layout->addStretch();
         table_->setCellWidget(row, 5, op_widget);
 
+        // 追加列：剩余天数，从真实 deleted_at + 保留天数算出
+        table_->setItem(row, 6, new QTableWidgetItem(remaining_text(entry.deleted_at)));
+
         // 行号会随重建漂移，回调里按 id 从 entries_ 现查
         connect(restore_btn, &QPushButton::clicked, this, [this, restore_btn] {
             emit restore_requested(restore_btn->property("entryId").toULongLong());
@@ -197,6 +203,30 @@ QString TrashPage::format_deleted_at(std::int64_t epoch_seconds)
     }
     return QDateTime::fromSecsSinceEpoch(epoch_seconds)
         .toString(QStringLiteral("yyyy-MM-dd HH:mm"));
+}
+
+QString TrashPage::remaining_text(std::int64_t epoch_seconds)
+{
+    // 保留天数与设置页一致（QSettings "trash_retention_days"，默认 7）。
+    // 0 = 不自动清理（设置页 specialValueText），显示"不清理"。
+    // 与 MainWindow::save_settings 的键一致：beginGroup("desktop") 下的
+    // trash_retention_days（漏了 group 会永远读到默认值 7）。
+    QSettings settings(QStringLiteral("FalconTeam"), QStringLiteral("Falcon"));
+    const int days = settings.value(
+                         QStringLiteral("desktop/trash_retention_days"), 7).toInt();
+    if (days <= 0) {
+        return QStringLiteral("不清理");
+    }
+    if (epoch_seconds <= 0) {
+        return QStringLiteral("—");
+    }
+    const qint64 elapsed = QDateTime::currentSecsSinceEpoch() - epoch_seconds;
+    const qint64 left = static_cast<qint64>(days) * 24 * 3600 - elapsed;
+    if (left <= 0) {
+        return QStringLiteral("即将清理");
+    }
+    const qint64 left_days = left / (24 * 3600) + (left % (24 * 3600) > 0 ? 1 : 0);
+    return QString::number(left_days) + QStringLiteral(" 天");
 }
 
 QString TrashPage::status_text(const TrashEntry& entry)

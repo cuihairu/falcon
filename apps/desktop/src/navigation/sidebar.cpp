@@ -56,6 +56,18 @@ void SideBar::setup_ui()
 
     create_space_section();
 
+    main_layout_->addWidget(create_separator());
+    auto* device_label = new QLabel(tr("跨设备与节点"), this);
+    device_label->setObjectName("sectionLabel");
+    main_layout_->addWidget(device_label);
+    create_device_section();
+
+    main_layout_->addWidget(create_separator());
+    auto* social_label = new QLabel(tr("账号与分享"), this);
+    social_label->setObjectName("sectionLabel");
+    main_layout_->addWidget(social_label);
+    create_social_section();
+
     main_layout_->addStretch();
 
     footer_card_ = new QWidget(this);
@@ -158,6 +170,60 @@ void SideBar::create_space_section()
     settings_button_ = create_nav_button(tr("偏好设置"), icons::Id::Settings);
     tools_layout->addWidget(settings_button_);
     connect(settings_button_, &QPushButton::clicked, this, &SideBar::settingsClicked);
+}
+
+void SideBar::create_device_section()
+{
+    auto* layout = new QVBoxLayout();
+    layout->setSpacing(kItemSpacing);
+    main_layout_->addLayout(layout);
+
+    auto* cross = create_nav_button(tr("跨设备"), icons::Id::Upload);
+    layout->addWidget(cross);
+    extra_nav_buttons_ << cross;
+    connect(cross, &QPushButton::clicked, this, &SideBar::crossDeviceClicked);
+
+    auto* nas = create_nav_button(tr("NAS 与路由"), icons::Id::Cloud);
+    layout->addWidget(nas);
+    extra_nav_buttons_ << nas;
+    connect(nas, &QPushButton::clicked, this, &SideBar::nasNodesClicked);
+
+    auto* airdrop = create_nav_button(tr("隔空传送"), icons::Id::Link);
+    layout->addWidget(airdrop);
+    extra_nav_buttons_ << airdrop;
+    connect(airdrop, &QPushButton::clicked, this, &SideBar::airdropClicked);
+
+    auto* nas_web = create_nav_button(tr("NAS Web 管理"), icons::Id::Folder);
+    layout->addWidget(nas_web);
+    extra_nav_buttons_ << nas_web;
+    connect(nas_web, &QPushButton::clicked, this, &SideBar::nasWebClicked);
+}
+
+void SideBar::create_social_section()
+{
+    auto* layout = new QVBoxLayout();
+    layout->setSpacing(kItemSpacing);
+    main_layout_->addLayout(layout);
+
+    auto* account = create_nav_button(tr("账号"), icons::Id::File);
+    layout->addWidget(account);
+    extra_nav_buttons_ << account;
+    connect(account, &QPushButton::clicked, this, &SideBar::accountClicked);
+
+    auto* friends = create_nav_button(tr("好友"), icons::Id::File);
+    layout->addWidget(friends);
+    extra_nav_buttons_ << friends;
+    connect(friends, &QPushButton::clicked, this, &SideBar::friendsClicked);
+
+    auto* groups = create_nav_button(tr("分享组"), icons::Id::Folder);
+    layout->addWidget(groups);
+    extra_nav_buttons_ << groups;
+    connect(groups, &QPushButton::clicked, this, &SideBar::shareGroupsClicked);
+
+    auto* records = create_nav_button(tr("分享记录"), icons::Id::List);
+    layout->addWidget(records);
+    extra_nav_buttons_ << records;
+    connect(records, &QPushButton::clicked, this, &SideBar::shareRecordsClicked);
 }
 
 } // namespace falcon::desktop
