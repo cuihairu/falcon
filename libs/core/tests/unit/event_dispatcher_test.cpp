@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <mutex>
 
@@ -54,6 +55,44 @@ private:
 
     mutable std::mutex mu;
     std::condition_variable cv;
+};
+
+// 队列满测试用：阻塞 worker 线程，使队列无法被排空，从而使丢弃计数
+// 不依赖线程调度速度（macOS runner 上 worker 可在 100 次 dispatch 内
+// 排空全部事件，原用例dropped 恒 0 而偶发红）
+class BlockingProgressListener final : public falcon::IEventListener {
+public:
+    void on_status_changed(falcon::TaskId, falcon::TaskStatus, falcon::TaskStatus) override {}
+    void on_progress(const falcon::ProgressInfo&) override {
+        {
+            std::lock_guard<std::mutex> lock(mu);
+            entered = true;
+        }
+        cv.notify_all();
+        std::unique_lock<std::mutex> lock(mu);
+        cv.wait(lock, [this] { return released; });
+    }
+    void on_error(falcon::TaskId, const std::string&) override {}
+    void on_completed(falcon::TaskId, const std::string&) override {}
+
+    bool wait_until_entered(std::chrono::milliseconds timeout) {
+        std::unique_lock<std::mutex> lock(mu);
+        return cv.wait_for(lock, timeout, [this] { return entered; });
+    }
+
+    void release() {
+        {
+            std::lock_guard<std::mutex> lock(mu);
+            released = true;
+        }
+        cv.notify_all();
+    }
+
+private:
+    std::mutex mu;
+    std::condition_variable cv;
+    bool entered = false;
+    bool released = false;
 };
 
 } // namespace
@@ -163,7 +202,8 @@ TEST(EventDispatcherTest, ConcurrentDispatch) {
     EXPECT_EQ(dispatcher.get_dropped_count(), 0u);
 }
 
-// 新增：队列满时的事件处理
+// 新增：队列满时的事件处理。阻塞 worker 使队列必然饱和，避免依赖
+// 调度速度；先释放再用 stop(true) 排空残留，确保 worker 不悬挂
 TEST(EventDispatcherTest, QueueFullHandling) {
     falcon::EventDispatcherConfig config;
     config.enable_async_dispatch = true;
@@ -171,28 +211,37 @@ TEST(EventDispatcherTest, QueueFullHandling) {
     config.max_queue_size = 10;
 
     falcon::EventDispatcher dispatcher(config);
-    CountingListener listener;
+    BlockingProgressListener listener;
     dispatcher.add_listener(&listener);
     dispatcher.start();
 
-    int dropped = 0;
-    for (int i = 0; i < 100; ++i) {
-        falcon::ProgressInfo info;
-        info.task_id = static_cast<falcon::TaskId>(i);
-        info.downloaded_bytes = static_cast<falcon::Bytes>(i);
-        info.total_bytes = 100;
-        info.speed = 1;
-        info.progress = static_cast<float>(i) / 100.0f;
+    falcon::ProgressInfo info;
+    info.task_id = 0;
+    info.total_bytes = 100;
+    info.speed = 1;
+    info.progress = 0.0f;
 
-        dispatcher.dispatch_progress(static_cast<falcon::TaskId>(i), info);
+    dispatcher.dispatch_progress(0, info);
+    const bool entered = listener.wait_until_entered(std::chrono::seconds(2));
+    EXPECT_TRUE(entered);
+    if (entered) {
+        // 首笔已被 worker 取出并在监听器中阻塞；随后 20 笔中恰 10 笔入队、
+        // 10 笔被丢弃
+        EXPECT_EQ(dispatcher.get_queue_size(), 0u);
+        for (int i = 1; i <= 20; ++i) {
+            info.task_id = static_cast<falcon::TaskId>(i);
+            dispatcher.dispatch_progress(info.task_id, info);
+        }
+        EXPECT_EQ(dispatcher.get_queue_size(), 10u);
+        EXPECT_EQ(dispatcher.get_dropped_count(), 10u);
     }
 
-    // 所有事件都应该被处理（因为 dispatch_progress 返回 void，不会丢弃）
-    // dropped 保持为 0
-    EXPECT_EQ(dropped, 0);
-
+    listener.release();
     dispatcher.stop(true);
-    EXPECT_GT(dispatcher.get_dropped_count(), 0u);
+
+    if (entered) {
+        EXPECT_GE(dispatcher.get_processed_count(), 11u);
+    }
 }
 
 // 新增：多监听器测试

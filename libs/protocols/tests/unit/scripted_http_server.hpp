@@ -89,6 +89,9 @@ struct FakeResponse {
                                 // 重注册路径（响应头 recv 注册失败注入的
                                 // 确定性命中窗口）
     std::string partial_prefix = "HTTP/1.1 200 OK\r\n";
+    int defer_body_ms = 0;  // >0：头发出后延迟再发 body（确定性把
+                            // 头/体拆到客户端两次 recv 之间——401 残体
+                            // 排空回归测试用，模拟 Windows CI 调度分裂）
 };
 
 // 连接级事件（红面取证用）：accept / 请求读取 recv 终止 / defer 路径
@@ -623,6 +626,14 @@ private:
                 break;
             }
             if (!send_all(fd, out)) break;
+            if (rec.method != "HEAD" && resp.defer_body_ms > 0 &&
+                !body.empty()) {
+                // 头/体分离发送：客户端首次 recv 只拿到头（401 解析
+                // 完成、重发已发出），body 延迟到达——残体排空路径的
+                // 确定性时序（Windows CI 偶发分裂的受控复现）
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(resp.defer_body_ms));
+            }
             if (rec.method != "HEAD") {
                 if (hold_prefix > 0 && hold_prefix < body.size()) {
                     // 闩门：发前缀后挂起，直到 release_holds()（或停机）

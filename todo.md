@@ -201,6 +201,14 @@ apps/
     新套件 DownloadEngineV2HttpsProxy 6/6 + 关联回归 218 过 +
     falcon_protocols_tests 全量 1047 过（4 skip 设计内）；适配层与
     metalink 门禁的 proxy 回退项同步摘除（剩余回退仅 cookie 引擎）。
+    ④ 401 同连接重发残体排空 `ed691cc`（Windows CI 慢调度下服务器
+    头/体分两次 recv 到达，重发请求先于 401 残体读净——残体拼入新
+    响应首行触发 invalid stoi argument；begin_auth_resend 按
+    Content-Length 计算未收残体、execute 循环先排空再重发，chunked
+    挑战体无法定界则干净失败；parse_status_line 增数字前置校验；
+    scripted_http_server 新 defer_body_ms 旋钮受控复现，新用例
+    AuthEndToEnd.Deferred401BodyDrainedBeforeResend NAIL-VERIFY 双向
+    实证；本机 ASan 894 / 非插桩 1048 全过）。
   - 注：Referer 已于 2026-10-11 原生化收编（V2 引擎发该头，适配层与
     metalink 门禁同步摘除）。
 - [ ] 日志库可选增强：FMT 风格调用点迁移到 spdlog 原生 fmt 语法、
@@ -302,11 +310,10 @@ apps/
 
 ### 超大文件候选（>1000 行）
 
-- [x] LAY-001 [P1] 拆分 `libs/protocols/src/commands/http_commands.cpp`（3640 行）——HTTP 多连接分段、TLS/代理、文件分配与 V2 重试命令混合在单 TU（`libs/protocols/src/commands/http_commands.cpp:61`）（commit `c7c23ae`）。
+- [x] LAY-001 [P1] 拆分 `libs/protocols/src/commands/http_commands.cpp`（3640 行）——HTTP 多连接分段、TLS/代理、文件分配与 V2 重试命令混合在单 TU（`libs/protocols/src/commands/http_commands.cpp:61`）（commit `c7c23ae`；V2 引擎后续在统一 V1 时移除）。
 - [x] LAY-002 [P1] 拆分 `apps/daemon/src/rpc/json_rpc_server.cpp`（1979 行 → 967 行）——aria2 方法分发 `dispatch_rpc` 拆到独立 TU，共享内部辅助（序列化/鉴权/分页）落 `json_rpc_server_detail.hpp`（commit `bfbabba`；build-desktop 全量 ctest 3219/3219）。
-- [ ] LAY-003 [P1] 拆分 `apps/desktop/src/pages/download_page.cpp`（1666 行）——任务表格/网格视图、筛选、操作菜单与 QSettings 记忆集中（`apps/desktop/src/pages/download_page.cpp:81`、`apps/desktop/src/pages/download_page.cpp:847`）。
-- [ ] LAY-004 [P1] 拆分 `apps/desktop/src/main_window.cpp`（1372 行）——窗口装配、侧栏/页面创建、托盘、IPC、设置与 40+ 信号槽共存（`apps/desktop/src/main_window.cpp:187`、`apps/desktop/src/main_window.cpp:935`）。
-- [ ] LAY-005 [P1] 拆分 `apps/desktop/src/pages/settings_page.cpp`（1346 行）——设置项 UI 与 engines.json 编辑/校验/持久化混合同页（`apps/desktop/src/pages/settings_page.cpp:791`、`apps/desktop/src/pages/settings_page.cpp:910`）。
+- [x] LAY-003 [P1] 拆分 `apps/desktop/src/pages/download_page.cpp`（1666 行）——任务表格/网格视图、筛选、操作菜单与 QSettings 记忆集中（`apps/desktop/src/pages/download_page.cpp:81`、`apps/desktop/src/pages/download_page.cpp:847`）（commit `9b9dbc3`；desktop 8 二进制 113/113）。
+- [x] LAY-004 [P1] 拆分 `apps/desktop/src/main_window.cpp`（1372 行）——窗口装配、侧栏/页面创建、托盘、IPC、设置与 40+ 信号槽共存（`apps/desktop/src/main_window.cpp:187`、`apps/desktop/src/main_window.cpp:935`）（commit `82560f7`；base TU 407 行 + 五拆分 TU（ipc/settings/tray/frameless/service），双 target 构建绿，desktop 8 二进制 113/113）。- [ ] LAY-005 [P1] 拆分 `apps/desktop/src/pages/settings_page.cpp`（1346 行）——设置项 UI 与 engines.json 编辑/校验/持久化混合同页（`apps/desktop/src/pages/settings_page.cpp:791`、`apps/desktop/src/pages/settings_page.cpp:910`）。
 - [ ] LAY-006 [P1] 拆分 `libs/protocols/src/incremental_download.cpp`（1246 行）——增量差分/全量回退/哈希校验与流控同文件（`libs/protocols/src/incremental_download.cpp:1055`）。
 - [ ] LAY-007 [P1] 拆分 `libs/protocols/plugins/http/http_handler.cpp`（1182 行）——HTTP 头探测、分段入口、V1/V2 分流与 curl 适配同文件（`libs/protocols/plugins/http/http_handler.cpp:1`）。
 - [ ] LAY-008 [P1] 拆分 `apps/desktop/src/pages/cloud_page.cpp`（1178 行）——云连接表单、配置持久化与目录浏览 UI 共存（`apps/desktop/src/pages/cloud_page.cpp:24`、`apps/desktop/src/pages/cloud_page.cpp:911`）。

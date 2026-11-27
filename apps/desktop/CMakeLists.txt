@@ -40,12 +40,20 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(SOURCES
     src/main.cpp
     src/main_window.cpp
+    src/main_window_frameless.cpp
+    src/main_window_ipc.cpp
+    src/main_window_service.cpp
+    src/main_window_settings.cpp
+    src/main_window_tray.cpp
     src/widgets/top_bar.cpp
     src/widgets/status_bar.cpp
     src/widgets/speed_float_widget.cpp
     src/widgets/task_table_widget.cpp
     src/navigation/sidebar.cpp
     src/pages/download_page.cpp
+    src/pages/download_page_table.cpp
+    src/pages/download_page_grid.cpp
+    src/pages/download_page_formatting.cpp
     src/pages/cloud_page.cpp
     src/pages/discovery_page.cpp
     src/pages/trash_page.cpp
